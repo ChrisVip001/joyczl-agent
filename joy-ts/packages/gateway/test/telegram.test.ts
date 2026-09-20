@@ -282,10 +282,14 @@ test("回答太长：分成几条发，不撞 Telegram 的上限", async () => {
     { length: 900 },
     (_, index) => `第 ${index} 行：这一行特意写长一点，好让总长度确实超过一条消息的上限。`,
   ).join("\n");
+  // 期望的切片数是确定的（splitMessage 是纯函数）——等到**全部**切片
+  // 到齐再断言，否则异步发送中途截到的只是半张清单（Linux 调度更快
+  // 暴露了这个竞态）。
+  const expected = splitMessage(long, MESSAGE_LIMIT);
   const { adapter, api } = setup({ respond: async () => long });
   api.pushUpdates([update(1, 42, "讲个长的")]);
 
-  await runUntil(adapter, () => api.sent.length >= 2);
+  await runUntil(adapter, () => api.sent.length >= expected.length);
 
   assert.ok(api.sent.length > 1, "该被切成多条");
   assert.ok(api.sent.every((chunk) => chunk.length <= 4096));
