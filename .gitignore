@@ -27,3 +27,4 @@ sdk/python-bin/dist/
 sdk/python-bin/src/joyczl_agent_bin/bin/*
 !sdk/python-bin/src/joyczl_agent_bin/bin/.gitkeep
 对比.md
+.ci-logs.py
