@@ -1,0 +1,29 @@
+[package]
+name = "joyczl-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP 客户端 —— 把「别人的工具」接成 Joy 自己的工具。"
+
+[lib]
+name = "joyczl_mcp"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+joyczl-tools = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+#   OAuth 授权码流程的 PKCE 用 S256：challenge = base64url(sha256(verifier))。
+#   不引 base64 crate —— 编码只有 60 行，自己写（见 oauth.rs）。
+sha2 = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+joyczl-state = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

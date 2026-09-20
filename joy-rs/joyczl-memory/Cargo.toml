@@ -1,0 +1,25 @@
+[package]
+name = "joyczl-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "两个管理记忆的智能体：检索门（要不要查）和 consolidation（记什么）。"
+
+[lib]
+name = "joyczl_memory"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+joyczl-provider = { workspace = true }
+joyczl-state = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

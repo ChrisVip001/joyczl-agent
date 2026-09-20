@@ -1,0 +1,21 @@
+[package]
+name = "joyczl-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "全部配置都是环境变量，读一次，不再有设置框架。"
+
+[lib]
+name = "joyczl_config"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+joyczl-protocol = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

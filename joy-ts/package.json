@@ -1,0 +1,25 @@
+{
+  "name": "joy-ts",
+  "private": true,
+  "type": "module",
+  "description": "Joy 的 TypeScript 侧：网页驾驶舱与聊天网关。逻辑与状态都在 Rust，这里只负责把协议接到浏览器和聊天平台。",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "gateway:telegram": "node packages/gateway/src/bin-telegram.ts",
+    "gateway:discord": "node packages/gateway/src/bin-discord.ts",
+    "gateway:wechat": "node packages/gateway/src/bin-wechat.ts",
+    "gateway:lark": "node packages/gateway/src/bin-lark.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
+  }
+}

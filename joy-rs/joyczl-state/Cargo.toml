@@ -1,0 +1,22 @@
+[package]
+name = "joyczl-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Joy 的全部持久状态：state.db（SQLite + FTS5）。只有 app-server 持有它。"
+
+[lib]
+name = "joyczl_state"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+sqlx = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

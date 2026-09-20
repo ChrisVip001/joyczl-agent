@@ -1,0 +1,13 @@
+{
+  "name": "@joy/dashboard",
+  "private": true,
+  "type": "module",
+  "description": "驾驶舱页面：把 app-server 的协议画成一屏。joy-ts 里唯一需要构建的包 —— 浏览器读不懂 .ts。",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "npm run typecheck && esbuild src/main.ts --bundle --format=esm --target=es2023 --sourcemap --outfile=dist/main.js && node copy-assets.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

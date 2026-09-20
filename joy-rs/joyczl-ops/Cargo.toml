@@ -1,0 +1,29 @@
+[package]
+name = "joyczl-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "驾驶舱的 HTTP 面：axum + SSE，把浏览器接到 app-server 上。"
+
+[lib]
+name = "joyczl_ops"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+joyczl-config = { workspace = true }
+joyczl-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

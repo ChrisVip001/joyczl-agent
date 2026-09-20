@@ -1,0 +1,17 @@
+[project]
+name = "joyczl-agent-bin"
+version = "0.1.0"
+description = "`joy` 二进制本体，给 joyczl-agent 用"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/joyczl_agent_bin"]
+
+# 二进制是分平台的，轮子标签也必须是 —— 默认的 `py3-none-any` 等于宣称
+# 「这个轮子装哪都能用」，而里面躺的是一个只能在某个架构上跑的 elf。
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"

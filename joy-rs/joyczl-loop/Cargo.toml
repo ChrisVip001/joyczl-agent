@@ -1,0 +1,28 @@
+[package]
+name = "joyczl-loop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "THE LOOP —— observe → reason → act → repeat。整个 agent 的核心机制。"
+
+[lib]
+name = "joyczl_loop"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+joyczl-provider = { workspace = true }
+joyczl-tools = { workspace = true }
+serde_json = { workspace = true }
+#   sync    = Interrupt 的 Notify（turn/interrupt 的取消令牌）
+#   macros  = tokio::select!（模型调用 / 工具执行与取消竞速）
+tokio = { workspace = true }
+
+[dev-dependencies]
+joyczl-state = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

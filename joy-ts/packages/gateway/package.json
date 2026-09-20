@@ -1,0 +1,25 @@
+{
+  "name": "@joy/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把聊天平台接到 Joy 上：一个 app-server 子进程，多个人共用。",
+  "exports": {
+    ".": "./src/bridge.ts",
+    "./telegram": "./src/telegram.ts",
+    "./discord": "./src/discord.ts",
+    "./wechat": "./src/wechat.ts",
+    "./lark": "./src/lark.ts",
+    "./wechat-crypto": "./src/wechat-crypto.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "start:telegram": "node src/bin-telegram.ts",
+    "start:discord": "node src/bin-discord.ts",
+    "start:wechat": "node src/bin-wechat.ts",
+    "start:lark": "node src/bin-lark.ts"
+  },
+  "dependencies": {
+    "@joy/client": "*"
+  }
+}

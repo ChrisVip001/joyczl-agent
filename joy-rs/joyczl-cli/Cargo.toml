@@ -1,0 +1,32 @@
+[package]
+name = "joyczl-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "`joy` 命令行入口。"
+
+# 二进制就叫 `joy`：人格名，短、好打。
+[[bin]]
+name = "joy"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+joyczl-app-server = { workspace = true }
+joyczl-config = { workspace = true }
+joyczl-eval = { workspace = true }
+joyczl-graph = { workspace = true }
+joyczl-memory = { workspace = true }
+joyczl-mcp = { workspace = true }
+joyczl-ops = { workspace = true }
+joyczl-protocol = { workspace = true }
+joyczl-provider = { workspace = true }
+joyczl-state = { workspace = true }
+joyczl-tools = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

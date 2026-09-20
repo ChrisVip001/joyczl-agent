@@ -1,0 +1,124 @@
+[workspace]
+resolver = "2"
+members = [
+    "joyczl-protocol",
+    "joyczl-protocol-noop-macros",
+    "joyczl-config",
+    "joyczl-provider",
+    "joyczl-tools",
+    "joyczl-loop",
+    "joyczl-graph",
+    "joyczl-mcp",
+    "joyczl-memory",
+    "joyczl-state",
+    "joyczl-eval",
+    "joyczl-app-server",
+    "joyczl-ops",
+    "joyczl-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+# ---- 运行时依赖：刻意保持极小 --------------------------------------------
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", features = ["clock"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+#   process = MCP 客户端要把服务器当子进程起起来（stdio 那条路）
+#   sync    = 几条连接要能被多个工具调用共享（tokio::sync::Mutex）
+#   time    = graph 的并行波次靠它验证「真的是同时跑的」
+#   net     = dashboard 的 HTTP 监听（TcpListener）
+tokio = { version = "1", features = [
+    "io-std",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+# 非 test 构建下把 `#[derive(TS)]` / `#[derive(JsonSchema)]` 替换成空宏，
+# 这样协议 crate 不必把 ts-rs / schemars 打进线上二进制。
+joyczl-protocol-noop-macros = { path = "joyczl-protocol-noop-macros" }
+joyczl-protocol = { path = "joyczl-protocol" }
+joyczl-state = { path = "joyczl-state" }
+joyczl-config = { path = "joyczl-config" }
+joyczl-provider = { path = "joyczl-provider" }
+joyczl-tools = { path = "joyczl-tools" }
+joyczl-loop = { path = "joyczl-loop" }
+joyczl-graph = { path = "joyczl-graph" }
+joyczl-mcp = { path = "joyczl-mcp" }
+joyczl-memory = { path = "joyczl-memory" }
+joyczl-eval = { path = "joyczl-eval" }
+joyczl-app-server = { path = "joyczl-app-server" }
+joyczl-ops = { path = "joyczl-ops" }
+
+# HTTP 客户端：只跟各家 LLM API 说话。
+# rustls 而不是 native-tls，省掉系统 OpenSSL 的编译依赖。
+# stream：SSE 流式（dashboard 的打字机效果靠它）。
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+# 流式迭代（Stream / StreamExt / unfold）与 Bytes。
+# 刻意用 futures-util 而不是 `futures` 全家桶：后者默认开 async-await 宏，
+# 会拉 futures-macro =0.3.34 —— 这个版本在 crates.io 上已经拿不到了，
+# 整个解析直接失败。我们只用 Stream/StreamExt/unfold，用不着宏。
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+bytes = "1"
+
+# PKCE 的 S256 challenge（MCP OAuth，见 joyczl-mcp/src/oauth.rs）。
+sha2 = "0.10"
+
+# SQLite。
+#   查询一律用运行时 API（`sqlx::query` / `query_as`），不用 `sqlx::query!` 宏：
+#   后者要编译期连上数据库，或先 `cargo sqlx prepare` 生成 sqlx-data.json。
+#   对一个 clone 下来就该能编译的项目，那是负担。
+#   derive  = `#[derive(FromRow)]`，把行映射成结构体
+#   macros  = 只为 `sqlx::migrate!`，它在编译期读 migrations/ 里的 .sql 文件，
+#             不需要数据库，于是二进制自带 schema
+#   default-features = false：不要 any/mysql/postgres/json，我们只用 sqlite
+sqlx = { version = "0.8", default-features = false, features = [
+    "derive",
+    "macros",
+    "migrate",
+    "runtime-tokio",
+    "sqlite",
+] }
+
+# HTTP 服务端（只给 joyczl-ops：dashboard 的驾驶舱页面）。
+#   axum = 路由 + SSE + JSON，它本身很薄，规则就是「用 hyper，别再造一套框架」。
+#   tower-http 的 fs = 静态文件。**不手写**：一个静态文件服务里最危险的是路径
+#   穿越（`GET /../../.env`），那是已经被写对过无数次的东西，没有理由再写一次。
+#   set-header = 给静态文件加 no-cache：前端还在天天改，浏览器缓存会让
+#   「我明明改了」变成十分钟的鬼故事。
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+
+# ---- 仅代码生成 / 测试用 --------------------------------------------------
+# TypeScript 绑定
+#   serde-json-impl：让 `serde_json::Value` 也有 TS 实现（否则协议里的
+#                    任意 JSON 字段编译不过）
+#   no-serde-warnings：ts-rs 解析不了 `skip_serializing_if` 这类属性时会刷警告
+# 不开 `format`：它拖进 dprint-plugin-typescript → swc_common，后者跟
+# serde 1.0.229 不兼容（用了已被移走的 serde::__private）。生成物改用
+# node 的 prettier 后处理，见 scripts/write_schema.py。
+ts-rs = { version = "10", features = ["serde-json-impl", "no-serde-warnings"] }
+# JSON Schema（Python SDK 的 pydantic 模型由它再生成）
+schemars = "0.8"
+tempfile = "3"
+
+[workspace.lints.rust]
+unused_must_use = "warn"
+
+[workspace.lints.clippy]
+# 协议是纯数据结构：枚举人类可读的名字比内存布局重要
+enum_variant_names = "allow"

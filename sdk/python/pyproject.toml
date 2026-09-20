@@ -1,0 +1,44 @@
+[project]
+name = "joyczl-agent"
+version = "0.1.0"
+description = "Joy 的 Python 客户端：把 `joy app-server` 拉起来，用 Python 说话"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2.7"]
+
+[project.optional-dependencies]
+# `joy` 二进制。它是分平台的，所以单独一个包（joyczl-agent-bin），主包才可能是
+# `py3-none-any`。不装也行 —— 客户端会接着回落到 $JOY_BIN / 仓库的 target / PATH。
+bin = ["joyczl-agent-bin"]
+
+[dependency-groups]
+# 只在生成代码时用。v2.py 是 datamodel-codegen 从 JSON Schema 生成的，
+# 钉死版本是因为生成器的次版本会改输出，而这两个文件是提交进仓库的。
+dev = [
+    "datamodel-code-generator==0.82.0",
+    "mypy>=1.11",
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+# `joyczl-agent-bin` 还没发布到任何 registry，所以在本地找。没有这一段，
+# `uv run`（连带我们的代码生成）会因为解析不出这个可选依赖而整个失败。
+joyczl-agent-bin = { path = "../python-bin", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/joyczl_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+# 开发环境是 3.13，但这个包声明支持 3.10 —— 差着的正是类型语法能用到哪一步。
+# 钉在这里，免得本地过了、装到 3.10 上炸。
+python_version = "3.10"
+# SDK 的类型标注就是它卖的东西，别让「忘了标注」悄悄溜过去。
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

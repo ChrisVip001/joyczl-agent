@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Joy 驾驶舱</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="dot" aria-hidden="true"></span>
+        <h1>Joy</h1>
+        <span class="pill" id="model">…</span>
+      </div>
+      <div class="right">
+        <span class="path" id="home"></span>
+        <span class="stamp" id="stamp"></span>
+        <button class="ghost" id="refresh" type="button">刷新</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="chat">
+        <div class="bar">
+          <p class="hint">
+            会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
+          </p>
+          <button class="ghost" id="older" type="button" hidden>更早的 ↑</button>
+        </div>
+        <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
+        <form class="composer" id="composer" autocomplete="off">
+          <textarea
+            id="input"
+            rows="1"
+            placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
+            aria-label="消息"
+          ></textarea>
+          <button id="send" type="submit">发送</button>
+        </form>
+      </section>
+
+      <aside class="panels">
+        <section class="panel">
+          <h2>概览</h2>
+          <div class="body" id="overview"></div>
+        </section>
+        <section class="panel">
+          <h2>记忆</h2>
+          <div class="body" id="memory"></div>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

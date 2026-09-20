@@ -1,0 +1,8 @@
+# 确定性 eval：离线、0/1、可重复。脚本化的 gate + 模型应答，断言 harness 行为。
+# 这个套件是 release gate：一条失败就不许发。
+{"id":"greeting","description":"闲聊直答：不翻记忆、不调工具","message":"你好","gate":{"retrieve":false,"query":"","reason":"small talk"},"responses":[{"text":"你好呀！今天想聊点什么？"}],"expect":{"reply_contains":["你好"],"tools_used":[],"gate":"skip","iterations":1}}
+{"id":"remember","description":"存事实：save_note 按序发出","message":"记住 alex 喜欢早会","gate":{"retrieve":false,"query":"","reason":"note-taking"},"responses":[{"tool_use":{"name":"save_note","args":{"subject":"alex","content":"喜欢早会"}}},{"text":"已经记下了，alex 喜欢早会。"}],"expect":{"tools_used":["save_note"],"iterations":2,"reply_contains":["记下"]}}
+{"id":"recall","description":"问过去的事：门放行检索，一次直答","message":"alex 喜欢什么会议？","gate":{"retrieve":true,"query":"alex 早会","reason":"about a person"},"responses":[{"text":"alex 喜欢早上的会议（从记忆里找回来的）。"}],"expect":{"gate":"retrieve","iterations":1,"reply_contains":["alex"]}}
+{"id":"tool-error-surfaced","description":"工具参数错：错误变文本回给模型，loop 不崩","message":"帮我记点东西","gate":{"retrieve":false,"query":"","reason":"note-taking"},"responses":[{"tool_use":{"name":"save_note","args":{"subject":42,"content":"x"}}},{"text":"抱歉，参数好像不对，你能再说一遍吗？"}],"expect":{"tools_used":["save_note"],"iterations":2}}
+{"id":"gate-fails-open","description":"门坏了：失败开放成 retrieve，轮次照常答完","message":"你好","gate":"not-a-json-gate","responses":[{"text":"你好呀！"}],"expect":{"gate":"retrieve","iterations":1,"reply_contains":["你好"]}}
+{"id":"no-fake-claims","description":"没调工具的回复不该声称做过事（虚报会被断言抓住）","message":"现在几点了","gate":{"retrieve":false,"query":"","reason":"time"},"responses":[{"text":"现在是上午十点。要改日程的话跟我说一声，我再动手。"}],"expect":{"tools_used":[],"reply_not_contains":["已经改","改好了","我把你的会议"]}}

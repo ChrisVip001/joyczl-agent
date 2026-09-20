@@ -1,0 +1,539 @@
+/* 驾驶舱的样式。
+ *
+ * 一条规矩：**这里没有一处是在表达状态**。状态都在 DOM 的 class 上
+ * （.streaming / .current / .busy / .failure），这里只负责它们长什么样。
+ * 于是「页面为什么是这个样子」永远只有一个地方要找。
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f5f2;
+  --panel: #fffdfa;
+  --ink: #1c1b19;
+  --dim: #6d6a64;
+  --faint: #9b978f;
+  --line: #e5e2dc;
+  --accent: #c2410c;
+  --accent-soft: #fbf0e6;
+  --chip: #f1efea;
+  --good: #15803d;
+  --bad: #b3261e;
+  --shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px rgb(0 0 0 / 4%);
+  --radius: 12px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16151a;
+    --panel: #1d1c22;
+    --ink: #ebe8e3;
+    --dim: #9c988f;
+    --faint: #6f6b64;
+    --line: #2d2c33;
+    --accent: #f0a05a;
+    --accent-soft: #2a2118;
+    --chip: #26252c;
+    --good: #77dda2;
+    --bad: #f0a09a;
+    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 22%);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- 页头 ---------------------------------------------------------------- */
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.pill {
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--dim);
+  font-size: 12px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.path {
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* 路径太长时保留尾部（更有信息量） */
+  font-family: var(--mono);
+}
+
+.ghost {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ghost:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- 主体 ---------------------------------------------------------------- */
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  min-height: 0;
+}
+
+.chat {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 0;
+  padding: 0 20px 12px;
+}
+
+/* 对话区顶上那条状态线：在看哪个会话，以及「更早的」（有更早的才出现）。
+   按钮显不显示由 `hidden` 属性说了算，所以这里不碰 display。 */
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 2px 0;
+}
+
+.messages {
+  overflow-y: auto;
+  padding: 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  scroll-behavior: smooth;
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 46rem;
+}
+
+.msg.me {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.msg.joy {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.bubble {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.msg.me .bubble {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .msg.me .bubble {
+    color: #24160c;
+  }
+}
+
+/* 正在流的那一条：末尾加一根闪动的竖线，一眼看出「还在说」。 */
+.bubble.streaming::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: currentColor;
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.trace {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.trace:empty {
+  display: none;
+}
+
+.chip {
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.chip.gate {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chip.tool {
+  font-family: var(--mono);
+}
+
+.foot {
+  color: var(--faint);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.failure {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: var(--bad);
+  font-size: 13px;
+}
+
+.failure .code {
+  font-family: var(--mono);
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+/* --- 输入 ---------------------------------------------------------------- */
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+
+.composer textarea {
+  flex: 1;
+  max-height: 40vh;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  resize: none;
+  outline: none;
+  field-sizing: content; /* 长到几行就几行；不支持的浏览器里是个固定一行的小框 */
+}
+
+.composer button {
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  .composer button {
+    color: #24160c;
+  }
+}
+
+.composer button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.hint {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.hint code {
+  color: var(--dim);
+  font-family: var(--mono);
+}
+
+/* --- 右侧面板 ------------------------------------------------------------ */
+
+.panels {
+  overflow-y: auto;
+  padding: 20px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.panel h2 {
+  margin: 0 0 10px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.panel .body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.block h3 {
+  margin: 0 0 6px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.headline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.headline .provider {
+  color: var(--faint);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.headline .model {
+  font-family: var(--mono);
+  font-size: 15px;
+}
+
+.numbers {
+  display: flex;
+  gap: 18px;
+}
+
+.number b {
+  display: block;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.number span {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.rows dt {
+  color: var(--faint);
+}
+
+.rows dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.item.current {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+}
+
+/* 会话行是可以点的（点了切过去），记忆那两栏的行不是 —— 所以「可点」是个
+   修饰类，而不是 `.item` 的默认长相。它里面是 `<button>`，按钮自带的那套
+   字体/对齐/宽度得按下去。 */
+.item.pick {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.item.pick:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.item .title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 550;
+}
+
+.item .body {
+  margin-top: 3px;
+  color: var(--dim);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.item .sub,
+.item .when {
+  display: block;
+  color: var(--faint);
+  font-size: 11px;
+  font-family: var(--mono);
+}
+
+.subject {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.tag {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.muted {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12.5px;
+}
+
+/* --- 窄屏 ---------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+
+  .panels {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    max-height: 45vh;
+  }
+
+  .path {
+    display: none;
+  }
+}

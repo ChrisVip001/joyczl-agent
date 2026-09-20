@@ -1,0 +1,1803 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ConfigReadParams": {
+      "properties": {
+        "keys": {
+          "description": "只取这几个 key；不给就全量返回。",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "title": "ConfigReadParams",
+      "type": "object"
+    },
+    "ConfigReadResponse": {
+      "properties": {
+        "config": {
+          "$ref": "#/definitions/SettingsView"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "title": "ConfigReadResponse",
+      "type": "object"
+    },
+    "ConfigWriteParams": {
+      "properties": {
+        "patch": {
+          "$ref": "#/definitions/SettingsPatch"
+        }
+      },
+      "required": [
+        "patch"
+      ],
+      "title": "ConfigWriteParams",
+      "type": "object"
+    },
+    "ConfigWriteResponse": {
+      "properties": {
+        "config": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SettingsView"
+            }
+          ],
+          "description": "写入后的完整配置，便于前端直接替换本地缓存。"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "title": "ConfigWriteResponse",
+      "type": "object"
+    },
+    "ConsolidationCompletedNotification": {
+      "properties": {
+        "newFacts": {
+          "description": "这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "newFacts"
+      ],
+      "title": "ConsolidationCompletedNotification",
+      "type": "object"
+    },
+    "DashboardData": {
+      "description": "驾驶舱首屏要的全部东西，一次取齐。\n\n它不是某个 RPC 的应答，而是 `joy dashboard` 那个 HTTP 端点 （`GET /api/data`）的载荷。**为什么定义在协议 crate 里**：因为判断标准 只有一条 —— 它跨语言。浏览器那一侧要按它做类型检查，手抄一遍就又会 漂移，而这正是整个工程在消灭的东西。\n\n字段都直接复用协议里的类型：驾驶舱不做二次建模，它就是这些数据的 一个视图。",
+      "properties": {
+        "config": {
+          "$ref": "#/definitions/SettingsView"
+        },
+        "episodes": {
+          "items": {
+            "$ref": "#/definitions/Episode"
+          },
+          "type": "array"
+        },
+        "facts": {
+          "items": {
+            "$ref": "#/definitions/Fact"
+          },
+          "type": "array"
+        },
+        "generatedAt": {
+          "description": "ISO 8601，毫秒精度。页面上显示「数据是什么时候的」。",
+          "type": "string"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/definitions/SessionSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "config",
+        "episodes",
+        "facts",
+        "generatedAt",
+        "sessions"
+      ],
+      "title": "DashboardData",
+      "type": "object"
+    },
+    "Episode": {
+      "properties": {
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "happenedAt": {
+          "description": "ISO 8601 日期。",
+          "type": "string"
+        },
+        "id": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "happenedAt",
+        "id",
+        "summary"
+      ],
+      "title": "Episode",
+      "type": "object"
+    },
+    "ErrorNotification": {
+      "properties": {
+        "code": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "ErrorNotification",
+      "type": "object"
+    },
+    "ErrorObject": {
+      "properties": {
+        "code": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Fact": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "source": {
+          "description": "`user`（直接告诉它的）或 `consolidation`（从对话里提炼的）。",
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "id",
+        "source",
+        "subject"
+      ],
+      "title": "Fact",
+      "type": "object"
+    },
+    "GateDecidedNotification": {
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/GateDecision"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision",
+        "turnId"
+      ],
+      "title": "GateDecidedNotification",
+      "type": "object"
+    },
+    "GateDecision": {
+      "properties": {
+        "decision": {
+          "$ref": "#/definitions/GateDecisionKind"
+        },
+        "query": {
+          "description": "判定为 retrieve 时的检索词；skip 时为 null。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "门给的理由（≤5 个词的那种）。失败开放时带上原因，便于排查。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decision",
+        "reason"
+      ],
+      "title": "GateDecision",
+      "type": "object"
+    },
+    "GateDecisionKind": {
+      "description": "检索门的判定：这一轮到底要不要翻记忆。 Joy 的 hero moment —— 默认全量检索既慢又会让无关记忆带偏答案。",
+      "enum": [
+        "retrieve",
+        "skip"
+      ],
+      "title": "GateDecisionKind",
+      "type": "string"
+    },
+    "GraphEndedNotification": {
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ms": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "path": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "steps": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "workflow": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ms",
+        "path",
+        "steps",
+        "workflow"
+      ],
+      "title": "GraphEndedNotification",
+      "type": "object"
+    },
+    "GraphInfo": {
+      "properties": {
+        "path": {
+          "description": "实际走过的节点名，顺序即执行顺序。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "route": {
+          "$ref": "#/definitions/GraphRouteKind"
+        },
+        "workflow": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "reason",
+        "route",
+        "workflow"
+      ],
+      "title": "GraphInfo",
+      "type": "object"
+    },
+    "GraphNodeEndedNotification": {
+      "properties": {
+        "error": {
+          "description": "节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keys": {
+          "description": "该节点写回了哪些 state key。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ms": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "node": {
+          "type": "string"
+        },
+        "workflow": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "keys",
+        "ms",
+        "node",
+        "workflow"
+      ],
+      "title": "GraphNodeEndedNotification",
+      "type": "object"
+    },
+    "GraphNodeStartedNotification": {
+      "properties": {
+        "node": {
+          "type": "string"
+        },
+        "visit": {
+          "description": "第几次进入该节点（>1 只可能出现在有意设计的环里）。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "workflow": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node",
+        "visit",
+        "workflow"
+      ],
+      "title": "GraphNodeStartedNotification",
+      "type": "object"
+    },
+    "GraphRouteKind": {
+      "description": "triage graph 把这一轮判成「快回答」还是「完整走一圈」。",
+      "enum": [
+        "quick",
+        "full"
+      ],
+      "title": "GraphRouteKind",
+      "type": "string"
+    },
+    "GraphStartedNotification": {
+      "properties": {
+        "nodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "workflow": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "nodes",
+        "workflow"
+      ],
+      "title": "GraphStartedNotification",
+      "type": "object"
+    },
+    "JsonRpcError": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ErrorObject"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RequestId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "解析不了 id 时（比如请求本身就是坏 JSON）为 null。"
+        },
+        "jsonrpc": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "jsonrpc"
+      ],
+      "title": "JsonRpcError",
+      "type": "object"
+    },
+    "JsonRpcMessage": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/JsonRpcResponse"
+        },
+        {
+          "$ref": "#/definitions/JsonRpcError"
+        }
+      ],
+      "description": "服务端回的任意一帧：应答或错误。",
+      "title": "JsonRpcMessage"
+    },
+    "JsonRpcNotification": {
+      "description": "服务端主动推送（SSE / stdio 上就是一帧一帧的事件）。",
+      "properties": {
+        "jsonrpc": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "jsonrpc",
+        "method"
+      ],
+      "title": "JsonRpcNotification",
+      "type": "object"
+    },
+    "JsonRpcRequest": {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "jsonrpc": {
+          "type": "string"
+        },
+        "method": {
+          "description": "形如 `turn/start`、`<resource>/<method>`，resource 用单数。",
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "method"
+      ],
+      "title": "JsonRpcRequest",
+      "type": "object"
+    },
+    "JsonRpcResponse": {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "jsonrpc": {
+          "type": "string"
+        },
+        "result": {
+          "description": "具体结构由 method 决定，解码方按 `*Response` 类型自行 narrow。"
+        }
+      },
+      "required": [
+        "id",
+        "jsonrpc",
+        "result"
+      ],
+      "title": "JsonRpcResponse",
+      "type": "object"
+    },
+    "MemoryForgetParams": {
+      "properties": {
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject"
+      ],
+      "title": "MemoryForgetParams",
+      "type": "object"
+    },
+    "MemoryForgetResponse": {
+      "properties": {
+        "removed": {
+          "description": "实际删掉多少条。0 表示本来就没有这个主题的记忆。",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "title": "MemoryForgetResponse",
+      "type": "object"
+    },
+    "MemoryListEpisodesParams": {
+      "properties": {
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "title": "MemoryListEpisodesParams",
+      "type": "object"
+    },
+    "MemoryListEpisodesResponse": {
+      "description": "情景记忆的列表。**没有 cursor**：`Episodes::recent` 只按时间倒序取最近 N 条， 存储层没有偏移量的概念。与其编一个用不了的游标，不如诚实地返回 null。",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/Episode"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "MemoryListEpisodesResponse",
+      "type": "object"
+    },
+    "MemoryListParams": {
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "title": "MemoryListParams",
+      "type": "object"
+    },
+    "MemoryListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/Fact"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "MemoryListResponse",
+      "type": "object"
+    },
+    "MemoryRememberParams": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "source": {
+          "description": "不给就是 `user`（用户直接说的）。consolidation 从对话里提炼时传 `consolidation`，这样前端能区分「你告诉它的」和「它自己总结的」。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "subject"
+      ],
+      "title": "MemoryRememberParams",
+      "type": "object"
+    },
+    "MemoryRememberResponse": {
+      "properties": {
+        "fact": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/Fact"
+            }
+          ],
+          "description": "写进去的完整 fact，带 id —— 前端可以直接插进列表，不用再查一次。"
+        }
+      },
+      "required": [
+        "fact"
+      ],
+      "title": "MemoryRememberResponse",
+      "type": "object"
+    },
+    "MemorySearchParams": {
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "topK": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "title": "MemorySearchParams",
+      "type": "object"
+    },
+    "MemorySearchResponse": {
+      "properties": {
+        "episodes": {
+          "items": {
+            "$ref": "#/definitions/Episode"
+          },
+          "type": "array"
+        },
+        "facts": {
+          "items": {
+            "$ref": "#/definitions/Fact"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "episodes",
+        "facts"
+      ],
+      "title": "MemorySearchResponse",
+      "type": "object"
+    },
+    "Message": {
+      "description": "会话历史里的一条消息：`chat_log` 的一行。\n\n跟实时那一路（`turnStarted` / `textDelta` / `turnCompleted`）说的是同一场 对话的两个视角：实时那一路只为**这一次连接**活着（刷新即消失）， 这一条让「刷新、换台设备、换个时候再看」成为可能。",
+      "properties": {
+        "at": {
+          "description": "ISO 8601（UTC）。写进来的时刻。",
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "id": {
+          "description": "chat_log 的行号。**也是游标**：`session/messages` 的 cursor 就是它。 用行号而不是时间戳：同一轮的两行是同一秒写进去的，时间戳分不出先后。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "meta": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnMeta"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "这一轮的遥测（检索门 / 工具 / 迭代 / 模型 / usage），**只有 assistant 行上有**。"
+        },
+        "role": {
+          "$ref": "#/definitions/MessageRole"
+        }
+      },
+      "required": [
+        "at",
+        "content",
+        "id",
+        "role"
+      ],
+      "title": "Message",
+      "type": "object"
+    },
+    "MessageRole": {
+      "description": "消息的角色。**闭集**，故意不留「未知」这个口子。\n\n`chat_log` 里将来若真多出别的角色，`session/messages` 会**跳过**那些行， 而不是硬塞一个值进来 —— 前端那个 `switch` 才能是穷尽的， 「还有第三种角色要画」这种事就会在编译期现形。",
+      "enum": [
+        "user",
+        "assistant"
+      ],
+      "title": "MessageRole",
+      "type": "string"
+    },
+    "ModelInfo": {
+      "properties": {
+        "fast": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "flagship": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "provider"
+      ],
+      "title": "ModelInfo",
+      "type": "object"
+    },
+    "ModelListParams": {
+      "properties": {
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "ModelListParams",
+      "type": "object"
+    },
+    "ModelListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/ModelInfo"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "ModelListResponse",
+      "type": "object"
+    },
+    "RequestId": {
+      "anyOf": [
+        {
+          "format": "int32",
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "请求 id：JSON-RPC 允许数字或字符串。\n\n数字这一支是 `i32` 而不是 `u64`：`u64` 会被 ts-rs 映射成 TypeScript 的 `bigint`，而 `JSON.parse` 出来的是 `number` —— 客户端拿到 `1` 却被告知类型是 `bigint`，这是那种不报错、只在运行时对不上的 bug。跨语言边界只用 `i32`， 跟 v2.rs 的规矩是同一条。",
+      "title": "RequestId"
+    },
+    "ServerNotification": {
+      "description": "一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。",
+      "oneOf": [
+        {
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "ts": {
+              "description": "ISO 8601，毫秒精度。",
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "turnStarted"
+              ],
+              "type": "string"
+            },
+            "userMessage": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "sessionId",
+            "ts",
+            "turnId",
+            "type",
+            "userMessage"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delta": {
+              "description": "流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。",
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "textDelta"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "delta",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "decision": {
+              "$ref": "#/definitions/GateDecision"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "gateDecided"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "decision",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "args": {
+              "description": "模型给的参数，结构随工具而定。"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "toolStarted"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "args",
+            "tool",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "durationMs": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "output": {
+              "description": "工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ToolStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "toolCompleted"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "output",
+            "status",
+            "tool",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "newFacts": {
+              "description": "这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。",
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "consolidationCompleted"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "newFacts",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "nodes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "graphStarted"
+              ],
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "nodes",
+            "type",
+            "workflow"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "node": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "graphNodeStarted"
+              ],
+              "type": "string"
+            },
+            "visit": {
+              "description": "第几次进入该节点（>1 只可能出现在有意设计的环里）。",
+              "format": "int32",
+              "type": "integer"
+            },
+            "workflow": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "node",
+            "type",
+            "visit",
+            "workflow"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "description": "节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keys": {
+              "description": "该节点写回了哪些 state key。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "ms": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "node": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "graphNodeEnded"
+              ],
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "keys",
+            "ms",
+            "node",
+            "type",
+            "workflow"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ms": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "path": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "steps": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": {
+              "enum": [
+                "graphEnded"
+              ],
+              "type": "string"
+            },
+            "workflow": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ms",
+            "path",
+            "steps",
+            "type",
+            "workflow"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "iterations": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "meta": {
+              "$ref": "#/definitions/TurnMeta"
+            },
+            "reply": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "turnCompleted"
+              ],
+              "type": "string"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TokenUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "iterations",
+            "meta",
+            "reply",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "code": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "data": true,
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "error"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "type"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ServerNotification"
+    },
+    "SessionListParams": {
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "title": "SessionListParams",
+      "type": "object"
+    },
+    "SessionListResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/SessionSummary"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "SessionListResponse",
+      "type": "object"
+    },
+    "SessionMessagesParams": {
+      "description": "读一个会话说过的话。\n\n**为什么需要它**：没有这个方法，页面上那场对话就只活在浏览器里 —— 刷新一下全没了。它同时是「切换会话」的前提：切过去至少能看见那边说过什么。",
+      "properties": {
+        "cursor": {
+          "description": "只取比这条消息**更早**的（往上翻旧账）。不给就是最新的那一页。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "SessionMessagesParams",
+      "type": "object"
+    },
+    "SessionMessagesResponse": {
+      "description": "消息**最新的在最前** —— 跟对话本身的方向相反，因为「往上翻」才是 这个方法的用法：先拿最近一页，再顺着 `nextCursor` 往更早的地方走。",
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/Message"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "description": "还有更早的才给：把它当下一次的 cursor。null = 到底了。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "SessionMessagesResponse",
+      "type": "object"
+    },
+    "SessionNewParams": {
+      "properties": {
+        "sessionId": {
+          "description": "不给就由服务端生成。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "SessionNewParams",
+      "type": "object"
+    },
+    "SessionNewResponse": {
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "SessionNewResponse",
+      "type": "object"
+    },
+    "SessionSummary": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "lastAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messages": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "startedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "会话标题 = 第一条用户消息的前 60 个字。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "messages",
+        "title"
+      ],
+      "title": "SessionSummary",
+      "type": "object"
+    },
+    "SettingsPatch": {
+      "description": "配置的**写入补丁**。只传要改的字段，null 表示不改。",
+      "properties": {
+        "appleCalendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "consolidateEvery": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "experimental": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "googleCalendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "graphWorkflows": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "historyTurns": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxIterations": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxTokens": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retrievalTopK": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "smallModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "SettingsPatch",
+      "type": "object"
+    },
+    "SettingsView": {
+      "description": "配置的**读取视图**。字段刻意全量且非可选：读出来就该是完整现状。",
+      "properties": {
+        "appleCalendar": {
+          "type": "boolean"
+        },
+        "consolidateEvery": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "experimental": {
+          "type": "boolean"
+        },
+        "googleCalendar": {
+          "type": "boolean"
+        },
+        "graphWorkflows": {
+          "type": "boolean"
+        },
+        "historyTurns": {
+          "description": "工作记忆滑窗：只把最近 N 轮塞进 prompt。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "home": {
+          "type": "string"
+        },
+        "maxIterations": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "maxTokens": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "retrievalTopK": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "smallModel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "appleCalendar",
+        "consolidateEvery",
+        "experimental",
+        "googleCalendar",
+        "graphWorkflows",
+        "historyTurns",
+        "home",
+        "maxIterations",
+        "maxTokens",
+        "model",
+        "provider",
+        "retrievalTopK",
+        "smallModel"
+      ],
+      "title": "SettingsView",
+      "type": "object"
+    },
+    "TextDeltaNotification": {
+      "properties": {
+        "delta": {
+          "description": "流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。",
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "delta",
+        "turnId"
+      ],
+      "title": "TextDeltaNotification",
+      "type": "object"
+    },
+    "TokenUsage": {
+      "properties": {
+        "inputTokens": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "outputTokens": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "inputTokens",
+        "outputTokens"
+      ],
+      "title": "TokenUsage",
+      "type": "object"
+    },
+    "ToolCallRecord": {
+      "properties": {
+        "durationMs": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/ToolStatus"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "tool"
+      ],
+      "title": "ToolCallRecord",
+      "type": "object"
+    },
+    "ToolCompletedNotification": {
+      "properties": {
+        "durationMs": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output": {
+          "description": "工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/ToolStatus"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "output",
+        "status",
+        "tool",
+        "turnId"
+      ],
+      "title": "ToolCompletedNotification",
+      "type": "object"
+    },
+    "ToolStartedNotification": {
+      "properties": {
+        "args": {
+          "description": "模型给的参数，结构随工具而定。"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "args",
+        "tool",
+        "turnId"
+      ],
+      "title": "ToolStartedNotification",
+      "type": "object"
+    },
+    "ToolStatus": {
+      "enum": [
+        "ok",
+        "error"
+      ],
+      "title": "ToolStatus",
+      "type": "string"
+    },
+    "TurnCompletedNotification": {
+      "properties": {
+        "iterations": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "meta": {
+          "$ref": "#/definitions/TurnMeta"
+        },
+        "reply": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "iterations",
+        "meta",
+        "reply",
+        "turnId"
+      ],
+      "title": "TurnCompletedNotification",
+      "type": "object"
+    },
+    "TurnInterruptParams": {
+      "properties": {
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "title": "TurnInterruptParams",
+      "type": "object"
+    },
+    "TurnInterruptResponse": {
+      "properties": {
+        "interrupted": {
+          "description": "false = 这一轮已经跑完了，没打断到什么。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "interrupted"
+      ],
+      "title": "TurnInterruptResponse",
+      "type": "object"
+    },
+    "TurnMeta": {
+      "description": "一轮 turn 的遥测。落库到 chat_log.meta，所以重开一个旧会话 仍能看到当时是哪个脑子的哪个决定，而不只是最终那句回复。",
+      "properties": {
+        "gate": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GateDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "graph": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GraphInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "graph 没介入时为 null。"
+        },
+        "interrupted": {
+          "default": false,
+          "description": "这一轮被 `turn/interrupt` 打断时为 true。 旧库里的 meta 没有这个字段 —— `#[serde(default)]` 让它们照常解析。",
+          "type": "boolean"
+        },
+        "iterations": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "latencyMs": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "model": {
+          "description": "真正回答这一轮的模型：被 graph 判成 quick 时是小模型，如实记录。",
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/definitions/ToolCallRecord"
+          },
+          "type": "array"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TokenUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "这一轮的 token 用量。只走过 `turnCompleted`、没进库的历史缺陷 已经补上：现在它随 meta 一起落进 chat_log，重看历史也看得到花了多少。"
+        }
+      },
+      "required": [
+        "iterations",
+        "latencyMs",
+        "model",
+        "provider",
+        "tools"
+      ],
+      "title": "TurnMeta",
+      "type": "object"
+    },
+    "TurnStartParams": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stream": {
+          "description": "是否逐 token 推送 `textDelta`。dashboard 开着，脚本调用关着。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "TurnStartParams",
+      "type": "object"
+    },
+    "TurnStartResponse": {
+      "properties": {
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turnId"
+      ],
+      "title": "TurnStartResponse",
+      "type": "object"
+    },
+    "TurnStartedNotification": {
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "ts": {
+          "description": "ISO 8601，毫秒精度。",
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "userMessage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "ts",
+        "turnId",
+        "userMessage"
+      ],
+      "title": "TurnStartedNotification",
+      "type": "object"
+    }
+  },
+  "title": "JoyProtocolV2"
+}

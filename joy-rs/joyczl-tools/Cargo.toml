@@ -1,0 +1,31 @@
+[package]
+name = "joyczl-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Joy 能做的事：模型读 schema，Rust 执行。"
+
+[lib]
+name = "joyczl_tools"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+joyczl-config = { workspace = true }
+joyczl-memory = { workspace = true }
+joyczl-provider = { workspace = true }
+joyczl-state = { workspace = true }
+serde_json = { workspace = true }
+#   search_web 的两个后端都是 HTTP：Tavily 是 JSON API，
+#   DuckDuckGo 是拉一页 HTML 自己抠。同一份 reqwest，不再引第二个客户端。
+reqwest = { workspace = true }
+#   osascript 是子进程（Apple Calendar 同步走 AppleScript）。
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

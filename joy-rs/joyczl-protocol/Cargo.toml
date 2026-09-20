@@ -1,0 +1,24 @@
+[package]
+name = "joyczl-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Joy app-server 的跨语言契约：Rust 定义，TypeScript 与 Python 全部生成。"
+
+[lib]
+name = "joyczl_protocol"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+joyczl-protocol-noop-macros = { workspace = true }
+
+[dev-dependencies]
+# 只在代码生成时用到：见 noop-macros 的说明
+ts-rs = { workspace = true }
+schemars = { workspace = true }
+
+[lints]
+workspace = true

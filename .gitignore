@@ -1,0 +1,29 @@
+# Rust
+target/
+
+# Python
+__pycache__/
+.venv/
+*.pyc
+
+# Node
+node_modules/
+
+# 运行时状态（记忆库、日历、outbox、trace 都在这儿）
+.joy/
+
+# 注意：joy-rs/joyczl-protocol/schema/ 故意**不**忽略。
+# 它是从 Rust 协议定义生成的产物，check-in 才能让「改了协议没重新生成」
+# 这件事在 PR diff 里直接现形。想确认没漂移：just check-app-server-schema
+
+# 驾驶舱前端的构建产物。跟上面那条正好相反：它是 `tsc + esbuild` 出来的
+# JS，一条命令就能重来，而要看的东西（.ts 源码）本来就在 git 里。
+# 生成物会漂移，所以它 check-in；构建产物不会，所以它不 check-in。
+joy-ts/packages/dashboard/dist/
+
+# 二进制轮子的构建产物，以及万一有人手动往包里拷了二进制 —— 那玩意儿几十 MB，
+# 一旦提交进仓库就再也删不干净了。（打包本身不落文件：见 sdk/python-bin/hatch_build.py）
+sdk/python-bin/dist/
+sdk/python-bin/src/joyczl_agent_bin/bin/*
+!sdk/python-bin/src/joyczl_agent_bin/bin/.gitkeep
+对比.md

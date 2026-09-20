@@ -1,0 +1,27 @@
+[package]
+name = "joyczl-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "模型接入：多种 provider，一种方言，零框架。"
+
+[lib]
+name = "joyczl_provider"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+bytes = { workspace = true }
+futures-util = { workspace = true }
+joyczl-config = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
