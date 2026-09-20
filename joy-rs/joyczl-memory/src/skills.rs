@@ -148,7 +148,7 @@ impl SkillLoader {
                 }
             }
         }
-        self.skills.sort_by(|a, b| a.name.cmp(&b.name));
+        self.skills.sort_by_key(|s| s.name.clone());
         self.sig = self.scan_sig();
     }
 

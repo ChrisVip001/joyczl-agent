@@ -73,4 +73,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p joyczl-cli
-      - run: ./target/debug/joy eval
+      - run: ./target/debug/joy eval ../evals/deterministic
