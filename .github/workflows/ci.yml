@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust (fmt / clippy / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  schema:
+    name: Protocol artifacts (drift check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: python3 scripts/write_schema.py --check
+
+  ts:
+    name: TypeScript (typecheck / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+        working-directory: joy-ts
+      - run: npm run typecheck
+        working-directory: joy-ts
+      - run: npm test
+        working-directory: joy-ts
+
+  python:
+    name: Python SDK (mypy / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+        working-directory: sdk/python
+      - run: uv run mypy src/joyczl_agent tests
+        working-directory: sdk/python
+      - run: uv run pytest
+        working-directory: sdk/python
+
+  gate:
+    name: Release gate (deterministic evals)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p joyczl-cli
+      - run: ./target/debug/joy eval
