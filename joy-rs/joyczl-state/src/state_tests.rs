@@ -11,7 +11,7 @@ async fn temp_db(name: &str) -> SqlitePool {
     let pool = crate::open(&path).await.expect("打开数据库");
     // TempDir 一出作用域就删目录，而 sqlite 还会建 -wal/-shm 文件。
     // 测试进程反正马上就退出，让它泄漏比让数据库消失更安全。
-    std::mem::forget(dir);
+    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     pool
 }
 

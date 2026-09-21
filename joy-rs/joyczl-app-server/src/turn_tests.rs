@@ -52,7 +52,7 @@ async fn server(mock: Arc<Mock>, graph_workflows: bool) -> Server {
         ..Settings::default()
     };
     // 目录跟着测试进程走 —— 临时目录是这里的脚手架，不是被测对象。
-    std::mem::forget(dir);
+    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
 
     let server = Server::boot(pool, settings).await;
     // 真 provider 要 key，这里换成脚本化的假货：同一条 trait 上的另一个实现，
@@ -459,7 +459,7 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    std::mem::forget(dir);
+    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     let settings = Settings {
         home: home.clone(),
         ..Settings::default()
@@ -506,7 +506,7 @@ async fn a_bad_patch_is_rejected_without_touching_anything() {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    std::mem::forget(dir);
+    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     let settings = Settings {
         home: home.clone(),
         ..Settings::default()

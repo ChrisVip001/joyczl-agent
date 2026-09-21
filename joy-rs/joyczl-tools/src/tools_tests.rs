@@ -12,7 +12,7 @@ async fn ctx() -> ToolCtx {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    std::mem::forget(dir); // 同 state_tests：sqlite 要写 -wal/-shm，不能提前删目录
+    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     ToolCtx {
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
