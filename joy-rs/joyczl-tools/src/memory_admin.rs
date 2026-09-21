@@ -11,17 +11,8 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::{require_str, Tool, ToolCtx};
-
-/// create_skill 的名字只能是小写 slug（weekly-review 这种）。
-/// 它要变成目录名，放行别的字符就是在给路径穿越递刀子。
-fn is_slug(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-}
+// 名字规则与 joy skill install / update 共用一处（它会变成目录名）。
+use joyczl_memory::skills::is_slug;
 
 fn opt_i64(args: &Value, key: &str) -> Result<Option<i64>> {
     match args.get(key) {

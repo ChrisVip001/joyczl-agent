@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::skills::parse_skill_text;
+use crate::skills::{is_slug, parse_skill_text};
 
 /// 索引里的一条。`url` 可以是 http(s)，也可以是本地路径。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,15 +166,6 @@ pub fn install(home: &Path, name: &str, content: &str) -> Result<PathBuf, String
     // 原子替换：同一文件系统内的 rename。
     std::fs::rename(&staging, &target).map_err(|e| format!("替换失败：{e}"))?;
     Ok(target.join("SKILL.md"))
-}
-
-fn is_slug(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {

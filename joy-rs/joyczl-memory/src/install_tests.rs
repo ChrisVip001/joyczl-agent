@@ -3,6 +3,7 @@
 use super::install::{
     install, installed_version, needs_update, parse_index, update_all, IndexEntry, Outcome,
 };
+use crate::skills::{install_from_text, is_slug};
 
 const GOOD: &str = "---\nname: weekly-review\ndescription: summarize the week\nversion: 1.1.0\n---\n1. pull episodes\n";
 
@@ -41,6 +42,34 @@ fn version_comparison_never_downgrades() {
     assert!(!needs_update(Some("2.0.0"), "1.9.0"), "不降级");
     // 比不了大小的（非数字）就老实不动。
     assert!(!needs_update(Some("2024-05"), "2024-06"));
+}
+
+/// 三条写入路径（`joy skill install` / `joy skill update` / `create_skill`）
+/// 共用同一条名字规则。
+///
+/// 它们曾经各写一份，并且**已经分叉**：install_from_text 放行首尾带连字符的
+/// 名字，另两条不放行 —— 同一个名字在不同入口一边能过一边不能过。这个测试
+/// 钉住「一处规则」，名字规则再分叉就会在这里红。
+#[test]
+fn every_writer_agrees_on_what_a_valid_name_is() {
+    assert!(is_slug("weekly-review"));
+    assert!(is_slug("v2"));
+    assert!(!is_slug(""));
+    assert!(!is_slug("-evil-"), "首尾连字符是目录名的坏习惯");
+    assert!(!is_slug("Weekly Review"));
+    assert!(!is_slug("../evil"));
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    let home = dir.path();
+    let text = "---\nname: -evil-\ndescription: x\n---\nb";
+    assert!(
+        install_from_text(home, text).is_err(),
+        "install 这条路要拒绝"
+    );
+    assert!(
+        install(home, "-evil-", text).is_err(),
+        "update 这条路也要拒绝"
+    );
 }
 
 #[test]

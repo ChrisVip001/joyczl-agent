@@ -332,6 +332,22 @@ fn copy_dir(src: &Path, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 技能名必须是 slug：小写字母、数字、连字符，且不以连字符开头或结尾。
+///
+/// **只有一个来源**：名字要变成目录名（`<home>/skills/<名>/`），而
+/// `create_skill`、`joy skill install`、`joy skill update` 三条写入路径都得
+/// 过这一关。三处各写一遍的后果是它们**已经分叉过一次**（一条路径放行首尾
+/// 带连字符的名字，另两条不放行）—— 同一个名字在不同入口一边能过一边不能过，
+/// 这类不一致比任何单条规则本身都更难查。
+pub fn is_slug(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
 /// `joy skill install` 的执行体：收到 SKILL.md 的**文本**（网络抓取由
 /// CLI 做），校验 frontmatter（与 create_skill 同一套），落位
 /// `<home>/skills/<名>/SKILL.md`。重名一律拒绝 —— 从不覆盖已有技能。
@@ -339,12 +355,7 @@ pub fn install_from_text(home: &Path, text: &str) -> Result<String, String> {
     let skill = parse_skill_text(text).ok_or_else(|| {
         "不是合法的技能：SKILL.md 需要 YAML frontmatter，含 name 和 description。".to_string()
     })?;
-    if !skill
-        .name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        || skill.name.is_empty()
-    {
+    if !is_slug(&skill.name) {
         return Err(format!(
             "技能名 '{}' 不是小写 slug（小写字母、数字、连字符），拒绝安装 —— 它要变成目录名。",
             skill.name
