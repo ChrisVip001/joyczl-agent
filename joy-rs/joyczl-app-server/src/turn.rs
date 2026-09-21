@@ -327,6 +327,31 @@ struct Routed {
 /// `inner` 是节点留给 loop 的事件出口：图里跑的时候事件得从那儿出去，
 /// 引擎才好补上 `node=full_agent`。不带图时是 `None`。
 ///
+/// 溢出重试时强制保留的轮数：留最新两轮原文，其余折进摘要。
+const FORCED_RETRY_TURNS: usize = 2;
+
+/// 摘要那一段的预留：摘要模型的上限（700 token）+ 段头与余量。
+/// 摘要是在 load_history 里生成的，算预算时它还不存在，只能先扣下。
+const SUMMARY_RESERVE_TOKENS: usize = 800;
+
+/// 这一轮的上下文预算（token）：窗口（`JOY_CONTEXT_WINDOW` 优先，否则用
+/// provider 表里的近似值）× 比例。下限 1024 —— 比例配得再小，也不该把窗口
+/// 压到连一轮对话都装不下。
+fn budget_tokens(resolved: &Resolved, settings: &joyczl_config::Settings) -> usize {
+    let window = settings
+        .context_window
+        .unwrap_or_else(|| resolved.context_window());
+    ((window as f64 * settings.compact_threshold) as usize).max(1024)
+}
+
+/// 这个错误是「上下文溢出」吗？loop 把 provider 的错误包进了 anyhow，
+/// 这里下钻一层认它 —— 溢出是唯一值得「压缩后重试一次」的错误。
+fn is_context_overflow(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<joyczl_provider::ProviderError>()
+        .is_some_and(joyczl_provider::ProviderError::is_context_overflow)
+}
+
 /// `interrupt` 一路传给 loop：模型调用与工具执行都跟「取消」竞速。
 #[allow(clippy::too_many_arguments)]
 async fn full_turn(
@@ -399,13 +424,32 @@ async fn full_turn(
     );
     let skills = skill_loader.matching_skills(message);
 
-    // ---- 工作记忆：滑窗 + 滚动摘要。滑窗外被挤出去的老轮次折进摘要，
-    // 摘要是往前滚的，存 state.db（见 joyczl-memory 的 compaction.rs）。
-    let (history, summary) =
-        load_history(&server.chat, resolved, session_id, settings.history_turns).await;
+    // ---- 工作记忆：滑窗 + 滚动摘要 + token 预算。
+    //
+    // 轮数是**上限**，token 才是闸门：一个长工具输出就能把窗口撑爆，而轮数
+    // 看起来还很"安全"。预算是「上下文窗口 × JOY_COMPACT_THRESHOLD」减去
+    // 已经确定要花掉的部分（system 前缀、工具声明、这一轮的答案、摘要段）。
+    // 估算是近似的（cl100k），所以刻意留宽一点。
+    let soul = load_soul(&settings.home);
+    let reserve = joyczl_provider::tokens::estimate_text(&soul)
+        + joyczl_provider::tokens::estimate_text(&memory_context)
+        + joyczl_provider::tokens::estimate_text(&skills)
+        + joyczl_provider::tokens::estimate_tools(&server.tools.schemas())
+        + settings.max_tokens.max(0) as usize
+        + SUMMARY_RESERVE_TOKENS;
+    let history_budget = budget_tokens(resolved, &settings).saturating_sub(reserve);
 
-    let system = build_system(
-        &load_soul(&settings.home),
+    let (mut history, mut summary) = load_history(
+        &server.chat,
+        resolved,
+        session_id,
+        settings.history_turns,
+        history_budget,
+        None,
+    )
+    .await;
+    let mut system = build_system(
+        &soul,
         &resolved.model,
         &resolved.provider_id,
         &memory_context,
@@ -461,26 +505,60 @@ async fn full_turn(
         None => Some(tool_started),
     };
 
-    let result: LoopResult = joyczl_loop::run(joyczl_loop::Turn {
-        client: resolved.client.as_ref(),
-        model: &resolved.model,
-        system,
-        history,
-        user_message: message.to_string(),
-        tools: &server.tools,
-        ctx,
-        max_iterations: settings.max_iterations,
-        max_tokens: settings.max_tokens,
-        observer,
-        on_text: Some(on_text),
-        interrupt,
-    })
-    .await
-    .map_err(|e| ErrorObject {
-        code: codes::PROVIDER_ERROR,
-        message: format!("模型调用失败：{e}"),
-        data: None,
-    })?;
+    // 跑一轮；**只有**上下文溢出值得压缩后重试一次 —— 别的错误重试只会得到
+    // 同样的错误（跟 graph_route 里那句注释是同一条规矩）。
+    let mut retried = false;
+    let result: LoopResult = loop {
+        let attempt = joyczl_loop::run(joyczl_loop::Turn {
+            client: resolved.client.as_ref(),
+            model: &resolved.model,
+            system: system.clone(),
+            history: history.clone(),
+            user_message: message.to_string(),
+            tools: &server.tools,
+            ctx: ctx.clone(),
+            max_iterations: settings.max_iterations,
+            max_tokens: settings.max_tokens,
+            observer: observer.clone(),
+            on_text: Some(on_text.clone()),
+            interrupt: interrupt.clone(),
+        })
+        .await;
+
+        match attempt {
+            Ok(result) => break result,
+            Err(e) if !retried && is_context_overflow(&e) => {
+                eprintln!("(joy) 上下文超了，压缩后重试一次");
+                retried = true;
+                let (forced_history, forced_summary) = load_history(
+                    &server.chat,
+                    resolved,
+                    session_id,
+                    settings.history_turns,
+                    0,
+                    Some(FORCED_RETRY_TURNS),
+                )
+                .await;
+                history = forced_history;
+                summary = forced_summary;
+                system = build_system(
+                    &soul,
+                    &resolved.model,
+                    &resolved.provider_id,
+                    &memory_context,
+                    &skills,
+                    summary.as_deref(),
+                );
+            }
+            Err(e) => {
+                return Err(ErrorObject {
+                    code: codes::PROVIDER_ERROR,
+                    message: format!("模型调用失败：{e}"),
+                    data: None,
+                })
+            }
+        }
+    };
 
     Ok(FullTurn {
         result,
@@ -769,14 +847,27 @@ fn build_system(
 /// 只有滑窗，被挤出去的那部分就等于失忆。所以：被挤出去的老轮次交给
 /// `compaction` 折成一段摘要（失败开放，最差也是截断摘录），随会话存库，
 /// 每轮拼进 system prompt。返回 `(工作记忆, 摘要)`。
+/// `token_budget` 是这一轮**能花在历史上**的近似 token 数；`window_override`
+/// 是「上下文溢出后强制压缩」那条路：指定保留几轮，不再看预算。
+#[allow(clippy::too_many_arguments)]
 async fn load_history(
     chat: &joyczl_state::Chat,
     resolved: &Resolved,
     session_id: &str,
     history_turns: i32,
+    token_budget: usize,
+    window_override: Option<usize>,
 ) -> (Vec<Message>, Option<String>) {
     let pairs = chat.session_history(session_id).await.unwrap_or_default();
-    let window = history_turns.max(0) as usize;
+    let ceiling = history_turns.max(0) as usize;
+    // 轮数是上限、token 是闸门。
+    let window = match window_override {
+        Some(forced) => forced,
+        None => ceiling.min(joyczl_memory::compaction::turns_that_fit(
+            &pairs,
+            token_budget,
+        )),
+    };
 
     let summary = joyczl_memory::compaction::refresh(
         chat,

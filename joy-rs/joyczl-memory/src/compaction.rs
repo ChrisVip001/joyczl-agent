@@ -133,6 +133,30 @@ pub fn newly_evicted(
     pairs[covered..evicted_len].to_vec()
 }
 
+/// 预算里装得下多少轮：从**最新**往回装，装到装不下为止。
+///
+/// 这是「按 token 触发压缩」的落点：预算小了，保留下来的轮次就少，
+/// 被挤出去的部分由 `roll_forward` 折进摘要。至少保留 1 轮 —— 连最新一轮
+/// 都不给的话，模型会对着摘要回答「你刚才说了什么」。
+///
+/// 估算是近似的（见 `joyczl_provider::tokens`），所以这里只需要量级对。
+pub fn turns_that_fit(pairs: &[(String, String)], budget: usize) -> usize {
+    let mut used = 0usize;
+    let mut kept = 0usize;
+    for (user, assistant) in pairs.iter().rev() {
+        // 两条消息 + 各自固定开销（与 joyczl_provider::tokens 的算法保持一致）。
+        let cost = joyczl_provider::tokens::estimate_text(user)
+            + joyczl_provider::tokens::estimate_text(assistant)
+            + 8;
+        if kept > 0 && used + cost > budget {
+            break;
+        }
+        used += cost;
+        kept += 1;
+    }
+    kept
+}
+
 /// 把摘要接到 system prompt 里。空摘要返回 None，调用方就不加这一段。
 pub fn summary_section(summary: &str) -> Option<String> {
     let summary = summary.trim();

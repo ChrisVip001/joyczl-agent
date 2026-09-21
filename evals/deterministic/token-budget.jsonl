@@ -1,0 +1,9 @@
+# token 预算触发压缩：轮数远没到上限（history_turns=12），但预算先到 —— 老轮次
+# 照样折进摘要。这是「轮数是上限、token 是闸门」那条设计的落点：一个长工具输出
+# 就能把窗口撑爆，而轮数看起来还很"安全"。
+#
+# 参数刻意选得让预算**确定性地**压到 1 轮（窗口 4096 × 5% = 204，被下限抬到 1024，
+# 而 system + 11 个工具声明 + 答案额度 + 摘要预留远超 1024），这样用例不依赖估算的
+# 具体数值。窗口 1 轮意味着：从第 3 轮起，每轮都会多出一次摘要调用 —— 脚本队列
+# 必须把它排在门前面的位置（顺序 = 真实调用顺序：门 → 压缩 → loop）。
+{"id":"token-budget-triggers-compaction","description":"轮数没到上限但 token 超预算：老轮次折进摘要","settings":{"history_turns":12,"context_window":4096,"max_tokens":256,"compact_threshold":0.05},"turns":[{"message":"记住这个代号：zeta-secret-9","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"好的。"}]},{"message":"再记一个：alpha-bravo-charlie","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"也记下了。"}]},{"message":"今天天气怎么样","gate":{"retrieve":false,"query":"","reason":"small talk"},"responses":[{"text":"用户报备过一个代号。"},{"text":"晴天。"}]},{"message":"现在几点","gate":{"retrieve":false,"query":"","reason":"time"},"responses":[{"text":"用户早些时候报备过代号。"},{"text":"十点整。"}]}],"expect":{"last_prompt_contains":["早些时候"],"last_prompt_not_contains":["zeta-secret-9","alpha-bravo-charlie"]}}

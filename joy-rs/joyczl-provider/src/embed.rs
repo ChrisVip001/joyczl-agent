@@ -78,7 +78,7 @@ impl Embedder {
         let status = response.status().as_u16();
         let body = response.text().await?;
         if status >= 400 {
-            return Err(ProviderError::Http { status, body });
+            return Err(ProviderError::from_http(status, body));
         }
         let parsed: serde_json::Value = serde_json::from_str(&body)
             .map_err(|e| ProviderError::Parse(format!("embedding 应答不是 JSON：{e}")))?;

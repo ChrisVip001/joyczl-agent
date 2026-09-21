@@ -73,6 +73,13 @@ pub struct SettingsOverrides {
     #[serde(default)]
     pub max_iterations: Option<i32>,
     #[serde(default)]
+    pub max_tokens: Option<i32>,
+    /// 覆盖上下文窗口的近似值 —— token 触发的压缩要能在用例里钉死。
+    #[serde(default)]
+    pub context_window: Option<u32>,
+    #[serde(default)]
+    pub compact_threshold: Option<f64>,
+    #[serde(default)]
     pub graph_workflows: Option<bool>,
     /// 执行工具的开与放行规则（见 joyczl-tools 的 exec.rs）。
     #[serde(default)]

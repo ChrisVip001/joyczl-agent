@@ -22,6 +22,7 @@ pub mod error;
 pub mod mock;
 pub mod openai;
 pub mod sse;
+pub mod tokens;
 
 pub use error::ProviderError;
 
@@ -210,6 +211,13 @@ pub struct ProviderInfo {
     pub model: &'static str,
     /// 便宜模型（检索门 / consolidation 用）
     pub small_model: &'static str,
+    /// 上下文窗口的**近似值**（token）。用途只有一个：算「什么时候该压缩」
+    /// （见 `tokens.rs` 与 `JOY_COMPACT_THRESHOLD`）。
+    ///
+    /// 估小了只会让压缩早发生（多花一次便宜模型调用），估大了才会溢出 ——
+    /// 所以取值一律偏保守。真实上限以 provider 自己报的错为准：那类错误会被
+    /// 认出来（`ProviderError::ContextOverflow`），压缩后重试一次。
+    pub context_window: u32,
 }
 
 impl ProviderInfo {
@@ -230,6 +238,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: None,
         model: "claude-sonnet-5",
         small_model: "claude-haiku-4-5-20251001",
+        context_window: 200_000,
     },
     ProviderInfo {
         id: "openai",
@@ -238,6 +247,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: None,
         model: "gpt-5.5",
         small_model: "gpt-4.1-mini",
+        context_window: 200_000,
     },
     ProviderInfo {
         id: "openrouter",
@@ -246,6 +256,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://openrouter.ai/api/v1"),
         model: "nvidia/nemotron-3-super-120b-a12b:free",
         small_model: "google/gemma-4-26b-a4b-it:free",
+        context_window: 128_000,
     },
     ProviderInfo {
         id: "gemini",
@@ -254,6 +265,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://generativelanguage.googleapis.com/v1beta/openai/"),
         model: "gemini-3.5-flash",
         small_model: "gemini-3.1-flash-lite",
+        context_window: 1_000_000,
     },
     ProviderInfo {
         id: "deepseek",
@@ -262,6 +274,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://api.deepseek.com"),
         model: "deepseek-v4-pro",
         small_model: "deepseek-v4-pro",
+        context_window: 128_000,
     },
     ProviderInfo {
         id: "minimax",
@@ -270,6 +283,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://api.minimaxi.com/anthropic"),
         model: "MiniMax-M3",
         small_model: "MiniMax-M2",
+        context_window: 200_000,
     },
     ProviderInfo {
         id: "kimi",
@@ -278,6 +292,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://api.moonshot.ai/anthropic"),
         model: "kimi-k3",
         small_model: "kimi-k2.6",
+        context_window: 200_000,
     },
     ProviderInfo {
         id: "glm",
@@ -286,6 +301,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://api.z.ai/api/anthropic"),
         model: "glm-5.2",
         small_model: "glm-5-turbo",
+        context_window: 200_000,
     },
     ProviderInfo {
         id: "xai",
@@ -294,6 +310,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://api.x.ai/v1"),
         model: "grok-4",
         small_model: "grok-4-fast",
+        context_window: 256_000,
     },
     ProviderInfo {
         id: "opencode_zen",
@@ -302,6 +319,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://opencode.ai/zen/v1"),
         model: "deepseek-v4-flash-free",
         small_model: "deepseek-v4-flash-free",
+        context_window: 128_000,
     },
     ProviderInfo {
         id: "opencode_go",
@@ -310,6 +328,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         base_url: Some("https://opencode.ai/zen/go/v1"),
         model: "deepseek-v4-flash",
         small_model: "deepseek-v4-flash",
+        context_window: 128_000,
     },
     ProviderInfo {
         // 本地推理：不需要 key，不需要网络。`key_env` 空着就是声明这件事。
@@ -323,6 +342,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         // consolidation 用的便宜模型）；换成自己装过的名字用 JOY_MODEL。
         model: "qwen3:8b",
         small_model: "qwen3:4b",
+        context_window: 32_768,
     },
 ];
 
@@ -367,6 +387,22 @@ pub struct Resolved {
     pub client: Arc<dyn Provider>,
     pub model: String,
     pub small_model: String,
+}
+
+/// 表里没有的 provider（mock、评测、自建网关）按这个数算上下文窗口。
+/// 保守取值：压缩早发生只是多花一次便宜调用，溢出要多跑一整轮请求。
+pub const DEFAULT_CONTEXT_WINDOW: u32 = 32_768;
+
+impl Resolved {
+    /// 这一轮的上下文窗口近似值。查 `PROVIDERS` 表，查不到就用默认。
+    ///
+    /// 不把窗口塞进 `Resolved` 的字段里：它本来就住在表里，多一份副本就多一处
+    /// 会不一致的地方（而且每加一个 provider 都得记得同步两处）。
+    pub fn context_window(&self) -> u32 {
+        lookup(&self.provider_id)
+            .map(|info| info.context_window)
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW)
+    }
 }
 
 // 手写 Debug：dyn Provider 没法 derive，而测试里 expect_err 需要它。

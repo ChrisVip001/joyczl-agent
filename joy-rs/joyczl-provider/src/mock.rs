@@ -14,10 +14,14 @@ use crate::{
     Usage,
 };
 
+/// 队列里的一项：可以是应答，也可以是一次**失败** ——
+/// 「上下文溢出 → 压缩 → 重试」这类路径必须能脚本化。
+pub type MockOutcome = Result<CreateResponse, ProviderError>;
+
 pub struct Mock {
     /// 队列里的应答按序弹出；空了就报错 —— 这样「模型说的话比测试预期的多」
     /// 会立刻暴露，而不是悄悄沿用上一条。
-    responses: Mutex<VecDeque<CreateResponse>>,
+    responses: Mutex<VecDeque<MockOutcome>>,
     /// 收到的请求，供断言用（比如确认 system 和 tools 真的传进去了）。
     pub received: Mutex<Vec<CreateRequest>>,
     /// true = `stream()` 会把文本拆成小块逐个回调，用来测流式路径。
@@ -28,8 +32,13 @@ pub struct Mock {
 
 impl Mock {
     pub fn new(responses: Vec<CreateResponse>) -> Self {
+        Self::with_outcomes(responses.into_iter().map(Ok).collect())
+    }
+
+    /// 手工排「成功 or 失败」的队列。
+    pub fn with_outcomes(outcomes: Vec<MockOutcome>) -> Self {
         Self {
-            responses: Mutex::new(responses.into()),
+            responses: Mutex::new(outcomes.into()),
             received: Mutex::new(Vec::new()),
             deltas: false,
             streamed: Mutex::new(Vec::new()),
@@ -44,13 +53,21 @@ impl Mock {
         }
     }
 
+    /// 一次「上下文超出窗口」的失败 —— provider 真的会这么报。
+    pub fn context_overflow() -> MockOutcome {
+        Err(ProviderError::ContextOverflow {
+            status: 400,
+            body: "This model's maximum context length is 200000 tokens".to_string(),
+        })
+    }
+
     fn take(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
         self.received.lock().expect("锁").push(request);
         self.responses
             .lock()
             .expect("锁")
             .pop_front()
-            .ok_or_else(|| ProviderError::Api("mock 的应答用完了".to_string()))
+            .unwrap_or_else(|| Err(ProviderError::Api("mock 的应答用完了".to_string())))
     }
 
     /// 一条纯文本应答，最常用的形状。

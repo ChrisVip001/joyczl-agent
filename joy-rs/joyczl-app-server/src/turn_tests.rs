@@ -608,3 +608,106 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
     assert_eq!(row["inputTokens"], 10);
     assert_eq!(row["iterations"], 1);
 }
+
+// ---- 上下文溢出：压缩后重试一次 ---------------------------------------------
+
+/// 溢出是唯一值得重试的错误：压一次再试，成功就照常收尾。
+#[tokio::test]
+async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
+    let mock = Arc::new(Mock::with_outcomes(vec![
+        // 门
+        Ok(Mock::text(
+            r#"{"retrieve": false, "query": "", "reason": "small talk"}"#,
+        )),
+        // 第一次 loop：provider 说上下文超了
+        Mock::context_overflow(),
+        // 重试前的强制压缩（摘要那一次模型调用）
+        Ok(Mock::text("更早的对话摘要。")),
+        // 第二次 loop：成功
+        Ok(Mock::text("四。")),
+    ]));
+    let server = server(mock.clone(), false).await;
+    // 攒几轮历史 —— 强制压缩得有东西可折。
+    for i in 0..4 {
+        server
+            .chat
+            .append_exchange(
+                &format!("问题 {i}"),
+                &format!("回答 {i}"),
+                "test",
+                "cli",
+                None,
+            )
+            .await
+            .expect("写会话");
+    }
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("test".to_string()),
+            message: "2+2 等于几？".to_string(),
+            stream: Some(true),
+        },
+        RequestId::Number(1),
+        &EventSink::new(tx),
+    )
+    .await
+    .expect("溢出后重试该跑通");
+
+    let mut reply = String::new();
+    while let Ok(frame) = rx.try_recv() {
+        if let Frame::Notification(ServerNotification::TurnCompleted(done)) = frame {
+            reply = done.reply.clone();
+        }
+    }
+    assert_eq!(reply, "四。");
+    assert_eq!(
+        mock.received.lock().expect("锁").len(),
+        4,
+        "门 + 溢出 + 摘要 + 重试，一次都不多"
+    );
+    assert!(
+        server
+            .chat
+            .load_rollup("test")
+            .await
+            .expect("查库")
+            .is_some(),
+        "强制压缩该留下摘要"
+    );
+}
+
+/// 别的错误**不**重试：重试只会用同样的方式再失败一次（白等一倍时间）。
+#[tokio::test]
+async fn a_plain_provider_error_is_not_retried() {
+    let mock = Arc::new(Mock::with_outcomes(vec![
+        Ok(Mock::text(
+            r#"{"retrieve": false, "query": "", "reason": "small talk"}"#,
+        )),
+        Err(joyczl_provider::ProviderError::Api("boom".to_string())),
+    ]));
+    let server = server(mock.clone(), false).await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+
+    let error = crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("test".to_string()),
+            message: "你好".to_string(),
+            stream: Some(true),
+        },
+        RequestId::Number(1),
+        &EventSink::new(tx),
+    )
+    .await
+    .expect_err("要如实报错");
+
+    assert_eq!(error.code, joyczl_protocol::codes::PROVIDER_ERROR);
+    assert_eq!(
+        mock.received.lock().expect("锁").len(),
+        2,
+        "门一次 + loop 一次，不该有第二次模型调用"
+    );
+}

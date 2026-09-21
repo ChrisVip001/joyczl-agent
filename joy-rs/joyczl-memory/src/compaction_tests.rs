@@ -121,3 +121,21 @@ async fn refresh_persists_the_waterline_so_the_next_turn_does_not_recompute() {
         "水位线没过，不该再调一次模型"
     );
 }
+
+#[test]
+fn the_token_budget_decides_how_many_turns_survive() {
+    use super::compaction::turns_that_fit;
+
+    let pairs = pairs(5);
+    assert_eq!(turns_that_fit(&pairs, usize::MAX), 5, "预算够就全留");
+    assert_eq!(turns_that_fit(&pairs, 0), 1, "预算再紧也要留最新一轮");
+    assert!(turns_that_fit(&pairs, 1_000_000) == 5);
+    assert_eq!(turns_that_fit(&[], 100), 0, "没有历史就没有轮次");
+
+    // 预算只够装下后面一部分：从**最新**往回装。
+    let tight = turns_that_fit(&pairs, 40);
+    assert!(
+        (1..5).contains(&tight),
+        "装不下 5 轮，但也不该是 0：{tight}"
+    );
+}

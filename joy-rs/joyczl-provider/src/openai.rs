@@ -104,14 +104,11 @@ impl Client {
                 retry["max_tokens"] = retry["max_completion_tokens"].take();
                 let (s2, t2) = self.post(&retry).await?;
                 if s2 >= 400 {
-                    return Err(ProviderError::Http {
-                        status: s2,
-                        body: t2,
-                    });
+                    return Err(ProviderError::from_http(s2, t2));
                 }
                 return from_openai(&t2);
             }
-            return Err(ProviderError::Http { status, body: text });
+            return Err(ProviderError::from_http(status, text));
         }
         from_openai(&text)
     }
@@ -139,7 +136,7 @@ impl Client {
         let status = response.status().as_u16();
         if status >= 400 {
             let text = response.text().await?;
-            return Err(ProviderError::Http { status, body: text });
+            return Err(ProviderError::from_http(status, text));
         }
 
         let mut tools: BTreeMap<i64, PartialCall> = BTreeMap::new();

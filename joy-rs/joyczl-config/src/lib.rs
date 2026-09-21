@@ -25,6 +25,10 @@ fn env_int(name: &str, default: i32) -> i32 {
     env(name).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
+fn env_float(name: &str, default: f64) -> f64 {
+    env(name).and_then(|v| v.parse().ok()).unwrap_or(default)
+}
+
 // ---- 旋钮的边界：唯一来源 ----------------------------------------------------
 //
 // 两个入口共用这张表：**启动期**（`Settings::validate`，非法值当场退出）与
@@ -108,7 +112,10 @@ fn check_bound(key: &str, value: i64) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// 只有 PartialEq，没有 Eq：`compact_threshold` 是 f64，而 f64 不是 Eq
+// （NaN 让「相等」失去自反性）。除它之外全是整数与布尔，用不上 Eq 的地方
+// 就别假装用得上。
+#[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     // ---- LLM：选一个 provider，配它的 key。见 joyczl-provider 的 PROVIDERS。
     pub provider: String,
@@ -131,7 +138,17 @@ pub struct Settings {
     pub max_tokens: i32,
     /// 工作记忆滑窗：只把最近 N 轮塞进 prompt。更老的在 state.db 里，
     /// 靠检索门 + 情景记忆找回来。
+    ///
+    /// 它是**上限**，不是触发条件：真正决定什么时候压缩的是 token，
+    /// 见 `compact_threshold`。
     pub history_turns: i32,
+    /// `JOY_CONTEXT_WINDOW`：覆盖 provider 表里的上下文窗口近似值。
+    /// 本地模型（ollama / LM Studio）的窗口千差万别，表里的值只是常见默认。
+    pub context_window: Option<u32>,
+    /// `JOY_COMPACT_THRESHOLD`：用到上下文窗口的多少比例就开始压缩
+    /// （默认 0.8）。轮数是上限、token 是闸门 —— 一个长工具输出就能撑爆
+    /// 窗口，而轮数看起来还很"安全"。
+    pub compact_threshold: f64,
 
     // ---- 记忆
     /// 每 N 轮新对话才提炼一次事实。
@@ -175,6 +192,8 @@ impl Default for Settings {
             max_iterations: 10,
             max_tokens: 8192,
             history_turns: 12,
+            context_window: None,
+            compact_threshold: 0.8,
             consolidate_every: 6,
             retrieval_top_k: 4,
             apple_calendar: false,
@@ -205,6 +224,8 @@ impl Settings {
             max_iterations: env_int("JOY_MAX_ITERATIONS", d.max_iterations),
             max_tokens: env_int("JOY_MAX_TOKENS", d.max_tokens),
             history_turns: env_int("JOY_HISTORY_TURNS", d.history_turns),
+            context_window: env("JOY_CONTEXT_WINDOW").and_then(|v| v.parse().ok()),
+            compact_threshold: env_float("JOY_COMPACT_THRESHOLD", d.compact_threshold),
             consolidate_every: env_int("JOY_CONSOLIDATE_EVERY", d.consolidate_every),
             retrieval_top_k: env_int("JOY_RETRIEVAL_TOP_K", d.retrieval_top_k),
             apple_calendar: env_bool("JOY_APPLE_CALENDAR"),
@@ -247,6 +268,31 @@ impl Settings {
         check_bound("JOY_RETRIEVAL_TOP_K", self.retrieval_top_k as i64)?;
         check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
         check_bound("JOY_EXEC_TIMEOUT", self.exec_timeout_secs)?;
+
+        // 覆盖窗口时顺手查一条关系：答案的额度不能比窗口还大 —— 那种配置
+        // 下模型永远答不完，而表现是「莫名其妙被截断」。
+        if let Some(window) = self.context_window {
+            if !(1_024..=10_000_000).contains(&window) {
+                return Err(format!(
+                    "JOY_CONTEXT_WINDOW 应该在 1024 到 10000000 之间，收到 {window}"
+                ));
+            }
+            if self.max_tokens as u32 >= window {
+                return Err(format!(
+                    "JOY_MAX_TOKENS（{}）不能大于等于 JOY_CONTEXT_WINDOW（{window}）—— \
+                     那样连答案都放不下",
+                    self.max_tokens
+                ));
+            }
+        }
+
+        // 比例型旋钮单独查（不是整数，进不了 BOUNDS 那张表）。
+        if !(0.05..=0.95).contains(&self.compact_threshold) {
+            return Err(format!(
+                "JOY_COMPACT_THRESHOLD 应该在 0.05 到 0.95 之间，收到 {}",
+                self.compact_threshold
+            ));
+        }
 
         // 放行规则：空表合法（= 什么都不放行，那是默认）。但表里每一条都得是
         // 一条**能用的**规则 —— 写坏的规则会静默地永不匹配，而命令被拒时
@@ -603,6 +649,54 @@ mod config_tests {
             ..Settings::default()
         };
         assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn the_compaction_threshold_is_a_ratio() {
+        // 0 会让每一轮都压缩，1 以上会让压缩永远不发生 —— 两者都是配错了。
+        for bad in [0.0, 0.01, 1.0, 2.0, -0.5] {
+            let s = Settings {
+                compact_threshold: bad,
+                ..Settings::default()
+            };
+            let error = s.validate().expect_err("越界的比例要被抓到");
+            assert!(error.contains("JOY_COMPACT_THRESHOLD"), "{error}");
+        }
+        let s = Settings {
+            compact_threshold: 0.5,
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn a_window_override_must_be_sane() {
+        let too_small = Settings {
+            context_window: Some(10),
+            ..Settings::default()
+        };
+        assert!(too_small
+            .validate()
+            .expect_err("10 的窗口没意义")
+            .contains("JOY_CONTEXT_WINDOW"));
+
+        // 答案额度比窗口还大：永远答不完，属于配错了。
+        let impossible = Settings {
+            context_window: Some(4096),
+            max_tokens: 8192,
+            ..Settings::default()
+        };
+        assert!(impossible
+            .validate()
+            .expect_err("答案放不下")
+            .contains("JOY_MAX_TOKENS"));
+
+        let ok = Settings {
+            context_window: Some(8192),
+            max_tokens: 1024,
+            ..Settings::default()
+        };
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

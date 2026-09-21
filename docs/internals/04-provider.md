@@ -211,10 +211,29 @@ fn authed(&self, b: RequestBuilder) -> RequestBuilder {
 **刻意的克制**：没有重试、没有降级、没有缓存。向量是关键词检索的加分项，
 算不出来时那条腿短了，检索本身照样工作（⑦ 里的 `search_hybrid` 兜住）。
 
+## 4.8b `tokens.rs`：给「离上限还有多远」一个数
+
+只有一件事要用它：决定**什么时候压缩**工作记忆（`JOY_COMPACT_THRESHOLD`）。
+准确用量永远以 provider 回报的 `usage` 为准（那才是计价与 trace 的数），
+这里只要量级对 —— 它的唯一后果是「压缩早一点或晚一点发生」。
+
+- 编码器用 cl100k（跨厂商的公共近似），词表编进二进制，运行时不联网；
+- `estimate_text` / `estimate_messages` / `estimate_tools` 三个函数，后两个含固定开销
+  （每条消息 4 token、每请求 8 token）；
+- **工具声明也要算进去**：MCP 接上十几个工具就是几千 token，不扣掉它，压缩会来得太晚；
+- 中文在这个编码器下被高估（约 1–2 token/字），也就是压缩会早一点发生 ——
+  这个方向的误差可以接受，反过来的（低估 → 溢出 → 白跑一轮请求）才是要避免的。
+
+`ProviderInfo.context_window` 是**近似值**，一律偏保守；`JOY_CONTEXT_WINDOW` 可以覆盖
+（本地模型窗口千差万别）；`Resolved::context_window()` 查表取值，表里没有的
+（mock / 自建网关）走 `DEFAULT_CONTEXT_WINDOW`。
+
 ## 4.9 `mock.rs`：让整层可测的替身
 
 ```rust
 Mock::new(vec![...])        // 按序弹出应答；弹空 → Err("mock 的应答用完了")
+Mock::with_outcomes(vec![...])  // 手工排「成功 or 失败」——「溢出→压缩→重试」这类路径要能脚本化
+Mock::context_overflow()    // 一次真的会发生的「上下文超出窗口」
 Mock::streaming(vec![...])  // 流式模式
 Mock::text("…")             // 便捷：EndTurn + usage 10/5
 Mock::tool_use(id, name, input)  // 便捷：ToolUse + usage 20/8

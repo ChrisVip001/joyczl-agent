@@ -11,6 +11,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+tiktoken-rs = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
 joyczl-config = { workspace = true }

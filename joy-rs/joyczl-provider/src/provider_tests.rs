@@ -211,3 +211,62 @@ fn a_cloud_provider_still_requires_a_key() {
     let error = crate::resolve(&settings).expect_err("云端缺 key 必须报错");
     assert!(error.contains("ANTHROPIC_API_KEY"), "{error}");
 }
+
+// ---- token 估算 ------------------------------------------------------------
+
+#[test]
+fn token_estimation_is_monotonic_and_never_zero_for_real_text() {
+    assert_eq!(crate::tokens::estimate_text(""), 0);
+    assert_eq!(crate::tokens::estimate_text("   "), 0, "空白不算 token");
+
+    let short = crate::tokens::estimate_text("你好");
+    let long = crate::tokens::estimate_text("你好，今天天气不错，我们下午去公园散步吧");
+    assert!(short > 0, "中文至少要数出 token");
+    assert!(long > short, "更长的文本成本更高");
+
+    // 中文在这个编码器下偏高，但量级要对：一个字至少一个 token。
+    assert!(crate::tokens::estimate_text("中文测试四个字") >= 4);
+}
+
+#[test]
+fn tool_declarations_cost_tokens_too() {
+    let schema = ToolSchema {
+        name: "save_note".to_string(),
+        description: "记住一件值得长期记住的事".to_string(),
+        input_schema: json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+    };
+    assert!(crate::tokens::estimate_tools(std::slice::from_ref(&schema)) > 0);
+    assert_eq!(
+        crate::tokens::estimate_tools(&[]),
+        0,
+        "没有工具就不该占预算"
+    );
+    let two = crate::tokens::estimate_tools(&[schema.clone(), schema.clone()]);
+    let one = crate::tokens::estimate_tools(std::slice::from_ref(&schema));
+    assert!(
+        two > one,
+        "工具越多越贵 —— 这正是 MCP 接一堆工具时压缩会提前的原因"
+    );
+}
+
+#[test]
+fn context_overflow_is_recognised_from_the_wordings_providers_actually_use() {
+    use crate::error::looks_like_context_overflow;
+    // OpenAI 风格
+    assert!(looks_like_context_overflow(
+        400,
+        "This model's maximum context length is 200000 tokens"
+    ));
+    // Anthropic 风格
+    assert!(looks_like_context_overflow(
+        400,
+        "prompt is too long: 250000 tokens > 200000 maximum"
+    ));
+    // 中文网关
+    assert!(looks_like_context_overflow(400, "请求超出上下文长度限制"));
+    // 别的 4xx 不该被误判成溢出 —— 误判会带来一次没意义的压缩
+    assert!(!looks_like_context_overflow(400, "invalid api key"));
+    assert!(!looks_like_context_overflow(404, "context length"));
+    // 2xx 更不该
+    assert!(!looks_like_context_overflow(200, "context length"));
+}

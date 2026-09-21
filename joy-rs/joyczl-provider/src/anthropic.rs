@@ -94,7 +94,7 @@ impl Client {
 
         let (status, text) = self.post(&body).await?;
         if status >= 400 {
-            return Err(ProviderError::Http { status, body: text });
+            return Err(ProviderError::from_http(status, text));
         }
 
         let value: Value = serde_json::from_str(&text)
@@ -133,7 +133,7 @@ impl Client {
         let status = response.status().as_u16();
         if status >= 400 {
             let text = response.text().await?;
-            return Err(ProviderError::Http { status, body: text });
+            return Err(ProviderError::from_http(status, text));
         }
 
         // index → (id, name, 到目前为止攒到的参数 JSON)

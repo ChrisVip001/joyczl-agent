@@ -19,6 +19,8 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_MAX_ITERATIONS` | 1 – 100 |
 | `JOY_MAX_TOKENS` | 128 – 200000 |
 | `JOY_HISTORY_TURNS` | 0 – 1000 |
+| `JOY_CONTEXT_WINDOW` | 1024 – 10000000，且必须大于 `JOY_MAX_TOKENS` |
+| `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
@@ -44,7 +46,9 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 |---|---|---|
 | `JOY_MAX_ITERATIONS` | `10` | 单轮 loop 的迭代上限（硬停护栏） |
 | `JOY_MAX_TOKENS` | `8192` | 单次模型调用输出上限（给推理模型留思考余量） |
-| `JOY_HISTORY_TURNS` | `12` | 工作记忆滑窗：只把最近 N 轮塞进 prompt（更老的折进滚动摘要，不是丢掉） |
+| `JOY_HISTORY_TURNS` | `12` | 工作记忆滑窗的**上限**：只把最近 N 轮塞进 prompt（更老的折进滚动摘要，不是丢掉） |
+| `JOY_CONTEXT_WINDOW` | provider 默认 | 覆盖上下文窗口的估算值（本地模型窗口差异极大，表里只是常见默认） |
+| `JOY_COMPACT_THRESHOLD` | `0.8` | 用到窗口的这个比例就开始压缩 —— token 才是闸门，轮数是上限 |
 | `JOY_CONSOLIDATE_EVERY` | `6` | 每 N 轮新对话触发一次 consolidation |
 | `JOY_RETRIEVAL_TOP_K` | `4` | 检索门放行时拉回的 facts 条数 |
 | `JOY_GRAPH_WORKFLOWS` | `0` | 打开 triage 前门图（失败开放，只能更快不能更差） |

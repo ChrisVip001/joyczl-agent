@@ -48,6 +48,11 @@ tokio = { version = "1", features = [
 # 关掉默认特性 —— resolve-http/file 那套远程引用我们用不上（schema 全是本地字面量）。
 jsonschema = { version = "0.56", default-features = false }
 
+# token 估算：压缩要按「离上下文上限有多近」触发，而不是按轮数。
+# 跨厂商近似（cl100k 编码器），准确用量仍以 provider 回报的 usage 为准。
+# 关掉默认特性：只用 cl100k_base。BPE 词表是编进二进制的，不联网。
+tiktoken-rs = { version = "0.12", default-features = false }
+
 # 非 test 构建下把 `#[derive(TS)]` / `#[derive(JsonSchema)]` 替换成空宏，
 # 这样协议 crate 不必把 ts-rs / schemars 打进线上二进制。
 joyczl-protocol-noop-macros = { path = "joyczl-protocol-noop-macros" }

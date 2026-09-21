@@ -74,6 +74,8 @@ clone settings
 | 5 | **登记取消令牌** + `_guard = TurnGuard{…}` | 守卫先建，无论怎么退出都摘表 |
 | 6 | 发 `TurnStarted` | 客户端据此显示用户消息 |
 | 7 | **前门 `graph_route`**；返回 `None`（图关着/坏了）就调 `full_turn` | 图只能省时间，不能减能力 |
+| 7b | `full_turn` 里先算**上下文预算**（窗口 × `JOY_COMPACT_THRESHOLD` 减掉 system/工具/答案/摘要的预留），再用它决定保留几轮历史 | token 是闸门、轮数是上限（⑦） |
+| 7c | loop 抛错时只有**上下文溢出**会触发「强制压缩 + 重试一次」 | 别的错误重试只会以同样方式再失败 |
 | 8 | 补发 `ToolCompleted` 通知（每个工具一条） | `ToolStarted` 在 loop 期间由 observer 发（⑨.4），这里补的是结束态 |
 | 9 | `fold_tool_activity(reply, tool_calls)` | 见 9.3 |
 | 10 | `quick = graph.route == Quick` | |

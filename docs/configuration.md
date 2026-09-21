@@ -22,6 +22,8 @@ points cannot disagree.
 | `JOY_MAX_ITERATIONS` | 1 – 100 |
 | `JOY_MAX_TOKENS` | 128 – 200000 |
 | `JOY_HISTORY_TURNS` | 0 – 1000 |
+| `JOY_CONTEXT_WINDOW` | 1024 – 10000000, and must exceed `JOY_MAX_TOKENS` |
+| `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
@@ -48,7 +50,9 @@ nothing", which is the default.
 |---|---|---|
 | `JOY_MAX_ITERATIONS` | `10` | hard iteration cap for one loop |
 | `JOY_MAX_TOKENS` | `8192` | per-call output cap (headroom for reasoning models) |
-| `JOY_HISTORY_TURNS` | `12` | working-memory window: only the last N turns enter the prompt (older turns are folded into a rolling summary, not dropped) |
+| `JOY_HISTORY_TURNS` | `12` | working-memory window **ceiling**: only the last N turns enter the prompt (older turns are folded into a rolling summary, not dropped) |
+| `JOY_CONTEXT_WINDOW` | provider default | override the context-window estimate (local models differ wildly; the table holds common defaults) |
+| `JOY_COMPACT_THRESHOLD` | `0.8` | start compacting at this fraction of the window — tokens are the real gate, turns are the ceiling |
 | `JOY_CONSOLIDATE_EVERY` | `6` | run consolidation every N new turns |
 | `JOY_RETRIEVAL_TOP_K` | `4` | facts fetched when the gate opens |
 | `JOY_GRAPH_WORKFLOWS` | `0` | enable the triage front-door graph (fail-open, costs time only) |
