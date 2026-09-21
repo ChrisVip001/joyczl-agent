@@ -27,6 +27,7 @@ points cannot disagree.
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
+| `JOY_LLM_RETRIES` | 0 – 5 |
 | `JOY_EXEC_TIMEOUT` | 1 – 3600 |
 
 `JOY_EXEC_ALLOW` is checked too: at most 64 rules, each non-empty, no newlines,
@@ -43,6 +44,7 @@ nothing", which is the default.
 | `JOY_BASE_URL` | provider default | override the API endpoint (tests can point it at a fake server) |
 | `JOY_MODEL` / `JOY_SMALL_MODEL` | provider default | main model / cheap model (retrieval gate and consolidation) |
 | `JOY_LLM_TIMEOUT` | `120` | per-call model timeout in seconds |
+| `JOY_LLM_RETRIES` | `2` | retries on 429/5xx/network hiccups — exponential backoff (500ms, capped at 8s per wait, 30s total), **announced every time**, never a different provider; `0` disables |
 
 ## Behavior knobs
 

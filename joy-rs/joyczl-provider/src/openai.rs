@@ -25,10 +25,12 @@ pub struct Client {
     http: HttpClient,
     base_url: String,
     api_key: String,
+    /// 限流/临时故障时最多重试几次（`JOY_LLM_RETRIES`）。
+    max_retries: u32,
 }
 
 impl Client {
-    pub fn new(api_key: &str, base_url: Option<&str>, timeout: Duration) -> Self {
+    pub fn new(api_key: &str, base_url: Option<&str>, timeout: Duration, max_retries: u32) -> Self {
         Self {
             http: HttpClient::builder()
                 .timeout(timeout)
@@ -39,6 +41,7 @@ impl Client {
                 .trim_end_matches('/')
                 .to_string(),
             api_key: api_key.to_string(),
+            max_retries,
         }
     }
 
@@ -53,18 +56,20 @@ impl Client {
         }
     }
 
-    async fn post(&self, body: &Value) -> Result<(u16, String), ProviderError> {
-        let response = self
-            .authed(
-                self.http
-                    .post(format!("{}/chat/completions", self.base_url)),
-            )
-            .json(body)
-            .send()
-            .await?;
-        let status = response.status().as_u16();
-        let text = response.text().await?;
-        Ok((status, text))
+    /// 发一次请求（限流/临时故障会退避重试），返回**还没读 body** 的应答 ——
+    /// 流式那条路要自己接着读。
+    async fn send(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
+        let url = format!("{}/chat/completions", self.base_url);
+        crate::retry::with_retries(self.max_retries, || async {
+            Ok(self.authed(self.http.post(&url)).json(body).send().await?)
+        })
+        .await
+    }
+
+    /// 一次性调用用的包装：把 body 读成文本（非 2xx 已经在 `send` 里变成错误）。
+    async fn post(&self, body: &Value) -> Result<String, ProviderError> {
+        let response = self.send(body).await?;
+        response.text().await.map_err(ProviderError::from)
     }
 }
 
@@ -92,24 +97,24 @@ impl Provider for Client {
 impl Client {
     async fn create_inner(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
         let body = to_openai(&request);
-        let (status, text) = self.post(&body).await?;
-        if status >= 400 {
+        let text = match self.post(&body).await {
+            Ok(text) => text,
             // 旧端点只认 max_tokens，不认 max_completion_tokens。只在错误
-            // 真的是关于这个参数时才重试 —— 见过别的失败被这次重试盖住，
-            // 留下一条「用 max_completion_tokens」的迷惑信息。
-            let about_tokens =
-                text.contains("max_completion_tokens") || text.contains("max_tokens");
-            if body.get("max_completion_tokens").is_some() && about_tokens {
+            // 真的是关于这个参数时才换名字重发 —— 见过别的失败被这次重试
+            // 盖住，留下一条「用 max_completion_tokens」的迷惑信息。
+            Err(ProviderError::Http {
+                status: 400,
+                body: why,
+                ..
+            }) if body.get("max_completion_tokens").is_some()
+                && (why.contains("max_completion_tokens") || why.contains("max_tokens")) =>
+            {
                 let mut retry = body.clone();
                 retry["max_tokens"] = retry["max_completion_tokens"].take();
-                let (s2, t2) = self.post(&retry).await?;
-                if s2 >= 400 {
-                    return Err(ProviderError::from_http(s2, t2));
-                }
-                return from_openai(&t2);
+                self.post(&retry).await?
             }
-            return Err(ProviderError::from_http(status, text));
-        }
+            Err(e) => return Err(e),
+        };
         from_openai(&text)
     }
 
@@ -125,19 +130,9 @@ impl Client {
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
 
-        let response = self
-            .authed(
-                self.http
-                    .post(format!("{}/chat/completions", self.base_url)),
-            )
-            .json(&body)
-            .send()
-            .await?;
-        let status = response.status().as_u16();
-        if status >= 400 {
-            let text = response.text().await?;
-            return Err(ProviderError::from_http(status, text));
-        }
+        // 重试只覆盖「拿到应答」这一步：一旦开始读流，中途断开就不再重发 ——
+        // 重发会把已经吐给用户的那半截话变成两遍。
+        let response = self.send(&body).await?;
 
         let mut tools: BTreeMap<i64, PartialCall> = BTreeMap::new();
         let mut text = String::new();

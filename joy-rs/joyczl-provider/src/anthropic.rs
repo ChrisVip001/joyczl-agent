@@ -24,10 +24,12 @@ pub struct Client {
     http: HttpClient,
     base_url: String,
     api_key: String,
+    /// 限流/临时故障时最多重试几次（`JOY_LLM_RETRIES`）。
+    max_retries: u32,
 }
 
 impl Client {
-    pub fn new(api_key: &str, base_url: Option<&str>, timeout: Duration) -> Self {
+    pub fn new(api_key: &str, base_url: Option<&str>, timeout: Duration, max_retries: u32) -> Self {
         Self {
             http: HttpClient::builder()
                 .timeout(timeout)
@@ -38,21 +40,30 @@ impl Client {
                 .trim_end_matches('/')
                 .to_string(),
             api_key: api_key.to_string(),
+            max_retries,
         }
     }
 
-    async fn post(&self, body: &Value) -> Result<(u16, String), ProviderError> {
-        let response = self
-            .http
-            .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", API_VERSION)
-            .json(body)
-            .send()
-            .await?;
-        let status = response.status().as_u16();
-        let text = response.text().await?;
-        Ok((status, text))
+    /// 发一次请求（限流/临时故障会退避重试），返回**还没读 body** 的应答。
+    async fn send(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
+        let url = format!("{}/v1/messages", self.base_url);
+        crate::retry::with_retries(self.max_retries, || async {
+            Ok(self
+                .http
+                .post(&url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", API_VERSION)
+                .json(body)
+                .send()
+                .await?)
+        })
+        .await
+    }
+
+    /// 一次性调用用的包装。
+    async fn post(&self, body: &Value) -> Result<String, ProviderError> {
+        let response = self.send(body).await?;
+        response.text().await.map_err(ProviderError::from)
     }
 }
 
@@ -92,10 +103,7 @@ impl Client {
             body["tools"] = json!(request.tools);
         }
 
-        let (status, text) = self.post(&body).await?;
-        if status >= 400 {
-            return Err(ProviderError::from_http(status, text));
-        }
+        let text = self.post(&body).await?;
 
         let value: Value = serde_json::from_str(&text)
             .map_err(|e| ProviderError::Parse(format!("应答不是合法 JSON：{e}")))?;
@@ -122,19 +130,8 @@ impl Client {
             body["tools"] = json!(request.tools);
         }
 
-        let response = self
-            .http
-            .post(format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", API_VERSION)
-            .json(&body)
-            .send()
-            .await?;
-        let status = response.status().as_u16();
-        if status >= 400 {
-            let text = response.text().await?;
-            return Err(ProviderError::from_http(status, text));
-        }
+        // 重试只覆盖「拿到应答」这一步；开始读流之后断开就不再重发。
+        let response = self.send(&body).await?;
 
         // index → (id, name, 到目前为止攒到的参数 JSON)
         let mut tools: BTreeMap<i64, (String, String, String)> = BTreeMap::new();

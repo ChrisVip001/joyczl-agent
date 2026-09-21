@@ -111,6 +111,15 @@ async fn chat_turn(server: &Server, session_id: &str, message: &str) {
                     decided.decision.reason
                 );
             }
+            // 重试**从不静默**：与其让用户对着一个卡住的界面猜，不如说清楚
+            // 「限流了，等一会儿再来一次」。
+            ServerNotification::Retry(retry) => {
+                end_streamed_line(&mut streamed);
+                println!(
+                    "…模型那边{}，{}ms 后重试（第 {} 次）",
+                    retry.reason, retry.delay_ms, retry.attempt
+                );
+            }
             ServerNotification::ToolStarted(started) => {
                 end_streamed_line(&mut streamed);
                 println!("…正在调用 {}…", started.tool);

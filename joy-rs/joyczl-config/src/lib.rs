@@ -80,6 +80,12 @@ pub const BOUNDS: &[Bound] = &[
     },
     Bound {
         patch_name: None,
+        env_name: "JOY_LLM_RETRIES",
+        min: 0,
+        max: 5,
+    },
+    Bound {
+        patch_name: None,
         env_name: "JOY_LLM_TIMEOUT",
         min: 1,
         max: 3_600,
@@ -130,6 +136,10 @@ pub struct Settings {
     pub home: PathBuf,
 
     // ---- Loop 护栏
+    /// `JOY_LLM_RETRIES`：限流/临时故障时最多退避重试几次（默认 2，上限 5，
+    /// 0 = 关闭）。只重试「再试一次有意义」的错误，而且**每次必发通知** ——
+    /// 见 joyczl-provider 的 retry.rs。
+    pub llm_retries: i32,
     /// 单次模型调用的超时。挂掉的网络调用绝不能让一轮 turn 静默冻结。
     pub llm_timeout_secs: i64,
     pub max_iterations: i32,
@@ -195,6 +205,7 @@ impl Default for Settings {
             model: None,
             small_model: None,
             home: PathBuf::from(".joy"),
+            llm_retries: 2,
             llm_timeout_secs: 120,
             max_iterations: 10,
             max_tokens: 8192,
@@ -229,6 +240,7 @@ impl Settings {
             model: env("JOY_MODEL"),
             small_model: env("JOY_SMALL_MODEL"),
             home: env("JOY_HOME").map(PathBuf::from).unwrap_or(d.home),
+            llm_retries: env_int("JOY_LLM_RETRIES", d.llm_retries),
             llm_timeout_secs: env_int("JOY_LLM_TIMEOUT", d.llm_timeout_secs as i32) as i64,
             max_iterations: env_int("JOY_MAX_ITERATIONS", d.max_iterations),
             max_tokens: env_int("JOY_MAX_TOKENS", d.max_tokens),
@@ -283,6 +295,7 @@ impl Settings {
         check_bound("JOY_HISTORY_TURNS", self.history_turns as i64)?;
         check_bound("JOY_CONSOLIDATE_EVERY", self.consolidate_every as i64)?;
         check_bound("JOY_RETRIEVAL_TOP_K", self.retrieval_top_k as i64)?;
+        check_bound("JOY_LLM_RETRIES", self.llm_retries as i64)?;
         check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
         check_bound("JOY_EXEC_TIMEOUT", self.exec_timeout_secs)?;
 

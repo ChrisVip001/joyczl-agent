@@ -171,6 +171,31 @@ fn authed(&self, b: RequestBuilder) -> RequestBuilder {
 理由写在注释里：一个空的 `Authorization: Bearer ` 头比不带头更糟，有些网关会因此
 回 401。本地端点（Ollama / LM Studio / vLLM）就走这条。
 
+## 4.5b `retry.rs`：有限、可见、不换厂商
+
+只有两类错误值得重试（`ProviderError::retryable`）：**429**（限流）与 **5xx**
+（临时故障），加上网络抖动。别的错误重试只会以同样方式再失败一次 —— 白等一倍
+时间、多花一次配额；尤其不该重试「上下文溢出」（那是要压上下文，不是再撞）。
+
+三条自我约束：
+
+* **有限**：默认 2 次（`JOY_LLM_RETRIES`，上限 5），指数退避 500ms 起、单次等待
+  上限 8 秒、整轮总预算 30 秒。服务端 `Retry-After` 会被尊重，但同样受上限约束
+  —— 一个说「600 秒后再来」的服务端不该把一轮对话挂在那儿。
+* **可见**：每次重试都发一条 `Retry` 通知。绝不静默重试。
+* **不换厂商**：换 provider 是另一个决定（要配 fallback 链、要解释为什么换）。
+
+实现上，重试只包住「拿到应答」这一步（`with_retries`），**开始读流之后断开不再
+重发** —— 重发会把已经吐给用户的那半截话变成两遍。
+
+通知的出口用 **task-local**（`with_note_sink`）而不是 `Provider` trait 的参数：
+trait 签名是与 loop 的契约，不值得为一个通知动它；而「这一轮」正好是任务边界
+（`run_turn` 跑在自己的任务里），task-local 天然是这一轮的作用域，也不会像共享
+字段那样在两个并发 turn 之间串台。没有出口时（评测、库用法）退到 stderr ——
+**绝不静默**。
+
+错误分类与 `Retry-After` 的解析都只有一处实现（`error.rs`），两个 wire 共用。
+
 ## 4.6 `anthropic.rs`：几乎没有翻译
 
 - 请求：`{model, max_tokens, messages}`，`system` 存在才加顶层 `system`，

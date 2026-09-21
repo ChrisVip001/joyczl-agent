@@ -816,6 +816,36 @@
       "description": "请求 id：JSON-RPC 允许数字或字符串。\n\n数字这一支是 `i32` 而不是 `u64`：`u64` 会被 ts-rs 映射成 TypeScript 的 `bigint`，而 `JSON.parse` 出来的是 `number` —— 客户端拿到 `1` 却被告知类型是 `bigint`，这是那种不报错、只在运行时对不上的 bug。跨语言边界只用 `i32`， 跟 v2.rs 的规矩是同一条。",
       "title": "RequestId"
     },
+    "RetryNotification": {
+      "description": "一次「正在重试」的说明。\n\n重试**从不静默**：用户看到的是这句话，而不是一段莫名其妙的长时间停顿。",
+      "properties": {
+        "attempt": {
+          "description": "第几次重试（从 1 开始）。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "delayMs": {
+          "description": "等了多久。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "reason": {
+          "description": "为什么重试（`HTTP 429` / `网络错误：…`）。",
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "delayMs",
+        "reason",
+        "turnId"
+      ],
+      "title": "RetryNotification",
+      "type": "object"
+    },
     "ServerNotification": {
       "description": "一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。",
       "oneOf": [
@@ -890,6 +920,42 @@
           },
           "required": [
             "decision",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "正在重试（限流/临时故障）：**每次必发**，不静默。",
+          "properties": {
+            "attempt": {
+              "description": "第几次重试（从 1 开始）。",
+              "format": "int32",
+              "type": "integer"
+            },
+            "delayMs": {
+              "description": "等了多久。",
+              "format": "int32",
+              "type": "integer"
+            },
+            "reason": {
+              "description": "为什么重试（`HTTP 429` / `网络错误：…`）。",
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "retry"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "attempt",
+            "delayMs",
+            "reason",
             "turnId",
             "type"
           ],
@@ -1721,6 +1787,12 @@
         },
         "provider": {
           "type": "string"
+        },
+        "retries": {
+          "default": 0,
+          "description": "这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。",
+          "format": "int32",
+          "type": "integer"
         },
         "tools": {
           "items": {

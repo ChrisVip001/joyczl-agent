@@ -199,6 +199,15 @@ class RequestId(RootModel[int | str]):
     ]
 
 
+class RetryNotification(BaseModel):
+    attempt: Annotated[int, Field(description='第几次重试（从 1 开始）。')]
+    delayMs: Annotated[int, Field(description='等了多久。')]
+    reason: Annotated[
+        str, Field(description='为什么重试（`HTTP 429` / `网络错误：…`）。')
+    ]
+    turnId: str
+
+
 class ServerNotification1(BaseModel):
     sessionId: str
     ts: Annotated[str, Field(description='ISO 8601，毫秒精度。')]
@@ -219,13 +228,23 @@ class ServerNotification2(BaseModel):
 
 
 class ServerNotification4(BaseModel):
+    attempt: Annotated[int, Field(description='第几次重试（从 1 开始）。')]
+    delayMs: Annotated[int, Field(description='等了多久。')]
+    reason: Annotated[
+        str, Field(description='为什么重试（`HTTP 429` / `网络错误：…`）。')
+    ]
+    turnId: str
+    type: Literal['retry']
+
+
+class ServerNotification5(BaseModel):
     args: Annotated[Any, Field(description='模型给的参数，结构随工具而定。')]
     tool: str
     turnId: str
     type: Literal['toolStarted']
 
 
-class ServerNotification6(BaseModel):
+class ServerNotification7(BaseModel):
     newFacts: Annotated[
         int,
         Field(description='这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。'),
@@ -233,13 +252,13 @@ class ServerNotification6(BaseModel):
     type: Literal['consolidationCompleted']
 
 
-class ServerNotification7(BaseModel):
+class ServerNotification8(BaseModel):
     nodes: list[str]
     type: Literal['graphStarted']
     workflow: str
 
 
-class ServerNotification8(BaseModel):
+class ServerNotification9(BaseModel):
     node: str
     type: Literal['graphNodeStarted']
     visit: Annotated[
@@ -248,7 +267,7 @@ class ServerNotification8(BaseModel):
     workflow: str
 
 
-class ServerNotification9(BaseModel):
+class ServerNotification10(BaseModel):
     error: Annotated[
         str | None,
         Field(
@@ -262,7 +281,7 @@ class ServerNotification9(BaseModel):
     workflow: str
 
 
-class ServerNotification10(BaseModel):
+class ServerNotification11(BaseModel):
     error: str | None = None
     ms: int
     path: list[str]
@@ -271,7 +290,7 @@ class ServerNotification10(BaseModel):
     workflow: str
 
 
-class ServerNotification12(BaseModel):
+class ServerNotification13(BaseModel):
     code: int
     data: Any | None = None
     message: str
@@ -483,7 +502,7 @@ class ServerNotification3(BaseModel):
     type: Literal['gateDecided']
 
 
-class ServerNotification5(BaseModel):
+class ServerNotification6(BaseModel):
     durationMs: int | None = None
     output: Annotated[
         str,
@@ -553,6 +572,10 @@ class TurnMeta(BaseModel):
         ),
     ]
     provider: str
+    retries: Annotated[
+        int | None,
+        Field(description='这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。'),
+    ] = 0
     tools: list[ToolCallRecord]
     usage: Annotated[
         TokenUsage | None,
@@ -592,7 +615,7 @@ class Message(BaseModel):
     role: MessageRole
 
 
-class ServerNotification11(BaseModel):
+class ServerNotification12(BaseModel):
     iterations: int
     meta: TurnMeta
     reply: str
@@ -615,6 +638,7 @@ class ServerNotification(
         | ServerNotification10
         | ServerNotification11
         | ServerNotification12
+        | ServerNotification13
     ]
 ):
     root: Annotated[
@@ -629,7 +653,8 @@ class ServerNotification(
         | ServerNotification9
         | ServerNotification10
         | ServerNotification11
-        | ServerNotification12,
+        | ServerNotification12
+        | ServerNotification13,
         Field(
             description='一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。',
             title='ServerNotification',

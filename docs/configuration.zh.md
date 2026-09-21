@@ -24,6 +24,7 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
+| `JOY_LLM_RETRIES` | 0 – 5 |
 | `JOY_EXEC_TIMEOUT` | 1 – 3600 |
 
 `JOY_EXEC_ALLOW` 也在校验范围内：最多 64 条、每条非空、不含换行、不超 200 字符。
@@ -39,6 +40,7 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_BASE_URL` | 厂商默认 | 覆盖 API 端点（测试时也可指向假端点） |
 | `JOY_MODEL` / `JOY_SMALL_MODEL` | 厂商默认 | 主模型 / 便宜模型（检索门与 consolidation 用） |
 | `JOY_LLM_TIMEOUT` | `120` | 单次模型调用超时（秒） |
+| `JOY_LLM_RETRIES` | `2` | 429/5xx/网络抖动时重试几次 —— 指数退避（500ms 起、单次上限 8s、总预算 30s），**每次必发通知**，绝不换厂商；`0` 关闭 |
 
 ## 行为旋钮
 

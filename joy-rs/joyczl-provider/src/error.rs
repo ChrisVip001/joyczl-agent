@@ -7,7 +7,12 @@ pub enum ProviderError {
     /// 模型那边回了非 2xx。body 原样带上 —— 限流、模型名写错、key 无效，
     /// 各家的提示都在 body 里，丢掉它排查就只能靠猜。
     #[error("HTTP {status}: {body}")]
-    Http { status: u16, body: String },
+    Http {
+        status: u16,
+        body: String,
+        /// `Retry-After` 头（秒）。429 时常有，有这个就按服务端说的等。
+        retry_after_secs: Option<u64>,
+    },
 
     /// 网络层挂了：超时、DNS、连接被拒。
     #[error("网络错误: {0}")]
@@ -32,16 +37,49 @@ impl ProviderError {
     ///
     /// 所有 `status >= 400` 的地方都走这里，于是「认出溢出」只有一处实现。
     pub fn from_http(status: u16, body: String) -> Self {
+        Self::from_http_retry(status, body, None)
+    }
+
+    /// 同上，但带上服务端在 `Retry-After` 里要求的等待秒数（429 常见）。
+    pub fn from_http_retry(status: u16, body: String, retry_after_secs: Option<u64>) -> Self {
         if looks_like_context_overflow(status, &body) {
             Self::ContextOverflow { status, body }
         } else {
-            Self::Http { status, body }
+            Self::Http {
+                status,
+                body,
+                retry_after_secs,
+            }
         }
     }
 
     /// 是「上下文溢出」吗？（`full_turn` 靠它决定要不要压缩后重试）
     pub fn is_context_overflow(&self) -> bool {
         matches!(self, ProviderError::ContextOverflow { .. })
+    }
+
+    /// **值得退避重试吗？** 只有两类：限流（429）与服务端临时故障（5xx），
+    /// 加上网络层抖动。
+    ///
+    /// 别的错误重试只会以同样方式再失败一次 —— 白等一倍时间，还多花一次配额。
+    /// 尤其不要重试「上下文溢出」：那是要压上下文，不是要再撞一次。
+    pub fn retryable(&self) -> bool {
+        match self {
+            ProviderError::Http { status, .. } => *status == 429 || *status >= 500,
+            ProviderError::Network(_) => true,
+            _ => false,
+        }
+    }
+
+    /// 服务端要求的等待时长（`Retry-After`），没给就是 `None`。
+    pub fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            ProviderError::Http {
+                retry_after_secs: Some(secs),
+                ..
+            } => Some(std::time::Duration::from_secs(*secs)),
+            _ => None,
+        }
     }
 }
 

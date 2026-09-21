@@ -53,6 +53,7 @@ export type * from "./DashboardData";
 export type * from "./TurnStartedNotification";
 export type * from "./TextDeltaNotification";
 export type * from "./GateDecidedNotification";
+export type * from "./RetryNotification";
 export type * from "./ToolStartedNotification";
 export type * from "./ToolCompletedNotification";
 export type * from "./ConsolidationCompletedNotification";

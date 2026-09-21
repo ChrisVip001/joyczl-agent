@@ -36,16 +36,21 @@ camelCase; integers are `i32` only (`i64` maps to ts-rs `bigint` while
 ## turn/start notification sequence
 
 ```
-turnStarted → gateDecided → textDelta* → toolStarted → toolCompleted*
+turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCompleted*
             → consolidationCompleted? → turnCompleted → (response)
 ```
 
+`retry` can precede any model call (gate, loop, summarizer), so it is
+**insertable** rather than fixed in place.
+
 * `gateDecided`: the retrieval gate's ruling (retrieve/skip + reason + query).
+* `retry`: one retry (attempt, reason, delay). Emitted **every time** — a retry
+  is never silent; `meta.retries` carries the total.
 * `textDelta`: streamed text increment; only with `stream:true`.
 * `toolStarted` / `toolCompleted`: tool begin and end (duration, status).
 * `turnCompleted`: `reply`, `iterations`, `usage`, `meta` (gate / graph /
-  tools / model / provider / latency / interrupted). The meta is persisted
-  with the conversation.
+  tools / model / provider / latency / interrupted / guardHits / retries).
+  The meta is persisted with the conversation.
 
 ## Error codes
 

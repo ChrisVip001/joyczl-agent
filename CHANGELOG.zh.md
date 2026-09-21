@@ -32,6 +32,14 @@
 `JOY_CONTEXT_WINDOW` / `JOY_COMPACT_THRESHOLD` 可以调；校验会拒绝
 `JOY_MAX_TOKENS >= JOY_CONTEXT_WINDOW` 这种答案放不下的配置。
 
+### 限流与临时故障会重试，而且看得见
+
+429/5xx/网络抖动会指数退避重试（单次等待 500ms 起、上限 8s，总预算 30s，
+`JOY_LLM_RETRIES` 默认 2，`0` 关闭）。每次重试都发一条 `Retry` 通知并记进
+`TurnMeta.retries`，于是那段等待是**有解释的**而不是莫名其妙的；REPL 打一行
+小字，驾驶舱显示一枚标记。服务端给了 `Retry-After` 就按它等（受上限约束）。
+不做 provider failover —— 那是另一个决定。
+
 ### 行为变更：沙箱内的命令默认断网
 
 `run_command` 现在默认**没有网络** —— seatbelt 加 `(deny network*)`，

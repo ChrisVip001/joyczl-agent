@@ -63,8 +63,12 @@ fn collect_deltas() -> (Arc<Mutex<Vec<String>>>, crate::TextSink) {
 #[tokio::test]
 async fn anthropic_stream_yields_deltas_over_a_real_socket() {
     let base = spawn_sse_server(anthropic_sse_body());
-    let client =
-        crate::anthropic::Client::new("test-key", Some(&base), std::time::Duration::from_secs(5));
+    let client = crate::anthropic::Client::new(
+        "test-key",
+        Some(&base),
+        std::time::Duration::from_secs(5),
+        2,
+    );
     let (deltas, on_text) = collect_deltas();
 
     let response = client
@@ -94,8 +98,12 @@ async fn anthropic_stream_yields_deltas_over_a_real_socket() {
 #[tokio::test]
 async fn openai_stream_yields_deltas_over_a_real_socket() {
     let base = spawn_sse_server(openai_sse_body());
-    let client =
-        crate::openai::Client::new("test-key", Some(&base), std::time::Duration::from_secs(5));
+    let client = crate::openai::Client::new(
+        "test-key",
+        Some(&base),
+        std::time::Duration::from_secs(5),
+        2,
+    );
     let (deltas, on_text) = collect_deltas();
 
     let response = client

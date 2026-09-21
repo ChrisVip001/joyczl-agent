@@ -6,6 +6,7 @@ import type { GraphEndedNotification } from "./GraphEndedNotification";
 import type { GraphNodeEndedNotification } from "./GraphNodeEndedNotification";
 import type { GraphNodeStartedNotification } from "./GraphNodeStartedNotification";
 import type { GraphStartedNotification } from "./GraphStartedNotification";
+import type { RetryNotification } from "./RetryNotification";
 import type { TextDeltaNotification } from "./TextDeltaNotification";
 import type { ToolCompletedNotification } from "./ToolCompletedNotification";
 import type { ToolStartedNotification } from "./ToolStartedNotification";
@@ -22,6 +23,7 @@ export type ServerNotification =
   | ({ type: "turnStarted" } & TurnStartedNotification)
   | ({ type: "textDelta" } & TextDeltaNotification)
   | ({ type: "gateDecided" } & GateDecidedNotification)
+  | ({ type: "retry" } & RetryNotification)
   | ({ type: "toolStarted" } & ToolStartedNotification)
   | ({ type: "toolCompleted" } & ToolCompletedNotification)
   | ({ type: "consolidationCompleted" } & ConsolidationCompletedNotification)

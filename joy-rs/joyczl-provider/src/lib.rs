@@ -21,6 +21,7 @@ pub mod embed;
 pub mod error;
 pub mod mock;
 pub mod openai;
+pub mod retry;
 pub mod sse;
 pub mod tokens;
 
@@ -451,13 +452,20 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
         .or_else(|| info.base_url.map(str::to_string));
     let timeout = Duration::from_secs(settings.llm_timeout_secs.max(1) as u64);
 
+    let max_retries = settings.llm_retries.max(0) as u32;
     let client: Arc<dyn Provider> = match info.wire {
         Wire::Anthropic => Arc::new(anthropic::Client::new(
             &api_key,
             base_url.as_deref(),
             timeout,
+            max_retries,
         )),
-        Wire::OpenAi => Arc::new(openai::Client::new(&api_key, base_url.as_deref(), timeout)),
+        Wire::OpenAi => Arc::new(openai::Client::new(
+            &api_key,
+            base_url.as_deref(),
+            timeout,
+            max_retries,
+        )),
     };
 
     Ok(Resolved {

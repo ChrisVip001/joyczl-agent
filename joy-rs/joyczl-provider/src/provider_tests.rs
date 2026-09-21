@@ -270,3 +270,200 @@ fn context_overflow_is_recognised_from_the_wordings_providers_actually_use() {
     // 2xx 更不该
     assert!(!looks_like_context_overflow(200, "context length"));
 }
+
+// ---- 分级退避重试 ------------------------------------------------------------
+
+/// 一个只够用的 HTTP 服务器：按剧本逐个应答。
+///
+/// 手写而不是引测试框架 —— 我们要的就是「第一次 429、第二次 200」这种最小
+/// 剧本，一个 TcpListener 加几行文本足够，而且能从 hits 上直接看出重试了几次。
+struct Scripted {
+    base_url: String,
+    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+async fn scripted(responses: Vec<(u16, &'static str)>) -> Scripted {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("监听端口");
+    let addr = listener.local_addr().expect("本地地址");
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = hits.clone();
+
+    tokio::spawn(async move {
+        let mut index = 0usize;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            // 请求内容不看，读掉一段就够。
+            let mut buf = vec![0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+            let (status, body) = responses.get(index).copied().unwrap_or((200, "{}"));
+            index += 1;
+            let reason = if status == 429 {
+                "Too Many Requests"
+            } else {
+                "OK"
+            };
+            // 429 带一个 `Retry-After: 0`：既验证我们读了它，又让测试不真等。
+            let extra = if status == 429 {
+                "Retry-After: 0\r\n"
+            } else {
+                ""
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.flush().await;
+        }
+    });
+
+    Scripted {
+        base_url: format!("http://{addr}"),
+        hits,
+    }
+}
+
+fn openai_settings(server: &Scripted, retries: i32) -> joyczl_config::Settings {
+    joyczl_config::Settings {
+        provider: "openai".to_string(),
+        api_key: Some("test-key".to_string()),
+        base_url: Some(server.base_url.clone()),
+        model: Some("test-model".to_string()),
+        small_model: Some("test-model".to_string()),
+        llm_retries: retries,
+        ..Default::default()
+    }
+}
+
+fn notice_sink() -> (
+    std::sync::Arc<std::sync::Mutex<Vec<crate::retry::RetryNotice>>>,
+    crate::retry::NoteSink,
+) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink: crate::retry::NoteSink = {
+        let seen = seen.clone();
+        std::sync::Arc::new(move |notice: crate::retry::RetryNotice| {
+            seen.lock().expect("锁").push(notice);
+        })
+    };
+    (seen, sink)
+}
+
+const OK_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","content":"好了"}}],
+                           "usage":{"prompt_tokens":3,"completion_tokens":1}}"#;
+
+/// 429 → 退避 → 重试成功，而且**说了出去**。
+#[tokio::test]
+async fn a_rate_limit_is_retried_and_announced() {
+    let server = scripted(vec![
+        (429, r#"{"error":{"message":"slow down"}}"#),
+        (200, OK_BODY),
+    ])
+    .await;
+    let resolved = crate::resolve(&openai_settings(&server, 2)).expect("解析");
+    let (seen, sink) = notice_sink();
+
+    let response = crate::retry::with_note_sink(
+        sink,
+        resolved.client.create(crate::CreateRequest {
+            model: "test-model".to_string(),
+            system: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            max_tokens: 32,
+        }),
+    )
+    .await
+    .expect("第二次该成功");
+
+    assert_eq!(response.text(), "好了");
+    assert_eq!(
+        server.hits.load(std::sync::atomic::Ordering::Relaxed),
+        2,
+        "一次 429 加一次成功"
+    );
+    let seen = seen.lock().expect("锁");
+    assert_eq!(seen.len(), 1, "每次重试都必须有一条通知");
+    assert!(seen[0].reason.contains("429"), "{:?}", seen[0]);
+    assert_eq!(seen[0].delay_ms, 0, "要听服务端 Retry-After 的（这里是 0）");
+}
+
+/// 关掉重试（`JOY_LLM_RETRIES=0`）时，429 立刻如实冒上去。
+#[tokio::test]
+async fn retries_can_be_switched_off() {
+    let server = scripted(vec![(429, r#"{"error":{"message":"slow down"}}"#)]).await;
+    let resolved = crate::resolve(&openai_settings(&server, 0)).expect("解析");
+    let (seen, sink) = notice_sink();
+
+    let error = crate::retry::with_note_sink(
+        sink,
+        resolved.client.create(crate::CreateRequest {
+            model: "test-model".to_string(),
+            system: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            max_tokens: 32,
+        }),
+    )
+    .await
+    .expect_err("关掉重试就该报错");
+
+    assert!(error.retryable(), "429 是「可以重试」的那一类");
+    assert_eq!(server.hits.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(seen.lock().expect("锁").is_empty(), "没有重试就没有通知");
+}
+
+/// 400（key 错、参数错）**不**重试：重试只会以同样方式再失败一次。
+#[tokio::test]
+async fn a_client_error_is_not_retried() {
+    let server = scripted(vec![(400, r#"{"error":{"message":"bad key"}}"#)]).await;
+    let resolved = crate::resolve(&openai_settings(&server, 3)).expect("解析");
+    let (seen, sink) = notice_sink();
+
+    let error = crate::retry::with_note_sink(
+        sink,
+        resolved.client.create(crate::CreateRequest {
+            model: "test-model".to_string(),
+            system: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            max_tokens: 32,
+        }),
+    )
+    .await
+    .expect_err("400 要如实报错");
+
+    assert!(!error.retryable(), "400 不属于可重试的一类");
+    assert_eq!(
+        server.hits.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "一次都不该重试"
+    );
+    assert!(seen.lock().expect("锁").is_empty());
+}
+
+/// 重试类别的判定表本身也要钉住 —— 这是整个机制的地基。
+#[test]
+fn only_transient_failures_are_retryable() {
+    use crate::error::ProviderError;
+    let http = |status| ProviderError::from_http(status, "{}".to_string());
+    assert!(http(429).retryable(), "限流是典型可重试");
+    assert!(http(500).retryable());
+    assert!(http(503).retryable());
+    assert!(!http(400).retryable());
+    assert!(!http(401).retryable());
+    assert!(!http(404).retryable());
+    assert!(!ProviderError::Api("x".to_string()).retryable());
+    assert!(!ProviderError::Parse("x".to_string()).retryable());
+    // 上下文溢出是「该压缩」，不是「该再撞一次」。
+    assert!(!ProviderError::ContextOverflow {
+        status: 400,
+        body: "maximum context length".to_string()
+    }
+    .retryable());
+}

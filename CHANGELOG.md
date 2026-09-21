@@ -34,6 +34,15 @@ overflow is recognised (`ProviderError::ContextOverflow`) and the turn is
 compacted and retried **once**. `JOY_CONTEXT_WINDOW` / `JOY_COMPACT_THRESHOLD`
 tune it; validation rejects `JOY_MAX_TOKENS >= JOY_CONTEXT_WINDOW`.
 
+### Rate limits and transient failures are retried, visibly
+
+429/5xx/network hiccups are retried with exponential backoff (500ms up to 8s per
+wait, 30s total, `JOY_LLM_RETRIES` default 2, `0` disables). Every retry emits a
+`Retry` notification and `TurnMeta.retries`, so the wait is explained rather
+than mysterious; the REPL prints a line and the dashboard shows a chip. A
+provider that reports `Retry-After` is obeyed, within the caps. There is no
+provider failover — that is a separate decision.
+
 ### Behaviour change: sandboxed commands are offline
 
 `run_command` now runs with **no network** by default — seatbelt gets

@@ -144,6 +144,9 @@ pub struct TurnMeta {
     /// 命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。
     #[serde(default)]
     pub guard_note: Option<String>,
+    /// 这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。
+    #[serde(default)]
+    pub retries: i32,
 }
 
 // ===========================================================================
@@ -666,6 +669,22 @@ pub struct TextDeltaNotification {
     pub delta: String,
 }
 
+/// 一次「正在重试」的说明。
+///
+/// 重试**从不静默**：用户看到的是这句话，而不是一段莫名其妙的长时间停顿。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct RetryNotification {
+    pub turn_id: String,
+    /// 第几次重试（从 1 开始）。
+    pub attempt: i32,
+    /// 为什么重试（`HTTP 429` / `网络错误：…`）。
+    pub reason: String,
+    /// 等了多久。
+    pub delay_ms: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -790,6 +809,8 @@ pub enum ServerNotification {
     TurnStarted(TurnStartedNotification),
     TextDelta(TextDeltaNotification),
     GateDecided(GateDecidedNotification),
+    /// 正在重试（限流/临时故障）：**每次必发**，不静默。
+    Retry(RetryNotification),
     ToolStarted(ToolStartedNotification),
     ToolCompleted(ToolCompletedNotification),
     ConsolidationCompleted(ConsolidationCompletedNotification),

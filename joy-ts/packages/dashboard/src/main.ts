@@ -143,6 +143,18 @@ async function send(text: string): Promise<void> {
           );
           break;
 
+        case "retry":
+          // 重试从不静默：看到这一句就知道「刚才那几秒不是卡住」。
+          trace.append(
+            chip(
+              `重试第 ${notification.attempt} 次（${notification.reason}，${formatMs(
+                notification.delayMs,
+              )} 后）`,
+              "gate",
+            ),
+          );
+          break;
+
         case "toolStarted":
           trace.append(chip(`工具 · ${notification.tool}`, "tool"));
           break;

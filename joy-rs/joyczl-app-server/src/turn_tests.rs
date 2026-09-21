@@ -711,3 +711,129 @@ async fn a_plain_provider_error_is_not_retried() {
         "门一次 + loop 一次，不该有第二次模型调用"
     );
 }
+
+// ---- 限流重试：真 HTTP、真客户端 --------------------------------------------
+
+/// 一个极小的 HTTP 服务器：按剧本逐个应答。返回 base_url。
+///
+/// 这里不引测试框架也不用 Mock —— 要钉住的正是「真的 openai 客户端在真的
+/// 429 上会退避重试」，用假客户端就测不到这件事。
+async fn scripted_http(responses: Vec<(u16, String)>) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("监听端口");
+    let addr = listener.local_addr().expect("本地地址");
+    tokio::spawn(async move {
+        let mut index = 0usize;
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            let (status, body) = responses
+                .get(index)
+                .cloned()
+                .unwrap_or((200, "{}".to_string()));
+            index += 1;
+            let reason = if status == 429 {
+                "Too Many Requests"
+            } else {
+                "OK"
+            };
+            // `Retry-After: 0`：既验证读了它，又让测试不用真等。
+            let extra = if status == 429 {
+                "Retry-After: 0\r\n"
+            } else {
+                ""
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.flush().await;
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// 一次完整的（非流式）应答 —— 门走这条路。
+fn completion(text: &str) -> String {
+    serde_json::json!({
+        "choices": [{"message": {"role": "assistant", "content": text}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    })
+    .to_string()
+}
+
+/// 一次流式应答 —— loop 走这条路（`stream: true`）。
+fn sse_text(text: &str) -> String {
+    format!(
+        "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
+        serde_json::json!({"choices": [{"delta": {"content": text}}]}),
+        serde_json::json!({"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 3}}),
+    )
+}
+
+/// 429 被重试，而且重试**看得到**：一条 Retry 通知 + `meta.retries`。
+#[tokio::test]
+async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
+    let base = scripted_http(vec![
+        (429, r#"{"error":{"message":"slow down"}}"#.to_string()),
+        // 门（重试之后才轮到它）
+        (
+            200,
+            completion(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
+        ),
+        // loop
+        (200, sse_text("四。")),
+    ])
+    .await;
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    let settings = joyczl_config::Settings {
+        home: dir.path().to_path_buf(),
+        provider: "openai".to_string(),
+        api_key: Some("test-key".to_string()),
+        base_url: Some(base),
+        model: Some("test-model".to_string()),
+        small_model: Some("test-model".to_string()),
+        max_tokens: 256,
+        ..Default::default()
+    };
+    let server = crate::open(&settings).await.expect("装配（走真实客户端）");
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("test".to_string()),
+            message: "2+2 等于几？".to_string(),
+            stream: Some(true),
+        },
+        RequestId::Number(1),
+        &EventSink::new(tx),
+    )
+    .await
+    .expect("限流之后该照常跑完");
+
+    let mut retries = 0;
+    let mut meta_retries = -1;
+    while let Ok(frame) = rx.try_recv() {
+        if let Frame::Notification(notification) = frame {
+            match notification {
+                ServerNotification::Retry(retry) => {
+                    retries += 1;
+                    assert!(retry.reason.contains("429"), "{retry:?}");
+                    assert!(!retry.turn_id.is_empty(), "通知要带上是哪一轮");
+                }
+                ServerNotification::TurnCompleted(done) => {
+                    meta_retries = done.meta.retries;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(retries, 1, "每次重试都要有一条通知");
+    assert_eq!(meta_retries, 1, "meta 里的次数是实测的");
+}

@@ -40,6 +40,12 @@ means "we would like this, nobody has built it".
   be caught by it. The allowlist and the sandbox are the real defences.
   → `joy-rs/joyczl-tools/src/exec.rs` (`HARD_DENY`, `pipes_into_a_shell`)
 
+* **Deliberate** — Model calls are retried only for 429/5xx/network, at most
+  `JOY_LLM_RETRIES` times (default 2), inside a 30 second budget, and never by
+  switching provider. A provider that is down stays down until you change
+  something.
+  → `joy-rs/joyczl-provider/src/retry.rs`
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

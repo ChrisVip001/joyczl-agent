@@ -34,15 +34,21 @@
 ## turn/start 的通知序列
 
 ```
-turnStarted → gateDecided → textDelta* → toolStarted → toolCompleted*
+turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCompleted*
             → consolidationCompleted? → turnCompleted →（应答）
 ```
 
+重试可能出现在任何一次模型调用之前（门、loop、压缩摘要都算），所以它在序列里
+是**可插入**的，位置不固定。
+
 * `gateDecided`：检索门判定（retrieve/skip + 理由 + 检索词）。
+* `retry`：一次重试（第几次、为什么、等多久）。**每次必发** —— 重试绝不
+  静默；`meta.retries` 记着总数。
 * `textDelta`：流式文本增量；仅 `stream:true` 时产生。
 * `toolStarted` / `toolCompleted`：工具开始与完成（含耗时与状态）。
 * `turnCompleted`：`reply`、`iterations`、`usage`、`meta`（gate / graph /
-  tools / model / provider / latency / interrupted）。meta 随对话落库。
+  tools / model / provider / latency / interrupted / guardHits / retries）。
+  meta 随对话落库。
 
 ## 错误码
 

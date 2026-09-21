@@ -41,4 +41,8 @@ export type TurnMeta = {
    * 命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。
    */
   guardNote: string | null;
+  /**
+   * 这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。
+   */
+  retries: number;
 };

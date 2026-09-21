@@ -32,6 +32,11 @@
   （`bash -c "$(printf …)"`）它抓不住。真正的防线是放行表与沙箱。
   → `joy-rs/joyczl-tools/src/exec.rs`（`HARD_DENY`、`pipes_into_a_shell`）
 
+* **刻意** —— 模型调用只对 429/5xx/网络抖动重试，次数受 `JOY_LLM_RETRIES`
+  约束（默认 2），总预算 30 秒，而且**绝不换厂商**。某家挂了就是挂了，直到你
+  改点什么。
+  → `joy-rs/joyczl-provider/src/retry.rs`
+
 ## 记忆
 
 * **未做** —— 写入时没有去重/合并。`facts` 没有唯一约束、`add` 总是插入，

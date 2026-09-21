@@ -95,6 +95,7 @@ macro_rules! protocol_types {
             TurnStartedNotification,
             TextDeltaNotification,
             GateDecidedNotification,
+            RetryNotification,
             ToolStartedNotification,
             ToolCompletedNotification,
             ConsolidationCompletedNotification,

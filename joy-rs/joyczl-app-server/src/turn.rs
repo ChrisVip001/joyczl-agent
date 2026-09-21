@@ -13,6 +13,7 @@
 //! 打字机效果），工具一完成也立刻推。`turn/start` 的应答由本函数自己发
 //! —— 它必须等所有通知发完之后才轮到，顺序只有它自己清楚。
 
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Local;
@@ -28,8 +29,8 @@ use joyczl_protocol::{
     codes, ConsolidationCompletedNotification, ErrorObject, GateDecidedNotification, GateDecision,
     GateDecisionKind, GraphEndedNotification, GraphInfo, GraphNodeEndedNotification,
     GraphNodeStartedNotification, GraphRouteKind, GraphStartedNotification, JsonRpcMessage,
-    JsonRpcResponse, RequestId, ServerNotification, TextDeltaNotification, TokenUsage,
-    ToolCallRecord, ToolCompletedNotification, ToolStartedNotification, ToolStatus,
+    JsonRpcResponse, RequestId, RetryNotification, ServerNotification, TextDeltaNotification,
+    TokenUsage, ToolCallRecord, ToolCompletedNotification, ToolStartedNotification, ToolStatus,
     TurnCompletedNotification, TurnMeta, TurnStartParams, TurnStartResponse,
     TurnStartedNotification, JSONRPC_VERSION,
 };
@@ -104,37 +105,63 @@ pub async fn run_turn(
         ts: Local::now().to_rfc3339(),
     }));
 
+    // ---- 重试通知：**每次必发**。
+    //
+    // 计数也走这里 —— `meta.retries` 因此是实测值而不是猜的。用户看到的应该
+    // 是「限流了，正在重试」，而不是一段莫名其妙的长时间停顿。
+    let retries = Arc::new(AtomicI32::new(0));
+    let retry_sink: joyczl_provider::retry::NoteSink = {
+        let counter = retries.clone();
+        let sink = sink.clone();
+        let turn_id = turn_id.clone();
+        Arc::new(move |notice: joyczl_provider::retry::RetryNotice| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            sink.notification(ServerNotification::Retry(RetryNotification {
+                turn_id: turn_id.clone(),
+                attempt: narrow(notice.attempt as i64),
+                reason: notice.reason.clone(),
+                delay_ms: narrow(notice.delay_ms as i64),
+            }));
+        })
+    };
+
     // ---- 前门：triage 图（默认关着）。
     //
     // 图只可能让这一轮**更快**，绝不可能让它更差：任何一步出问题都掉回下面
     // 那条普通的完整 loop —— 跟检索门同一条「失败开放」的规矩。
-    let (graph, full) = match graph_route(
-        server,
-        &resolved,
-        &params.message,
-        &session_id,
-        &turn_id,
-        sink,
-        Some(interrupt.clone()),
-    )
-    .await?
-    {
-        Some(routed) => (Some(routed.info), routed.turn),
-        None => (
-            None,
-            full_turn(
-                server,
-                &resolved,
-                &params.message,
-                &session_id,
-                &turn_id,
-                sink,
+    //
+    // 整段（图与 full_turn）都套在通知出口里：模型调用可能发生在两条路径的
+    // 任何一处，重试通知不该只覆盖其中一条。
+    let (graph, full) = joyczl_provider::retry::with_note_sink(retry_sink, async {
+        match graph_route(
+            server,
+            &resolved,
+            &params.message,
+            &session_id,
+            &turn_id,
+            sink,
+            Some(interrupt.clone()),
+        )
+        .await?
+        {
+            Some(routed) => Ok((Some(routed.info), routed.turn)),
+            None => Ok((
                 None,
-                Some(interrupt.clone()),
-            )
-            .await?,
-        ),
-    };
+                full_turn(
+                    server,
+                    &resolved,
+                    &params.message,
+                    &session_id,
+                    &turn_id,
+                    sink,
+                    None,
+                    Some(interrupt.clone()),
+                )
+                .await?,
+            )),
+        }
+    })
+    .await?;
     let FullTurn { result, gate } = full;
 
     for call in &result.tool_calls {
@@ -192,6 +219,7 @@ pub async fn run_turn(
         interrupted: result.interrupted,
         guard_hits: result.guard.hits,
         guard_note: result.guard.note.clone(),
+        retries: retries.load(Ordering::Relaxed),
     };
 
     let meta_json = serde_json::to_string(&meta).ok();
