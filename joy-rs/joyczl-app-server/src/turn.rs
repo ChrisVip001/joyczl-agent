@@ -75,8 +75,9 @@ pub async fn run_turn(
     // 模型没配好：把「怎么办」说清楚，而不是丢一句 no key。
     let resolved: Resolved = server.resolved().ok_or_else(|| ErrorObject {
         code: codes::PROVIDER_ERROR,
-        message: "模型还没配好：缺 API key。往 .env 里加对应 provider 的 key \
-                  （如 ANTHROPIC_API_KEY=…），再重启 joy app-server。"
+        message: "模型还没配好：缺 API key。设好环境变量再重启 joy app-server —— \
+                  例如 export ANTHROPIC_API_KEY=…（Joy 不读 .env，要用就先 \
+                  `set -a; source .env; set +a`）。"
             .to_string(),
         data: None,
     })?;

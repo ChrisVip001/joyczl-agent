@@ -28,3 +28,9 @@ sdk/python-bin/src/joyczl_agent_bin/bin/*
 !sdk/python-bin/src/joyczl_agent_bin/bin/.gitkeep
 对比.md
 .ci-logs.py
+
+# 凭证：真实的 .env 绝不进仓库（模板 .env.example 例外，它故意被跟踪）。
+# Joy 本身不读 .env，但人会用它来 source，所以泄漏风险是真实的。
+.env
+.env.local
+!.env.example

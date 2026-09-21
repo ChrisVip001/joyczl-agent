@@ -452,7 +452,8 @@ fn no_key_message(info: &ProviderInfo) -> String {
         msg.push_str(&format!("  1. 去领一个 key：{url}\n"));
     }
     msg.push_str(&format!(
-        "  2. 加到 .env：\n       {}=你的-key\n",
+        "  2. 把它设成环境变量（Joy 不读 .env；要用就先 source）：\n       \
+         export {}=你的-key\n",
         info.key_env
     ));
     msg.push_str(&format!("其他 provider：{}", ids()));
