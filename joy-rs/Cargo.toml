@@ -44,6 +44,10 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
+# 工具参数的 JSON Schema 校验：模型给的参数不合法时，报错要具体到字段与期望值。
+# 关掉默认特性 —— resolve-http/file 那套远程引用我们用不上（schema 全是本地字面量）。
+jsonschema = { version = "0.56", default-features = false }
+
 # 非 test 构建下把 `#[derive(TS)]` / `#[derive(JsonSchema)]` 替换成空宏，
 # 这样协议 crate 不必把 ts-rs / schemars 打进线上二进制。
 joyczl-protocol-noop-macros = { path = "joyczl-protocol-noop-macros" }

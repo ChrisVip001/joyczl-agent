@@ -1,8 +1,10 @@
 //! 工具的测试：不联网，真的开临时库，验证行为和输出文案。
 
+use std::sync::Arc;
+
 use serde_json::json;
 
-use crate::{handlers, ToolCtx};
+use crate::{handlers, Tool, ToolCtx, ToolRegistry};
 
 /// 开一个临时 state.db，返回可直接用的 ctx。home 也在临时目录里 ——
 /// calendar.ics / outbox 的测试需要真的写文件。
@@ -120,7 +122,8 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         "缺参数：{out}"
     );
 
-    // 类型不对
+    // 类型不对：现在由参数 schema 先挡下（比 handler 里的手写检查更早、
+    // 也更具体 —— 报错里带字段路径）
     let out = registry
         .execute(
             ctx.clone(),
@@ -129,7 +132,7 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         )
         .await;
     assert!(
-        out.starts_with("Error:") && out.contains("字符串"),
+        out.starts_with("Error:") && out.contains("subject") && out.contains("schema"),
         "类型错：{out}"
     );
 
@@ -339,7 +342,8 @@ async fn manage_memory_updates_and_deletes_by_id() {
         .await;
     assert!(out.contains("没有编号"), "删第二次要如实说：{out}");
 
-    // 不认识的 action 也是文本，不是错误。
+    // 不认识的 action 也是文本，不是错误 —— 现在由 schema 的 enum 先挡下
+    // （handler 里那条兜底分支只在 schema 编译失败时才会走到）。
     let out = registry
         .execute(
             ctx.clone(),
@@ -347,7 +351,7 @@ async fn manage_memory_updates_and_deletes_by_id() {
             json!({"action": "nuke_everything", "id": 1}),
         )
         .await;
-    assert!(out.contains("不认识的 action"), "{out}");
+    assert!(out.starts_with("Error:") && out.contains("action"), "{out}");
 }
 
 /// create_skill：合法 slug 落盘成 SKILL.md，非法名字和重名都被拒 ——
@@ -409,4 +413,77 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
                 .is_some_and(|p| p.exists()),
         "不该写出目录树之外的东西"
     );
+}
+
+// ---- 参数 schema 校验 --------------------------------------------------------
+
+/// 类型不对：**handler 根本不该被调用**（否则会留下半个副作用），
+/// 报错要指名道姓说是哪个字段。
+#[tokio::test]
+async fn a_wrong_typed_argument_is_caught_before_the_handler_runs() {
+    let registry = handlers::build_default();
+    let ctx = ctx().await;
+
+    let out = registry
+        .execute(
+            ctx.clone(),
+            "save_note",
+            json!({"subject": 123, "content": "x"}),
+        )
+        .await;
+
+    assert!(out.starts_with("Error:"), "要保持 Error: 前缀：{out}");
+    assert!(out.contains("schema"), "{out}");
+    assert!(out.contains("subject"), "要说清是哪个字段：{out}");
+    assert!(
+        ctx.facts.recent(10, 0).await.expect("查库").is_empty(),
+        "校验没过就不该落库"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_required_argument_is_caught_by_the_schema() {
+    let registry = handlers::build_default();
+    let ctx = ctx().await;
+
+    let out = registry
+        .execute(ctx.clone(), "save_note", json!({"subject": "alex"}))
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("content"), "缺的那个字段要出现在报错里：{out}");
+}
+
+/// 远端（MCP）可能报上来一个坏 schema。那种工具**跳过校验照常执行** ——
+/// 一个 schema 写坏了不该让工具直接不可用。
+#[tokio::test]
+async fn a_tool_with_a_broken_schema_still_runs() {
+    let mut registry = ToolRegistry::new();
+    registry.register(Tool {
+        name: "broken_schema".to_string(),
+        description: "schema 是垃圾的工具".to_string(),
+        input_schema: json!("这不是一个 schema"),
+        handler: Arc::new(|_ctx: ToolCtx, _args: serde_json::Value| {
+            Box::pin(async { Ok("真的跑了".to_string()) })
+        }),
+    });
+
+    let out = registry
+        .execute(ctx().await, "broken_schema", json!({"whatever": true}))
+        .await;
+    assert_eq!(out, "真的跑了", "坏 schema 不该拦住执行：{out}");
+}
+
+/// 合规的参数照样通到 handler（校验不能误伤正常调用）。
+#[tokio::test]
+async fn valid_arguments_pass_the_schema() {
+    let registry = handlers::build_default();
+    let ctx = ctx().await;
+    let out = registry
+        .execute(
+            ctx.clone(),
+            "save_note",
+            json!({"subject": "alex", "content": "喜欢早会"}),
+        )
+        .await;
+    assert!(out.contains("已记住"), "{out}");
 }

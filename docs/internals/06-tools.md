@@ -44,6 +44,29 @@ Err(e) → format!("Error: 执行 {name} 失败：{e}")
 参数助手也是同一套语气：`require_str` 会说「缺少参数 'x'」「应该是字符串，
 得到的是 …」「不能是空的」；`opt_u32` 会在给了负数时说清楚。
 
+### 参数 schema 校验：在 handler 之前先过一遍
+
+`input_schema` 不只是给模型看的声明 —— `ToolRegistry::register` 会用
+`jsonschema` 把它**预编译**成校验器（调用时零解析），`execute` 在动 handler
+之前先校验：
+
+```
+参数不合 schema → "Error: 参数不符合 {name} 的 schema —— /subject：42 is not of
+                  type \"string\"；…（还有 N 处）。请重写输入以满足 schema。"
+```
+
+三个设计点：
+
+1. **报错带字段路径与期望**（`describe_violations` 最多列三处），模型据此能改对；
+   不 dump 整段 schema —— 那会把上下文塞满，而它要的只是「哪里不对」。
+2. **校验失败时 handler 根本没被调用**，所以不会留下半个副作用。
+3. **坏 schema 跳过校验照常执行**：MCP 服务器可能报上来一个编不了的 schema，
+   那种工具仍然可用，但启动日志里会有一行说明（静默跳过校验会让人以为参数被查过）。
+
+于是 handler 里的手写检查从「唯一的防线」变成「读起来更亲切的第二层」
+（比如 `manage_memory` 的未知 action 现在由 schema 的 enum 先挡下，
+handler 里那条兜底分支只在 schema 编译失败时才会走到）。
+
 ## 6.2 注册顺序：显式，不用宏也不用扫目录
 
 `handlers.rs（build_default）` 按固定顺序 register **11 个**工具：

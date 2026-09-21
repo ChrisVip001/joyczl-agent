@@ -67,6 +67,13 @@ impl Tool {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: BTreeMap<String, Tool>,
+    /// 每个工具**预编译**好的参数校验器。注册时编一次，调用时零解析。
+    ///
+    /// 外层 `Option` 是「这个工具在不在表里」，内层是「它的 schema 编得出来吗」：
+    /// MCP 服务器可能报上来一个坏 schema，那种情况跳过校验照常执行 ——
+    /// 一个远端 schema 写坏了不该让工具直接不可用（但要在启动日志里说一声，
+    /// 静默跳过校验会让人以为参数被查过）。
+    validators: BTreeMap<String, Option<jsonschema::Validator>>,
 }
 
 impl ToolRegistry {
@@ -75,6 +82,17 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: Tool) {
+        let validator = match jsonschema::validator_for(&tool.input_schema) {
+            Ok(validator) => Some(validator),
+            Err(e) => {
+                eprintln!(
+                    "(joy) 工具 '{}' 的 input_schema 编译不了（{e}）—— 这个工具的参数不做校验",
+                    tool.name
+                );
+                None
+            }
+        };
+        self.validators.insert(tool.name.clone(), validator);
         self.tools.insert(tool.name.clone(), tool);
     }
 
@@ -99,11 +117,50 @@ impl ToolRegistry {
                 self.names().join(", ")
             );
         };
+
+        // 参数先过一遍 schema，再交给 handler。三件事按这个顺序是有原因的：
+        // 报错能具体到字段与期望（模型据此改得对），handler 里就不必再重复
+        // 检查类型；而且**校验失败时 handler 根本没被调用**，不会留下半个副作用。
+        if let Some(Some(validator)) = self.validators.get(name) {
+            if let Err(why) = describe_violations(validator, &args) {
+                return format!(
+                    "Error: 参数不符合 {name} 的 schema —— {why}。请重写输入以满足 schema。"
+                );
+            }
+        }
+
         match (tool.handler)(ctx, args).await {
             Ok(output) => output,
             Err(e) => format!("Error: 执行 {name} 失败：{e}"),
         }
     }
+}
+
+/// 把 schema 违规翻译成一句给模型读的话：最多列三处，每处带字段路径。
+///
+/// 不 dump 整段 schema —— 那会把上下文塞满，而模型要的只是「哪里不对」。
+/// 全部合规时返回 `Ok(())`。
+fn describe_violations(validator: &jsonschema::Validator, args: &Value) -> Result<(), String> {
+    let all: Vec<String> = validator
+        .iter_errors(args)
+        .map(|error| {
+            let path = error.instance_path();
+            if path.is_empty() {
+                format!("参数本身：{error}")
+            } else {
+                format!("{path}：{error}")
+            }
+        })
+        .collect();
+    if all.is_empty() {
+        return Ok(());
+    }
+    let shown = all.len().min(3);
+    let mut text = all[..shown].join("；");
+    if all.len() > shown {
+        text.push_str(&format!("（还有 {} 处）", all.len() - shown));
+    }
+    Err(text)
 }
 
 // ---- handler 里反复用的小工具 ---------------------------------------------

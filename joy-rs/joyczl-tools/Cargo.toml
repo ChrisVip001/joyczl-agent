@@ -15,6 +15,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 joyczl-config = { workspace = true }
 joyczl-memory = { workspace = true }
+jsonschema = { workspace = true }
 joyczl-provider = { workspace = true }
 joyczl-state = { workspace = true }
 serde_json = { workspace = true }
