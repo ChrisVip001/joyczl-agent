@@ -1,6 +1,6 @@
 [project]
 name = "joyczl-agent-bin"
-version = "0.1.0"
+version = "0.5.0"
 description = "`joy` 二进制本体，给 joyczl-agent 用"
 requires-python = ">=3.10"
 

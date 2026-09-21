@@ -2,6 +2,28 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 0.5.0 — 本地、沙箱、定时
+
+- 本地推理：`ollama` provider —— 不要 key、不要网络，对话不出这台机器。
+  LM Studio / vLLM 用 `JOY_BASE_URL` + `JOY_MODEL` 指过去
+- `joy mcp serve`：Joy 成为一台 MCP 服务器，暴露五个记忆工具，这台机器上的
+  其他 agent 共享同一份事实（**只暴露记忆**，不暴露任何「替别人动手」的能力）
+- 沙箱执行：`run_command` 挂在 `JOY_EXEC` 后面，默认关，三道闸门 ——
+  不可配置的硬拒名单、放行表（空 = 全部拒绝）、macOS `sandbox-exec` /
+  Linux `bubblewrap`（写权限限制在工作目录、Joy 的 home 与临时目录）。
+  沙箱不可用就拒绝执行，绝不在沙箱之外跑
+- 上下文压缩：被滑窗挤出去的轮次折进按会话的滚动摘要（存 state.db，只往前滚、
+  不重算全史）；摘要模型罢工时退化为确定性摘录
+- `joy schedule`：定时任务可声明在技能 frontmatter（`schedule: 0 8 * * 1-5`）
+  或 `schedules.json` 里，五字段 cron，同一分钟最多触发一次，结果写进 outbox
+- 混合检索（`JOY_EMBEDDINGS`，关键词与向量两条腿按名次 RRF 融合）+
+  `joy memory reindex` 给开关打开之前的事实补向量
+- consolidation 过滤临时陈述，不把它们当成事实存档
+- `joy skill update`：按索引更新 —— 先校验、再暂存、备份、原子替换，从不降级
+- 分发：Dockerfile（多阶段、非 root、装了 bubblewrap）与 Homebrew formula 模板
+- `docs/limitations.zh.md`：已知边界清单（刻意的与未做的），每条都指出下一步
+  该打开哪个文件
+
 ## 0.4.0 — 功能面补齐
 
 - 协议：`turn/interrupt`（取消令牌 + 竞速收兵）、`config/write`

@@ -1,6 +1,6 @@
 [project]
 name = "joyczl-agent"
-version = "0.1.0"
+version = "0.5.0"
 description = "Joy 的 Python 客户端：把 `joy app-server` 拉起来，用 Python 说话"
 readme = "README.md"
 requires-python = ">=3.10"

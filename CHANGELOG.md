@@ -2,6 +2,34 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.5.0 — Local, sandboxed, scheduled
+
+- Local inference: an `ollama` provider — no key, no network, nothing leaves
+  the machine. LM Studio / vLLM work through `JOY_BASE_URL` + `JOY_MODEL`
+- `joy mcp serve`: Joy becomes an MCP server exposing five memory tools, so
+  other agents on this machine share the same facts (memory only — nothing
+  that lets another agent make Joy act)
+- Sandboxed execution: `run_command` behind `JOY_EXEC`, off by default, gated
+  three times — an unconfigurable hard deny list, an allowlist (empty = deny
+  everything), and macOS `sandbox-exec` / Linux `bubblewrap` with writes
+  confined to the working directory, the Joy home and temp. No usable sandbox
+  means the command is refused, never run unsandboxed
+- Context compaction: turns pushed out of the working-memory window fold into
+  a rolling per-session summary (stored in state.db, never recomputed from
+  scratch); a dead summarizer falls back to a deterministic excerpt
+- `joy schedule`: declarative jobs from skill frontmatter (`schedule: 0 8 * * 1-5`)
+  or `schedules.json`, five-field cron, one firing per minute, results written
+  to the outbox
+- Hybrid retrieval (`JOY_EMBEDDINGS`, keyword and vector legs fused by rank /
+  RRF) + `joy memory reindex` for facts written before the switch was on
+- Consolidation drops temporary statements instead of filing them as facts
+- `joy skill update`: index-driven upgrades — validate, stage, back up, swap
+  atomically, never downgrade
+- Distribution: Dockerfile (multi-stage, non-root, bubblewrap installed) and a
+  Homebrew formula template
+- `docs/limitations.md`: every known boundary — deliberate or unfinished — with
+  the file to open next
+
 ## 0.4.0 — Feature-complete surface
 
 - Protocol: `turn/interrupt` (cancellation tokens + racing shutdown),

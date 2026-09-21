@@ -18,7 +18,7 @@
 class Joy < Formula
   desc "Local-first personal assistant with long-term memory"
   homepage "https://github.com/ChrisVip001/joyczl-agent"
-  url "https://github.com/ChrisVip001/joyczl-agent/archive/refs/tags/v0.1.0.tar.gz"
+  url "https://github.com/ChrisVip001/joyczl-agent/archive/refs/tags/v0.5.0.tar.gz"
   sha256 "REPLACE_WITH_THE_TARBALL_SHA256"
   license any_of: ["MIT", "Apache-2.0"]
   head "https://github.com/ChrisVip001/joyczl-agent.git", branch: "main"
