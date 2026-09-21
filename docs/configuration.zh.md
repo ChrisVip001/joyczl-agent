@@ -79,6 +79,8 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 | `JOY_DELEGATE` | `0` | 开启 `delegate_task` 工具（子代理有自己的上下文，且不能再派生） |
 | `JOY_EXEC_ALLOW` | — | 放行表，逗号分隔，支持末尾 `*` 通配（`cargo test,git status,ls *`）。空 = 全部拒绝 |
 | `JOY_EXEC_TIMEOUT` | `30` | 单条命令的超时（秒） |
+| `JOY_APPROVAL` | `never` | 放行表没匹配上时怎么办：`never` = 拒绝，`on-request` = 问一句（没人答 = 拒绝）。对硬拒名单与沙箱无效 |
+| `JOY_APPROVAL_TIMEOUT` | `120` | 等回答的秒数，超时按拒绝算 |
 | `JOY_EXEC_NETWORK` | `0` | 让沙箱内的命令能联网。**默认关** —— 一条被放行的命令不该有能力把数据送出去 |
 | `JOY_EXEC_WRITABLE_ROOTS` | — | 额外可写的目录（冒号分隔，必须是已存在的绝对路径），典型用途是构建缓存 |
 
@@ -87,6 +89,16 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 才联网）；没有沙箱的机器拒绝执行任何命令。硬拒名单
 （`sudo`、`mkfs`、把下载内容交给 shell……）不可配置。见
 [SECURITY.zh.md](../SECURITY.zh.md)。
+
+## 交互式批准一条命令
+
+默认情况下，没匹配上放行表的命令直接拒绝。`JOY_APPROVAL=on-request` 把它变成
+一个问题：这一轮发 `approvalRequested`（工具、命令原文、为什么没放行、时限）
+然后**等**。终端打 `y`/`a`/其他，驾驶舱渲染一条确认小条；两边都发
+`approval/respond`。沉默就是拒绝 —— 超时、答得太晚、没有界面，结局一样。
+
+`remember: true`（终端里的 `a`，或驾驶舱的「允许并记住」）会把**被批准的那条
+命令本身**（不加通配）追加进 `settings.json` 的放行表，**下次启动**生效。
 
 ## 把活交给子代理
 

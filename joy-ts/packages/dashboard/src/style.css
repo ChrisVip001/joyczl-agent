@@ -537,3 +537,35 @@ main {
     display: none;
   }
 }
+
+/* 批准条：chip + 命令 + 三个按钮。命令用等宽，方便一眼看清要跑的是什么。 */
+.approval {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.approval .cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--chip);
+}
+
+.approval button {
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #d8d5cd);
+  background: transparent;
+  cursor: pointer;
+}
+
+.approval button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

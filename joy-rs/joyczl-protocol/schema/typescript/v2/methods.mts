@@ -4,6 +4,7 @@
 export const METHODS = {
   TURN_START: "turn/start",
   TURN_INTERRUPT: "turn/interrupt",
+  APPROVAL_RESPOND: "approval/respond",
   SESSION_LIST: "session/list",
   SESSION_NEW: "session/new",
   SESSION_MESSAGES: "session/messages",

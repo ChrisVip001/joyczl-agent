@@ -15,9 +15,10 @@ use axum::Json;
 use chrono::Local;
 use futures_util::stream::{self, Stream};
 use joyczl_protocol::{
-    codes, methods, ConfigReadResponse, DashboardData, ErrorObject, MemoryListEpisodesResponse,
-    MemoryListResponse, ServerNotification, SessionListResponse, SessionMessagesParams,
-    SessionMessagesResponse, TurnStartParams, TurnStartResponse,
+    codes, methods, ApprovalRespondParams, ApprovalRespondResponse, ConfigReadResponse,
+    DashboardData, ErrorObject, MemoryListEpisodesResponse, MemoryListResponse, ServerNotification,
+    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, TurnStartParams,
+    TurnStartResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -93,6 +94,26 @@ pub async fn session(
     {
         Ok(page) => Json(page).into_response(),
         Err(error) => failed(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+/// `POST /api/approval` —— 回答一次「要不要执行」。
+///
+/// 载荷是协议里的 `ApprovalRespondParams`。**不是 SSE**：这是一问一答，
+/// 答完就没了。太晚送达时返回 `accepted: false`（那一轮早已不等了），
+/// 前端据此知道自己的点击没人听，而不是以为批准生效了。
+pub async fn approval(
+    State(app): State<Arc<AppServer>>,
+    Json(params): Json<ApprovalRespondParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("ApprovalRespondParams 一定能序列化");
+    // 与 turn 走同一条路：app-server 是子进程，回答也是它的一个方法。
+    match app
+        .request::<ApprovalRespondResponse>(methods::APPROVAL_RESPOND, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
     }
 }
 
@@ -231,6 +252,7 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
         N::TextDelta(n) => Some(&n.turn_id),
         N::GateDecided(n) => Some(&n.turn_id),
         N::Retry(n) => Some(&n.turn_id),
+        N::ApprovalRequested(n) => Some(&n.turn_id),
         N::ToolStarted(n) => Some(&n.turn_id),
         N::ToolCompleted(n) => Some(&n.turn_id),
         N::TurnCompleted(n) => Some(&n.turn_id),

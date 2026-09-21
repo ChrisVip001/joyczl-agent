@@ -7,6 +7,29 @@
 （`lib.rs`（Server 装配）、`turn.rs`（一轮的全流程）、`dispatch.rs`（13 个方法）、
 `stdio.rs`（传输）、`trace.rs`（落盘）、`subagent.rs`（子代理执行体））。
 
+## 批准等待表（`approval.rs`）
+
+`Server.approvals` 的键是 `turn_id → request_id → Waiting { tx, command }`，
+与 `turns`（取消令牌表）同一副形状，也遵守同一条生命周期纪律：`finish_turn`
+把整桶摘掉 —— 一轮结束后，属于它的那些问题不可能再有人回答。
+
+`Bridge` 是 `ApprovalBroker` 的实现（工具层只认 trait）：
+
+1. 登记 `oneshot::Sender<bool>`；
+2. 发 `approvalRequested` 通知；
+3. `tokio::time::timeout(超时, rx)` 等 —— **超时是实现方的责任**。工具层
+   兜不住「服务端在等」这件事：一个永远等下去的 broker 会把一轮对话永久挂住。
+4. 无论结果如何都把登记撤掉（表不会因为超时而长胖）。
+
+`command` 存在 `Waiting` 里是为了 `remember`：`answer_approval(..., remember:
+true)` 需要把**被批准的那条命令**写进 `settings.json`（`remember_command`，
+走 `apply_config_patch` 那条既有的落盘路径）。记的是原样那条命令，不加通配 ——
+用户看到并批准的是它，不是这一类。
+
+`answer_approval` 返回 `bool`：`false` = 太晚送达。协议里对应
+`ApprovalRespondResponse.accepted`，客户端据此知道自己的点击没人听，而不是以为
+批准生效了。
+
 ## 子代理（`subagent.rs`）
 
 `delegate_task` 的执行体在这里：工具层只有 `SubagentRunner` 这个 trait（依赖方向

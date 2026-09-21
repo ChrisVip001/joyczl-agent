@@ -49,12 +49,18 @@ The sandbox also cuts the network: sandboxed commands run offline unless
 `JOY_EXEC_NETWORK=1` is set, and extra writable roots can be opened with
 `JOY_EXEC_WRITABLE_ROOTS` (each must be an existing absolute directory).
 
+With `JOY_APPROVAL=on-request` the allowlist gate becomes a question instead
+of a wall: an unmatched command emits `approvalRequested` and waits (120s by
+default). **No answer means no run** — timeouts, a closed connection, a late
+reply and "no one is listening" all resolve to a refusal. The hard deny list
+and the sandbox cannot be approved away; only the allowlist gate is
+negotiable.
+
 Known limits, stated so they do not quietly grow: the hard deny list is
 substring matching, so cleverly obfuscated commands can slip past it (the
-allowlist and the sandbox are the real defences); there is no interactive
-approval prompt (the
-allowlist is the third gate); policy is read once at startup. The full list,
-with the file to open for each, is
+allowlist and the sandbox are the real defences); "remember this command"
+writes the exact command and needs a restart; policy is read once at startup.
+The full list, with the file to open for each, is
 [docs/limitations.md](docs/limitations.md).
 
 ## Inputs and paths

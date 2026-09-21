@@ -13,6 +13,42 @@ class JoyProtocolV2(RootModel[Any]):
     root: Annotated[Any, Field(title='JoyProtocolV2')]
 
 
+class ApprovalRequestedNotification(BaseModel):
+    argsPreview: Annotated[
+        str, Field(description='给人看的动作预览：命令原文，或参数摘要。')
+    ]
+    expiresInMs: Annotated[int, Field(description='多少毫秒内没人回答就按拒绝算。')]
+    reason: Annotated[str, Field(description='为什么没被放行规则直接放行。')]
+    requestId: Annotated[
+        str, Field(description='这一轮内的请求号，回答时要原样带回来。')
+    ]
+    tool: Annotated[
+        str, Field(description='想执行什么（工具名，目前只有 `run_command`）。')
+    ]
+    turnId: str
+
+
+class ApprovalRespondParams(BaseModel):
+    approved: bool
+    remember: Annotated[
+        bool | None,
+        Field(
+            description='记住这个决定：把这条命令本身写进 `<home>/settings.json` 的放行表 （不加通配 —— 用户批准的是这条命令，不是这一类）。'
+        ),
+    ] = False
+    requestId: str
+    turnId: str
+
+
+class ApprovalRespondResponse(BaseModel):
+    accepted: Annotated[
+        bool,
+        Field(
+            description='这个请求还在等人回答吗？太晚送达（已超时或那一轮已经结束）时为 false —— 客户端据此知道「我的回答没人听」，而不是以为批准生效了。'
+        ),
+    ]
+
+
 class ConfigReadParams(BaseModel):
     keys: Annotated[
         list[str] | None, Field(description='只取这几个 key；不给就全量返回。')
@@ -238,13 +274,29 @@ class ServerNotification4(BaseModel):
 
 
 class ServerNotification5(BaseModel):
+    argsPreview: Annotated[
+        str, Field(description='给人看的动作预览：命令原文，或参数摘要。')
+    ]
+    expiresInMs: Annotated[int, Field(description='多少毫秒内没人回答就按拒绝算。')]
+    reason: Annotated[str, Field(description='为什么没被放行规则直接放行。')]
+    requestId: Annotated[
+        str, Field(description='这一轮内的请求号，回答时要原样带回来。')
+    ]
+    tool: Annotated[
+        str, Field(description='想执行什么（工具名，目前只有 `run_command`）。')
+    ]
+    turnId: str
+    type: Literal['approvalRequested']
+
+
+class ServerNotification6(BaseModel):
     args: Annotated[Any, Field(description='模型给的参数，结构随工具而定。')]
     tool: str
     turnId: str
     type: Literal['toolStarted']
 
 
-class ServerNotification7(BaseModel):
+class ServerNotification8(BaseModel):
     newFacts: Annotated[
         int,
         Field(description='这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。'),
@@ -252,13 +304,13 @@ class ServerNotification7(BaseModel):
     type: Literal['consolidationCompleted']
 
 
-class ServerNotification8(BaseModel):
+class ServerNotification9(BaseModel):
     nodes: list[str]
     type: Literal['graphStarted']
     workflow: str
 
 
-class ServerNotification9(BaseModel):
+class ServerNotification10(BaseModel):
     node: str
     type: Literal['graphNodeStarted']
     visit: Annotated[
@@ -267,7 +319,7 @@ class ServerNotification9(BaseModel):
     workflow: str
 
 
-class ServerNotification10(BaseModel):
+class ServerNotification11(BaseModel):
     error: Annotated[
         str | None,
         Field(
@@ -281,7 +333,7 @@ class ServerNotification10(BaseModel):
     workflow: str
 
 
-class ServerNotification11(BaseModel):
+class ServerNotification12(BaseModel):
     error: str | None = None
     ms: int
     path: list[str]
@@ -290,7 +342,7 @@ class ServerNotification11(BaseModel):
     workflow: str
 
 
-class ServerNotification13(BaseModel):
+class ServerNotification14(BaseModel):
     code: int
     data: Any | None = None
     message: str
@@ -332,6 +384,12 @@ class SessionSummary(BaseModel):
 class SettingsPatch(BaseModel):
     appleCalendar: bool | None = None
     consolidateEvery: int | None = None
+    execAllow: Annotated[
+        list[str] | None,
+        Field(
+            description='放行表（`JOY_EXEC_ALLOW`）的整表替换 —— 「记住这条命令」写的就是它。'
+        ),
+    ] = None
     experimental: bool | None = None
     googleCalendar: bool | None = None
     graphWorkflows: bool | None = None
@@ -502,7 +560,7 @@ class ServerNotification3(BaseModel):
     type: Literal['gateDecided']
 
 
-class ServerNotification6(BaseModel):
+class ServerNotification7(BaseModel):
     durationMs: int | None = None
     output: Annotated[
         str,
@@ -615,7 +673,7 @@ class Message(BaseModel):
     role: MessageRole
 
 
-class ServerNotification12(BaseModel):
+class ServerNotification13(BaseModel):
     iterations: int
     meta: TurnMeta
     reply: str
@@ -639,6 +697,7 @@ class ServerNotification(
         | ServerNotification11
         | ServerNotification12
         | ServerNotification13
+        | ServerNotification14
     ]
 ):
     root: Annotated[
@@ -654,7 +713,8 @@ class ServerNotification(
         | ServerNotification10
         | ServerNotification11
         | ServerNotification12
-        | ServerNotification13,
+        | ServerNotification13
+        | ServerNotification14,
         Field(
             description='一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。',
             title='ServerNotification',

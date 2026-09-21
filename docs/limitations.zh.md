@@ -23,9 +23,18 @@
 * **刻意** —— 硬拒名单是**子串匹配**，变着花样的写法能绕过去。它是安全带不是
   证明：真正管用的是放行表与沙箱。
   → `joy-rs/joyczl-tools/src/exec.rs`（`HARD_DENY`）
-* **刻意** —— 没有交互式批准弹窗。第三道闸门是放行表，不是对话框。做弹窗要
-  动协议方法加驾驶舱 UI，那是独立的一个项目。
-  → `joy-rs/joyczl-tools/src/exec.rs`（`vet`）、`joy-rs/joyczl-app-server/src/dispatch.rs`
+* **刻意** —— 批准只有**档位**，没有按工具分类的粒度。`JOY_APPROVAL` 就是
+  `never`（默认）与 `on-request` 两档；更细的版本（执行要问、MCP 不问）没做，
+  因为目前只有 exec 有那个「问」的闸门 —— 那种配置会是在描述一个不存在的东西。
+  → `joy-rs/joyczl-config/src/lib.rs`（`approval`）
+* **刻意** —— 「记住这条命令」写进 `settings.json` 的是**被批准的那条命令本身**
+  （不加通配），而且要**下次启动**才生效：执行策略在启动时读一次。说了「记住了」
+  却悄悄把规则放宽，比不记更糟。
+  → `joy-rs/joyczl-app-server/src/lib.rs`（`remember_command`）
+* **刻意** —— MCP 的反向请求（elicitation/sampling）会收到一个明确的「不支持」，
+  而不是完整支持。要真的回答它们，得先有一套「服务器随便问什么都答得出来」的
+  UI 契约。
+  → `joy-rs/joyczl-mcp/src/transport.rs`
 * **刻意** —— 沙箱不可用就什么都不跑。Linux 上这意味着 `bwrap` 既要存在、
   也要真的能建命名空间：Ubuntu 24.04 限制了非特权用户命名空间，所以可用性
   是**每个进程探测一次**（真跑一次 `bwrap`），不是查文件在不在。

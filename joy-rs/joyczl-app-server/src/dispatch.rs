@@ -5,14 +5,15 @@
 //! 顺序必须由它自己控制，所以不走「返回值」这条路。
 
 use joyczl_protocol::{
-    codes, methods, ConfigReadParams, ConfigReadResponse, ConfigWriteParams, ConfigWriteResponse,
-    ErrorObject, JsonRpcError, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, MemoryForgetParams,
-    MemoryForgetResponse, MemoryListEpisodesParams, MemoryListEpisodesResponse, MemoryListParams,
-    MemoryListResponse, MemoryRememberParams, MemoryRememberResponse, MemorySearchParams,
-    MemorySearchResponse, MessageRole, ModelInfo, ModelListParams, ModelListResponse, RequestId,
-    SessionListParams, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
-    SessionNewParams, SessionNewResponse, TurnInterruptParams, TurnInterruptResponse,
-    TurnStartParams, JSONRPC_VERSION,
+    codes, methods, ApprovalRespondParams, ApprovalRespondResponse, ConfigReadParams,
+    ConfigReadResponse, ConfigWriteParams, ConfigWriteResponse, ErrorObject, JsonRpcError,
+    JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, MemoryForgetParams, MemoryForgetResponse,
+    MemoryListEpisodesParams, MemoryListEpisodesResponse, MemoryListParams, MemoryListResponse,
+    MemoryRememberParams, MemoryRememberResponse, MemorySearchParams, MemorySearchResponse,
+    MessageRole, ModelInfo, ModelListParams, ModelListResponse, RequestId, SessionListParams,
+    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
+    SessionNewResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -242,6 +243,15 @@ async fn dispatch(
             // turnCompleted 通知）由正在跑的那轮自己完成。
             let interrupted = server.interrupt_turn(&p.turn_id);
             respond(TurnInterruptResponse { interrupted })
+        }
+
+        methods::APPROVAL_RESPOND => {
+            let p: ApprovalRespondParams = parse(params, method)?;
+            // 太晚送达（已超时、那一轮已经结束）不是错误 —— 如实回一个
+            // accepted: false，客户端才知道「我的回答没人听」。
+            let accepted =
+                server.answer_approval(&p.turn_id, &p.request_id, p.approved, p.remember);
+            respond(ApprovalRespondResponse { accepted })
         }
 
         other => Err(ErrorObject {

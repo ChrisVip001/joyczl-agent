@@ -83,6 +83,7 @@ pub fn router(app: Arc<AppServer>, assets: PathBuf) -> Router {
         .route("/api/data", get(api::data))
         .route("/api/session", get(api::session))
         .route("/api/turn", post(api::turn))
+        .route("/api/approval", post(api::approval))
         // 静态文件兜底。`ServeDir` 而不是自己读文件：路径穿越（`/../../.env`）
         // 是那种已经被写对过无数次的东西，没有理由再写一次。
         // `append_index_html_on_directories` 让 `/` 落到 index.html。

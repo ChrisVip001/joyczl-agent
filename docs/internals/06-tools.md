@@ -44,6 +44,30 @@ Err(e) → format!("Error: 执行 {name} 失败：{e}")
 参数助手也是同一套语气：`require_str` 会说「缺少参数 'x'」「应该是字符串，
 得到的是 …」「不能是空的」；`opt_u32` 会在给了负数时说清楚。
 
+### `run_command` 的三道闸门现在是三态（`exec.rs`）
+
+`vet()` 返回 `Gate`：
+
+```rust
+enum Gate { Allow, Deny(String), NeedsApproval { reason: String } }
+```
+
+* **闸门 1 硬拒名单** → `Deny`，永不可协商（批准碰不到它）。
+* **闸门 2 放行表** → 匹配上 `Allow`；没匹配上时看 `policy.approval`：
+  false 是 `Deny`（从前的行为），true 是 `NeedsApproval`（问一句）。
+* **闸门 3 沙箱** → `Deny`，同样不可协商 —— 它排在批准**之后**判定，
+  但批准只发生在闸门 2，所以点「同意」也换不来一个没有沙箱的执行。
+
+`NeedsApproval` 的落地在 `execute()` 里：拿到 broker 就问（`approval.rs` 的
+trait，实现由 app-server 注入），问不到就：
+
+```text
+Error: …也没人在问你：JOY_APPROVAL=on-request 时，从终端或驾驶舱提问才有人能回答。
+```
+
+**「没人能问」与「问了被拒」是两句不同的话** —— 前者要告诉用户怎么把界面接上，
+后者只需说明这次没批准。混成一句会让「为什么它不问我」变成需要读源码的问题。
+
 ### 参数 schema 校验：在 handler 之前先过一遍
 
 `input_schema` 不只是给模型看的声明 —— `ToolRegistry::register` 会用

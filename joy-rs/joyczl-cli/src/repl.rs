@@ -61,6 +61,41 @@ pub async fn run(server: Server) -> Result<()> {
     Ok(())
 }
 
+/// 问一次批准：打印预览、读一行回答、把回答送回去。
+///
+/// 含混的回答（空行、乱打）一律算拒绝 —— 与整个批准机制同一条规矩：放行只有
+/// 一种来源，就是一个明确的「可以」。
+async fn ask_approval(server: &Server, ask: joyczl_protocol::ApprovalRequestedNotification) {
+    println!("…需要批准：{}", ask.args_preview);
+    println!("  为什么问：{}", ask.reason);
+    print!("  批准执行？（y = 允许 / a = 允许并记住 / 其他 = 拒绝）: ");
+    std::io::stdout().flush().ok();
+
+    // 单独开一个 stdin 句柄：主循环那一刻没在读，不会打架。
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut line = String::new();
+    let _ = tokio::io::AsyncBufReadExt::read_line(&mut stdin, &mut line).await;
+    let answer = line.trim().to_lowercase();
+    let approved = matches!(answer.as_str(), "y" | "yes" | "a" | "always");
+    let remember = matches!(answer.as_str(), "a" | "always");
+
+    let accepted = server.answer_approval(&ask.turn_id, &ask.request_id, approved, remember);
+    if !accepted {
+        println!("…这个问题已经过期了（那一轮不再等答案）");
+    } else if approved {
+        println!(
+            "…批准了{}",
+            if remember {
+                "，并记住这条命令"
+            } else {
+                ""
+            }
+        );
+    } else {
+        println!("…拒绝了");
+    }
+}
+
 fn new_session_id() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -110,6 +145,13 @@ async fn chat_turn(server: &Server, session_id: &str, message: &str) {
                     },
                     decided.decision.reason
                 );
+            }
+            // 有人问「要不要执行」：这是唯一需要用户**当场**回答的通知。
+            // 直接在这里读一行 stdin —— 主循环此刻正等着一轮跑完，不会跟它
+            // 抢输入（为这点事做异步 stdin 竞速不值得）。
+            ServerNotification::ApprovalRequested(ask) => {
+                end_streamed_line(&mut streamed);
+                ask_approval(server, ask).await;
             }
             // 重试**从不静默**：与其让用户对着一个卡住的界面猜，不如说清楚
             // 「限流了，等一会儿再来一次」。

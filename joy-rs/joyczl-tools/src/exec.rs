@@ -49,6 +49,11 @@ pub struct ExecPolicy {
     /// 命令默认不该拥有把数据送出去的能力。`cargo test` 这类要下载的命令
     /// 得显式把开关打开。
     pub network: bool,
+    /// 放行表没匹配上时，允不允许**问一句**（`JOY_APPROVAL=on-request`）。
+    /// 默认 false = 直接拒绝（等于从前行为）。
+    pub approval: bool,
+    /// 等人回答的秒数（`JOY_APPROVAL_TIMEOUT`）。
+    pub approval_timeout_secs: i64,
     /// 超长输出的落盘位置（`<home>/spill`）。`None` = 不落盘，只截断。
     ///
     /// 截断是必须的（一条 `find /` 能塞爆上下文），但**丢掉的东西是没了**。
@@ -102,49 +107,71 @@ fn pipes_into_a_shell(command: &str) -> bool {
     })
 }
 
-/// 命令该不该跑：``Ok(())`` 放行，``Err(为什么)`` 是给模型读的拒因。
-pub fn vet(command: &str, policy: &ExecPolicy) -> Result<(), String> {
+/// 闸门给出的三种结局。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Gate {
+    /// 放行。
+    Allow,
+    /// 拒绝。理由直接给模型读（以 `Error:` 前缀交出去）。
+    Deny(String),
+    /// 放行表没匹配上，但开了 `JOY_APPROVAL=on-request`：问一句再决定。
+    ///
+    /// **只有放行表这一关可以被问到。** 硬拒名单与沙箱在这之前就返回了，
+    /// 批准根本没有机会碰到它们 —— 一个能靠点「同意」绕过的保险丝不是保险丝。
+    NeedsApproval { reason: String },
+}
+
+/// 命令该不该跑。三道闸门按顺序判，第一道拦下的说了算。
+pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
     let lower = command.to_lowercase();
 
-    // 闸门 1：硬拒。不可配置。
+    // 闸门 1：硬拒。不可配置，也不可协商。
     if let Some(hit) = HARD_DENY.iter().find(|pattern| lower.contains(*pattern)) {
-        return Err(format!(
+        return Gate::Deny(format!(
             "这条命令被硬拒名单挡下了（命中 '{hit}'）—— 这类命令无论怎么配都不会执行。"
         ));
     }
     if pipes_into_a_shell(&lower) {
-        return Err(
+        return Gate::Deny(
             "这条命令被硬拒名单挡下了（把下载的内容直接交给 shell 执行）\
              —— 这类命令无论怎么配都不会执行。"
                 .to_string(),
         );
     }
 
-    // 闸门 2：allowlist。空表 = 默认拒绝。
+    // 闸门 2：allowlist。空表 = 默认拒绝；`on-request` 时改成「问一句」。
     if policy.allow.is_empty() {
-        return Err(
-            "执行工具没有放行任何命令。要允许一类命令，设 JOY_EXEC_ALLOW，\
-             例如 JOY_EXEC_ALLOW='cargo test,git status,ls *'。"
-                .to_string(),
-        );
+        let why = "执行工具没有放行任何命令。要允许一类命令，设 JOY_EXEC_ALLOW，\
+                   例如 JOY_EXEC_ALLOW='cargo test,git status,ls *'。"
+            .to_string();
+        return if policy.approval {
+            Gate::NeedsApproval { reason: why }
+        } else {
+            Gate::Deny(why)
+        };
     }
     if !policy.allow.iter().any(|rule| matches_rule(rule, command)) {
-        return Err(format!(
-            "没有匹配的放行规则，拒绝执行。当前规则：{}。\
+        let why = format!(
+            "没有匹配的放行规则。当前规则：{}。\
              要允许它，往 JOY_EXEC_ALLOW 里加一条（支持末尾的 * 通配）。",
             policy.allow.join(", ")
-        ));
+        );
+        return if policy.approval {
+            Gate::NeedsApproval { reason: why }
+        } else {
+            Gate::Deny(why)
+        };
     }
 
-    // 闸门 3：沙箱。不可用就不跑 —— 这是本模块存在的理由。
+    // 闸门 3：沙箱。不可用就不跑 —— 这是本模块存在的理由，也不可协商。
     if !sandbox_available() {
-        return Err(
+        return Gate::Deny(
             "这台机器上没有可用的沙箱（macOS 需要 sandbox-exec，Linux 需要 bubblewrap），\
              拒绝在沙箱之外执行命令。"
                 .to_string(),
         );
     }
-    Ok(())
+    Gate::Allow
 }
 
 /// 放行规则匹配：整串相等，或规则以 `*` 结尾时的前缀匹配；`*` 单独一条
@@ -328,9 +355,34 @@ pub(crate) fn sandbox_argv(
 /// `policy.extra_roots`（配置来的）在这里一起并进去 —— 合并放在 execute 内部，
 /// 是为了让「策略里写了什么」在任何调用路径上都成立：散在调用方去记得合并，
 /// 就会有一条路径静默忽略配置。
-pub async fn execute(command: &str, policy: &ExecPolicy, writable: &[PathBuf]) -> String {
-    if let Err(why) = vet(command, policy) {
-        return format!("Error: {why}");
+pub async fn execute(
+    command: &str,
+    policy: &ExecPolicy,
+    writable: &[PathBuf],
+    approval: Option<&dyn crate::approval::ApprovalBroker>,
+) -> String {
+    match vet(command, policy) {
+        Gate::Deny(why) => return format!("Error: {why}"),
+        Gate::Allow => {}
+        Gate::NeedsApproval { reason } => {
+            // 没人能问、问了没人答、答得太晚 —— 都是拒绝。放行只有一种来源：
+            // 一个明确的「可以」。
+            let Some(broker) = approval else {
+                return format!(
+                    "Error: {reason}\n（也没人在问你：JOY_APPROVAL=on-request 时，从终端或 \
+                     驾驶舱提问才有人能回答。）"
+                );
+            };
+            let request = crate::approval::ApprovalRequest {
+                tool: "run_command".to_string(),
+                args_preview: command.to_string(),
+                reason,
+                timeout_secs: policy.approval_timeout_secs,
+            };
+            if !broker.request(request).await {
+                return "Error: 这次执行没有被批准（或没人回答），已跳过。".to_string();
+            }
+        }
     }
     let backend = sandbox_backend().expect("vet 已经把沙箱不可用挡在外头");
 
@@ -499,7 +551,7 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                 writable.push(ctx.home.clone());
                 // `JOY_EXEC_WRITABLE_ROOTS` 由 execute 自己并进来（策略在
                 // 任何调用路径上都生效，不靠调用方记得合并）。
-                Ok(execute(&command, &policy, &writable).await)
+                Ok(execute(&command, &policy, &writable, ctx.approval.as_deref()).await)
             })
         }),
     }

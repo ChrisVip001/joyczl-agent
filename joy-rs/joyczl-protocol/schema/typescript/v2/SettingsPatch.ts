@@ -16,4 +16,8 @@ export type SettingsPatch = {
   googleCalendar?: boolean | null;
   experimental?: boolean | null;
   graphWorkflows?: boolean | null;
+  /**
+   * 放行表（`JOY_EXEC_ALLOW`）的整表替换 —— 「记住这条命令」写的就是它。
+   */
+  execAllow?: Array<string> | null;
 };

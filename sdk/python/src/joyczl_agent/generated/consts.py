@@ -32,6 +32,7 @@ class Methods(str, Enum):
     # "Methods.TURN_START"，而方法名是要拼进日志和报错里的 —— 换回来。
     __str__ = str.__str__
 
+    APPROVAL_RESPOND = "approval/respond"
     CONFIG_READ = "config/read"
     CONFIG_WRITE = "config/write"
     MEMORY_FORGET = "memory/forget"

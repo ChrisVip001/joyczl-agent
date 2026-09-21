@@ -15,6 +15,7 @@
 //! 没配 key 也能启动：记忆和会话的方法照常工作，只有 `turn/*` 会报
 //! PROVIDER_ERROR，并把「去哪儿领 key」一并告诉调用方。
 
+mod approval;
 mod dispatch;
 mod stdio;
 mod subagent;
@@ -23,6 +24,10 @@ mod turn;
 
 #[cfg(test)]
 mod turn_tests;
+
+#[cfg(test)]
+#[path = "approval_tests.rs"]
+mod approval_tests;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -103,6 +108,9 @@ pub struct Server {
     pub(crate) resolved: Arc<RwLock<Option<Resolved>>>,
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) turns: Arc<Mutex<HashMap<String, Arc<Interrupt>>>>,
+    /// 在等人回答的批准请求：`approval/respond` 按 turn_id + request_id 找到
+    /// 它，把回答送回去。与 `turns` 同一条生命周期纪律（一轮结束整桶摘掉）。
+    pub(crate) approvals: approval::Pending,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -162,13 +170,19 @@ impl Server {
             resolved,
             tools: Arc::new(tools),
             turns: Arc::new(Mutex::new(HashMap::new())),
+            approvals: Arc::new(Mutex::new(HashMap::new())),
             pool,
         }
     }
 
     /// 执行工具时给 handler 的环境。**只有这一处构造**（turn 与子代理共用）——
     /// 加字段时不会漏掉某条路径。
-    pub(crate) fn tool_ctx(&self) -> ToolCtx {
+    ///
+    /// `approval` 是这一轮的批准通道：子代理传 `None`（它不该阻塞在人类身上）。
+    pub(crate) fn tool_ctx(
+        &self,
+        approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
+    ) -> ToolCtx {
         let settings = self.settings();
         tool_ctx(
             &self.facts,
@@ -176,7 +190,76 @@ impl Server {
             &self.chat,
             &self.calendar,
             &settings.home,
+            approval,
         )
+    }
+
+    /// 这一轮的批准通道。`never` 模式（默认）返回 `None` —— 没人问，也就没人答，
+    /// 需要批准的动作直接拒绝。
+    pub(crate) fn approval_bridge(
+        &self,
+        turn_id: &str,
+        sink: &EventSink,
+    ) -> Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>> {
+        let settings = self.settings();
+        if settings.approval != "on-request" {
+            return None;
+        }
+        Some(Arc::new(approval::Bridge {
+            pending: self.approvals.clone(),
+            sink: sink.clone(),
+            turn_id: turn_id.to_string(),
+            timeout_secs: settings.approval_timeout_secs,
+        }))
+    }
+
+    /// 回答一次批准请求。返回 `false` = 太晚了（已超时，或那一轮已经结束）——
+    /// 如实告诉客户端，免得它以为批准生效了。
+    pub fn answer_approval(
+        &self,
+        turn_id: &str,
+        request_id: &str,
+        approved: bool,
+        remember: bool,
+    ) -> bool {
+        let waiting = self
+            .approvals
+            .lock()
+            .expect("approvals 锁不该中毒")
+            .get_mut(turn_id)
+            .and_then(|per_turn| per_turn.remove(request_id));
+        let Some(waiting) = waiting else {
+            return false;
+        };
+        if approved && remember {
+            self.remember_command(&waiting.command);
+        }
+        // 送不到（接收端已经走了）不算失败：那一轮已经结束了。
+        let _ = waiting.tx.send(approved);
+        true
+    }
+
+    /// 「记住这条命令」：整表替换放行表，落进 `settings.json`。
+    ///
+    /// 记的是**这条命令本身**，不加通配 —— 用户看到并批准的是它，不是这一类。
+    /// 执行策略在启动时读一次，所以这条要**下次启动**才生效；这一点如实说出来，
+    /// 而不是让人以为下次不会再问了。
+    fn remember_command(&self, command: &str) {
+        let mut settings = self.settings();
+        if settings.exec_allow.iter().any(|rule| rule == command) {
+            return; // 已经在表里了（大概是同一轮里问了两次）
+        }
+        settings.exec_allow.push(command.to_string());
+        let patch = joyczl_protocol::SettingsPatch {
+            exec_allow: Some(settings.exec_allow.clone()),
+            ..Default::default()
+        };
+        match self.apply_config_patch(&patch) {
+            Ok(_) => eprintln!(
+                "(joy) 已记住这条命令：{command}（执行策略在启动时读一次，下次启动才生效）"
+            ),
+            Err(why) => eprintln!("(joy) 没能记住这条命令：{why}"),
+        }
     }
 
     /// 当前设置的快照。拿到的副本随便用多久都行 —— 并发写只会影响下一轮。
@@ -233,6 +316,12 @@ impl Server {
     /// 摘掉一个 turn。跑完了就没有可打断的东西。
     pub(crate) fn finish_turn(&self, turn_id: &str) {
         self.turns.lock().expect("turns 锁不该中毒").remove(turn_id);
+        // 同一个道理：这一轮没回答的批准请求也一并作废（它的接收端已经走了，
+        // 留着只会占地方）。
+        self.approvals
+            .lock()
+            .expect("approvals 锁不该中毒")
+            .remove(turn_id);
     }
 
     /// 打断一个在跑的 turn。返回 false = 没找到（已经跑完了）。
@@ -369,12 +458,25 @@ async fn builtin_tools(settings: &Settings) -> ToolRegistry {
                     .join(", ")
             )
         };
-        eprintln!("(joy) 执行工具已启用：沙箱 {sandbox}，{network}，放行规则：{allow}{extra}");
+        let approval = if settings.approval == "on-request" {
+            format!(
+                "，没匹配上时问你（{}秒没人答就拒绝）",
+                settings.approval_timeout_secs
+            )
+        } else {
+            "，没匹配上直接拒绝（JOY_APPROVAL=on-request 可以改成问一句）".to_string()
+        };
+        eprintln!(
+            "(joy) 执行工具已启用：沙箱 {sandbox}，{network}，放行规则：{allow}{approval}{extra}"
+        );
         tools.register(joyczl_tools::exec::run_command(
             joyczl_tools::exec::ExecPolicy {
                 allow: settings.exec_allow.clone(),
                 timeout_secs: settings.exec_timeout_secs,
                 network: settings.exec_network,
+                // 批准只影响放行表那一关：没匹配上时是拒绝，还是问一句。
+                approval: settings.approval == "on-request",
+                approval_timeout_secs: settings.approval_timeout_secs,
                 // 超长输出落盘：截断仍然发生（上下文要保住），但原文还在。
                 spill_dir: Some(settings.home.join("spill")),
                 extra_roots: settings.exec_writable_roots.clone(),
@@ -414,6 +516,7 @@ pub(crate) fn tool_ctx(
     chat: &Chat,
     calendar: &Calendar,
     home: &std::path::Path,
+    approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
 ) -> ToolCtx {
     ToolCtx {
         facts: facts.clone(),
@@ -421,6 +524,7 @@ pub(crate) fn tool_ctx(
         chat: chat.clone(),
         calendar: calendar.clone(),
         home: home.to_path_buf(),
+        approval,
     }
 }
 

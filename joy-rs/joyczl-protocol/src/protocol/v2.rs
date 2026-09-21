@@ -23,6 +23,7 @@ use crate::{JsonSchema, TS};
 pub mod methods {
     pub const TURN_START: &str = "turn/start";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
+    pub const APPROVAL_RESPOND: &str = "approval/respond";
     pub const SESSION_LIST: &str = "session/list";
     pub const SESSION_NEW: &str = "session/new";
     pub const SESSION_MESSAGES: &str = "session/messages";
@@ -111,6 +112,52 @@ pub struct ToolCallRecord {
     pub tool: String,
     pub status: ToolStatus,
     pub duration_ms: Option<i32>,
+}
+
+/// 一次「要不要执行」的询问。
+///
+/// 服务端把问题抛给客户端后**等待**（默认 120 秒），回答由 `approval/respond`
+/// 送来。没人回答、超时、或者根本没有批准通道 —— 一律**按拒绝处理**：默认
+/// 拒绝是这个功能的地基，不是它的边界情况。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ApprovalRequestedNotification {
+    pub turn_id: String,
+    /// 这一轮内的请求号，回答时要原样带回来。
+    pub request_id: String,
+    /// 想执行什么（工具名，目前只有 `run_command`）。
+    pub tool: String,
+    /// 给人看的动作预览：命令原文，或参数摘要。
+    pub args_preview: String,
+    /// 为什么没被放行规则直接放行。
+    pub reason: String,
+    /// 多少毫秒内没人回答就按拒绝算。
+    pub expires_in_ms: i32,
+}
+
+/// `approval/respond` 的参数。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ApprovalRespondParams {
+    pub turn_id: String,
+    pub request_id: String,
+    pub approved: bool,
+    /// 记住这个决定：把这条命令本身写进 `<home>/settings.json` 的放行表
+    /// （不加通配 —— 用户批准的是这条命令，不是这一类）。
+    #[serde(default)]
+    pub remember: bool,
+}
+
+/// `approval/respond` 的应答。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ApprovalRespondResponse {
+    /// 这个请求还在等人回答吗？太晚送达（已超时或那一轮已经结束）时为 false ——
+    /// 客户端据此知道「我的回答没人听」，而不是以为批准生效了。
+    pub accepted: bool,
 }
 
 /// 一轮 turn 的遥测。落库到 chat_log.meta，所以重开一个旧会话
@@ -294,6 +341,9 @@ pub struct SettingsPatch {
     pub experimental: Option<bool>,
     #[ts(optional = nullable)]
     pub graph_workflows: Option<bool>,
+    /// 放行表（`JOY_EXEC_ALLOW`）的整表替换 —— 「记住这条命令」写的就是它。
+    #[ts(optional = nullable)]
+    pub exec_allow: Option<Vec<String>>,
 }
 
 impl SettingsPatch {
@@ -353,6 +403,9 @@ impl SettingsPatch {
         }
         if p.graph_workflows.is_some() {
             self.graph_workflows = p.graph_workflows;
+        }
+        if p.exec_allow.is_some() {
+            self.exec_allow = p.exec_allow.clone();
         }
     }
 }
@@ -811,6 +864,8 @@ pub enum ServerNotification {
     GateDecided(GateDecidedNotification),
     /// 正在重试（限流/临时故障）：**每次必发**，不静默。
     Retry(RetryNotification),
+    /// 有一条命令在等人批准：先回它，那一轮才会继续。
+    ApprovalRequested(ApprovalRequestedNotification),
     ToolStarted(ToolStartedNotification),
     ToolCompleted(ToolCompletedNotification),
     ConsolidationCompleted(ConsolidationCompletedNotification),

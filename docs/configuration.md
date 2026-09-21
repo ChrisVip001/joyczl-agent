@@ -85,6 +85,8 @@ vector: run `joy memory reindex` to backfill.
 | `JOY_DELEGATE` | `0` | enable the `delegate_task` tool (a subagent gets its own context; it cannot delegate again) |
 | `JOY_EXEC_ALLOW` | — | allowlist, comma separated, trailing `*` wildcards (`cargo test,git status,ls *`). Empty = deny everything |
 | `JOY_EXEC_TIMEOUT` | `30` | per-command timeout in seconds |
+| `JOY_APPROVAL` | `never` | what to do when the allowlist does not match: `never` = refuse, `on-request` = ask (no answer = refusal). Never applies to the deny list or the sandbox |
+| `JOY_APPROVAL_TIMEOUT` | `120` | seconds to wait for an answer before treating it as a refusal |
 | `JOY_EXEC_NETWORK` | `0` | let sandboxed commands reach the network. **Off by default** — an allowed command should not be able to send your data out |
 | `JOY_EXEC_WRITABLE_ROOTS` | — | extra writable directories (colon separated, must be existing absolute paths), e.g. a build cache |
 
@@ -94,6 +96,19 @@ with writes confined to the working directory, the Joy home and temp, and
 machine without a sandbox refuses to run anything. The hard deny list
 (`sudo`, `mkfs`, download-piped-into-shell, …) is not configurable. See
 [SECURITY.md](../SECURITY.md).
+
+## Approving a command interactively
+
+By default an unmatched command is simply refused. With `JOY_APPROVAL=on-request`
+it becomes a question: the turn emits `approvalRequested` (tool, the command
+itself, why it was not allowed, the deadline) and **waits**. The REPL prints
+`y`/`a`/anything-else, the dashboard renders a small confirm bar; both send
+`approval/respond`. Silence is a refusal — timeouts, a late answer and a
+missing UI all end the same way.
+
+`remember: true` (the `a` answer, or "允许并记住") appends the command — exactly
+as approved, no wildcard — to the exec allowlist in `settings.json`, which takes
+effect on the next start.
 
 ## Delegating work to a subagent
 

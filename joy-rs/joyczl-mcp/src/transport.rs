@@ -115,8 +115,27 @@ where
                 continue;
             };
             if message.get("id").and_then(Value::as_u64) != Some(id) {
-                // 我们的应答之前可能有别的消息：通知，或者服务器反过来
-                // 发起的请求。这个客户端不支持采样/反向提问，跳过。
+                // 我们的应答之前可能有别的消息：通知，或者服务器反过来发起的
+                // 请求（elicitation / sampling）。
+                //
+                // 反向请求**不能装作没看见**：服务器会一直等一个永远不来的
+                // 回答（有些实现就此挂住）。回一个明确的「不支持」，它至少
+                // 知道这边不会答。完整支持没做 —— 见 docs/limitations.md。
+                if let (Some(method), Some(their_id)) = (
+                    message.get("method").and_then(Value::as_str),
+                    message.get("id").cloned(),
+                ) {
+                    eprintln!("(joy) MCP 服务器发来反向请求 '{method}'，已明确回绝（不支持）");
+                    let reply = json!({
+                        "jsonrpc": "2.0",
+                        "id": their_id,
+                        "error": {
+                            "code": -32601,
+                            "message": format!("Joy 不支持反向请求 '{method}'"),
+                        },
+                    });
+                    self.send(&reply).await?;
+                }
                 continue;
             }
             return unwrap_message(&message);

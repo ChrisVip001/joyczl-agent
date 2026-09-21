@@ -10,6 +10,7 @@
     "TOOL_ERROR": -32001
   },
   "methods": {
+    "APPROVAL_RESPOND": "approval/respond",
     "CONFIG_READ": "config/read",
     "CONFIG_WRITE": "config/write",
     "MEMORY_FORGET": "memory/forget",

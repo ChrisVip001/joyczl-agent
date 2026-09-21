@@ -45,6 +45,7 @@ async fn ctx() -> super::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     super::ToolCtx {
+        approval: None,
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
         chat: joyczl_state::Chat::new(pool.clone()),

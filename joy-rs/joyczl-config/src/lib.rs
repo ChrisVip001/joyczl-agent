@@ -80,6 +80,12 @@ pub const BOUNDS: &[Bound] = &[
     },
     Bound {
         patch_name: None,
+        env_name: "JOY_APPROVAL_TIMEOUT",
+        min: 5,
+        max: 3_600,
+    },
+    Bound {
+        patch_name: None,
         env_name: "JOY_LLM_RETRIES",
         min: 0,
         max: 5,
@@ -191,6 +197,17 @@ pub struct Settings {
     pub exec_allow: Vec<String>,
     /// `JOY_EXEC_TIMEOUT`：单条命令的超时（秒）。
     pub exec_timeout_secs: i64,
+
+    // ---- 交互式批准（见 joyczl-tools 的 approval.rs）
+    /// `JOY_APPROVAL`：没被放行表匹配时怎么办。
+    ///
+    /// * `never`（默认）—— 直接拒绝（等于从前行为）。
+    /// * `on-request` —— 问一句再决定；**没人回答就按拒绝算**。
+    ///
+    /// 硬拒名单与沙箱这两道闸门**永远不可协商**：批准只能翻开放行表那一关。
+    pub approval: String,
+    /// `JOY_APPROVAL_TIMEOUT`：等人回答的秒数（默认 120）。
+    pub approval_timeout_secs: i64,
     /// `JOY_EXEC_NETWORK`：沙箱里**能不能联网**。默认 **false（断网）** ——
     /// 一条被放行的命令默认不该拥有把数据送出去的能力。
     /// 要让 `cargo test` 这类需要下载的命令跑起来，得显式设成 1。
@@ -228,6 +245,8 @@ impl Default for Settings {
             exec_enabled: false,
             exec_allow: Vec::new(),
             exec_timeout_secs: 30,
+            approval: "never".to_string(),
+            approval_timeout_secs: 120,
             exec_network: false,
             exec_writable_roots: Vec::new(),
         }
@@ -272,6 +291,9 @@ impl Settings {
                 })
                 .unwrap_or_default(),
             exec_timeout_secs: env_int("JOY_EXEC_TIMEOUT", d.exec_timeout_secs as i32) as i64,
+            approval: env("JOY_APPROVAL").unwrap_or(d.approval),
+            approval_timeout_secs: env_int("JOY_APPROVAL_TIMEOUT", d.approval_timeout_secs as i32)
+                as i64,
             exec_network: env_bool("JOY_EXEC_NETWORK"),
             exec_writable_roots: env("JOY_EXEC_WRITABLE_ROOTS")
                 .map(|raw| {
@@ -306,6 +328,13 @@ impl Settings {
         check_bound("JOY_LLM_RETRIES", self.llm_retries as i64)?;
         check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
         check_bound("JOY_EXEC_TIMEOUT", self.exec_timeout_secs)?;
+        check_bound("JOY_APPROVAL_TIMEOUT", self.approval_timeout_secs)?;
+        if !matches!(self.approval.as_str(), "never" | "on-request") {
+            return Err(format!(
+                "JOY_APPROVAL 只能是 never 或 on-request，收到 '{}'",
+                self.approval
+            ));
+        }
 
         // 覆盖窗口时顺手查一条关系：答案的额度不能比窗口还大 —— 那种配置
         // 下模型永远答不完，而表现是「莫名其妙被截断」。
@@ -350,29 +379,7 @@ impl Settings {
             }
         }
 
-        // 放行规则：空表合法（= 什么都不放行，那是默认）。但表里每一条都得是
-        // 一条**能用的**规则 —— 写坏的规则会静默地永不匹配，而命令被拒时
-        // 拒因里还列着它，查起来很费劲。
-        if self.exec_allow.len() > MAX_EXEC_RULES {
-            return Err(format!(
-                "JOY_EXEC_ALLOW 最多 {MAX_EXEC_RULES} 条规则，收到 {} 条",
-                self.exec_allow.len()
-            ));
-        }
-        for rule in &self.exec_allow {
-            let rule = rule.trim();
-            if rule.is_empty() {
-                return Err("JOY_EXEC_ALLOW 里有空规则 —— 空串不是一条规则".to_string());
-            }
-            if rule.contains(['\n', '\r']) {
-                return Err(format!("JOY_EXEC_ALLOW 的规则不能含换行：{rule:?}"));
-            }
-            if rule.chars().count() > MAX_EXEC_RULE_CHARS {
-                return Err(format!(
-                    "JOY_EXEC_ALLOW 的规则最长 {MAX_EXEC_RULE_CHARS} 字符：{rule:?}"
-                ));
-            }
-        }
+        check_exec_rules(&self.exec_allow)?;
         Ok(())
     }
 
@@ -422,6 +429,37 @@ pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(
     ] {
         if let Some(v) = value {
             check_bound(key, v as i64)?;
+        }
+    }
+    // 整表替换的放行表（「记住这条命令」走的就是它）：与启动期同一套规则校验。
+    if let Some(rules) = &patch.exec_allow {
+        check_exec_rules(rules)?;
+    }
+    Ok(())
+}
+
+/// 放行规则：空表合法（= 什么都不放行，那是默认）。但表里每一条都得是
+/// 一条**能用的**规则 —— 写坏的规则会静默地永不匹配，而命令被拒时拒因里
+/// 还列着它，查起来很费劲。启动期与 `config/write` 共用这一处。
+fn check_exec_rules(rules: &[String]) -> Result<(), String> {
+    if rules.len() > MAX_EXEC_RULES {
+        return Err(format!(
+            "JOY_EXEC_ALLOW 最多 {MAX_EXEC_RULES} 条规则，收到 {} 条",
+            rules.len()
+        ));
+    }
+    for rule in rules {
+        let rule = rule.trim();
+        if rule.is_empty() {
+            return Err("JOY_EXEC_ALLOW 里有空规则 —— 空串不是一条规则".to_string());
+        }
+        if rule.contains(['\n', '\r']) {
+            return Err(format!("JOY_EXEC_ALLOW 的规则不能含换行：{rule:?}"));
+        }
+        if rule.chars().count() > MAX_EXEC_RULE_CHARS {
+            return Err(format!(
+                "JOY_EXEC_ALLOW 的规则最长 {MAX_EXEC_RULE_CHARS} 字符：{rule:?}"
+            ));
         }
     }
     Ok(())
@@ -494,6 +532,9 @@ pub fn apply_patch(patch: &joyczl_protocol::SettingsPatch, settings: &mut Settin
     }
     if let Some(v) = p.graph_workflows {
         settings.graph_workflows = v;
+    }
+    if let Some(v) = &p.exec_allow {
+        settings.exec_allow = v.clone();
     }
 }
 

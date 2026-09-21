@@ -1,5 +1,7 @@
 import { CODES, METHODS } from "./protocol.ts";
 import type {
+  ApprovalRespondResponse,
+  ApprovalRespondParams,
   ConfigReadParams,
   ConfigReadResponse,
   ConfigWriteParams,
@@ -47,6 +49,10 @@ export interface Methods {
   [METHODS.TURN_INTERRUPT]: {
     params: TurnInterruptParams;
     result: TurnInterruptResponse;
+  };
+  [METHODS.APPROVAL_RESPOND]: {
+    params: ApprovalRespondParams;
+    result: ApprovalRespondResponse;
   };
   [METHODS.SESSION_LIST]: {
     params: SessionListParams;

@@ -23,7 +23,9 @@ from typing import Any, Literal, overload
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from .protocol import (
-    NOTIFICATION_METHOD,
+
+    ApprovalRespondParams,
+    ApprovalRespondResponse,
     Codes,
     ConfigReadParams,
     ConfigReadResponse,
@@ -43,6 +45,7 @@ from .protocol import (
     Methods,
     ModelListParams,
     ModelListResponse,
+    NOTIFICATION_METHOD,
     Notification,
     SessionListParams,
     SessionListResponse,
@@ -54,6 +57,7 @@ from .protocol import (
     TurnInterruptResponse,
     TurnStartParams,
     TurnStartResponse,
+
 )
 from .transport import StdioTransport, Transport
 
@@ -74,6 +78,7 @@ _NOTIFICATION: TypeAdapter[Any] = TypeAdapter(Notification)
 _RESPONSES: dict[Methods, type[BaseModel]] = {
     Methods.TURN_START: TurnStartResponse,
     Methods.TURN_INTERRUPT: TurnInterruptResponse,
+    Methods.APPROVAL_RESPOND: ApprovalRespondResponse,
     Methods.SESSION_LIST: SessionListResponse,
     Methods.SESSION_NEW: SessionNewResponse,
     Methods.SESSION_MESSAGES: SessionMessagesResponse,
@@ -199,6 +204,11 @@ class JoyClient:
     async def request(
         self, method: Literal[Methods.TURN_INTERRUPT], params: TurnInterruptParams
     ) -> TurnInterruptResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.APPROVAL_RESPOND], params: ApprovalRespondParams
+    ) -> ApprovalRespondResponse: ...
 
     @overload
     async def request(

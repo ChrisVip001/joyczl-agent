@@ -17,6 +17,7 @@ use joyczl_provider::ToolSchema;
 use joyczl_state::{Calendar, Chat, Episodes, Facts};
 use serde_json::Value;
 
+pub mod approval;
 pub mod calendar;
 pub mod exec;
 pub mod handlers;
@@ -37,6 +38,10 @@ mod exec_tests;
 #[path = "subagent_tests.rs"]
 mod subagent_tests;
 
+#[cfg(test)]
+#[path = "approval_tests.rs"]
+mod approval_tests;
+
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。
 #[derive(Clone)]
@@ -46,6 +51,10 @@ pub struct ToolCtx {
     pub chat: Chat,
     pub calendar: Calendar,
     pub home: PathBuf,
+    /// 有人可以问批准吗？`None` = 没有（子代理、`JOY_APPROVAL=never`、或没有
+    /// 交互界面的调用方）—— 于是需要批准的动作直接拒绝，正如 `approval.rs` 的
+    /// 「默认拒绝」。
+    pub approval: Option<Arc<dyn crate::approval::ApprovalBroker>>,
 }
 
 pub type BoxFut = Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;

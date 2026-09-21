@@ -495,8 +495,9 @@ async fn full_turn(
     });
 
     // ---- THE LOOP
-    // 工具环境只有一处构造（见 lib.rs 的 tool_ctx）—— 子代理走同一个。
-    let ctx = server.tool_ctx();
+    // 工具环境只有一处构造（见 lib.rs 的 tool_ctx）—— 子代理走同一个（它传 None）。
+    // 批准通道按这一轮建：`never` 模式下是 None，需要批准的动作直接拒绝。
+    let ctx = server.tool_ctx(server.approval_bridge(turn_id, sink));
 
     // 工具**开始**的通知得在执行前发出去：客户端才能画出"正在调用 X"。
     // 图里的节点事件出口（inner）若也在，就两个都叫 —— 互不挡道。

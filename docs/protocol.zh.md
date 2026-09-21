@@ -13,7 +13,8 @@
 | 方法 | 请求 → 应答 | 说明 |
 |---|---|---|
 | `turn/start` | `TurnStartParams` → `TurnStartResponse` | 跑一轮对话；应答在全部通知之后发出 |
-| `turn/interrupt` | `TurnInterruptParams` → `TurnInterruptResponse` | 打断在跑的 turn；`interrupted:false` = 已跑完 |
+| `turn/interrupt` | `TurnInterruptParams` → `TurnInterruptResponse` |
+| `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | 回答一次「要不要执行」；太晚送达时 `accepted: false` | 打断在跑的 turn；`interrupted:false` = 已跑完 |
 | `session/new` | `SessionNewParams` → `SessionNewResponse` | 新会话标签（不建任何实体） |
 | `session/list` | `SessionListParams` → `SessionListResponse` | 会话列表（游标分页） |
 | `session/messages` | `SessionMessagesParams` → `SessionMessagesResponse` | 一个会话的消息，最新在前，往上翻页 |
@@ -44,6 +45,8 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
 * `gateDecided`：检索门判定（retrieve/skip + 理由 + 检索词）。
 * `retry`：一次重试（第几次、为什么、等多久）。**每次必发** —— 重试绝不
   静默；`meta.retries` 记着总数。
+* `approvalRequested`：有一条命令在等人批准（工具、命令原文、拒因、时限）。
+  收到之后要调 `approval/respond`，那一轮才继续；**不回答就是拒绝**。
 * `textDelta`：流式文本增量；仅 `stream:true` 时产生。
 * `toolStarted` / `toolCompleted`：工具开始与完成（含耗时与状态）。
 * `turnCompleted`：`reply`、`iterations`、`usage`、`meta`（gate / graph /

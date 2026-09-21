@@ -5,6 +5,8 @@
 // 直接来自生成物（`./protocol.ts`），不是手抄的。
 
 import type {
+  ApprovalRespondParams,
+  ApprovalRespondResponse,
   DashboardData,
   ErrorObject,
   ServerNotification,
@@ -91,6 +93,24 @@ export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotif
     // 否则浏览器会攥着一个没人读的流，直到它自己超时。
     await reader.cancel().catch(() => undefined);
   }
+}
+
+/**
+ * 回答一次「要不要执行」。
+ *
+ * 与 turn 不同，这是一问一答：答完就没了，所以不用流。`accepted: false` 表示
+ * 太晚送达（那一轮早就不等了）—— 页面上要说一句，别让人以为自己的点击算数了。
+ */
+export async function respondApproval(
+  params: ApprovalRespondParams,
+): Promise<ApprovalRespondResponse> {
+  const response = await fetch("/api/approval", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ApprovalRespondResponse;
 }
 
 /** 一帧里 `data:` 后面的东西。keep-alive 那种注释帧返回 null。 */

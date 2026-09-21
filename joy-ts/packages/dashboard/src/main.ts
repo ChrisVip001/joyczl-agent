@@ -6,7 +6,7 @@
 // 这是这套分层最值钱的地方。
 
 import type { TurnCompletedNotification } from "./protocol";
-import { fetchDashboard, fetchMessages, talk } from "./api";
+import { fetchDashboard, fetchMessages, respondApproval, talk } from "./api";
 import {
   chip,
   el,
@@ -142,6 +142,52 @@ async function send(text: string): Promise<void> {
             ),
           );
           break;
+
+        case "approvalRequested": {
+          // 要执行许可：给了按钮，点了才动 —— **不点就是拒绝**（默认拒绝）。
+          const row = el("div", { class: "approval" });
+          row.append(
+            chip(`需要批准 · ${notification.tool}`, "gate"),
+            el("code", { class: "cmd", text: notification.argsPreview }),
+          );
+          const settle = (approved: boolean, remember: boolean) => {
+            row.querySelectorAll("button").forEach((button) => {
+              (button as HTMLButtonElement).disabled = true;
+            });
+            void respondApproval({
+              turnId: notification.turnId,
+              requestId: notification.requestId,
+              approved,
+              remember,
+            })
+              .then((response) => {
+                row.append(
+                  chip(
+                    response.accepted
+                      ? approved
+                        ? remember
+                          ? "已允许，并记住这条命令"
+                          : "已允许"
+                        : "已拒绝"
+                      : "回答得太晚，那一轮已经不等了",
+                    "note",
+                  ),
+                );
+              })
+              .catch((error: unknown) => {
+                row.append(chip(`回答没送出去：${String(error)}`, "note"));
+              });
+          };
+          const allow = el("button", { class: "approve", text: "允许" });
+          const always = el("button", { class: "approve", text: "允许并记住" });
+          const deny = el("button", { class: "deny", text: "拒绝" });
+          allow.addEventListener("click", () => settle(true, false));
+          always.addEventListener("click", () => settle(true, true));
+          deny.addEventListener("click", () => settle(false, false));
+          row.append(allow, always, deny);
+          trace.append(row);
+          break;
+        }
 
         case "retry":
           // 重试从不静默：看到这一句就知道「刚才那几秒不是卡住」。

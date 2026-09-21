@@ -83,7 +83,9 @@ impl SubagentRunner for Delegated {
             // 工具表用**父轮的副本**，只是其中没有 delegate_task —— 于是递归
             // 派生不是「被拒绝」，而是根本不存在的选项。
             let child_tools = tools.without(joyczl_tools::subagent::NAME);
-            let ctx = crate::tool_ctx(&facts, &episodes, &chat, &calendar, &home);
+            // 子代理**没有批准通道**（`None`）：它不该阻塞在人类身上，所以
+            // 需要批准的动作在它那儿直接按拒绝处理 —— 见 limitations.md。
+            let ctx = crate::tool_ctx(&facts, &episodes, &chat, &calendar, &home, None);
 
             let result = joyczl_loop::run(joyczl_loop::Turn {
                 client: resolved.client.as_ref(),

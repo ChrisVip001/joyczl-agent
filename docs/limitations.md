@@ -29,10 +29,20 @@ means "we would like this, nobody has built it".
   variants can slip past it. It is a seatbelt, not a proof: the allowlist and
   the sandbox are what actually hold.
   → `joy-rs/joyczl-tools/src/exec.rs` (`HARD_DENY`)
-* **Deliberate** — No interactive approval prompt. The third gate is the
-  allowlist, not a dialog. A prompt needs a protocol method plus dashboard UI,
-  which is a project of its own.
-  → `joy-rs/joyczl-tools/src/exec.rs` (`vet`), `joy-rs/joyczl-app-server/src/dispatch.rs`
+* **Deliberate** — Approval is per *mode*, not per tool class. `JOY_APPROVAL`
+  has `never` (default) and `on-request`; the finer-grained version (ask for
+  exec but not for MCP, say) is not there because only exec has a gate to ask
+  at — the config would be describing something that does not exist.
+  → `joy-rs/joyczl-config/src/lib.rs` (`approval`)
+* **Deliberate** — "Remember this command" writes the command **exactly as
+  approved** (no wildcard) into `settings.json`, and takes effect on the next
+  start: the exec policy is read once at startup. Saying "remembered" and
+  silently widening the rule would be worse.
+  → `joy-rs/joyczl-app-server/src/lib.rs` (`remember_command`)
+* **Deliberate** — MCP reverse requests (elicitation/sampling) get an explicit
+  "not supported" error instead of complete support. Answering them properly
+  needs a UI contract for arbitrary server-authored questions.
+  → `joy-rs/joyczl-mcp/src/transport.rs`
 * **Deliberate** — Without a working sandbox, *nothing* runs. On Linux this
   means `bwrap` must both exist *and* be able to create a namespace: Ubuntu
   24.04 restricts unprivileged user namespaces, so availability is probed by

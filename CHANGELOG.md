@@ -43,6 +43,17 @@ than mysterious; the REPL prints a line and the dashboard shows a chip. A
 provider that reports `Retry-After` is obeyed, within the caps. There is no
 provider failover — that is a separate decision.
 
+### Interactive approval (`JOY_APPROVAL=on-request`)
+
+A command that the allowlist does not match can now be asked about instead of
+flatly refused. The turn emits `approvalRequested` (tool, the command, why,
+the deadline) and waits; `approval/respond` answers it; the REPL and the
+dashboard both implement the answering side. Silence is a refusal: timeouts, a
+late reply, a closed connection and having no UI at all all end in no run.
+Only the allowlist gate is negotiable — the hard deny list and the sandbox
+cannot be approved away. "Remember" writes the exact command into
+`settings.json` and takes effect next start.
+
 ### Subagents (`JOY_DELEGATE`)
 
 `delegate_task` hands one self-contained job to a subagent and brings back only

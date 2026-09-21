@@ -14,7 +14,8 @@ before the response). Every type is defined in
 | Method | Request → Response | Purpose |
 |---|---|---|
 | `turn/start` | `TurnStartParams` → `TurnStartResponse` | run one conversation turn; the response follows all notifications |
-| `turn/interrupt` | `TurnInterruptParams` → `TurnInterruptResponse` | cancel a running turn; `interrupted:false` = already finished |
+| `turn/interrupt` | `TurnInterruptParams` → `TurnInterruptResponse` |
+| `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | answer one approval request; `accepted: false` when it arrived too late | cancel a running turn; `interrupted:false` = already finished |
 | `session/new` | `SessionNewParams` → `SessionNewResponse` | new session label (creates nothing) |
 | `session/list` | `SessionListParams` → `SessionListResponse` | session list (cursor-paged) |
 | `session/messages` | `SessionMessagesParams` → `SessionMessagesResponse` | a conversation's messages, newest first, paging upward |
@@ -46,6 +47,9 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
 * `gateDecided`: the retrieval gate's ruling (retrieve/skip + reason + query).
 * `retry`: one retry (attempt, reason, delay). Emitted **every time** — a retry
   is never silent; `meta.retries` carries the total.
+* `approvalRequested`: a command is waiting for approval (tool, the command
+  itself, why, deadline). Answer it with `approval/respond` or the turn stays
+  blocked; **no answer is a refusal**.
 * `textDelta`: streamed text increment; only with `stream:true`.
 * `toolStarted` / `toolCompleted`: tool begin and end (duration, status).
 * `turnCompleted`: `reply`, `iterations`, `usage`, `meta` (gate / graph /

@@ -5,15 +5,17 @@
 use std::path::PathBuf;
 
 use super::exec::{
-    execute, prune_spill, sandbox_argv, sandbox_available, vet, ExecPolicy, Sandbox,
+    execute, prune_spill, sandbox_argv, sandbox_available, vet, ExecPolicy, Gate, Sandbox,
 };
 
 fn policy(allow: &[&str]) -> ExecPolicy {
     ExecPolicy {
         allow: allow.iter().map(|r| r.to_string()).collect(),
         timeout_secs: 10,
-        // 与产品默认一致：沙箱里不联网、不落盘（落盘那条单独测）。
+        // 与产品默认一致：沙箱里不联网、不落盘（落盘那条单独测）、不问批准。
         network: false,
+        approval: false,
+        approval_timeout_secs: 120,
         spill_dir: None,
         extra_roots: Vec::new(),
     }
@@ -31,17 +33,18 @@ fn the_hard_deny_list_is_not_configurable() {
         "shutdown -h now",
     ] {
         let verdict = vet(command, &policy(&["*"]));
-        assert!(verdict.is_err(), "{command} 必须被硬拒");
-        assert!(
-            verdict.unwrap_err().contains("硬拒"),
-            "{command} 的拒因要说清是硬拒名单挡的"
-        );
+        let Gate::Deny(why) = &verdict else {
+            panic!("{command} 必须被硬拒，实际 {verdict:?}");
+        };
+        assert!(why.contains("硬拒"), "{command} 的拒因要说清是硬拒名单挡的");
     }
 }
 
 #[test]
 fn an_empty_allowlist_denies_everything() {
-    let error = vet("ls", &policy(&[])).expect_err("空表 = 默认拒绝");
+    let Gate::Deny(error) = vet("ls", &policy(&[])) else {
+        panic!("空表 = 默认拒绝");
+    };
     assert!(error.contains("JOY_EXEC_ALLOW"), "得说清怎么放开：{error}");
 }
 
@@ -51,11 +54,12 @@ fn an_empty_allowlist_denies_everything() {
 /// 测试得把两件事分开，否则「CI 上没有沙箱」会被误读成「规则写错了」。
 fn allowlist_verdict(command: &str, rules: &[&str]) -> Result<(), String> {
     match vet(command, &policy(rules)) {
-        Ok(()) => Ok(()),
+        // 匹配上了 —— 是不是需要批准是另一回事（下面有专门的测试）。
+        Gate::Allow | Gate::NeedsApproval { .. } => Ok(()),
         // 被放行表挡下的：这就是要观察的结果。
-        Err(why) if why.contains("没有匹配的放行规则") => Err(why),
+        Gate::Deny(why) if why.contains("放行") => Err(why),
         // 被后面那道闸门（沙箱）挡下的 —— 说明规则这一关过了。
-        Err(_) => Ok(()),
+        Gate::Deny(_) => Ok(()),
     }
 }
 
@@ -77,9 +81,11 @@ fn the_sandbox_requirement_is_the_last_gate() {
     // 沙箱不可用时：能匹配规则的命令照样被拒，且原因指向沙箱。
     let verdict = vet("echo hi", &policy(&["echo*"]));
     if sandbox_available() {
-        assert!(verdict.is_ok(), "{verdict:?}");
+        assert!(matches!(verdict, Gate::Allow), "{verdict:?}");
     } else {
-        let error = verdict.expect_err("没有沙箱就该拒绝");
+        let Gate::Deny(error) = &verdict else {
+            panic!("没有沙箱就该拒绝，实际 {verdict:?}");
+        };
         assert!(error.contains("沙箱"), "{error}");
     }
 }
@@ -94,6 +100,7 @@ async fn an_allowed_command_runs_and_reports_its_exit_code() {
         "echo hello-sandbox",
         &policy(&["echo*"]),
         &[dir.path().to_path_buf()],
+        None,
     )
     .await;
     assert!(output.contains("hello-sandbox"), "{output}");
@@ -111,6 +118,7 @@ async fn the_sandbox_confines_writes_to_the_allowed_roots() {
         &format!("echo ok > {}", probe.display()),
         &policy(&["echo*"]),
         &[dir.path().to_path_buf()],
+        None,
     )
     .await;
     assert!(
@@ -127,6 +135,7 @@ async fn the_sandbox_confines_writes_to_the_allowed_roots() {
         &format!("echo leak > {}", outside.display()),
         &policy(&["echo*"]),
         &[dir.path().to_path_buf()],
+        None,
     )
     .await;
     let leaked = outside.exists();
@@ -149,6 +158,7 @@ async fn a_refused_command_never_reaches_the_shell() {
         &format!("sudo echo hi > {}", probe.display()),
         &policy(&["*"]),
         &[dir.path().to_path_buf()],
+        None,
     )
     .await;
     assert!(output.starts_with("Error:"), "{output}");
@@ -230,6 +240,7 @@ async fn an_extra_root_is_writable_inside_the_sandbox() {
         &format!("echo cached > {}", probe.display()),
         &settings,
         &[home.path().to_path_buf()],
+        None,
     )
     .await;
     assert!(
@@ -254,6 +265,7 @@ async fn an_over_long_output_is_spilled_and_the_path_reported() {
         "head -c 9000 /dev/zero | tr '\\0' x",
         &settings,
         &[home.path().to_path_buf()],
+        None,
     )
     .await;
 
@@ -298,6 +310,7 @@ async fn without_a_spill_directory_it_just_truncates() {
         "head -c 9000 /dev/zero | tr '\\0' x",
         &policy(&["head*"]),
         &[home.path().to_path_buf()],
+        None,
     )
     .await;
     assert!(output.contains("已截断"), "{output}");
