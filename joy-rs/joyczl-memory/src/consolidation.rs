@@ -83,6 +83,12 @@ pub async fn consolidate_if_due(
                 if subject.is_empty() || content.is_empty() {
                     continue;
                 }
+                // 临时性的陈述不进长期记忆 ——「这次会话先这样」不是关于
+                // 世界的事实，记住它等于往档案里塞草稿。
+                if let Some(marker) = temporary_marker(content) {
+                    eprintln!("(joy) 跳过一条临时陈述（命中 '{marker}'）：{content}");
+                    continue;
+                }
                 facts.add(subject, content, "consolidation").await?;
                 written += 1;
             }
@@ -105,4 +111,37 @@ pub async fn consolidate_if_due(
     chat.mark_consolidated(&ids).await?;
 
     Ok(written)
+}
+
+/// 临时陈述的标记词。**中英并列**：模型用哪种语言提炼，就用哪种语言标记
+/// 临时性，过滤得两边都认。命中就跳过 —— 「这次会话」「暂时」「for now」
+/// 这类话是关于当下安排的，不是关于世界的事实。
+const TEMPORARY_MARKERS: &[&str] = &[
+    "本次会话",
+    "这次会话",
+    "本次对话",
+    "这次对话",
+    "当前对话",
+    "暂时",
+    "临时",
+    "先这样",
+    "就这一次",
+    "仅限今天",
+    "this session",
+    "this conversation",
+    "in this chat",
+    "for now",
+    "for the time being",
+    "temporarily",
+    "just for today",
+    "only for today",
+    "as a one-off",
+];
+
+pub(crate) fn temporary_marker(content: &str) -> Option<&'static str> {
+    let lower = content.to_lowercase();
+    TEMPORARY_MARKERS
+        .iter()
+        .find(|marker| lower.contains(&marker.to_lowercase()))
+        .copied()
 }

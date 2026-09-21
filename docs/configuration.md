@@ -34,6 +34,20 @@ reads them once at process start and never again. Joy **does not read any
 | `JOY_JUDGE_MODEL` | small model | referee model for `joy judge` (the referee is not a contestant) |
 | `JOY_GH_REPO` | — | repository for gather's GitHub scan (owner/repo) |
 
+## Hybrid retrieval
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JOY_EMBEDDINGS` | `0` | fuse vector similarity into memory retrieval |
+| `JOY_EMBED_MODEL` | — | embedding model (e.g. `nomic-embed-text` for Ollama) |
+
+Off by default: keyword (FTS5) retrieval works with no model and no network.
+When on, results are fused by rank (RRF, k=60) rather than by score — bm25 and
+cosine are not the same unit, and pretending otherwise is inventing data. A
+dead embedding service degrades to keyword-only with a warning; it never
+becomes "I remember nothing". Facts written before the switch was on have no
+vector: run `joy memory reindex` to backfill.
+
 ## Running commands
 
 | Variable | Default | Purpose |

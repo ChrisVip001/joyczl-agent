@@ -17,6 +17,7 @@
 //!     dashboard 的打字机效果直接用它。
 
 pub mod anthropic;
+pub mod embed;
 pub mod error;
 pub mod mock;
 pub mod openai;

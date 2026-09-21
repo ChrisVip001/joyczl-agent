@@ -123,7 +123,7 @@ async fn retrieve_context_formats_facts_and_episodes() {
         .await
         .unwrap();
 
-    let text = retrieve_context(&facts, &episodes, "alex", 4)
+    let text = retrieve_context(&facts, &episodes, "alex", 4, None)
         .await
         .unwrap();
     assert!(text.contains("**alex**"), "{text}");
@@ -136,7 +136,7 @@ async fn retrieve_context_formats_facts_and_episodes() {
 #[tokio::test]
 async fn retrieve_context_is_empty_when_nothing_matches() {
     let (facts, episodes, _chat) = stores().await;
-    let text = retrieve_context(&facts, &episodes, "??? ", 4)
+    let text = retrieve_context(&facts, &episodes, "??? ", 4, None)
         .await
         .unwrap();
     assert!(text.is_empty(), "没检索到就不该拼标题：{text:?}");
@@ -198,6 +198,33 @@ async fn consolidation_distills_facts_and_marks_rows() {
     assert_eq!(eps.len(), 1);
 }
 
+/// 提炼出来的临时陈述不落库，真事实照落 —— 两者在同一个应答里也要分得清。
+#[tokio::test]
+async fn consolidation_drops_temporary_statements_but_keeps_facts() {
+    let (facts, episodes, chat) = stores().await;
+    for i in 0..6 {
+        chat.append_exchange(&format!("m{i}"), &format!("r{i}"), "default", "cli", None)
+            .await
+            .unwrap();
+    }
+    let mock = Mock::new(vec![Mock::text(
+        r#"{"facts": [
+             {"subject": "plan", "content": "这个方案本次会话先用 A"},
+             {"subject": "alex", "content": "Alex prefers mornings"}
+           ],
+           "episode": "planned the week"}"#,
+    )]);
+
+    let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 6)
+        .await
+        .unwrap();
+    assert_eq!(written, 1, "只该写进一条");
+
+    let all = facts.recent(10, 0).await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].subject, "alex");
+}
+
 #[tokio::test]
 async fn consolidation_failure_keeps_the_log() {
     let (facts, episodes, chat) = stores().await;
@@ -245,6 +272,22 @@ async fn gate_prompt_carries_the_message() {
     let _ = should_retrieve(&mock, "small", "阿明喜欢什么").await;
     let sent = mock.received.lock().unwrap()[0].messages[0].text();
     assert!(sent.contains("阿明喜欢什么"), "用户消息没进 prompt：{sent}");
+}
+
+// ---- consolidation 的临时陈述过滤 -------------------------------------------
+
+#[test]
+fn temporary_statements_are_kept_out_of_long_term_memory() {
+    use super::consolidation::temporary_marker;
+    // 中英两种标记都认。
+    assert!(temporary_marker("这次会话先用这个方案").is_some());
+    assert!(temporary_marker("We will use this path for now").is_some());
+    assert!(temporary_marker("暂时把会议挪到下午").is_some());
+    // 真事实不该误伤。
+    assert!(temporary_marker("Alex 喜欢早上的会议").is_none());
+    assert!(temporary_marker("The release is on October 15").is_none());
+    // 大小写不敏感。
+    assert!(temporary_marker("FOR NOW keep it simple").is_some());
 }
 
 // ---- skills ----------------------------------------------------------------

@@ -15,6 +15,10 @@ pub struct FactRow {
     pub created_at: Option<String>,
 }
 
+/// `all_with_embedding` 的原始行：FactRow 的五个字段 + 向量文本
+/// （`None` = 这一列还是 NULL，虽然查询已经过滤过，留着类型诚实）。
+type FactWithEmbedding = (i64, String, String, String, Option<String>, Option<String>);
+
 #[derive(Clone)]
 pub struct Facts {
     pool: SqlitePool,
@@ -38,6 +42,59 @@ impl Facts {
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    /// 存一条事实的向量（JSON 数组文本）。算不出来就不算 —— 这一列是
+    /// 加分项，不是事实的一部分。
+    pub async fn set_embedding(&self, id: i64, vector: &[f32]) -> Result<()> {
+        let json = serde_json::to_string(vector)?;
+        sqlx::query("UPDATE facts SET embedding = ? WHERE id = ?")
+            .bind(json)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// 所有带向量的行。个人规模下全表扫描 + Rust 侧算余弦完全够用
+    /// （见 0005 迁移里的理由），不值得为它引一个向量扩展。
+    pub async fn all_with_embedding(&self) -> Result<Vec<(FactRow, Vec<f32>)>> {
+        let rows: Vec<FactWithEmbedding> = sqlx::query_as(
+            "SELECT id, subject, content, source, created_at, embedding
+             FROM facts WHERE embedding IS NOT NULL ORDER BY id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::new();
+        for (id, subject, content, source, created_at, embedding) in rows {
+            // 解析不了的向量当没有：它不该让整次检索失败。
+            let Some(vector) = embedding.and_then(|raw| serde_json::from_str(&raw).ok()) else {
+                continue;
+            };
+            out.push((
+                FactRow {
+                    id,
+                    subject,
+                    content,
+                    source,
+                    created_at,
+                },
+                vector,
+            ));
+        }
+        Ok(out)
+    }
+
+    /// 还没算过向量的事实（`joy memory reindex` 用）。
+    pub async fn missing_embedding(&self, limit: u32) -> Result<Vec<FactRow>> {
+        sqlx::query_as::<_, FactRow>(
+            "SELECT id, subject, content, source, created_at
+             FROM facts WHERE embedding IS NULL ORDER BY id LIMIT ?",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
     }
 
     /// 关键词检索。`bm25()` 越小越相关，所以升序取前 `top_k`。

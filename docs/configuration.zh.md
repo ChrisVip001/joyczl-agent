@@ -33,6 +33,18 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_JUDGE_MODEL` | small model | `joy judge` 的裁判模型（裁判不是选手） |
 | `JOY_GH_REPO` | — | `joy gather` 的 github scan 仓库（owner/repo） |
 
+## 混合检索
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `JOY_EMBEDDINGS` | `0` | 把向量相似度融进记忆检索 |
+| `JOY_EMBED_MODEL` | — | embedding 模型（Ollama 上例如 `nomic-embed-text`） |
+
+默认关着：关键词（FTS5）检索不需要模型、不需要网络。开着时两路结果按**名次**
+融合（RRF，k=60）而不是按分数——bm25 与余弦不是同一个量纲，硬凑等于编数据。
+embedding 服务不可用会降级成纯关键词并警告，绝不会变成「什么都想不起来」。
+开关打开之前写入的事实没有向量，用 `joy memory reindex` 补齐。
+
 ## 执行命令
 
 | 变量 | 默认 | 说明 |

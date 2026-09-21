@@ -12,6 +12,7 @@
 pub mod compaction;
 pub mod consolidation;
 pub mod gate;
+pub mod retrieval;
 pub mod skills;
 
 #[cfg(test)]
@@ -21,6 +22,10 @@ mod memory_tests;
 #[cfg(test)]
 #[path = "compaction_tests.rs"]
 mod compaction_tests;
+
+#[cfg(test)]
+#[path = "retrieval_tests.rs"]
+mod retrieval_tests;
 
 use std::path::Path;
 
@@ -33,8 +38,11 @@ pub async fn retrieve_context(
     episodes: &Episodes,
     query: &str,
     top_k: u32,
+    embedder: Option<&joyczl_provider::embed::Embedder>,
 ) -> anyhow::Result<String> {
-    let found = facts.search(query, top_k).await?;
+    // 事实那条线走混合检索（向量开关关着时就是纯关键词，与从前一模一样）；
+    // 情景记忆仍是关键词 —— 它本来就带日期，向量帮不上太多忙。
+    let found = retrieval::search_hybrid(facts, embedder, query, top_k).await;
     let episodes = episodes.search(query, 3).await?;
 
     let mut lines = Vec::new();

@@ -11,6 +11,8 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+# 事实的向量存成 JSON 数组文本（见 facts.rs）。
+serde_json = { workspace = true }
 anyhow = { workspace = true }
 sqlx = { workspace = true }
 

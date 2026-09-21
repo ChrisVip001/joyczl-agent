@@ -1013,6 +1013,7 @@ name = "joyczl-state"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde_json",
  "sqlx",
  "tempfile",
  "tokio",

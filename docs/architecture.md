@@ -88,6 +88,9 @@ interface and run the same tests.
 * **Retrieval gate**: a small model decides "does this message need memory?",
   answering JSON; any failure opens the gate — stale memory beats lost
   memory.
+* **Hybrid retrieval**: keyword hits (FTS5) and vector neighbours are fused by
+  rank (RRF), so "that launch plan we discussed" can find "ships October 15".
+  Off by default; a dead embedding service degrades to keyword-only.
 * **Consolidation**: every N turns, unconsolidated dialogue is distilled into
   facts (source-labelled) and one episode; failure never loses the raw log.
 * **Compaction**: turns pushed out of the working-memory window are folded

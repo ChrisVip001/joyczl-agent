@@ -7,6 +7,7 @@
 
 mod gather;
 mod mcp_cmd;
+mod memory_cmd;
 mod repl;
 mod schedule;
 mod skill_cmd;
@@ -22,6 +23,7 @@ Joy — 本地优先的个人助手
     joy                终端对话
     joy gather         晨报（github/web/calendar/memory 一趟图跑完，草稿进 outbox）
     joy schedule       常驻：按技能/ schedules.json 里的 cron 定时跑任务
+    joy memory reindex 给还没有向量的事实补上向量（JOY_EMBEDDINGS=1 那条腿）
     joy mcp …          看 MCP 服务器列表；login 跑浏览器 OAuth；serve 把记忆暴露成 MCP 服务器
     joy skill …        技能：list / export --to claude,codex / install <url>
     joy eval [路径]    确定性评测（离线 0/1，必须 100% 通过 = release gate）
@@ -89,6 +91,13 @@ async fn main() -> Result<()> {
             settings.ensure_home()?;
             let server = joyczl_app_server::open(&settings).await?;
             joyczl_app_server::run_stdio(server).await
+        }
+        Some("memory") => {
+            let mut settings = joyczl_config::Settings::from_env();
+            settings.home = home();
+            settings.ensure_home()?;
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            memory_cmd::run(&settings, &args).await
         }
         Some("schedule") => {
             let mut settings = joyczl_config::Settings::from_env();

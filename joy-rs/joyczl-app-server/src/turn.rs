@@ -360,12 +360,28 @@ async fn full_turn(
         decision: gate_decision.clone(),
     }));
 
+    // 混合检索的那条腿：开关开着才装配 embedder。装配失败（没配模型、
+    // provider 没有默认端点）只警告一次，检索退回纯关键词 —— 一个配错的
+    // 旋钮不该让整轮对话起不来。
+    let embedder = if settings.embeddings_enabled {
+        match joyczl_provider::embed::Embedder::from_settings(&settings) {
+            Ok(embedder) => Some(embedder),
+            Err(why) => {
+                eprintln!("(joy) 向量检索没配好，这次只用关键词：{why}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let memory_context = if decision.retrieve {
         joyczl_memory::retrieve_context(
             &server.facts,
             &server.episodes,
             &decision.query,
             settings.retrieval_top_k.max(1) as u32,
+            embedder.as_ref(),
         )
         .await
         .unwrap_or_default()
