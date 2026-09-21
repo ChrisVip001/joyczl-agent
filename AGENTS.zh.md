@@ -18,7 +18,7 @@ joy-rs/
   joyczl-tools/         工具注册表 + 内置工具
   joyczl-loop/          agent 主循环（可打断）
   joyczl-graph/         波次 DAG 引擎 + triage / gather 工作流
-  joyczl-mcp/           MCP 客户端（stdio/HTTP）+ 浏览器 OAuth
+  joyczl-mcp/           MCP 客户端（stdio/HTTP）+ 浏览器 OAuth + 记忆服务器（`joy mcp serve`）
   joyczl-memory/        检索门 + consolidation + Skills + MEMORY.md 镜像
   joyczl-app-server/    JSON-RPC over stdio，唯一持有 state.db
   joyczl-ops/           驾驶舱后端（axum + SSE）

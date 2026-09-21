@@ -1,8 +1,10 @@
-//! `joy mcp` —— MCP 服务器的查看与登录。
+//! `joy mcp` —— MCP 服务器的查看、登录与对外服务。
 //!
 //! `joy mcp`         列出 mcp.json 里配的服务器和各自的鉴权方式
 //! `joy mcp login X` 跑一遍浏览器 OAuth（发现 → 注册 → 授权 → 换 token），
 //!                   token 落 `<home>/mcp-auth/X.json`（0600）
+//! `joy mcp serve`   反过来：Joy 自己当一台 MCP 服务器，把记忆暴露出去，
+//!                   让别的 agent 读同一份事实（stdio，见 joyczl-mcp/server.rs）
 //!
 //! 登录是唯一会开浏览器的地方 —— app-server 启动时缺 token 只会警告并
 //! 跳过该服务器，绝不擅自弹浏览器：「一轮对话绝不擅自执行」的同一条规矩。
@@ -11,6 +13,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use joyczl_mcp::oauth;
+use joyczl_mcp::server::MemoryServer;
 
 pub async fn run(home: &Path, args: &[String]) -> Result<()> {
     let config_path = home.join("mcp.json");
@@ -22,11 +25,27 @@ pub async fn run(home: &Path, args: &[String]) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("用法：joy mcp login <服务器名>"))?;
             login(&config_path, home, name).await
         }
+        Some("serve") => serve(home).await,
         Some(other) => {
-            println!("不认识的子命令 '{other}'。可用：list（默认）、login <名>。");
+            println!("不认识的子命令 '{other}'。可用：list（默认）、login <名>、serve。");
             Ok(())
         }
     }
+}
+
+/// `joy mcp serve`：开同一个 state.db（WAL + busy_timeout，本来就能多进程
+/// 共存），在 stdio 上说 MCP。告示只走 stderr —— stdout 是协议通道。
+async fn serve(home: &Path) -> Result<()> {
+    let pool = joyczl_state::open(&home.join("state.db")).await?;
+    eprintln!(
+        "(joy) mcp serve：记忆工具已就绪（memory_search / remember / forget / list / episodes）"
+    );
+    MemoryServer::new(
+        joyczl_state::Facts::new(pool.clone()),
+        joyczl_state::Episodes::new(pool),
+    )
+    .run_stdio()
+    .await
 }
 
 fn list(config_path: &Path) -> Result<()> {

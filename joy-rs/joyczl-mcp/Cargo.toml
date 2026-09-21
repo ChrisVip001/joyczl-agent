@@ -12,6 +12,8 @@ doctest = false
 
 [dependencies]
 anyhow = { workspace = true }
+# `joy mcp serve`（server.rs）直接读写记忆表 —— 服务器一侧需要 state。
+joyczl-state = { workspace = true }
 joyczl-tools = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

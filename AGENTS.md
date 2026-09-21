@@ -20,7 +20,7 @@ joy-rs/
   joyczl-tools/         tool registry + built-in tools
   joyczl-loop/          the agent loop (cancellable)
   joyczl-graph/         wave-based DAG engine + triage / gather workflows
-  joyczl-mcp/           MCP client (stdio/HTTP) + browser OAuth
+  joyczl-mcp/           MCP client (stdio/HTTP) + browser OAuth + memory server (`joy mcp serve`)
   joyczl-memory/        retrieval gate + consolidation + Skills + MEMORY.md mirror
   joyczl-app-server/    JSON-RPC over stdio, the only holder of state.db
   joyczl-ops/           dashboard backend (axum + SSE)

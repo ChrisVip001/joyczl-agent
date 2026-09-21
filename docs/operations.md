@@ -33,6 +33,27 @@ Write `<home>/mcp.json` (stdio or HTTP servers); their tools merge into the
 tool registry. For `"oauth": true` remote servers run `joy mcp login <name>`
 first; expired tokens auto-refresh, and without a refresh_token rerun login.
 
+### Serving Joy's memory to other agents
+
+The reverse direction also exists: `joy mcp serve` makes Joy itself an MCP
+server over stdio, exposing five memory tools (`memory_search`,
+`memory_remember`, `memory_forget`, `memory_list`, `memory_episodes`) so
+other agents on this machine read and write the same facts. Only memory is
+exposed — nothing that makes Joy act on someone else's behalf.
+
+```json
+{"mcpServers": {"joy-memory": {
+  "command": "joy",
+  "args": ["mcp", "serve"],
+  "env": {"JOY_HOME": "/Users/you/.joy"}
+}}}
+```
+
+Point any MCP client (Claude Code, codex, …) at that stanza and it shares
+Joy's long-term memory. The server opens the same `state.db` through the same
+`open()` (WAL + busy_timeout, so multiple processes coexist); facts written
+by other agents are labelled `source: mcp` so the origin stays visible.
+
 ## Morning brief (cron-friendly)
 
 ```bash

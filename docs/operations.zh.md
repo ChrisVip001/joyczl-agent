@@ -31,6 +31,25 @@ JOY_HOME=$HOME/.joy ./target/debug/joy dashboard        # → http://localhost:7
 远程服务器用 `"oauth": true` 时先 `joy mcp login <名>`；token 过期自动
 刷新，没有 refresh_token 时重跑 login。
 
+### 把 Joy 的记忆给别的 agent 用
+
+反方向也有：`joy mcp serve` 让 Joy 自己成为一台 stdio 的 MCP 服务器，暴露
+五个记忆工具（`memory_search`、`memory_remember`、`memory_forget`、
+`memory_list`、`memory_episodes`），这台机器上的其他 agent 因此读写同一份
+事实。**只暴露记忆**——不暴露任何「替别人动手」的能力。
+
+```json
+{"mcpServers": {"joy-memory": {
+  "command": "joy",
+  "args": ["mcp", "serve"],
+  "env": {"JOY_HOME": "/Users/you/.joy"}
+}}}
+```
+
+任何 MCP 客户端（Claude Code、codex……）配上这一段就与 Joy 共享长期记忆。
+服务器用同一个 `open()` 开同一个 `state.db`（WAL + busy_timeout，多进程本来
+就能共存）；别的 agent 写进来的事实标着 `source: mcp`，来源始终可查。
+
 ## 晨报（cron 友好）
 
 ```bash

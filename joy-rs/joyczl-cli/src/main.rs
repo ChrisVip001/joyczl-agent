@@ -20,7 +20,7 @@ Joy — 本地优先的个人助手
 用法:
     joy                终端对话
     joy gather         晨报（github/web/calendar/memory 一趟图跑完，草稿进 outbox）
-    joy mcp [login X]  看 MCP 服务器列表；login 跑浏览器 OAuth 登录
+    joy mcp …          看 MCP 服务器列表；login 跑浏览器 OAuth；serve 把记忆暴露成 MCP 服务器
     joy skill …        技能：list / export --to claude,codex / install <url>
     joy eval [路径]    确定性评测（离线 0/1，必须 100% 通过 = release gate）
     joy judge [路径]   真模型答一轮 + 裁判打分（需要 key，出分不拦发版）

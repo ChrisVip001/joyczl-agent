@@ -22,6 +22,7 @@
 
 pub mod config;
 pub mod oauth;
+pub mod server;
 pub mod transport;
 
 use std::path::Path;
@@ -41,6 +42,10 @@ mod mcp_tests;
 #[cfg(test)]
 #[path = "oauth_tests.rs"]
 mod oauth_tests;
+
+#[cfg(test)]
+#[path = "mcp_server_tests.rs"]
+mod mcp_server_tests;
 
 /// 一条已经连上、握过手的连接。调用要排队，所以里面是一把 async 锁。
 pub struct Connection {
