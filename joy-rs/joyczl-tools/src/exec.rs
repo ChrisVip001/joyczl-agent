@@ -49,6 +49,11 @@ pub struct ExecPolicy {
     /// 命令默认不该拥有把数据送出去的能力。`cargo test` 这类要下载的命令
     /// 得显式把开关打开。
     pub network: bool,
+    /// 超长输出的落盘位置（`<home>/spill`）。`None` = 不落盘，只截断。
+    ///
+    /// 截断是必须的（一条 `find /` 能塞爆上下文），但**丢掉的东西是没了**。
+    /// 落一份原文件，模型与人都还能回查。
+    pub spill_dir: Option<PathBuf>,
     /// 额外的可写根（`JOY_EXEC_WRITABLE_ROOTS`）：工作目录与 home 之外的。
     /// 构建缓存是典型用例 —— 没有它，`cargo build` 在沙箱里写不进 target/。
     pub extra_roots: Vec<PathBuf>,
@@ -380,17 +385,81 @@ pub async fn execute(command: &str, policy: &ExecPolicy, writable: &[PathBuf]) -
         combined.push_str("\n--- stderr ---\n");
         combined.push_str(&err);
     }
-    truncate(combined)
+    truncate(combined, policy.spill_dir.as_deref())
 }
 
-fn truncate(mut text: String) -> String {
-    if text.chars().count() <= MAX_OUTPUT_CHARS {
+/// 超长就截断；能落盘就先落一份完整的，再把路径告诉模型。
+///
+/// 落盘失败**不影响返回值**：回到「截断 + 诚实标注」—— 一次写不进磁盘不该让
+/// 命令本身的输出也拿不到。
+fn truncate(mut text: String, spill_dir: Option<&Path>) -> String {
+    let total = text.chars().count();
+    if total <= MAX_OUTPUT_CHARS {
         return text;
     }
+    // **先落盘完整的，再截断。** 反过来的话落下去的就是截断后的那份 —— 那这个
+    // 文件等于白存（第一版就是这么写的，被测试当场抓住）。
+    let spilled = spill_dir.and_then(|dir| spill(&text, dir));
     let cut: String = text.chars().take(MAX_OUTPUT_CHARS).collect();
     text = cut;
-    text.push_str("\n…（输出太长，已截断）");
+    match spilled {
+        Some(path) => text.push_str(&format!(
+            "\n…（输出共 {total} 字符，已截断到前 {MAX_OUTPUT_CHARS}；完整输出在 {path}）"
+        )),
+        None => text.push_str(&format!(
+            "\n…（输出共 {total} 字符，已截断到前 {MAX_OUTPUT_CHARS}）"
+        )),
+    }
     text
+}
+
+/// 把完整输出写进 `<spill>/<日期>/<时间戳>-<随机>.txt`，返回**相对 home 的**
+/// 路径（相对路径好读，也不把绝对路径泄漏给模型）。
+fn spill(text: &str, spill_dir: &Path) -> Option<String> {
+    let day = chrono::Local::now().format("%Y%m%d").to_string();
+    let stamp = chrono::Local::now().format("%H%M%S%.3f").to_string();
+    let dir = spill_dir.join(&day);
+    std::fs::create_dir_all(&dir).ok()?;
+    let file = dir.join(format!("{stamp}-{}.txt", std::process::id()));
+    std::fs::write(&file, text).ok()?;
+    // 相对 home（spill 的父目录）—— 读起来就是「去 spill/… 看」。
+    let relative = spill_dir
+        .parent()
+        .and_then(|home| file.strip_prefix(home).ok())
+        .unwrap_or(&file);
+    Some(relative.display().to_string())
+}
+
+/// 清掉 `spill/` 里超过 `max_age_days` 天的文件。启动时跑一次。
+///
+/// 只按时间清，不做配额（见 docs/limitations.md）：一次性的清理比一个
+/// 猜不准的容量上限更可预测。清不掉也不报错 —— 这是打扫，不是功能。
+pub fn prune_spill(home: &Path, max_age_days: u64) {
+    let spill = home.join("spill");
+    let Ok(days) = std::fs::read_dir(&spill) else {
+        return; // 没有 spill 目录是常态
+    };
+    let cutoff =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(max_age_days * 24 * 60 * 60);
+    for day in days.flatten() {
+        let path = day.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let fresh = std::fs::read_dir(&path)
+            .map(|files| {
+                files.flatten().any(|file| {
+                    file.metadata()
+                        .and_then(|meta| meta.modified())
+                        .map(|modified| modified > cutoff)
+                        .unwrap_or(true) // 读不出时间就当它还新，别误删
+                })
+            })
+            .unwrap_or(true);
+        if !fresh {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
 }
 
 /// 注册进工具表的 `run_command`。只有 `JOY_EXEC=1` 时才会被注册 ——

@@ -328,10 +328,16 @@ async fn builtin_tools(settings: &Settings) -> ToolRegistry {
                 allow: settings.exec_allow.clone(),
                 timeout_secs: settings.exec_timeout_secs,
                 network: settings.exec_network,
+                // 超长输出落盘：截断仍然发生（上下文要保住），但原文还在。
+                spill_dir: Some(settings.home.join("spill")),
                 extra_roots: settings.exec_writable_roots.clone(),
             },
         ));
     }
+    // 启动时顺手打扫 spill/：只保留最近 7 天（见 docs/limitations.md 里
+    // 「不做配额轮转」那条）。与 exec 开关无关 —— 文件在那儿就该打扫。
+    joyczl_tools::exec::prune_spill(&settings.home, 7);
+
     let mcp = joyczl_mcp::McpClient::connect(&settings.home.join("mcp.json")).await;
     for warning in mcp.warnings() {
         // 跟上面那条一样：stdout 是协议通道，日志只能走 stderr。

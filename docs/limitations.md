@@ -19,6 +19,12 @@ means "we would like this, nobody has built it".
   `JOY_EXEC_WRITABLE_ROOTS`. Commands that need to download something need
   both switches.
   → `joy-rs/joyczl-tools/src/exec.rs` (`sandbox_argv`)
+* **Deliberate** — Spilled command output is cleaned by **age only**
+  (`spill/` keeps 7 days, pruned at startup), not by a size quota. A quota that
+  guesses wrong either fills the disk or deletes something you wanted; a
+  time-based sweep is predictable. Nothing else in `JOY_HOME` is rotated.
+  → `joy-rs/joyczl-tools/src/exec.rs` (`prune_spill`)
+
 * **Deliberate** — The hard deny list is substring matching, so obfuscated
   variants can slip past it. It is a seatbelt, not a proof: the allowlist and
   the sandbox are what actually hold.

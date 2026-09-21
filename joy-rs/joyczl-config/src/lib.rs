@@ -282,6 +282,8 @@ impl Settings {
         std::fs::create_dir_all(self.home.join("traces"))?;
         std::fs::create_dir_all(self.home.join("outbox"))?;
         std::fs::create_dir_all(self.home.join("skills"))?;
+        // 超长命令输出落盘的地方（见 joyczl-tools 的 exec.rs 与 limitations）。
+        std::fs::create_dir_all(self.home.join("spill"))?;
         Ok(())
     }
 

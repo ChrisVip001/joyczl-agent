@@ -15,6 +15,11 @@
   限制在工作目录、Joy 的 home 与临时目录，外加 `JOY_EXEC_WRITABLE_ROOTS` 里
   列出的目录。要下载东西的命令得同时打开这两个开关。
   → `joy-rs/joyczl-tools/src/exec.rs`（`sandbox_argv`）
+* **刻意** —— 落盘的命令输出只按**时间**清（`spill/` 保留 7 天，启动时打扫），
+  不做容量配额。配额猜错了要么撑满磁盘、要么删掉你还想要的东西；按时间扫一遍
+  是可预期的。`JOY_HOME` 里没有别的东西会轮转。
+  → `joy-rs/joyczl-tools/src/exec.rs`（`prune_spill`）
+
 * **刻意** —— 硬拒名单是**子串匹配**，变着花样的写法能绕过去。它是安全带不是
   证明：真正管用的是放行表与沙箱。
   → `joy-rs/joyczl-tools/src/exec.rs`（`HARD_DENY`）

@@ -43,6 +43,13 @@ than mysterious; the REPL prints a line and the dashboard shows a chip. A
 provider that reports `Retry-After` is obeyed, within the caps. There is no
 provider failover — that is a separate decision.
 
+### Long command output is kept, not just truncated
+
+Output past 8000 characters is still cut from what the model sees (context has
+to be protected), but the full text is written to `<home>/spill/<date>/…` and
+the path is reported, so it can be read back. `spill/` keeps seven days, pruned
+at startup; a failed write falls back to plain truncation.
+
 ### Behaviour change: sandboxed commands are offline
 
 `run_command` now runs with **no network** by default — seatbelt gets

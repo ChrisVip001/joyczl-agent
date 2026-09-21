@@ -4,14 +4,17 @@
 
 use std::path::PathBuf;
 
-use super::exec::{execute, sandbox_argv, sandbox_available, vet, ExecPolicy, Sandbox};
+use super::exec::{
+    execute, prune_spill, sandbox_argv, sandbox_available, vet, ExecPolicy, Sandbox,
+};
 
 fn policy(allow: &[&str]) -> ExecPolicy {
     ExecPolicy {
         allow: allow.iter().map(|r| r.to_string()).collect(),
         timeout_secs: 10,
-        // 与产品默认一致：沙箱里不联网。
+        // 与产品默认一致：沙箱里不联网、不落盘（落盘那条单独测）。
         network: false,
+        spill_dir: None,
         extra_roots: Vec::new(),
     }
 }
@@ -233,4 +236,109 @@ async fn an_extra_root_is_writable_inside_the_sandbox() {
         output.contains("退出码 0") && probe.exists(),
         "额外放开的根必须真的可写：{output}"
     );
+}
+
+// ---- 超长输出落盘 ------------------------------------------------------------
+
+/// 截断仍然发生（上下文要保住），但**完整输出**落在盘上，而且路径告诉了模型。
+#[tokio::test]
+async fn an_over_long_output_is_spilled_and_the_path_reported() {
+    if !sandbox_available() {
+        return;
+    }
+    let home = tempfile::tempdir().expect("临时目录");
+    let mut settings = policy(&["head*"]);
+    settings.spill_dir = Some(home.path().join("spill"));
+
+    let output = execute(
+        "head -c 9000 /dev/zero | tr '\\0' x",
+        &settings,
+        &[home.path().to_path_buf()],
+    )
+    .await;
+
+    assert!(
+        output.contains("完整输出在 spill/"),
+        "要说清完整输出在哪儿：{output}"
+    );
+    assert!(
+        output.chars().count() < 9000,
+        "喂回模型的仍然是截断后的（上下文要保住）"
+    );
+    // 落盘的必须是**完整**输出，不是截断后的那份。
+    let day = std::fs::read_dir(home.path().join("spill"))
+        .expect("spill 目录")
+        .next()
+        .expect("有日期目录")
+        .expect("读得到")
+        .path();
+    let file = std::fs::read_dir(&day)
+        .expect("日期目录")
+        .next()
+        .expect("有文件")
+        .expect("读得到")
+        .path();
+    let saved = std::fs::read_to_string(&file).expect("读落盘文件");
+    assert!(
+        saved.chars().count() > 8000,
+        "落盘的该是完整输出，实际 {} 字符",
+        saved.chars().count()
+    );
+}
+
+/// 没配落盘目录（或写不进去）时，退回「截断 + 诚实标注」—— 一次写不进磁盘
+/// 不该让命令本身的输出也拿不到。
+#[tokio::test]
+async fn without_a_spill_directory_it_just_truncates() {
+    if !sandbox_available() {
+        return;
+    }
+    let home = tempfile::tempdir().expect("临时目录");
+    let output = execute(
+        "head -c 9000 /dev/zero | tr '\\0' x",
+        &policy(&["head*"]),
+        &[home.path().to_path_buf()],
+    )
+    .await;
+    assert!(output.contains("已截断"), "{output}");
+    assert!(
+        !output.contains("完整输出在"),
+        "没落盘就不该说有文件：{output}"
+    );
+}
+
+/// 只按时间清：7 天前的目录清掉，新的留着。
+#[test]
+fn spill_cleanup_removes_only_old_days() {
+    let home = tempfile::tempdir().expect("临时目录");
+    let old_day = home.path().join("spill").join("20200101");
+    let new_day = home.path().join("spill").join("20990101");
+    std::fs::create_dir_all(&old_day).expect("建目录");
+    std::fs::create_dir_all(&new_day).expect("建目录");
+    let old_file = old_day.join("a.txt");
+    let new_file = new_day.join("b.txt");
+    std::fs::write(&old_file, "很久以前").expect("写文件");
+    std::fs::write(&new_file, "刚刚").expect("写文件");
+
+    // 把「旧」那个文件的时间拨回去 30 天（set_modified 是标准库能力）。
+    let thirty_days_ago =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 24 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&old_file)
+        .expect("打开")
+        .set_modified(thirty_days_ago)
+        .expect("改时间");
+
+    prune_spill(home.path(), 7);
+
+    assert!(!old_day.exists(), "超过 7 天的该被清掉");
+    assert!(new_day.exists() && new_file.exists(), "新的要留着");
+}
+
+/// 没有 spill 目录是最常见的情况（从没跑过超长命令）：打扫不该报错。
+#[test]
+fn spill_cleanup_on_a_missing_directory_is_a_no_op() {
+    let home = tempfile::tempdir().expect("临时目录");
+    prune_spill(home.path(), 7);
 }
