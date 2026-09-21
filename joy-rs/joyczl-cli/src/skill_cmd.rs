@@ -1,8 +1,15 @@
 //! `joy skill` —— 技能的查看、携带与安装。
 //!
-//! `joy skill list`                      看 Joy 装载了哪些技能
+//! `joy skill list`                      看 Joy 装载了哪些技能（含版本）
 //! `joy skill export --to claude,codex`  把技能复制给别的 agent（同一份 SKILL.md 格式）
 //! `joy skill install <url|路径>`        装一个别人的技能（校验 frontmatter，重名拒绝）
+//! `joy skill update [索引]`             按索引把已装的技能升到新版本
+//!                                       （索引默认 <home>/skills/index.json，
+//!                                        也可以给本地路径或 http(s) 地址）
+//!
+//! install 与 update 的分工值得说清楚：**install 从不覆盖**（技能是指令，
+//! 装之前先读一遍，重名就拒绝），**update 按版本替换**（老版本先备份进
+//! `.backup/`，新版本先落 `.staging/` 再原子换过去）。
 //!
 //! export 的规矩：**对方手里被改过的副本默认保留** —— 那可能是人家在
 //! 另一个 agent 里做的修改，--force 才覆盖。install 的规矩：**从不覆盖
@@ -11,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use joyczl_memory::install as installer;
 use joyczl_memory::skills;
 
 pub async fn run(home: &Path, args: &[String]) -> Result<()> {
@@ -23,8 +31,9 @@ pub async fn run(home: &Path, args: &[String]) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("用法：joy skill install <url 或本地路径>"))?;
             install(home, source).await
         }
+        Some("update") => update(home, args.get(1).map(String::as_str)).await,
         Some(other) => {
-            println!("不认识的子命令 '{other}'。可用：list（默认）、export、install。");
+            println!("不认识的子命令 '{other}'。可用：list（默认）、export、install、update。");
             Ok(())
         }
     }
@@ -40,7 +49,8 @@ fn list(home: &Path) -> Result<()> {
         return Ok(());
     }
     for skill in loaded {
-        println!("- {}  {}", skill.name, skill.description);
+        let version = skill.version.map(|v| format!(" v{v}")).unwrap_or_default();
+        println!("- {}{version}  {}", skill.name, skill.description);
     }
     Ok(())
 }
@@ -152,4 +162,72 @@ fn dirs_home() -> Result<PathBuf> {
     Ok(PathBuf::from(std::env::var("HOME").map_err(|_| {
         anyhow::anyhow!("读不到 HOME，--project 或手动指定")
     })?))
+}
+
+/// 按索引更新：解析索引 → 逐条取回内容 → 校验 → 版本比对 → 备份 + 原子替换。
+/// 取回、校验、替换都在 `joyczl_memory::install`，这里只负责把索引找出来、
+/// 把网络接上去。
+async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
+    let default_index = home.join("skills").join("index.json");
+    let source = index_arg
+        .map(str::to_string)
+        .unwrap_or_else(|| default_index.display().to_string());
+
+    let text = if is_http(&source) {
+        fetch(&source).await.map_err(anyhow::Error::msg)?
+    } else {
+        std::fs::read_to_string(&source).map_err(|e| anyhow::anyhow!("读不到索引 {source}：{e}"))?
+    };
+
+    let (entries, warnings) = installer::parse_index(&text).map_err(anyhow::Error::msg)?;
+    for warning in &warnings {
+        eprintln!("(joy) {warning}");
+    }
+    if entries.is_empty() {
+        println!("索引里没有可用的技能条目。");
+        return Ok(());
+    }
+
+    let outcomes = installer::update_all(home, &entries, |url: String| async move {
+        if is_http(&url) {
+            fetch(&url).await
+        } else {
+            std::fs::read_to_string(&url).map_err(|e| e.to_string())
+        }
+    })
+    .await;
+
+    let mut failed = 0;
+    for outcome in &outcomes {
+        println!("{}", outcome.line());
+        if !outcome.ok() {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        anyhow::bail!("{failed} 个技能没更新成功（上面逐条写了原因）");
+    }
+    Ok(())
+}
+
+fn is_http(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// 取一份技能内容。网页地址先转成原始内容地址（跟 install 同一条规矩：
+/// 人手复制来的多半是浏览器地址栏里那个）。
+async fn fetch(url: &str) -> Result<String, String> {
+    let raw = raw_url(url);
+    let response = reqwest::Client::new()
+        .get(&raw)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status().as_u16();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if status >= 400 {
+        return Err(format!("{raw}：HTTP {status}"));
+    }
+    Ok(body)
 }

@@ -12,6 +12,7 @@
 pub mod compaction;
 pub mod consolidation;
 pub mod gate;
+pub mod install;
 pub mod retrieval;
 pub mod skills;
 
@@ -26,6 +27,10 @@ mod compaction_tests;
 #[cfg(test)]
 #[path = "retrieval_tests.rs"]
 mod retrieval_tests;
+
+#[cfg(test)]
+#[path = "install_tests.rs"]
+mod install_tests;
 
 use std::path::Path;
 

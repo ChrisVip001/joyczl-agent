@@ -24,6 +24,8 @@ pub struct Skill {
     /// 可选的五字段 cron（`0 8 * * 1-5`）：带上它的技能同时是一条**定时
     /// 任务**，由 `joy schedule` 常驻进程按时触发（见 cli 的 schedule.rs）。
     pub schedule: Option<String>,
+    /// 可选版本号（`version: 1.2.0`）：`joy skill update` 靠它判断要不要换。
+    pub version: Option<String>,
 }
 
 /// 解析 SKILL.md 的文本（loader 与 create_skill 工具共用同一套校验）。
@@ -43,6 +45,7 @@ pub fn parse_skill_text(text: &str) -> Option<Skill> {
     let mut name = None;
     let mut description = None;
     let mut schedule = None;
+    let mut version = None;
     for line in front.lines() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
@@ -53,6 +56,7 @@ pub fn parse_skill_text(text: &str) -> Option<Skill> {
             "description" => description = Some(value.to_string()),
             // 空值等于没写 —— 一条 `schedule:` 后面什么都没有，不是任务。
             "schedule" if !value.is_empty() => schedule = Some(value.to_string()),
+            "version" if !value.is_empty() => version = Some(value.to_string()),
             _ => {}
         }
     }
@@ -62,6 +66,7 @@ pub fn parse_skill_text(text: &str) -> Option<Skill> {
         body: body.trim().to_string(),
         path: PathBuf::new(),
         schedule,
+        version,
     })
 }
 
@@ -212,6 +217,8 @@ pub struct LoadedSkill {
     pub folder: PathBuf,
     /// 带上就是一条定时任务（见 cli 的 schedule.rs）。
     pub schedule: Option<String>,
+    /// 带上就能被 `joy skill update` 认版本。
+    pub version: Option<String>,
 }
 
 /// 全部已装载技能，按名字去重，`home/skills` 的同名技能赢过其它目录
@@ -244,6 +251,7 @@ pub fn loaded_skills(home: &Path) -> Vec<LoadedSkill> {
                     description: skill.description,
                     folder,
                     schedule: skill.schedule,
+                    version: skill.version,
                 },
             );
         }

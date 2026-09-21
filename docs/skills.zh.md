@@ -26,6 +26,25 @@ description: Summarize the week and draft the Monday brief
 3. **只描述做法，不假借工具。** 技能可以引用 Joy 的内置工具（如
    create_event），但 exported 到别的 agent 后那些工具不存在。
 
+## 版本与 `joy skill update`
+
+技能可以在 frontmatter 里带 `version: 1.2.0`。给 Joy 一个索引，它会把更新的
+装上来，并把旧版本留着：
+
+```json
+{"skills": [{"name": "weekly-review", "version": "1.2.0",
+             "url": "https://example.com/skills/weekly-review.md"}]}
+```
+
+```bash
+joy skill update                       # <home>/skills/index.json
+joy skill update ./my-index.json       # 也可以给路径 / http(s) 地址
+```
+
+规矩按这个顺序执行：先校验（解析不了的 SKILL.md 绝不落盘）、再暂存然后原子
+替换、旧版本备份进 `.backup/<名字>-<时间戳>/`、并且从不降级。`joy skill
+install` 保持它自己的规矩 —— 从不覆盖。
+
 ## 让技能按时跑
 
 frontmatter 里加一行，技能就同时是一条定时任务：

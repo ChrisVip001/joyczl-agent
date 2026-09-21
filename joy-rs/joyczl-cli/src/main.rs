@@ -24,6 +24,7 @@ Joy — 本地优先的个人助手
     joy gather         晨报（github/web/calendar/memory 一趟图跑完，草稿进 outbox）
     joy schedule       常驻：按技能/ schedules.json 里的 cron 定时跑任务
     joy memory reindex 给还没有向量的事实补上向量（JOY_EMBEDDINGS=1 那条腿）
+    joy skill [update] 列出/更新技能（索引默认 <home>/skills/index.json）
     joy mcp …          看 MCP 服务器列表；login 跑浏览器 OAuth；serve 把记忆暴露成 MCP 服务器
     joy skill …        技能：list / export --to claude,codex / install <url>
     joy eval [路径]    确定性评测（离线 0/1，必须 100% 通过 = release gate）

@@ -30,6 +30,26 @@ description: Summarize the week and draft the Monday brief
    built-in tools (e.g. create_event), but once exported to another agent
    those tools do not exist.
 
+## Versioning and `joy skill update`
+
+A skill can carry `version: 1.2.0` in its frontmatter. Point Joy at an index
+and it installs whatever is newer, with the previous copy kept:
+
+```json
+{"skills": [{"name": "weekly-review", "version": "1.2.0",
+             "url": "https://example.com/skills/weekly-review.md"}]}
+```
+
+```bash
+joy skill update                       # <home>/skills/index.json
+joy skill update ./my-index.json       # or a path / http(s) URL
+```
+
+Rules, in order: validate first (a SKILL.md that will not parse is never
+written), stage then swap atomically, back up the old version to
+`.backup/<name>-<timestamp>/`, and never downgrade. `joy skill install` keeps
+its own rule — it refuses to overwrite anything.
+
 ## Letting a skill run on a schedule
 
 Adding one frontmatter line turns a skill into a scheduled job:
