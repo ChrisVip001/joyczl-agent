@@ -4,8 +4,6 @@
 //! 那条腿的入场券）。开关打开之前的记忆、以及写入时 embedding 服务恰好
 //! 不可用的事实，都靠它补齐 —— 不补也不会丢，只是暂时只有关键词那条腿。
 
-use std::path::Path;
-
 use anyhow::Result;
 use joyczl_provider::embed::Embedder;
 use joyczl_state::Facts;
@@ -35,6 +33,3 @@ async fn reindex(settings: &joyczl_config::Settings) -> Result<()> {
     println!("补了 {done} 条向量。");
     Ok(())
 }
-
-/// 保留给调用方的一句话说明（`joy memory` 的用法行）。
-pub const USAGE: &str = "joy memory reindex   给还没有向量的事实补上向量";
