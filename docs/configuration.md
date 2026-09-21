@@ -82,9 +82,12 @@ vector: run `joy memory reindex` to backfill.
 | `JOY_EXEC` | `0` | enable the `run_command` tool (off = the model never sees it) |
 | `JOY_EXEC_ALLOW` | — | allowlist, comma separated, trailing `*` wildcards (`cargo test,git status,ls *`). Empty = deny everything |
 | `JOY_EXEC_TIMEOUT` | `30` | per-command timeout in seconds |
+| `JOY_EXEC_NETWORK` | `0` | let sandboxed commands reach the network. **Off by default** — an allowed command should not be able to send your data out |
+| `JOY_EXEC_WRITABLE_ROOTS` | — | extra writable directories (colon separated, must be existing absolute paths), e.g. a build cache |
 
 Commands always run sandboxed (macOS `sandbox-exec` / Linux `bubblewrap`)
-with writes confined to the working directory, the Joy home and temp; a
+with writes confined to the working directory, the Joy home and temp, and
+**no network** unless `JOY_EXEC_NETWORK=1`; a
 machine without a sandbox refuses to run anything. The hard deny list
 (`sudo`, `mkfs`, download-piped-into-shell, …) is not configurable. See
 [SECURITY.md](../SECURITY.md).

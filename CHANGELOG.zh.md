@@ -2,6 +2,44 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 0.6.0 — 护栏、预算，以及一个离线的沙箱
+
+### 配置在启动期校验
+
+越界的值过去会静默变成默认值。现在 `Settings::validate` 在环境变量与
+`settings.json` 合并之后跑一次，非法值直接终止并在消息里点名是哪个变量。
+边界表（`joyczl-config::BOUNDS`）同时服务于启动路径与 `config/write`。
+
+### 工具参数按 schema 校验
+
+每个工具本来就声明了 `input_schema`；现在它在注册时被编译，并在 handler
+之前强制执行。于是非法调用回来的是一句
+`Error: 参数不符合 … 的 schema —— /subject：42 is not of type "string"`，
+而不是各工具手写的提示；而且校验没过时 handler 根本没跑，不留半个副作用。
+
+### 循环护栏
+
+模型卡在同一个调用（连续三次完全相同）或在几个调用之间来回（`A,B,A,B`）时
+现在会被告知，字节级重复的长结果会被换成引用桩。交替循环需要单独判定 ——
+它会把「连续相同」的计数重置 —— 所以两种形状都抓。`TurnMeta.guard_hits`
+让「这一轮卡过」在 trace 与驾驶舱里都看得见。
+
+### 上下文按 token 做预算
+
+`ProviderInfo.context_window` 加 tiktoken 估算决定什么时候压缩：轮数从此
+是**上限**，token 才是闸门。provider 报「上下文超了」会被认出来
+（`ProviderError::ContextOverflow`），这一轮会压缩后**重试一次**。
+`JOY_CONTEXT_WINDOW` / `JOY_COMPACT_THRESHOLD` 可以调；校验会拒绝
+`JOY_MAX_TOKENS >= JOY_CONTEXT_WINDOW` 这种答案放不下的配置。
+
+### 行为变更：沙箱内的命令默认断网
+
+`run_command` 现在默认**没有网络** —— seatbelt 加 `(deny network*)`，
+bubblewrap 加 `--unshare-net`。需要下载东西的命令（比如会拉 crate 的
+`cargo test`）必须设 `JOY_EXEC_NETWORK=1`。额外可写的目录用
+`JOY_EXEC_WRITABLE_ROOTS` 放开（冒号分隔，每条必须是已存在的绝对目录），
+构建缓存是典型用例。启动那一行会把两者都报出来。
+
 ## 0.5.0 — 本地、沙箱、定时
 
 - 本地推理：`ollama` provider —— 不要 key、不要网络，对话不出这台机器。

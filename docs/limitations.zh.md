@@ -11,10 +11,13 @@
 
 ## 执行（`run_command`、`JOY_EXEC`）
 
-* **刻意** —— 沙箱限制的是**写路径**，不是网络。沙箱内的命令照样能联网。
-  要断开需要各平台各写一层：macOS 的 seatbelt `network*` 规则、Linux 的
-  `--unshare-net`。
-  → `joy-rs/joyczl-tools/src/exec.rs`（`sandbox_command`）
+* **刻意** —— 沙箱内的命令默认**离线**（`JOY_EXEC_NETWORK=1` 才联网）；写权限
+  限制在工作目录、Joy 的 home 与临时目录，外加 `JOY_EXEC_WRITABLE_ROOTS` 里
+  列出的目录。要下载东西的命令得同时打开这两个开关。
+  → `joy-rs/joyczl-tools/src/exec.rs`（`sandbox_argv`）
+* **刻意** —— 硬拒名单是**子串匹配**，变着花样的写法能绕过去。它是安全带不是
+  证明：真正管用的是放行表与沙箱。
+  → `joy-rs/joyczl-tools/src/exec.rs`（`HARD_DENY`）
 * **刻意** —— 没有交互式批准弹窗。第三道闸门是放行表，不是对话框。做弹窗要
   动协议方法加驾驶舱 UI，那是独立的一个项目。
   → `joy-rs/joyczl-tools/src/exec.rs`（`vet`）、`joy-rs/joyczl-app-server/src/dispatch.rs`

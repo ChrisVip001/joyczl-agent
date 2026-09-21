@@ -177,6 +177,13 @@ pub struct Settings {
     pub exec_allow: Vec<String>,
     /// `JOY_EXEC_TIMEOUT`：单条命令的超时（秒）。
     pub exec_timeout_secs: i64,
+    /// `JOY_EXEC_NETWORK`：沙箱里**能不能联网**。默认 **false（断网）** ——
+    /// 一条被放行的命令默认不该拥有把数据送出去的能力。
+    /// 要让 `cargo test` 这类需要下载的命令跑起来，得显式设成 1。
+    pub exec_network: bool,
+    /// `JOY_EXEC_WRITABLE_ROOTS`：除了工作目录与 home 之外，还允许写哪些目录
+    /// （冒号分隔的绝对路径，必须已存在）。为了 `cargo build` 之类的构建缓存。
+    pub exec_writable_roots: Vec<PathBuf>,
 }
 
 impl Default for Settings {
@@ -205,6 +212,8 @@ impl Default for Settings {
             exec_enabled: false,
             exec_allow: Vec::new(),
             exec_timeout_secs: 30,
+            exec_network: false,
+            exec_writable_roots: Vec::new(),
         }
     }
 }
@@ -245,6 +254,14 @@ impl Settings {
                 })
                 .unwrap_or_default(),
             exec_timeout_secs: env_int("JOY_EXEC_TIMEOUT", d.exec_timeout_secs as i32) as i64,
+            exec_network: env_bool("JOY_EXEC_NETWORK"),
+            exec_writable_roots: env("JOY_EXEC_WRITABLE_ROOTS")
+                .map(|raw| {
+                    std::env::split_paths(&raw)
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -292,6 +309,24 @@ impl Settings {
                 "JOY_COMPACT_THRESHOLD 应该在 0.05 到 0.95 之间，收到 {}",
                 self.compact_threshold
             ));
+        }
+
+        // 额外可写根：必须是**已存在的绝对目录**。写规则时它们要被塞进沙箱
+        // 配置里，一个不存在的路径只会让规则静默失效（seatbelt 认不存在的
+        // subpath），于是「我明明放开了却写不进去」。
+        for root in &self.exec_writable_roots {
+            if !root.is_absolute() {
+                return Err(format!(
+                    "JOY_EXEC_WRITABLE_ROOTS 里必须是绝对路径，收到 {}",
+                    root.display()
+                ));
+            }
+            if !root.is_dir() {
+                return Err(format!(
+                    "JOY_EXEC_WRITABLE_ROOTS 里的目录不存在：{}",
+                    root.display()
+                ));
+            }
         }
 
         // 放行规则：空表合法（= 什么都不放行，那是默认）。但表里每一条都得是
@@ -697,6 +732,41 @@ mod config_tests {
             ..Settings::default()
         };
         assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn writable_roots_must_exist_and_be_absolute() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let ok = Settings {
+            exec_writable_roots: vec![dir.path().to_path_buf()],
+            ..Settings::default()
+        };
+        assert!(ok.validate().is_ok());
+
+        let missing = Settings {
+            exec_writable_roots: vec![PathBuf::from("/definitely/not/here")],
+            ..Settings::default()
+        };
+        assert!(missing
+            .validate()
+            .expect_err("不存在的目录要被抓到")
+            .contains("不存在"));
+
+        let relative = Settings {
+            exec_writable_roots: vec![PathBuf::from("build")],
+            ..Settings::default()
+        };
+        assert!(relative
+            .validate()
+            .expect_err("相对路径没法塞进沙箱规则")
+            .contains("绝对路径"));
+    }
+
+    #[test]
+    fn the_sandbox_is_offline_unless_asked_otherwise() {
+        // 默认值本身就是要被钉住的行为：不开这个开关，命令不能联网。
+        assert!(!Settings::default().exec_network);
+        assert!(Settings::default().exec_writable_roots.is_empty());
     }
 
     #[test]

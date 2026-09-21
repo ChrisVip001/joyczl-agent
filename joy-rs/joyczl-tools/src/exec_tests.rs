@@ -4,12 +4,15 @@
 
 use std::path::PathBuf;
 
-use super::exec::{execute, sandbox_available, vet, ExecPolicy};
+use super::exec::{execute, sandbox_argv, sandbox_available, vet, ExecPolicy, Sandbox};
 
 fn policy(allow: &[&str]) -> ExecPolicy {
     ExecPolicy {
         allow: allow.iter().map(|r| r.to_string()).collect(),
         timeout_secs: 10,
+        // 与产品默认一致：沙箱里不联网。
+        network: false,
+        extra_roots: Vec::new(),
     }
 }
 
@@ -148,4 +151,86 @@ async fn a_refused_command_never_reaches_the_shell() {
     assert!(output.starts_with("Error:"), "{output}");
     assert!(output.contains("硬拒"), "{output}");
     assert!(!probe.exists(), "被拒的命令不该有任何副作用");
+}
+
+// ---- 断网与可写根（argv 形状）----------------------------------------------
+
+/// 沙箱默认**断网**：两个后端各自用自己最硬的手段表达这件事。
+/// 断言 argv 而不是真去联网 —— 后者在 CI 上要么慢要么不稳，
+/// 而这里要钉的是「我们到底让沙箱带了什么参数」。
+#[test]
+fn the_sandbox_is_offline_unless_asked_otherwise() {
+    let roots = vec![PathBuf::from("/tmp/joy-work")];
+
+    let seatbelt = sandbox_argv(Sandbox::Seatbelt, "echo hi", &roots, false);
+    assert!(
+        seatbelt.iter().any(|arg| arg.contains("(deny network*)")),
+        "seatbelt profile 里要有断网规则：{seatbelt:?}"
+    );
+    let online = sandbox_argv(Sandbox::Seatbelt, "echo hi", &roots, true);
+    assert!(
+        !online.iter().any(|arg| arg.contains("network")),
+        "显式开了网络就不该有那条规则：{online:?}"
+    );
+
+    let bwrap = sandbox_argv(Sandbox::Bubblewrap, "echo hi", &roots, false);
+    assert!(
+        bwrap.contains(&"--unshare-net".to_string()),
+        "bwrap 要拿掉网络命名空间：{bwrap:?}"
+    );
+    let bwrap_online = sandbox_argv(Sandbox::Bubblewrap, "echo hi", &roots, true);
+    assert!(
+        !bwrap_online.contains(&"--unshare-net".to_string()),
+        "开了网络就不该 unshare：{bwrap_online:?}"
+    );
+}
+
+/// 额外可写根要真的进到沙箱规则里（两个后端各一句）。
+#[test]
+fn extra_writable_roots_reach_both_sandboxes() {
+    let roots = vec![
+        PathBuf::from("/tmp/joy-work"),
+        PathBuf::from("/tmp/joy-cache"),
+    ];
+
+    let seatbelt = sandbox_argv(Sandbox::Seatbelt, "echo hi", &roots, false);
+    let profile = seatbelt
+        .iter()
+        .find(|arg| arg.contains("(version 1)"))
+        .expect("seatbelt 用 -p 传一份 profile");
+    assert!(profile.contains("/tmp/joy-work"), "{profile}");
+    assert!(profile.contains("/tmp/joy-cache"), "{profile}");
+
+    let bwrap = sandbox_argv(Sandbox::Bubblewrap, "echo hi", &roots, false);
+    let joined = bwrap.join(" ");
+    assert!(
+        joined.contains("--bind /tmp/joy-cache /tmp/joy-cache"),
+        "{joined}"
+    );
+}
+
+/// 额外放开一个根，命令就真的写得进去 —— 这条把「JVY_EXEC_WRITABLE_ROOTS
+/// 有没有用」从参数层面钉到行为层面。
+#[tokio::test]
+async fn an_extra_root_is_writable_inside_the_sandbox() {
+    if !sandbox_available() {
+        return;
+    }
+    let outside = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("临时目录");
+    let mut settings = policy(&["echo*"]);
+    settings.extra_roots = vec![outside.path().to_path_buf()];
+
+    // 只写「外面那个目录」：它出现在 extra_roots 里，所以该写得进去。
+    let probe = outside.path().join("cache.txt");
+    let output = execute(
+        &format!("echo cached > {}", probe.display()),
+        &settings,
+        &[home.path().to_path_buf()],
+    )
+    .await;
+    assert!(
+        output.contains("退出码 0") && probe.exists(),
+        "额外放开的根必须真的可写：{output}"
+    );
 }

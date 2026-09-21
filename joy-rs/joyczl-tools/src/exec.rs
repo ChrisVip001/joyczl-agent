@@ -14,12 +14,15 @@
 //! 与工具层的其它成员一样：拒绝与失败都是**文本**，不是错误。拒绝原因要
 //! 说清楚（哪条规则挡的、怎么放开），模型才能向用户解释为什么没做。
 //!
-//! ## v1 的边界（如实写在这里，别让它悄悄扩大）
+//! ## 边界（如实写在这里，别让它悄悄扩大）
 //!
-//! * 限制的是**写路径**，不是网络：命令仍然能联网。要断网得各平台再写
-//!   一层（macOS seatbelt 的 network 规则 / bwrap 的 --unshare-net）。
-//! * 没有交互式批准：第三道闸门用 allowlist 表达，不做「弹窗问用户」——
-//!   那需要协议与 UI 一起改，是独立的一件事。
+//! * **默认断网**（`JOY_EXEC_NETWORK=1` 才联网）：沙箱层真的会断
+//!   （seatbelt 的 `(deny network*)` / bwrap 的 `--unshare-net`）。这是
+//!   行为变更：早先的版本只限制写路径，命令照样能联网。
+//! * 可写根除了工作目录与 home，还可以用 `JOY_EXEC_WRITABLE_ROOTS` 追加
+//!   （构建缓存是典型用例）。默认不追加 —— 开放的目录越少越好。
+//! * 硬拒名单是**子串匹配**：花哨的绕法抓不住。真正的防线是放行表与沙箱。
+//! * 没有交互式批准弹窗（第三道闸门用 allowlist 表达）。
 //! * 只在启动时读一次配置（`config/write` 改了要重启进程才生效）。
 
 use std::path::{Path, PathBuf};
@@ -42,6 +45,13 @@ pub struct ExecPolicy {
     /// `JOY_EXEC_ALLOW` 的规则。空 = 什么都不许跑。
     pub allow: Vec<String>,
     pub timeout_secs: i64,
+    /// 沙箱里能不能联网（`JOY_EXEC_NETWORK`）。默认 **false**：一条被放行的
+    /// 命令默认不该拥有把数据送出去的能力。`cargo test` 这类要下载的命令
+    /// 得显式把开关打开。
+    pub network: bool,
+    /// 额外的可写根（`JOY_EXEC_WRITABLE_ROOTS`）：工作目录与 home 之外的。
+    /// 构建缓存是典型用例 —— 没有它，`cargo build` 在沙箱里写不进 target/。
+    pub extra_roots: Vec<PathBuf>,
 }
 
 /// 永远不跑的图案。小写比较，子串匹配 —— 宁可漏掉一个花哨写法，
@@ -157,7 +167,7 @@ pub fn sandbox_available() -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Sandbox {
+pub(crate) enum Sandbox {
     /// macOS：`sandbox-exec -p <profile> <shell> -c <command>`。
     Seatbelt,
     /// Linux：`bwrap … <shell> -c <command>`。
@@ -218,7 +228,24 @@ fn sandbox_command(
     backend: Sandbox,
     command: &str,
     writable: &[PathBuf],
+    network: bool,
 ) -> tokio::process::Command {
+    let argv = sandbox_argv(backend, command, writable, network);
+    let mut cmd = tokio::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    cmd
+}
+
+/// 沙箱命令的 argv。
+///
+/// 单独抽出来是为了**可测**：参数形状（尤其是「有没有断网」）不该只在真跑
+/// 起来的时候才被看见 —— 那种「测试」等于没测。
+pub(crate) fn sandbox_argv(
+    backend: Sandbox,
+    command: &str,
+    writable: &[PathBuf],
+    network: bool,
+) -> Vec<String> {
     let roots: Vec<PathBuf> = writable
         .iter()
         .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
@@ -240,46 +267,72 @@ fn sandbox_command(
                 "(allow file-write* (subpath \"{}\"))\n",
                 std::env::temp_dir().display()
             ));
-            let mut cmd = tokio::process::Command::new("/usr/bin/sandbox-exec");
-            cmd.arg("-p")
-                .arg(profile)
-                .arg("/bin/sh")
-                .arg("-c")
-                .arg(command);
-            cmd
+            if !network {
+                // seatbelt 的默认是「什么都可以」，所以断网要显式拒绝。
+                profile.push_str("(deny network*)\n");
+            }
+            vec![
+                "/usr/bin/sandbox-exec".to_string(),
+                "-p".to_string(),
+                profile,
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                command.to_string(),
+            ]
         }
         Sandbox::Bubblewrap => {
             // 根只读挂载，工作目录与 /tmp 可写。
-            let mut cmd = tokio::process::Command::new("bwrap");
-            cmd.arg("--ro-bind")
-                .arg("/")
-                .arg("/")
-                .arg("--dev")
-                .arg("/dev")
-                .arg("--proc")
-                .arg("/proc")
-                .arg("--bind")
-                .arg("/tmp")
-                .arg("/tmp")
-                .arg("--die-with-parent");
+            let mut args = vec![
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+                "--proc".to_string(),
+                "/proc".to_string(),
+                "--bind".to_string(),
+                "/tmp".to_string(),
+                "/tmp".to_string(),
+                "--die-with-parent".to_string(),
+            ];
             for root in &roots {
-                cmd.arg("--bind").arg(root).arg(root);
+                args.push("--bind".to_string());
+                args.push(root.display().to_string());
+                args.push(root.display().to_string());
+            }
+            if !network {
+                // 不给网络命名空间：连不上任何东西（比防火墙规则更硬 ——
+                // 它不依赖内核的规则匹配）。
+                args.push("--unshare-net".to_string());
             }
             // `--` 之后才是要跑的：与探测那一次保持同一个形状。
-            cmd.arg("--").arg("/bin/sh").arg("-c").arg(command);
-            cmd
+            args.push("--".to_string());
+            args.push("/bin/sh".to_string());
+            args.push("-c".to_string());
+            args.push(command.to_string());
+            let mut argv = vec!["bwrap".to_string()];
+            argv.extend(args);
+            argv
         }
     }
 }
 
 /// 执行一条命令。**永不返回 Err** —— 拒绝、超时、非零退出码都是文本。
+///
+/// `writable` 是调用方**动态**决定的那些根（工作目录、home）；
+/// `policy.extra_roots`（配置来的）在这里一起并进去 —— 合并放在 execute 内部，
+/// 是为了让「策略里写了什么」在任何调用路径上都成立：散在调用方去记得合并，
+/// 就会有一条路径静默忽略配置。
 pub async fn execute(command: &str, policy: &ExecPolicy, writable: &[PathBuf]) -> String {
     if let Err(why) = vet(command, policy) {
         return format!("Error: {why}");
     }
     let backend = sandbox_backend().expect("vet 已经把沙箱不可用挡在外头");
 
-    let mut child = match sandbox_command(backend, command, writable)
+    let mut roots: Vec<PathBuf> = writable.to_vec();
+    roots.extend(policy.extra_roots.iter().cloned());
+
+    let mut child = match sandbox_command(backend, command, &roots, policy.network)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -375,6 +428,8 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     writable.push(cwd.clone());
                 }
                 writable.push(ctx.home.clone());
+                // `JOY_EXEC_WRITABLE_ROOTS` 由 execute 自己并进来（策略在
+                // 任何调用路径上都生效，不靠调用方记得合并）。
                 Ok(execute(&command, &policy, &writable).await)
             })
         }),

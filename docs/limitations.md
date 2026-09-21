@@ -13,10 +13,16 @@ means "we would like this, nobody has built it".
 
 ## Execution (`run_command`, `JOY_EXEC`)
 
-* **Deliberate** — The sandbox confines *writes*, not the network. A sandboxed
-  command can still reach the internet. Closing it needs platform work:
-  seatbelt `network*` rules on macOS, `--unshare-net` on Linux.
-  → `joy-rs/joyczl-tools/src/exec.rs` (`sandbox_command`)
+* **Deliberate** — Sandboxed commands run **offline** by default
+  (`JOY_EXEC_NETWORK=1` to allow network); writes are confined to the working
+  directory, the Joy home and temp, plus anything listed in
+  `JOY_EXEC_WRITABLE_ROOTS`. Commands that need to download something need
+  both switches.
+  → `joy-rs/joyczl-tools/src/exec.rs` (`sandbox_argv`)
+* **Deliberate** — The hard deny list is substring matching, so obfuscated
+  variants can slip past it. It is a seatbelt, not a proof: the allowlist and
+  the sandbox are what actually hold.
+  → `joy-rs/joyczl-tools/src/exec.rs` (`HARD_DENY`)
 * **Deliberate** — No interactive approval prompt. The third gate is the
   allowlist, not a dialog. A prompt needs a protocol method plus dashboard UI,
   which is a project of its own.

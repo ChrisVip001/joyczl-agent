@@ -304,11 +304,31 @@ async fn builtin_tools(settings: &Settings) -> ToolRegistry {
         } else {
             settings.exec_allow.join(", ")
         };
-        eprintln!("(joy) 执行工具已启用：沙箱 {sandbox}，放行规则：{allow}");
+        let network = if settings.exec_network {
+            "可联网"
+        } else {
+            "沙箱内断网（JOY_EXEC_NETWORK=1 可开）"
+        };
+        let extra = if settings.exec_writable_roots.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "，额外可写根：{}",
+                settings
+                    .exec_writable_roots
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        eprintln!("(joy) 执行工具已启用：沙箱 {sandbox}，{network}，放行规则：{allow}{extra}");
         tools.register(joyczl_tools::exec::run_command(
             joyczl_tools::exec::ExecPolicy {
                 allow: settings.exec_allow.clone(),
                 timeout_secs: settings.exec_timeout_secs,
+                network: settings.exec_network,
+                extra_roots: settings.exec_writable_roots.clone(),
             },
         ));
     }

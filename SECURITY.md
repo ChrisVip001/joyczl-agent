@@ -45,8 +45,14 @@ a structural guarantee, not a convention.
    Joy home and temp. **If no sandbox is available, the command is
    refused** — Joy never runs a command unsandboxed "to make it work".
 
-Known limits, stated so they do not quietly grow: the sandbox confines
-*writes*, not the network; there is no interactive approval prompt (the
+The sandbox also cuts the network: sandboxed commands run offline unless
+`JOY_EXEC_NETWORK=1` is set, and extra writable roots can be opened with
+`JOY_EXEC_WRITABLE_ROOTS` (each must be an existing absolute directory).
+
+Known limits, stated so they do not quietly grow: the hard deny list is
+substring matching, so cleverly obfuscated commands can slip past it (the
+allowlist and the sandbox are the real defences); there is no interactive
+approval prompt (the
 allowlist is the third gate); policy is read once at startup. The full list,
 with the file to open for each, is
 [docs/limitations.md](docs/limitations.md).

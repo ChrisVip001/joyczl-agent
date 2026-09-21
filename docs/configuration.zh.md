@@ -76,9 +76,12 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 | `JOY_EXEC` | `0` | 开启 `run_command` 工具（关着 = 模型看不见它） |
 | `JOY_EXEC_ALLOW` | — | 放行表，逗号分隔，支持末尾 `*` 通配（`cargo test,git status,ls *`）。空 = 全部拒绝 |
 | `JOY_EXEC_TIMEOUT` | `30` | 单条命令的超时（秒） |
+| `JOY_EXEC_NETWORK` | `0` | 让沙箱内的命令能联网。**默认关** —— 一条被放行的命令不该有能力把数据送出去 |
+| `JOY_EXEC_WRITABLE_ROOTS` | — | 额外可写的目录（冒号分隔，必须是已存在的绝对路径），典型用途是构建缓存 |
 
 命令一律在沙箱里跑（macOS `sandbox-exec` / Linux `bubblewrap`），写权限限制在
-工作目录、Joy 的 home 与临时目录；没有沙箱的机器拒绝执行任何命令。硬拒名单
+工作目录、Joy 的 home 与临时目录，并且**默认断网**（`JOY_EXEC_NETWORK=1`
+才联网）；没有沙箱的机器拒绝执行任何命令。硬拒名单
 （`sudo`、`mkfs`、把下载内容交给 shell……）不可配置。见
 [SECURITY.zh.md](../SECURITY.zh.md)。
 

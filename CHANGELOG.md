@@ -2,6 +2,47 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.6.0 — Guardrails, budgets, and an offline sandbox
+
+### Configuration is validated at startup
+
+Out-of-range values used to silently become defaults. `Settings::validate` now
+runs once after the environment and `settings.json` are merged and aborts with
+the variable named. One bounds table (`joyczl-config::BOUNDS`) serves both the
+startup path and `config/write`.
+
+### Tool arguments are checked against their schema
+
+Every tool already declared an `input_schema`; now it is compiled at
+registration and enforced before the handler runs, so a bad call comes back as
+`Error: 参数不符合 … 的 schema —— /subject：42 is not of type "string"` instead
+of a hand-written message, and no half-applied side effect is left behind.
+
+### A stall guard
+
+A model looping on the same call (three identical calls in a row) or
+alternating between a small set (`A,B,A,B`) now gets told, and byte-identical
+long results are replaced with a reference stub. Interleaved loops need their
+own test — they reset the consecutive counter — so both shapes are detected.
+`TurnMeta.guard_hits` makes a stuck turn visible in traces and the dashboard.
+
+### Context is budgeted in tokens
+
+`ProviderInfo.context_window` plus tiktoken estimation decide when to compact:
+turns are now a ceiling, tokens are the gate. A provider reporting a context
+overflow is recognised (`ProviderError::ContextOverflow`) and the turn is
+compacted and retried **once**. `JOY_CONTEXT_WINDOW` / `JOY_COMPACT_THRESHOLD`
+tune it; validation rejects `JOY_MAX_TOKENS >= JOY_CONTEXT_WINDOW`.
+
+### Behaviour change: sandboxed commands are offline
+
+`run_command` now runs with **no network** by default — seatbelt gets
+`(deny network*)`, bubblewrap gets `--unshare-net`. Commands that need to
+download something (a `cargo test` that fetches crates, say) must set
+`JOY_EXEC_NETWORK=1`. Extra writable directories can be opened with
+`JOY_EXEC_WRITABLE_ROOTS` (colon separated, each must be an existing absolute
+directory) — a build cache is the typical case. The startup line reports both.
+
 ## 0.5.0 — Local, sandboxed, scheduled
 
 - Local inference: an `ollama` provider — no key, no network, nothing leaves
