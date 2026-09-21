@@ -14,7 +14,7 @@ joy-rs/
   joyczl-protocol/      跨语言契约，唯一事实来源（schema/ 生成物 check-in）
   joyczl-config/        JOY_* 环境变量，启动读一次
   joyczl-state/         SQLite + FTS5(trigram)；记忆后端契约与 conformance
-  joyczl-provider/      11 家模型厂商，两种 wire format + SSE
+  joyczl-provider/      12 家厂商（含本地 Ollama），两种 wire format + SSE
   joyczl-tools/         工具注册表 + 内置工具
   joyczl-loop/          agent 主循环（可打断）
   joyczl-graph/         波次 DAG 引擎 + triage / gather 工作流

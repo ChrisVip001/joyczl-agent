@@ -12,7 +12,7 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `JOY_HOME` | `./.joy` | 状态目录：state.db、SOUL.md、skills/、traces/、outbox/、mcp.json、settings.json |
-| `JOY_PROVIDER` | `anthropic` | 模型厂商：anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go |
+| `JOY_PROVIDER` | `anthropic` | 模型厂商：anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama |
 | `JOY_API_KEY` | — | 显式指定 key，优先于厂商默认变量 |
 | `JOY_BASE_URL` | 厂商默认 | 覆盖 API 端点（测试时也可指向假端点） |
 | `JOY_MODEL` / `JOY_SMALL_MODEL` | 厂商默认 | 主模型 / 便宜模型（检索门与 consolidation 用） |
@@ -32,6 +32,28 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_SKILL_DIRS` | — | 冒号分隔的额外技能目录（`home/skills` 之外） |
 | `JOY_JUDGE_MODEL` | small model | `joy judge` 的裁判模型（裁判不是选手） |
 | `JOY_GH_REPO` | — | `joy gather` 的 github scan 仓库（owner/repo） |
+
+## 本地推理（Ollama）
+
+`JOY_PROVIDER=ollama` 完全跑在这台机器上：不要 key、不要网络、对话不出本机。
+装好 [Ollama](https://ollama.com) 之后：
+
+```bash
+ollama pull qwen3:8b     # 主模型
+ollama pull qwen3:4b     # 便宜模型（检索门、consolidation）
+JOY_PROVIDER=ollama joy  # 不需要任何 API key
+```
+
+Ollama 暴露的是 OpenAI 兼容端点（`http://127.0.0.1:11434/v1`），所以复用
+云端 provider 同一条 wire。LM Studio 与 vLLM 形状相同——用 `JOY_BASE_URL`
+指过去、`JOY_MODEL` 指到你装着的模型即可。按模型覆盖默认值：
+
+```bash
+JOY_PROVIDER=ollama JOY_MODEL=qwen3:14b JOY_SMALL_MODEL=qwen3:4b joy
+```
+
+这是隐私路径、零成本路径，也是断网（或 key 失效）时照样能用的路径。
+Ollama 没起来时报的是网络错误——`ollama serve` 把它启动起来。
 
 ## 各厂商的 key 变量
 

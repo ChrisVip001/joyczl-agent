@@ -24,7 +24,7 @@
 | `memory/forget` | `MemoryForgetParams` → `MemoryForgetResponse` | 按主题删除 |
 | `config/read` | `ConfigReadParams` → `ConfigReadResponse` | 完整配置视图 |
 | `config/write` | `ConfigWriteParams` → `ConfigWriteResponse` | 应用补丁并热生效（落 settings.json） |
-| `model/list` | `ModelListParams` → `ModelListResponse` | 11 家 provider 的模型目录 |
+| `model/list` | `ModelListParams` → `ModelListResponse` | 12 家 provider 的模型目录 |
 
 约定：方法名 `<resource>/<method>`（resource 单数）；载荷命名
 `*Params` / `*Response` / `*Notification`；wire 字段 camelCase；整数一律

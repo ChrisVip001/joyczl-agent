@@ -23,7 +23,7 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
                  joyczl-protocol  ←──── 唯一事实来源（TS/JSON Schema/pydantic 生成物）
                  joyczl-config    ←──── JOY_* 环境变量，启动读一次
                         │
-                 joyczl-provider ────── 11 家模型厂商，两种 wire format + SSE
+                 joyczl-provider ────── 12 家厂商（含本地 Ollama），两种 wire format + SSE
                         │
         ┌───────────────┼────────────────┐
    joyczl-tools    joyczl-loop       joyczl-mcp

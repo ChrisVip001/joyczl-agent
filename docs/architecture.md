@@ -26,7 +26,7 @@ structure that makes that possible; running and configuring it live in
                  joyczl-protocol  ←──── single source of truth (TS/JSON Schema/pydantic artifacts)
                  joyczl-config    ←──── JOY_* env vars, read once at boot
                         │
-                 joyczl-provider ────── 11 model providers, two wire formats + SSE
+                 joyczl-provider ────── 12 providers (incl. local Ollama), two wire formats + SSE
                         │
         ┌───────────────┼────────────────┐
    joyczl-tools    joyczl-loop       joyczl-mcp

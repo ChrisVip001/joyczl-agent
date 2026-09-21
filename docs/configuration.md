@@ -13,7 +13,7 @@ reads them once at process start and never again. Joy **does not read any
 | Variable | Default | Purpose |
 |---|---|---|
 | `JOY_HOME` | `./.joy` | state directory: state.db, SOUL.md, skills/, traces/, outbox/, mcp.json, settings.json |
-| `JOY_PROVIDER` | `anthropic` | provider: anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go |
+| `JOY_PROVIDER` | `anthropic` | provider: anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama |
 | `JOY_API_KEY` | — | explicit key, takes precedence over the provider's default variable |
 | `JOY_BASE_URL` | provider default | override the API endpoint (tests can point it at a fake server) |
 | `JOY_MODEL` / `JOY_SMALL_MODEL` | provider default | main model / cheap model (retrieval gate and consolidation) |
@@ -33,6 +33,30 @@ reads them once at process start and never again. Joy **does not read any
 | `JOY_SKILL_DIRS` | — | colon-separated extra skill directories (besides `home/skills`) |
 | `JOY_JUDGE_MODEL` | small model | referee model for `joy judge` (the referee is not a contestant) |
 | `JOY_GH_REPO` | — | repository for gather's GitHub scan (owner/repo) |
+
+## Local inference (Ollama)
+
+`JOY_PROVIDER=ollama` runs entirely on this machine: no key, no network,
+nothing leaves the computer. Install [Ollama](https://ollama.com), then:
+
+```bash
+ollama pull qwen3:8b     # the main model
+ollama pull qwen3:4b     # the cheap model (retrieval gate, consolidation)
+JOY_PROVIDER=ollama joy  # no API key anywhere
+```
+
+Ollama exposes an OpenAI-compatible endpoint (`http://127.0.0.1:11434/v1`),
+so it reuses the same wire as the cloud providers. LM Studio and vLLM are
+the same shape — point `JOY_BASE_URL` at them and `JOY_MODEL` at whatever
+you have loaded. Override the defaults per model:
+
+```bash
+JOY_PROVIDER=ollama JOY_MODEL=qwen3:14b JOY_SMALL_MODEL=qwen3:4b joy
+```
+
+This is the privacy path and the zero-cost path, and the one that keeps
+working when the network (or a key) does not. If Ollama is not running the
+error surfaces as a network error — start it with `ollama serve`.
 
 ## Per-provider key variables
 

@@ -5,6 +5,7 @@
 //!
 //!   * anthropic 原生格式 → Anthropic、Kimi/Moonshot、GLM/Z.ai、MiniMax
 //!   * openai 兼容格式   → OpenAI、Gemini、DeepSeek、OpenRouter、xAI …
+//!   * 本地推理           → Ollama（同一份 openai 兼容格式，不需要 key）
 //!
 //! 两种 wire format 之间的全部差异，就是 openai.rs 里那两个转换函数 ——
 //! 两个转换函数加起来不过几十行。
@@ -200,12 +201,22 @@ pub struct ProviderInfo {
     pub wire: Wire,
     /// 存 key 的环境变量。key 本身绝不进配置文件 —— mcp.json 那种被人贴进
     /// bug 报告的文件里出现 bearer token 就是泄漏。
+    ///
+    /// **留空 = 本地端点**（Ollama）：它不需要 key，`resolve` 也就不去找。
     pub key_env: &'static str,
     pub base_url: Option<&'static str>,
     /// 主模型（loop 用）
     pub model: &'static str,
     /// 便宜模型（检索门 / consolidation 用）
     pub small_model: &'static str,
+}
+
+impl ProviderInfo {
+    /// 这个 provider 需不需要 key。本地推理不需要 —— 这正是它能离线、
+    /// 零成本、不把对话送出这台机器的原因。
+    pub fn needs_key(&self) -> bool {
+        !self.key_env.is_empty()
+    }
 }
 
 /// 这些默认值只是起点，`JOY_MODEL` / `JOY_SMALL_MODEL` 随时覆盖。
@@ -299,6 +310,19 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "deepseek-v4-flash",
         small_model: "deepseek-v4-flash",
     },
+    ProviderInfo {
+        // 本地推理：不需要 key，不需要网络。`key_env` 空着就是声明这件事。
+        // Ollama 暴露的是 OpenAI 兼容端点（`/v1`），所以复用同一条 wire ——
+        // LM Studio / vLLM 也长一样，改 `JOY_BASE_URL` 即可指过去。
+        id: "ollama",
+        wire: Wire::OpenAi,
+        key_env: "",
+        base_url: Some("http://127.0.0.1:11434/v1"),
+        // 先 `ollama pull qwen3:8b`（主模型）与 `qwen3:4b`（检索门 /
+        // consolidation 用的便宜模型）；换成自己装过的名字用 JOY_MODEL。
+        model: "qwen3:8b",
+        small_model: "qwen3:4b",
+    },
 ];
 
 /// key 从哪领。报错时一起给出来，省得用户去搜。
@@ -368,6 +392,10 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
     })?;
 
     // .strip()：复制粘贴带进来的换行/空格会污染请求头。
+    //
+    // 本地 provider（`key_env` 为空）不需要 key：没有就空着，客户端的
+    // `authed` 会因此不发 Authorization 头。显式配了 `JOY_API_KEY` 的
+    // 情况仍然照用 —— 有些本地网关（带鉴权的 vLLM 部署）自己要 key。
     let api_key = settings
         .api_key
         .clone()
@@ -377,6 +405,7 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
                 .map(|v| v.trim().to_string())
         })
         .filter(|v| !v.is_empty())
+        .or_else(|| (!info.needs_key()).then(String::new))
         .ok_or_else(|| no_key_message(info))?;
 
     let base_url = settings

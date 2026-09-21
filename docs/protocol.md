@@ -25,7 +25,7 @@ before the response). Every type is defined in
 | `memory/forget` | `MemoryForgetParams` → `MemoryForgetResponse` | delete by subject |
 | `config/read` | `ConfigReadParams` → `ConfigReadResponse` | full configuration view |
 | `config/write` | `ConfigWriteParams` → `ConfigWriteResponse` | apply a patch, hot-reload (persisted to settings.json) |
-| `model/list` | `ModelListParams` → `ModelListResponse` | model catalog across 11 providers |
+| `model/list` | `ModelListParams` → `ModelListResponse` | model catalog across 12 providers |
 
 Conventions: methods are `<resource>/<method>` (singular resource); payloads
 are named `*Params` / `*Response` / `*Notification`; wire fields are

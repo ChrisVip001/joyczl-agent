@@ -156,3 +156,58 @@ fn resolve_rejects_unknown_provider_with_the_list() {
         "错误里该列出可选 provider：{error}"
     );
 }
+
+// ---- 本地推理（ollama）------------------------------------------------------
+
+#[test]
+fn local_provider_needs_no_key() {
+    // 环境里什么都没有也解析得出来 —— 这正是本地推理的意义：
+    // 离线、零成本、对话不出这台机器。
+    let settings = joyczl_config::Settings {
+        provider: "ollama".to_string(),
+        ..Default::default()
+    };
+    let resolved = crate::resolve(&settings).expect("本地 provider 不需要 key");
+    assert_eq!(resolved.provider_id, "ollama");
+    assert_eq!(resolved.model, "qwen3:8b");
+    assert_eq!(resolved.small_model, "qwen3:4b");
+}
+
+#[test]
+fn local_provider_is_openai_wire_at_the_local_endpoint() {
+    let info = crate::lookup("ollama").expect("目录里有 ollama");
+    assert_eq!(info.wire, crate::Wire::OpenAi);
+    assert!(!info.needs_key(), "空 key_env 就是「不需要 key」的声明");
+    assert_eq!(info.base_url, Some("http://127.0.0.1:11434/v1"));
+}
+
+#[test]
+fn local_provider_still_honours_explicit_overrides() {
+    // LM Studio / vLLM 就是靠 JOY_BASE_URL + JOY_MODEL 指过去的。
+    let settings = joyczl_config::Settings {
+        provider: "ollama".to_string(),
+        base_url: Some("http://127.0.0.1:1234/v1".to_string()),
+        model: Some("my-local-model".to_string()),
+        small_model: Some("my-local-small".to_string()),
+        ..Default::default()
+    };
+    let resolved = crate::resolve(&settings).expect("解析");
+    assert_eq!(resolved.model, "my-local-model");
+    assert_eq!(resolved.small_model, "my-local-small");
+}
+
+#[test]
+fn a_cloud_provider_still_requires_a_key() {
+    // 免 key 只对本地成立。开发机上可能恰好配着这个 key —— 有就跳过，
+    // 不然断言的不是代码而是这台机器的 .env。
+    if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        return;
+    }
+    let settings = joyczl_config::Settings {
+        provider: "anthropic".to_string(),
+        api_key: None,
+        ..Default::default()
+    };
+    let error = crate::resolve(&settings).expect_err("云端缺 key 必须报错");
+    assert!(error.contains("ANTHROPIC_API_KEY"), "{error}");
+}

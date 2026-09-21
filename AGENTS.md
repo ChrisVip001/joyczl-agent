@@ -16,7 +16,7 @@ joy-rs/
                         (schema/ artifacts are checked in)
   joyczl-config/        JOY_* environment variables, read once at boot
   joyczl-state/         SQLite + FTS5(trigram); memory-backend contract & conformance
-  joyczl-provider/      11 model providers, two wire formats + SSE
+  joyczl-provider/      12 providers (incl. local Ollama), two wire formats + SSE
   joyczl-tools/         tool registry + built-in tools
   joyczl-loop/          the agent loop (cancellable)
   joyczl-graph/         wave-based DAG engine + triage / gather workflows

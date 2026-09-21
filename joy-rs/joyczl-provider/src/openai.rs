@@ -42,11 +42,23 @@ impl Client {
         }
     }
 
+    /// 给请求带上 key —— 除非本来就没有。本地端点（Ollama / LM Studio /
+    /// vLLM）不需要 key：一个空的 `Authorization: Bearer ` 头比不带头更糟，
+    /// 有些网关会因此回 401，而不是「忽略」。
+    fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.api_key.is_empty() {
+            builder
+        } else {
+            builder.bearer_auth(&self.api_key)
+        }
+    }
+
     async fn post(&self, body: &Value) -> Result<(u16, String), ProviderError> {
         let response = self
-            .http
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(&self.api_key)
+            .authed(
+                self.http
+                    .post(format!("{}/chat/completions", self.base_url)),
+            )
             .json(body)
             .send()
             .await?;
@@ -117,9 +129,10 @@ impl Client {
         body["stream_options"] = json!({ "include_usage": true });
 
         let response = self
-            .http
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(&self.api_key)
+            .authed(
+                self.http
+                    .post(format!("{}/chat/completions", self.base_url)),
+            )
             .json(&body)
             .send()
             .await?;
