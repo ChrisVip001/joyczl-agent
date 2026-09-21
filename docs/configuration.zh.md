@@ -33,6 +33,19 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_JUDGE_MODEL` | small model | `joy judge` 的裁判模型（裁判不是选手） |
 | `JOY_GH_REPO` | — | `joy gather` 的 github scan 仓库（owner/repo） |
 
+## 执行命令
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `JOY_EXEC` | `0` | 开启 `run_command` 工具（关着 = 模型看不见它） |
+| `JOY_EXEC_ALLOW` | — | 放行表，逗号分隔，支持末尾 `*` 通配（`cargo test,git status,ls *`）。空 = 全部拒绝 |
+| `JOY_EXEC_TIMEOUT` | `30` | 单条命令的超时（秒） |
+
+命令一律在沙箱里跑（macOS `sandbox-exec` / Linux `bubblewrap`），写权限限制在
+工作目录、Joy 的 home 与临时目录；没有沙箱的机器拒绝执行任何命令。硬拒名单
+（`sudo`、`mkfs`、把下载内容交给 shell……）不可配置。见
+[SECURITY.zh.md](../SECURITY.zh.md)。
+
 ## 本地推理（Ollama）
 
 `JOY_PROVIDER=ollama` 完全跑在这台机器上：不要 key、不要网络、对话不出本机。

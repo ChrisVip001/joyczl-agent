@@ -29,6 +29,26 @@ a structural guarantee, not a convention.
 * External reads (gather's GitHub scan) use the user's own `gh` CLI
   credentials, independent of the model-visible tool switches.
 
+## Running commands (JOY_EXEC)
+
+`run_command` is the highest-privilege thing in the project, so it is
+**off by default** and gated three times:
+
+1. **Hard deny list** (`joyczl-tools/src/exec.rs`) — catastrophic commands
+   (`sudo`, `mkfs`, `dd`, fork bombs, download-piped-into-shell) never run,
+   no matter what is configured. This gate is not configurable; a fuse you
+   can switch off is not a fuse.
+2. **Allowlist** — `JOY_EXEC_ALLOW` must match, or nothing runs. An empty
+   list denies everything; default-deny, never default-allow.
+3. **Sandbox** — commands run under macOS `sandbox-exec` / Linux
+   `bubblewrap` with write access confined to the working directory, the
+   Joy home and temp. **If no sandbox is available, the command is
+   refused** — Joy never runs a command unsandboxed "to make it work".
+
+Known limits, stated so they do not quietly grow: the sandbox confines
+*writes*, not the network; there is no interactive approval prompt (the
+allowlist is the third gate); policy is read once at startup.
+
 ## Inputs and paths
 
 * Skill names are forced to lowercase slugs (create_skill) and `install`

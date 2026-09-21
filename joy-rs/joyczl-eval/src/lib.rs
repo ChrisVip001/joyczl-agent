@@ -189,6 +189,8 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         retrieval_top_k: scenario.settings.retrieval_top_k.unwrap_or(4),
         max_iterations: scenario.settings.max_iterations.unwrap_or(10),
         graph_workflows: scenario.settings.graph_workflows.unwrap_or(false),
+        exec_enabled: scenario.settings.exec_enabled.unwrap_or(false),
+        exec_allow: scenario.settings.exec_allow.clone().unwrap_or_default(),
         ..joyczl_config::Settings::default()
     };
     settings.ensure_home()?;
@@ -332,10 +334,17 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
     let mut any_failed = false;
 
     for scenario in &scenarios {
-        if scenario.prereq.as_deref() == Some("python3") && which_python3().is_none() {
+        let missing = match scenario.prereq.as_deref() {
+            Some("python3") if which_python3().is_none() => Some("这台机器上没有 python3"),
+            Some("sandbox") if !joyczl_tools::exec::sandbox_available() => {
+                Some("这台机器上没有可用的沙箱（sandbox-exec / bubblewrap）")
+            }
+            _ => None,
+        };
+        if let Some(why) = missing {
             skipped += 1;
             println!(
-                "  ⊙ {} {}（跳过：这台机器上没有 python3）",
+                "  ⊙ {} {}（跳过：{why}）",
                 scenario.id, scenario.description
             );
             results.push(serde_json::json!({"id": scenario.id, "skipped": true}));

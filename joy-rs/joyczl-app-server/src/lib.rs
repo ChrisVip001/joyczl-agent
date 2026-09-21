@@ -288,6 +288,27 @@ pub async fn open(settings: &Settings) -> Result<Server> {
 /// 是同一条规矩）。没有 mcp.json 就等于没配，不读文件、不起进程、不连网。
 async fn builtin_tools(settings: &Settings) -> ToolRegistry {
     let mut tools = joyczl_tools::handlers::build_default();
+    // 执行工具：**默认关着**，开了才注册 —— 没开的时候模型连它的名字都
+    // 看不见。权限最高的一件事，开关必须是用户亲手按下的。
+    if settings.exec_enabled {
+        let sandbox = if joyczl_tools::exec::sandbox_available() {
+            "可用"
+        } else {
+            "不可用（命令会被拒绝执行）"
+        };
+        let allow = if settings.exec_allow.is_empty() {
+            "空（什么都不放行）".to_string()
+        } else {
+            settings.exec_allow.join(", ")
+        };
+        eprintln!("(joy) 执行工具已启用：沙箱 {sandbox}，放行规则：{allow}");
+        tools.register(joyczl_tools::exec::run_command(
+            joyczl_tools::exec::ExecPolicy {
+                allow: settings.exec_allow.clone(),
+                timeout_secs: settings.exec_timeout_secs,
+            },
+        ));
+    }
     let mcp = joyczl_mcp::McpClient::connect(&settings.home.join("mcp.json")).await;
     for warning in mcp.warnings() {
         // 跟上面那条一样：stdout 是协议通道，日志只能走 stderr。

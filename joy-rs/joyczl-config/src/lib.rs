@@ -57,6 +57,16 @@ pub struct Settings {
     pub google_calendar: bool,
     pub experimental: bool,
     pub graph_workflows: bool,
+
+    // ---- 执行（`run_command`，见 joyczl-tools 的 exec.rs）
+    /// `JOY_EXEC`：开了才会把 run_command 注册进工具表。默认关 ——
+    /// 一个能执行命令的助手，开关必须是用户亲手按下的。
+    pub exec_enabled: bool,
+    /// `JOY_EXEC_ALLOW`：放行规则（逗号分隔，支持末尾 `*` 通配）。
+    /// **空表 = 什么都不放行**：默认拒绝，不是默认允许。
+    pub exec_allow: Vec<String>,
+    /// `JOY_EXEC_TIMEOUT`：单条命令的超时（秒）。
+    pub exec_timeout_secs: i64,
 }
 
 impl Default for Settings {
@@ -78,6 +88,9 @@ impl Default for Settings {
             google_calendar: false,
             experimental: false,
             graph_workflows: false,
+            exec_enabled: false,
+            exec_allow: Vec::new(),
+            exec_timeout_secs: 30,
         }
     }
 }
@@ -103,6 +116,17 @@ impl Settings {
             google_calendar: env_bool("JOY_GOOGLE_CALENDAR"),
             experimental: env_bool("JOY_EXPERIMENTAL"),
             graph_workflows: env_bool("JOY_GRAPH_WORKFLOWS"),
+            exec_enabled: env_bool("JOY_EXEC"),
+            exec_allow: env("JOY_EXEC_ALLOW")
+                .map(|raw| {
+                    raw.split(',')
+                        .map(str::trim)
+                        .filter(|rule| !rule.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            exec_timeout_secs: env_int("JOY_EXEC_TIMEOUT", d.exec_timeout_secs as i32) as i64,
         }
     }
 

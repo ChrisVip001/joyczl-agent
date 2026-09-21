@@ -36,7 +36,7 @@ pub struct Scenario {
     /// 开跑前写进 home 的文件（相对路径）—— mcp.json 与假服务器用。
     #[serde(default)]
     pub files: Option<std::collections::BTreeMap<String, String>>,
-    /// 前置依赖缺失时跳过本用例（目前仅认 "python3"）。跳过不算失败。
+    /// 前置依赖缺失时跳过本用例（"python3" / "sandbox"）。跳过不算失败。
     #[serde(default)]
     pub prereq: Option<String>,
 }
@@ -74,6 +74,11 @@ pub struct SettingsOverrides {
     pub max_iterations: Option<i32>,
     #[serde(default)]
     pub graph_workflows: Option<bool>,
+    /// 执行工具的开与放行规则（见 joyczl-tools 的 exec.rs）。
+    #[serde(default)]
+    pub exec_enabled: Option<bool>,
+    #[serde(default)]
+    pub exec_allow: Option<Vec<String>>,
 }
 
 impl Scenario {

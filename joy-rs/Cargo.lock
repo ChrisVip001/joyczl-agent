@@ -899,6 +899,7 @@ dependencies = [
  "joyczl-config",
  "joyczl-protocol",
  "joyczl-provider",
+ "joyczl-tools",
  "serde",
  "serde_json",
  "tempfile",

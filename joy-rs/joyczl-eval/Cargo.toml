@@ -17,6 +17,8 @@ joyczl-app-server = { workspace = true }
 joyczl-config = { workspace = true }
 joyczl-protocol = { workspace = true }
 joyczl-provider = { workspace = true }
+# prereq "sandbox" 要问的就是 exec 模块：这台机器有没有可用的沙箱。
+joyczl-tools = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # 每个用例一个全新的临时 home —— state.db 互不串味。

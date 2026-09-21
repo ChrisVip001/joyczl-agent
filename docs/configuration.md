@@ -34,6 +34,20 @@ reads them once at process start and never again. Joy **does not read any
 | `JOY_JUDGE_MODEL` | small model | referee model for `joy judge` (the referee is not a contestant) |
 | `JOY_GH_REPO` | — | repository for gather's GitHub scan (owner/repo) |
 
+## Running commands
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JOY_EXEC` | `0` | enable the `run_command` tool (off = the model never sees it) |
+| `JOY_EXEC_ALLOW` | — | allowlist, comma separated, trailing `*` wildcards (`cargo test,git status,ls *`). Empty = deny everything |
+| `JOY_EXEC_TIMEOUT` | `30` | per-command timeout in seconds |
+
+Commands always run sandboxed (macOS `sandbox-exec` / Linux `bubblewrap`)
+with writes confined to the working directory, the Joy home and temp; a
+machine without a sandbox refuses to run anything. The hard deny list
+(`sudo`, `mkfs`, download-piped-into-shell, …) is not configurable. See
+[SECURITY.md](../SECURITY.md).
+
 ## Local inference (Ollama)
 
 `JOY_PROVIDER=ollama` runs entirely on this machine: no key, no network,

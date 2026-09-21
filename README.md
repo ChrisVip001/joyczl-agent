@@ -67,6 +67,7 @@ persisted with the conversation.
 | `search_web` | DuckDuckGo HTML, or Tavily with `TAVILY_API_KEY` |
 | `create_skill` | persist an agreed workflow as procedural memory |
 | `current_time` | local time with weekday and timezone |
+| `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
 
 Tool failures return to the model as text — the loop never crashes on one.
 

@@ -18,6 +18,7 @@ use joyczl_state::{Calendar, Chat, Episodes, Facts};
 use serde_json::Value;
 
 pub mod calendar;
+pub mod exec;
 pub mod handlers;
 pub mod memory_admin;
 pub mod messages;
@@ -26,6 +27,10 @@ pub mod web;
 #[cfg(test)]
 #[path = "tools_tests.rs"]
 mod tools_tests;
+
+#[cfg(test)]
+#[path = "exec_tests.rs"]
+mod exec_tests;
 
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。
