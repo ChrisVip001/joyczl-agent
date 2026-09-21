@@ -33,6 +33,10 @@ Write `<home>/mcp.json` (stdio or HTTP servers); their tools merge into the
 tool registry. For `"oauth": true` remote servers run `joy mcp login <name>`
 first; expired tokens auto-refresh, and without a refresh_token rerun login.
 
+Known operational limits (no log rotation, no daemonisation, missed schedule
+runs are not backfilled, and more) are listed in
+[limitations.md](limitations.md).
+
 ### Serving Joy's memory to other agents
 
 The reverse direction also exists: `joy mcp serve` makes Joy itself an MCP

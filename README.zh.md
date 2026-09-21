@@ -75,6 +75,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | [docs/gateways.zh.md](docs/gateways.zh.md) | Telegram / Discord / 微信 / 飞书的接法、平台怪癖与安全提示 |
 | [docs/testing.zh.md](docs/testing.zh.md) | 四层质量体系与最新测试报告 |
 | [docs/operations.zh.md](docs/operations.zh.md) | 运行手册：各种运行形态、备份、故障排查 |
+| [docs/limitations.zh.md](docs/limitations.zh.md) | 已知边界清单：刻意的与未做的，每条都指出下一步该打开哪个文件 |
 | [docs/skills.zh.md](docs/skills.zh.md) | 技能创作：格式、触发规则、安装与分发 |
 | [CONTRIBUTING.zh.md](CONTRIBUTING.zh.md) | 贡献指南：工程纪律与提交规则 |
 | [SECURITY.zh.md](SECURITY.zh.md) | 安全模型：凭证、能力边界、OAuth |

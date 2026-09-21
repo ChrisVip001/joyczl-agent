@@ -29,7 +29,7 @@ joy-rs/
 joy-ts/                 @joy/client, @joy/gateway, @joy/dashboard
 sdk/python/             thin Python client (pydantic models are generated)
 evals/                  deterministic and judge scenarios (JSONL)
-docs/                   architecture / configuration / protocol / testing / operations / skills
+docs/                   architecture / configuration / protocol / testing / operations / skills / limitations
 scripts/                schema generation + four end-to-end smokes
 ```
 

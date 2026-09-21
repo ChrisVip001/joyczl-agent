@@ -47,7 +47,9 @@ a structural guarantee, not a convention.
 
 Known limits, stated so they do not quietly grow: the sandbox confines
 *writes*, not the network; there is no interactive approval prompt (the
-allowlist is the third gate); policy is read once at startup.
+allowlist is the third gate); policy is read once at startup. The full list,
+with the file to open for each, is
+[docs/limitations.md](docs/limitations.md).
 
 ## Inputs and paths
 

@@ -31,6 +31,9 @@ JOY_HOME=$HOME/.joy ./target/debug/joy dashboard        # → http://localhost:7
 远程服务器用 `"oauth": true` 时先 `joy mcp login <名>`；token 过期自动
 刷新，没有 refresh_token 时重跑 login。
 
+运维侧的已知边界（没有日志轮转、不做 daemon 化、漏掉的定时执行不补跑等）见
+[limitations.zh.md](limitations.zh.md)。
+
 ### 把 Joy 的记忆给别的 agent 用
 
 反方向也有：`joy mcp serve` 让 Joy 自己成为一台 stdio 的 MCP 服务器，暴露
