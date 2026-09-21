@@ -179,6 +179,10 @@ pub struct Settings {
     pub embed_model: Option<String>,
 
     // ---- 执行（`run_command`，见 joyczl-tools 的 exec.rs）
+    /// `JOY_DELEGATE`：开了才会把 `delegate_task` 注册进工具表。默认关 ——
+    /// 「把活交出去自己跑」是能力也是风险（多一份上下文、多一段没人看的
+    /// 过程），开关同样得是用户亲手按下的。
+    pub delegate_enabled: bool,
     /// `JOY_EXEC`：开了才会把 run_command 注册进工具表。默认关 ——
     /// 一个能执行命令的助手，开关必须是用户亲手按下的。
     pub exec_enabled: bool,
@@ -220,6 +224,7 @@ impl Default for Settings {
             graph_workflows: false,
             embeddings_enabled: false,
             embed_model: None,
+            delegate_enabled: false,
             exec_enabled: false,
             exec_allow: Vec::new(),
             exec_timeout_secs: 30,
@@ -255,6 +260,7 @@ impl Settings {
             graph_workflows: env_bool("JOY_GRAPH_WORKFLOWS"),
             embeddings_enabled: env_bool("JOY_EMBEDDINGS"),
             embed_model: env("JOY_EMBED_MODEL"),
+            delegate_enabled: env_bool("JOY_DELEGATE"),
             exec_enabled: env_bool("JOY_EXEC"),
             exec_allow: env("JOY_EXEC_ALLOW")
                 .map(|raw| {

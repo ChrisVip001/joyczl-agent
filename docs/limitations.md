@@ -52,6 +52,16 @@ means "we would like this, nobody has built it".
   something.
   → `joy-rs/joyczl-provider/src/retry.rs`
 
+* **Deliberate** — A subagent has no approval path: where the parent would
+  ask you, the child simply is refused (`JOY_APPROVAL` never reaches it). A
+  subagent that blocks on a human is worse than a subagent that cannot do the
+  thing.
+* **Deliberate** — A subagent's conversation is not persisted (no
+  `subagent:*` entries in `session/list`) and its internal events are not
+  streamed; the parent sees one tool call and its conclusion. What it used
+  (including failed calls) is appended to that conclusion.
+  → `joy-rs/joyczl-app-server/src/subagent.rs`
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

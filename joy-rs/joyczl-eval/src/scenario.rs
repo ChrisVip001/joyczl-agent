@@ -84,6 +84,9 @@ pub struct SettingsOverrides {
     /// 执行工具的开与放行规则（见 joyczl-tools 的 exec.rs）。
     #[serde(default)]
     pub exec_enabled: Option<bool>,
+    /// 子代理（`JOY_DELEGATE`）。
+    #[serde(default)]
+    pub delegate_enabled: Option<bool>,
     #[serde(default)]
     pub exec_allow: Option<Vec<String>>,
 }

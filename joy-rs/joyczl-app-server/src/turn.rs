@@ -35,7 +35,6 @@ use joyczl_protocol::{
     TurnStartedNotification, JSONRPC_VERSION,
 };
 use joyczl_provider::{ContentBlock, CreateRequest, Message, Resolved, Role, TextSink, Usage};
-use joyczl_tools::ToolCtx;
 
 use crate::{narrow, trace, EventSink, Server};
 
@@ -56,7 +55,7 @@ const DEFAULT_SOUL: &str = "\
 
 /// SOUL.md 是用户可编辑的人格文件，第一次运行时创建。
 /// 改它就改了 Joy 是谁 —— 这是最朴素的程序性记忆。
-pub fn load_soul(home: &std::path::Path) -> String {
+pub(crate) fn load_soul(home: &std::path::Path) -> String {
     let path = home.join("SOUL.md");
     if !path.exists() {
         let _ = std::fs::write(&path, DEFAULT_SOUL);
@@ -496,13 +495,8 @@ async fn full_turn(
     });
 
     // ---- THE LOOP
-    let ctx = ToolCtx {
-        facts: server.facts.clone(),
-        episodes: server.episodes.clone(),
-        chat: server.chat.clone(),
-        calendar: server.calendar.clone(),
-        home: settings.home.clone(),
-    };
+    // 工具环境只有一处构造（见 lib.rs 的 tool_ctx）—— 子代理走同一个。
+    let ctx = server.tool_ctx();
 
     // 工具**开始**的通知得在执行前发出去：客户端才能画出"正在调用 X"。
     // 图里的节点事件出口（inner）若也在，就两个都叫 —— 互不挡道。
@@ -832,7 +826,7 @@ fn graph_event(sink: &EventSink, event: GraphEvent) {
     }
 }
 
-fn build_system(
+pub(crate) fn build_system(
     soul: &str,
     model: &str,
     provider: &str,

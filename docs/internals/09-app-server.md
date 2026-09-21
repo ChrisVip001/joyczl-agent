@@ -5,7 +5,28 @@
 
 目录：`joy-rs/joyczl-app-server/src/`
 （`lib.rs`（Server 装配）、`turn.rs`（一轮的全流程）、`dispatch.rs`（13 个方法）、
-`stdio.rs`（传输）、`trace.rs`（落盘））。
+`stdio.rs`（传输）、`trace.rs`（落盘）、`subagent.rs`（子代理执行体））。
+
+## 子代理（`subagent.rs`）
+
+`delegate_task` 的执行体在这里：工具层只有 `SubagentRunner` 这个 trait（依赖方向
+不能反过来 —— loop 依赖 tools）。
+
+三处容易写错、已经付出的代价：
+
+* **模型与设置是运行时现读的**（共享 `Arc<RwLock<_>>`），不是构造时 clone 一份。
+  第一版把 `Resolved` 快照进了 runner，于是 `config/write` 换了 provider、或测试里
+  `install_provider` 之后，子代理还在用**启动那一刻**的 client —— 一个完全不报错
+  的静默错误（eval 场景当场把它照出来）。
+* **子代理的工具表是父表在注册 `delegate_task` 之前的副本**：`boot` 里先建
+  `builtin_tools`，把它的副本交给 runner，然后才注册 `delegate_task`。顺序反了
+  就等于把递归派生打开。
+* **失败的工具调用要在结论里标出来**。父轮只看到一次工具调用与一段结论；如果
+  子代理是在一次失败的调用上编出的结论，父轮必须看得出来。这条是 eval 逼出来的：
+  最早的版本只列工具名，测试写不出「递归确实被挡住」的断言。
+
+`ToolCtx` 只有一处构造（`lib.rs::tool_ctx`），turn 与子代理共用 —— 两处各写一遍
+就是等着某天加字段时漏掉一个。
 
 ## 9.1 `Server`：字段与两把锁
 

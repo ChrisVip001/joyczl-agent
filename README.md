@@ -68,6 +68,7 @@ persisted with the conversation.
 | `create_skill` | persist an agreed workflow as procedural memory |
 | `current_time` | local time with weekday and timezone |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
+| `delegate_task` | hand one self-contained job to a subagent — off unless `JOY_DELEGATE=1`, and it cannot delegate again |
 
 Tool failures return to the model as text — the loop never crashes on one.
 

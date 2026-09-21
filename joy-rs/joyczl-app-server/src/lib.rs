@@ -17,6 +17,7 @@
 
 mod dispatch;
 mod stdio;
+mod subagent;
 mod trace;
 mod turn;
 
@@ -32,6 +33,7 @@ use joyczl_loop::Interrupt;
 use joyczl_protocol::{JsonRpcMessage, ServerNotification, SettingsPatch, SettingsView};
 use joyczl_provider::Resolved;
 use joyczl_state::{Calendar, Chat, Episodes, Facts};
+use joyczl_tools::ToolCtx;
 use joyczl_tools::ToolRegistry;
 use sqlx::sqlite::SqlitePool;
 use tokio::sync::mpsc;
@@ -108,7 +110,11 @@ pub struct Server {
 impl Server {
     /// 从 state.db 装配。provider 解析失败不致命 —— 记下原因，等 turn 再报。
     pub async fn boot(pool: SqlitePool, settings: Settings) -> Self {
-        let resolved = match joyczl_provider::resolve(&settings) {
+        let settings = Arc::new(RwLock::new(settings));
+        // 读锁只在表达式里拿一下：**绝不跨 await 持有**（clippy 会拦，也确实
+        // 该拦 —— 一个被 await 卡住的读锁会把整台服务器堵死）。
+        let snapshot = settings.read().expect("settings 锁不该中毒").clone();
+        let resolved = match joyczl_provider::resolve(&snapshot) {
             Ok(resolved) => Some(resolved),
             Err(reason) => {
                 // 打到 stderr：stdout 是协议通道，不能混入日志。
@@ -116,20 +122,61 @@ impl Server {
                 None
             }
         };
+        let resolved = Arc::new(RwLock::new(resolved));
         // 工具表要连 MCP（若有配置），所以是 async 的 —— 装配顺序上只能
         // 先把它建好，再塞进 Server。
-        let tools = builtin_tools(&settings).await;
+        let mut tools = builtin_tools(&snapshot).await;
+        let facts = Facts::new(pool.clone());
+        let episodes = Episodes::new(pool.clone());
+        let chat = Chat::new(pool.clone());
+        let calendar = Calendar::new(pool.clone());
+
+        // 子代理：**默认关着**，开了才注册。runner 拿到的是「这一份工具表的
+        // 副本」——**注意 `tools.clone()` 在 register 之前求值**，所以副本里
+        // 没有 `delegate_task`：递归派生于是不是「被拒绝」，而是根本不存在
+        // 这个选项。顺序反过来就等于把递归打开。
+        if snapshot.delegate_enabled {
+            eprintln!(
+                "(joy) 子代理已启用：delegate_task 可用了（子代理不能再派生子代理、不参与批准）"
+            );
+            tools.register(joyczl_tools::subagent::delegate_task(Arc::new(
+                subagent::Delegated {
+                    tools: Arc::new(tools.clone()),
+                    facts: facts.clone(),
+                    episodes: episodes.clone(),
+                    chat: chat.clone(),
+                    calendar: calendar.clone(),
+                    // 共享句柄，不是快照：换 provider 之后进来的这一轮要用新的。
+                    settings: settings.clone(),
+                    resolved: resolved.clone(),
+                },
+            )));
+        }
+
         Self {
-            facts: Facts::new(pool.clone()),
-            episodes: Episodes::new(pool.clone()),
-            chat: Chat::new(pool.clone()),
-            calendar: Calendar::new(pool.clone()),
-            settings: Arc::new(RwLock::new(settings)),
-            resolved: Arc::new(RwLock::new(resolved)),
+            facts,
+            episodes,
+            chat,
+            calendar,
+            settings,
+            resolved,
             tools: Arc::new(tools),
             turns: Arc::new(Mutex::new(HashMap::new())),
             pool,
         }
+    }
+
+    /// 执行工具时给 handler 的环境。**只有这一处构造**（turn 与子代理共用）——
+    /// 加字段时不会漏掉某条路径。
+    pub(crate) fn tool_ctx(&self) -> ToolCtx {
+        let settings = self.settings();
+        tool_ctx(
+            &self.facts,
+            &self.episodes,
+            &self.chat,
+            &self.calendar,
+            &settings.home,
+        )
     }
 
     /// 当前设置的快照。拿到的副本随便用多久都行 —— 并发写只会影响下一轮。
@@ -357,6 +404,24 @@ async fn builtin_tools(settings: &Settings) -> ToolRegistry {
         );
     }
     tools
+}
+
+/// 工具执行环境的**唯一**构造处。turn 与子代理都走它 —— 两处各写一遍
+/// 就是等着某天加字段时漏掉一个（子代理拿到半个 ctx 会很难查）。
+pub(crate) fn tool_ctx(
+    facts: &Facts,
+    episodes: &Episodes,
+    chat: &Chat,
+    calendar: &Calendar,
+    home: &std::path::Path,
+) -> ToolCtx {
+    ToolCtx {
+        facts: facts.clone(),
+        episodes: episodes.clone(),
+        chat: chat.clone(),
+        calendar: calendar.clone(),
+        home: home.to_path_buf(),
+    }
 }
 
 /// 协议里的整数字段是 i32（理由见 joyczl-protocol 的模块文档），存储层是 i64。

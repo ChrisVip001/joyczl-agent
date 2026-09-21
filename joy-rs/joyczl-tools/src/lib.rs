@@ -22,6 +22,7 @@ pub mod exec;
 pub mod handlers;
 pub mod memory_admin;
 pub mod messages;
+pub mod subagent;
 pub mod web;
 
 #[cfg(test)]
@@ -31,6 +32,10 @@ mod tools_tests;
 #[cfg(test)]
 #[path = "exec_tests.rs"]
 mod exec_tests;
+
+#[cfg(test)]
+#[path = "subagent_tests.rs"]
+mod subagent_tests;
 
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。
@@ -46,6 +51,7 @@ pub struct ToolCtx {
 pub type BoxFut = Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;
 pub type Handler = Arc<dyn Fn(ToolCtx, Value) -> BoxFut + Send + Sync>;
 
+#[derive(Clone)]
 pub struct Tool {
     pub name: String,
     pub description: String,
@@ -64,7 +70,7 @@ impl Tool {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ToolRegistry {
     tools: BTreeMap<String, Tool>,
     /// 每个工具**预编译**好的参数校验器。注册时编一次，调用时零解析。
@@ -79,6 +85,17 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 去掉某个工具的一份副本（子代理用：它不能再派生子代理）。
+    ///
+    /// 复制整个注册表而不是共享 —— 子代理的表与父的表从此互不影响，而工具
+    /// 本身是 `Arc` 包着的，复制很便宜。
+    pub fn without(&self, name: &str) -> Self {
+        let mut copy = self.clone();
+        copy.tools.remove(name);
+        copy.validators.remove(name);
+        copy
     }
 
     pub fn register(&mut self, tool: Tool) {

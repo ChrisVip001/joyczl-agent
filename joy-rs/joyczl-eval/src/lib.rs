@@ -193,6 +193,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         compact_threshold: scenario.settings.compact_threshold.unwrap_or(0.8),
         graph_workflows: scenario.settings.graph_workflows.unwrap_or(false),
         exec_enabled: scenario.settings.exec_enabled.unwrap_or(false),
+        delegate_enabled: scenario.settings.delegate_enabled.unwrap_or(false),
         exec_allow: scenario.settings.exec_allow.clone().unwrap_or_default(),
         ..joyczl_config::Settings::default()
     };

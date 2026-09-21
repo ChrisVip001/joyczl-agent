@@ -62,6 +62,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `create_skill` | 把约定的工作流存成过程记忆 |
 | `current_time` | 本地时间（含星期与时区） |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)） |
+| `delegate_task` | 把一件自成一体的活交给子代理——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生 |
 
 工具失败以文本回给模型——loop 绝不因一次工具失败而崩。
 

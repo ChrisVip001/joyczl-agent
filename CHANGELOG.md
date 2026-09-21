@@ -43,6 +43,16 @@ than mysterious; the REPL prints a line and the dashboard shows a chip. A
 provider that reports `Retry-After` is obeyed, within the caps. There is no
 provider failover — that is a separate decision.
 
+### Subagents (`JOY_DELEGATE`)
+
+`delegate_task` hands one self-contained job to a subagent and brings back only
+the conclusion, in a fresh context (empty history, no retrieval, no skills). It
+gets the parent's tools **minus `delegate_task`**, so delegating again is not
+refused but impossible; it cannot ask you anything; and its answers are capped
+at 5 iterations (hard cap 10) and 2048 tokens. The conclusion is annotated with
+the tools it used, failed calls included, so the parent can tell whether the
+answer rests on something that failed. Off by default.
+
 ### Long command output is kept, not just truncated
 
 Output past 8000 characters is still cut from what the model sees (context has

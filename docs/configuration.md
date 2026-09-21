@@ -82,6 +82,7 @@ vector: run `joy memory reindex` to backfill.
 | Variable | Default | Purpose |
 |---|---|---|
 | `JOY_EXEC` | `0` | enable the `run_command` tool (off = the model never sees it) |
+| `JOY_DELEGATE` | `0` | enable the `delegate_task` tool (a subagent gets its own context; it cannot delegate again) |
 | `JOY_EXEC_ALLOW` | — | allowlist, comma separated, trailing `*` wildcards (`cargo test,git status,ls *`). Empty = deny everything |
 | `JOY_EXEC_TIMEOUT` | `30` | per-command timeout in seconds |
 | `JOY_EXEC_NETWORK` | `0` | let sandboxed commands reach the network. **Off by default** — an allowed command should not be able to send your data out |
@@ -93,6 +94,26 @@ with writes confined to the working directory, the Joy home and temp, and
 machine without a sandbox refuses to run anything. The hard deny list
 (`sudo`, `mkfs`, download-piped-into-shell, …) is not configurable. See
 [SECURITY.md](../SECURITY.md).
+
+## Delegating work to a subagent
+
+`JOY_DELEGATE=1` adds `delegate_task`, which hands one self-contained job to a
+subagent and brings back only the conclusion — useful when the work would
+otherwise fill the conversation with searching and reading, or when you want it
+done in a fresh context. What the subagent gets:
+
+* an empty history and a short system prompt (soul + "do this one thing"),
+  with no retrieval, no skills and no summary;
+* the parent's tool table **minus `delegate_task`** — delegating again is not
+  refused, it simply is not an option;
+* its own iteration limit (default 5, hard cap 10) and at most 2048 output
+  tokens;
+* no interactive approval path and no way to ask you a question.
+
+The conclusion comes back with the tools it used, and failed calls are marked,
+so a parent can tell whether the answer rests on something that worked. The
+subagent's conversation is not stored. It runs in the same process against the
+same state, so nothing is isolated beyond its context.
 
 ## Local inference (Ollama)
 
