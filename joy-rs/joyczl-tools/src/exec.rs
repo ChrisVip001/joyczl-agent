@@ -189,6 +189,10 @@ fn bubblewrap_runs() -> bool {
             "/dev",
             "--proc",
             "/proc",
+            "--bind",
+            "/tmp",
+            "/tmp",
+            "--die-with-parent",
             "--",
             "/bin/true",
         ])
