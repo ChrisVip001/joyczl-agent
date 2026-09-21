@@ -1116,6 +1116,7 @@
           "type": "object"
         },
         {
+          "description": "装了 `Box`：它带的 `TurnMeta` 比别的变体大一个量级，而通知是按事件 构造、在通道里搬运的。ts-rs 对 `Box<T>` 透明，TS/Python 生成物不受影响。",
           "properties": {
             "iterations": {
               "format": "int32",
@@ -1686,6 +1687,20 @@
             }
           ],
           "description": "graph 没介入时为 null。"
+        },
+        "guardHits": {
+          "default": 0,
+          "description": "循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "guardNote": {
+          "default": null,
+          "description": "命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "interrupted": {
           "default": false,

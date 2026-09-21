@@ -77,7 +77,7 @@ clone settings
 | 8 | 补发 `ToolCompleted` 通知（每个工具一条） | `ToolStarted` 在 loop 期间由 observer 发（⑨.4），这里补的是结束态 |
 | 9 | `fold_tool_activity(reply, tool_calls)` | 见 9.3 |
 | 10 | `quick = graph.route == Quick` | |
-| 11 | 组装 `TurnMeta{gate, graph, iterations, latency_ms, tools, model（quick 时是小模型）, provider, usage, interrupted}` | 「你是什么模型」不会被自己答错 |
+| 11 | 组装 `TurnMeta{gate, graph, iterations, latency_ms, tools, model（quick 时是小模型）, provider, usage, interrupted, guard_hits, guard_note}` | 「你是什么模型」不会被自己答错；循环护栏的账也记在这儿 |
 | 12 | `meta_json = to_string(&meta)` | |
 | 13 | **trace 与 usage 各写一行** | 观测不是可选项，但写失败只喊 stderr |
 | 14 | `chat.append_exchange(user, reply, session_id, "app-server", meta_json)` | assistant 行带 meta |

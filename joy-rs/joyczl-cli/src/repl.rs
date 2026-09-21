@@ -152,6 +152,14 @@ async fn chat_turn(server: &Server, session_id: &str, message: &str) {
                 if completed.meta.interrupted {
                     println!("（这轮被打断了。）");
                 }
+                // 护栏命中不是正常现象：用户该知道这一轮有一部分预算花在
+                // 原地打转上了（也解释了为什么耗时更长）。
+                if completed.meta.guard_hits > 0 {
+                    println!(
+                        "…循环护栏命中 {} 次（模型在重复调用）",
+                        completed.meta.guard_hits
+                    );
+                }
                 break;
             }
             // 图的节点事件对终端太啰嗦；triage 开着时 meta 里能看到路线。

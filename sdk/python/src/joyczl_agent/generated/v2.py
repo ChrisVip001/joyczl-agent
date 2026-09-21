@@ -526,6 +526,18 @@ class TurnMeta(BaseModel):
     graph: Annotated[GraphInfo | None, Field(description='graph 没介入时为 null。')] = (
         None
     )
+    guardHits: Annotated[
+        int | None,
+        Field(
+            description='循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。'
+        ),
+    ] = 0
+    guardNote: Annotated[
+        str | None,
+        Field(
+            description='命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。'
+        ),
+    ] = None
     interrupted: Annotated[
         bool | None,
         Field(

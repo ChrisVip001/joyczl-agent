@@ -32,4 +32,13 @@ export type TurnMeta = {
    * 旧库里的 meta 没有这个字段 —— `#[serde(default)]` 让它们照常解析。
    */
   interrupted: boolean;
+  /**
+   * 循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。
+   * 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。
+   */
+  guardHits: number;
+  /**
+   * 命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。
+   */
+  guardNote: string | null;
 };

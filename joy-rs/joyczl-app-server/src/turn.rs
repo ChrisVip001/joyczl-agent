@@ -190,6 +190,8 @@ pub async fn run_turn(
             output_tokens: narrow(result.usage.output_tokens),
         }),
         interrupted: result.interrupted,
+        guard_hits: result.guard.hits,
+        guard_note: result.guard.note.clone(),
     };
 
     let meta_json = serde_json::to_string(&meta).ok();
@@ -266,7 +268,7 @@ pub async fn run_turn(
         eprintln!("(joy) MEMORY.md 镜像失败（记忆本身不受影响）：{e}");
     }
 
-    sink.notification(ServerNotification::TurnCompleted(
+    sink.notification(ServerNotification::TurnCompleted(Box::new(
         TurnCompletedNotification {
             turn_id: turn_id.clone(),
             reply: result.reply.clone(),
@@ -277,7 +279,7 @@ pub async fn run_turn(
             }),
             meta,
         },
-    ));
+    )));
 
     // 全部通知发完，才轮到应答。
     sink.response(JsonRpcMessage::Response(JsonRpcResponse {
@@ -649,6 +651,7 @@ async fn graph_route(
                         usage: Usage::default(),
                         messages: Vec::new(),
                         interrupted: false,
+                        guard: joyczl_loop::guard::GuardReport::default(),
                     },
                     gate: None,
                 },

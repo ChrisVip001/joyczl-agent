@@ -1,0 +1,6 @@
+# 循环护栏：模型卡在重复/交替的工具调用里时要早停，而不是烧完迭代预算。
+# 断言用 last_prompt_contains 而不是 tool_output_contains —— 护栏只改「喂回
+# 模型的文本」（加提醒、把重复的长结果换引用桩），tool_calls 与 trace 里留的
+# 仍是真结果。所以「模型确实看到了提醒」才是这条机制该被钉的地方。
+{"id":"guard-stops-identical-repeats","description":"同一调用重复到第 3 次：模型在下一轮看到护栏提醒","gate":{"retrieve":false,"query":"","reason":"tool"},"responses":[{"tool_use":{"name":"save_note","args":{"subject":"alex","content":"喜欢早会"}}},{"tool_use":{"name":"save_note","args":{"subject":"alex","content":"喜欢早会"}}},{"tool_use":{"name":"save_note","args":{"subject":"alex","content":"喜欢早会"}}},{"text":"我好像卡住了，先停下来。"}],"expect":{"tools_used":["save_note","save_note","save_note"],"last_prompt_contains":["[guard]"],"reply_contains":["先停下来"]}}
+{"id":"guard-catches-alternating-cycle","description":"A,B,A,B 交替重复：连续计数会被重置，必须靠周期判据抓到","gate":{"retrieve":false,"query":"","reason":"tool"},"responses":[{"tool_use":{"name":"list_memory","args":{"limit":1}}},{"tool_use":{"name":"current_time","args":{}}},{"tool_use":{"name":"list_memory","args":{"limit":1}}},{"tool_use":{"name":"current_time","args":{}}},{"text":"我在重复同一组调用，停下来汇报。"}],"expect":{"tools_used":["list_memory","current_time","list_memory","current_time"],"last_prompt_contains":["[guard]"],"reply_contains":["停下来汇报"]}}

@@ -29,6 +29,14 @@ use joyczl_provider::{
 use joyczl_tools::{ToolCtx, ToolRegistry};
 use serde_json::Value;
 
+pub mod guard;
+
+use guard::{GuardReport, StallGuard};
+
+#[cfg(test)]
+#[path = "guard_tests.rs"]
+mod guard_tests;
+
 /// 一轮 turn 的打断开关。`turn/interrupt` 在别的任务里把它拨下去，
 /// loop 在下一个安全点（模型调用、工具执行的途中以 select 竞速）收兵。
 ///
@@ -123,6 +131,8 @@ pub struct LoopResult {
     /// 被 `turn/interrupt` 打断时为 true：reply 里是打断前已经吐出的文本，
     /// 不保证完整。
     pub interrupted: bool,
+    /// 这一轮里循环护栏的账（命中几次、最后说了什么）。
+    pub guard: GuardReport,
 }
 
 pub struct Turn<'a> {
@@ -153,6 +163,8 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
 
     let mut tool_calls: Vec<ToolOutcome> = Vec::new();
     let mut usage = Usage::default();
+    // 本轮内的循环检测（跨轮的重复由 app-server 的 fold_tool_activity 负责）。
+    let mut guard = StallGuard::new();
 
     // 流式期间模型吐出的全部文本。被打断时，这就是 reply 里能救回来的部分 ——
     // 断在句中间的半句话，也比一句"没了"诚实。
@@ -180,6 +192,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 iteration - 1,
                 usage,
                 messages,
+                GuardReport::close(&guard),
             ));
         }
 
@@ -240,6 +253,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                             iteration - 1,
                             usage,
                             messages,
+                            GuardReport::close(&guard),
                         ));
                     }
                     response = fut => response?,
@@ -275,6 +289,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 usage,
                 messages,
                 interrupted: false,
+                guard: GuardReport::close(&guard),
             });
         }
 
@@ -300,6 +315,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                         iteration - 1,
                         usage,
                         messages,
+                        GuardReport::close(&guard),
                     ));
                 }
                 Some(cancel) => {
@@ -312,6 +328,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                                 iteration - 1,
                                 usage,
                                 messages,
+                                GuardReport::close(&guard),
                             ));
                         }
                         output = fut => output,
@@ -337,9 +354,13 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 output: output.clone(),
                 duration_ms,
             });
+            // 护栏过一眼：命中就换桩 + 追加提醒。**只改喂回模型的文本** ——
+            // tool_calls 与 Tool 事件里留的都是真结果。
+            let verdict = guard.observe(name, input, &output);
+            let for_model = guard::for_model(&output, name, input, &verdict);
             results.push(ContentBlock::ToolResult {
                 tool_use_id: id.to_string(),
-                content: output,
+                content: for_model,
             });
         }
         messages.push(Message {
@@ -356,6 +377,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         usage,
         messages,
         interrupted: false,
+        guard: GuardReport::close(&guard),
     })
 }
 
@@ -367,6 +389,7 @@ fn interrupted_result(
     iterations: i32,
     usage: Usage,
     messages: Vec<Message>,
+    guard: GuardReport,
 ) -> LoopResult {
     let partial = streamed.lock().expect("streamed 锁不该中毒").clone();
     let reply = if partial.trim().is_empty() {
@@ -381,6 +404,7 @@ fn interrupted_result(
         usage,
         messages,
         interrupted: true,
+        guard,
     }
 }
 

@@ -137,6 +137,13 @@ pub struct TurnMeta {
     /// 旧库里的 meta 没有这个字段 —— `#[serde(default)]` 让它们照常解析。
     #[serde(default)]
     pub interrupted: bool,
+    /// 循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。
+    /// 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。
+    #[serde(default)]
+    pub guard_hits: i32,
+    /// 命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。
+    #[serde(default)]
+    pub guard_note: Option<String>,
 }
 
 // ===========================================================================
@@ -790,6 +797,8 @@ pub enum ServerNotification {
     GraphNodeStarted(GraphNodeStartedNotification),
     GraphNodeEnded(GraphNodeEndedNotification),
     GraphEnded(GraphEndedNotification),
-    TurnCompleted(TurnCompletedNotification),
+    /// 装了 `Box`：它带的 `TurnMeta` 比别的变体大一个量级，而通知是按事件
+    /// 构造、在通道里搬运的。ts-rs 对 `Box<T>` 透明，TS/Python 生成物不受影响。
+    TurnCompleted(Box<TurnCompletedNotification>),
     Error(ErrorNotification),
 }

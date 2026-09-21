@@ -420,3 +420,44 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
     assert_eq!(result.iterations, 1, "第二轮模型调用没有发生");
     assert_eq!(result.reply, "（这轮被打断了。）");
 }
+
+/// 循环护栏接进了 loop：同一调用重复到第 3 次时，喂回模型的文本会多一段提醒，
+/// 但 `tool_calls` 里记的仍是**真结果**（trace 与通知该看到真的）。
+#[tokio::test]
+async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
+    let args = json!({"subject": "alex", "content": "喜欢早会"});
+    let mock = Mock::new(vec![
+        Mock::tool_use("tu_1", "save_note", args.clone()),
+        Mock::tool_use("tu_2", "save_note", args.clone()),
+        Mock::tool_use("tu_3", "save_note", args.clone()),
+        Mock::text("好了。"),
+    ]);
+    let tools = handlers::build_default();
+
+    let result = turn(&mock, &tools, ctx().await, None).await;
+
+    assert!(result.guard.hits >= 1, "第 3 次相同调用必须触发护栏");
+    assert!(result.guard.note.is_some(), "命中的说明要留下来");
+
+    // 喂回模型的那条 ToolResult 里有提醒……
+    let warned = result.messages.iter().any(|message| {
+        message.content.iter().any(|block| {
+            matches!(block, joyczl_provider::ContentBlock::ToolResult { content, .. }
+                     if content.contains("[guard]"))
+        })
+    });
+    assert!(warned, "提醒必须进到模型看得见的地方");
+
+    // ……而记录下来的工具输出还是干净的。
+    assert!(
+        result
+            .tool_calls
+            .iter()
+            .all(|call| !call.output.contains("[guard]")),
+        "tool_calls 里该是真结果"
+    );
+    assert!(
+        result.tool_calls.iter().all(|call| call.ok()),
+        "这三次调用本身都是成功的"
+    );
+}
