@@ -34,7 +34,7 @@
 | ③ | [配置层](03-config.md) | `Settings` 的只读一次模型、`SettingsPatch` 的三级叠加、`config/write` 的落盘顺序 |
 | ④ | [provider 层](04-provider.md) | 12 家厂商表、`resolve` 的优先级链、两种 wire format 的纯函数翻译、SSE 解析、embedding |
 | ⑤ | [agent 循环](05-loop.md) | `Turn` 的全部输入、双护栏、流式与非流式如何归一、打断的三个安全点 |
-| ⑥ | [工具层](06-tools.md) | `Tool`/`ToolRegistry` 契约、9 个内置工具逐个讲、`run_command` 的三道闸门与沙箱 |
+| ⑥ | [工具层](06-tools.md) | `Tool`/`ToolRegistry` 契约、11 个内置工具逐个讲、`run_command` 的三道闸门与沙箱 |
 | ⑦ | [记忆层](07-memory.md) | 检索门、consolidation、上下文压缩的水位线、RRF 混合检索、技能渐进披露、技能安装 |
 | ⑧ | [图引擎](08-graph.md) | 波次执行算法、写冲突检测、路由与 `on_error`、triage 前门、gather 晨报 |
 | ⑨ | [服务端](09-app-server.md) | `Server` 装配、`run_turn` 17 步流水线、dispatch 的 13 个方法、stdio 并发模型、trace |
@@ -49,7 +49,7 @@
 1. **启动**（⑩）：`main` 看到没有子命令 → 读环境变量得到 `Settings`（③）→
    `joyczl_app_server::open` 把 `<home>/settings.json` 里的补丁叠上去 →
    `state.db` 建/开、WAL、迁移跑到最新（②）→ `resolve()` 拿 provider 客户端（④）→
-   `builtin_tools()` 组装工具表（内置 9 个 + 可能有的 exec + MCP）（⑥）→ 进 REPL。
+   `builtin_tools()` 组装工具表（内置 11 个 + 可能有的 exec + MCP）（⑥）→ 进 REPL。
 2. **你敲的这句话**进 `chat_turn`：起一个 `EventSink` 通道，`run_turn` 跑在另一个
    任务里，REPL 同时开始消费通知（⑩）。
 3. **`run_turn` 第一步**（⑨）：登记取消令牌（`turns[turn_id] = Interrupt`）并挂上

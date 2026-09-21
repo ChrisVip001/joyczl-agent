@@ -46,7 +46,7 @@ Err(e) → format!("Error: 执行 {name} 失败：{e}")
 
 ## 6.2 注册顺序：显式，不用宏也不用扫目录
 
-`handlers.rs（build_default）` 按固定顺序 register 9 个工具：
+`handlers.rs（build_default）` 按固定顺序 register **11 个**工具：
 
 ```
 save_note → forget_note → search_memory → list_memory → current_time

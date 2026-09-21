@@ -53,7 +53,7 @@ clone settings
 `builtin_tools` 的三段：
 
 ```
-1. handlers::build_default()                           ← 9 个内置工具（⑥）
+1. handlers::build_default()                           ← 11 个内置工具（⑥）
 2. if settings.exec_enabled { register(run_command) }   ← 默认关；开了才注册（⑥）
 3. McpClient::connect(home/mcp.json) → warnings 打 stderr、每个工具注册进来
 ```

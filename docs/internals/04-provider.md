@@ -184,7 +184,7 @@ fn authed(&self, b: RequestBuilder) -> RequestBuilder {
   （追加参数分片）、`message_delta` 取 stop_reason 与 output token、
   `error` 转 `ProviderError::Api`，其余忽略。
 
-## 4.7 `sse.rs`：40 行的通用流解析器
+## 4.7 `sse.rs`：70 行的通用流解析器
 
 `data_lines<S: Stream<Item = Result<Bytes, reqwest::Error>>>` 用
 `futures_util::stream::unfold` 维护 `(stream, buffer, eof)` 三件状态：

@@ -1,7 +1,7 @@
 # ⑧ 图引擎：`joyczl-graph`
 
 这一层解决一件事：**把「几条并行的事 + 一次汇合 + 一个判断」写成数据，而不是写成
-一堆 if。** 它很像 LangGraph，但只有 400 行，且节点是 Rust 闭包而不是任意 Python。
+一堆 if。** 它很像 LangGraph，但整个引擎加拓扑描述不到 800 行，且节点是 Rust 闭包而不是任意 Python。
 
 目录：`joy-rs/joyczl-graph/src/`
 （`lib.rs`（引擎）、`nodes.rs`（常用节点形状）、`workflows/`（triage、gather））。
