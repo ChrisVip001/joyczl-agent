@@ -146,6 +146,12 @@ fn matches_rule(rule: &str, command: &str) -> bool {
 }
 
 /// 沙箱现在能不能用。
+///
+/// 「能用」是**测出来的**，不是查出来的：文件在那儿不等于它能跑起来。
+/// 这一条在 Linux 上尤其要紧 —— Ubuntu 24.04 默认用 AppArmor 限制了非特权
+/// 用户命名空间，`bwrap` 装在那儿也会以 "setting up uid map: Permission
+/// denied" 失败。要是只看「bwrap 在不在 PATH 里」就放行，命令会在沙箱**没
+/// 生效**的情况下跑起来，这正是本模块最不该发生的事。
 pub fn sandbox_available() -> bool {
     sandbox_backend().is_some()
 }
@@ -159,13 +165,39 @@ enum Sandbox {
 }
 
 fn sandbox_backend() -> Option<Sandbox> {
-    if Path::new("/usr/bin/sandbox-exec").exists() {
-        return Some(Sandbox::Seatbelt);
-    }
-    if which("bwrap") {
-        return Some(Sandbox::Bubblewrap);
-    }
-    None
+    // 探测一次就够：结果缓存在进程生命周期里，省掉每条命令一次的 fork。
+    static BACKEND: std::sync::OnceLock<Option<Sandbox>> = std::sync::OnceLock::new();
+    *BACKEND.get_or_init(|| {
+        if Path::new("/usr/bin/sandbox-exec").exists() {
+            return Some(Sandbox::Seatbelt);
+        }
+        if which("bwrap") && bubblewrap_runs() {
+            return Some(Sandbox::Bubblewrap);
+        }
+        None
+    })
+}
+
+/// 真的起一次 bubblewrap（`/bin/true`），看它能不能建起沙箱。
+fn bubblewrap_runs() -> bool {
+    std::process::Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--",
+            "/bin/true",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn which(program: &str) -> bool {
@@ -229,7 +261,8 @@ fn sandbox_command(
             for root in &roots {
                 cmd.arg("--bind").arg(root).arg(root);
             }
-            cmd.arg("/bin/sh").arg("-c").arg(command);
+            // `--` 之后才是要跑的：与探测那一次保持同一个形状。
+            cmd.arg("--").arg("/bin/sh").arg("-c").arg(command);
             cmd
         }
     }
