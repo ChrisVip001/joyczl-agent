@@ -86,10 +86,13 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 |---|---|
 | P0 ✅ | 协议层 + 生成管线（63 个类型） |
 | P1 ✅ | state（SQLite+FTS5）、app-server（JSON-RPC over stdio）、`joy` CLI |
-| P2 ✅ | config / provider（11 家）/ tools / loop / memory（门 + 提炼） |
+| P2 ✅ | config / provider（12 家，含 Ollama）/ tools / loop / memory（门 + 提炼） |
 | P2b ✅ | provider 流式、MCP、图 + triage 前门 |
 | P3 ✅ | 驾驶舱，Telegram / Discord / 微信 / 飞书网关（后三者未连过真平台） |
 | P4 ✅ | 终端 REPL、turn/interrupt、config/write + model/list、完整工具集、Skills、trace/usage、gather、MCP OAuth、evals + gate + judge |
+| P5 ✅ | 本地推理（Ollama，不需要 key）、`joy mcp serve`（把记忆暴露成 MCP 服务器）、Homebrew formula + Dockerfile |
+| P6 ✅ | `JOY_EXEC` 三道闸门的沙箱执行（硬拒名单 + 放行表 + seatbelt/bwrap）、上下文压缩（滚动摘要）、声明式定时任务（`joy schedule`） |
+| P7 ✅ | 混合检索（`JOY_EMBEDDINGS`，RRF）、临时陈述过滤、技能更新（`joy skill update`） |
 | 下一步 | 分发：PyPI wheel + npm shim，均未发布 |
 
 ## 命名

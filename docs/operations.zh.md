@@ -73,6 +73,22 @@ async with await JoyClient.connect() as client:   # 拉起 joy app-server 子进
 环境变量由嵌入方进程决定（子进程继承）；`JOY_BIN` 可指定二进制。
 打包：`just build-python-bin` 产出分平台 wheel。
 
+## 打包
+
+```bash
+docker build -t joy .
+docker run --rm -p 7777:7777 -v joy-state:/home/joy/.joy \
+  -e ANTHROPIC_API_KEY=… joy                 # 驾驶舱
+docker run --rm -it -v joy-state:/home/joy/.joy \
+  -e ANTHROPIC_API_KEY=… joy app-server      # stdio 上的协议
+```
+
+全部状态都在 `JOY_HOME` 下（镜像里是 `/home/joy/.joy`），一个 volume 就能带着走。
+镜像里装了 `bubblewrap`——Linux 沙箱后端要的就是它，没有它 `run_command`
+会拒绝执行任何命令（这是设计，不是故障）。Homebrew formula 模板在
+`packaging/homebrew/joy.rb`（用 `cargo install` 从源码构建；发布 tarball 的
+sha256 自己填）。
+
 ## 定时任务
 
 `joy schedule` 是常驻进程，按五字段 cron（`*`、`*/步长`、`a-b`、`a,b`）触发

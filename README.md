@@ -92,10 +92,13 @@ Tool failures return to the model as text — the loop never crashes on one.
 |---|---|
 | P0 ✅ | protocol layer + generation pipeline (63 types) |
 | P1 ✅ | state (SQLite+FTS5), app-server (JSON-RPC over stdio), `joy` CLI |
-| P2 ✅ | config / provider (11) / tools / loop / memory (gate + consolidation) |
+| P2 ✅ | config / provider (12, incl. Ollama) / tools / loop / memory (gate + consolidation) |
 | P2b ✅ | provider streaming, MCP, graph + triage front door |
 | P3 ✅ | dashboard, Telegram / Discord / WeChat / Lark gateways (the latter three never connected to real platforms) |
 | P4 ✅ | terminal REPL, turn/interrupt, config/write + model/list, full tool set, Skills, trace/usage, gather, MCP OAuth, evals + gate + judge |
+| P5 ✅ | local inference (Ollama, no key), `joy mcp serve` (memory as an MCP server), Homebrew formula + Dockerfile |
+| P6 ✅ | sandboxed execution behind `JOY_EXEC` (deny list + allowlist + seatbelt/bwrap), context compaction (rolling summaries), declarative schedules (`joy schedule`) |
+| P7 ✅ | hybrid retrieval (`JOY_EMBEDDINGS`, RRF), temporary-statement filter, skill updates (`joy skill update`) |
 | Next | distribution: PyPI wheel + npm shim; both unpublished |
 
 ## Naming

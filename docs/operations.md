@@ -79,6 +79,22 @@ Environment variables are decided by the embedding process (the subprocess
 inherits them); `JOY_BIN` can point at the binary. Packaging:
 `just build-python-bin` produces per-platform wheels.
 
+## Packaging
+
+```bash
+docker build -t joy .
+docker run --rm -p 7777:7777 -v joy-state:/home/joy/.joy \
+  -e ANTHROPIC_API_KEY=… joy                 # dashboard
+docker run --rm -it -v joy-state:/home/joy/.joy \
+  -e ANTHROPIC_API_KEY=… joy app-server      # protocol on stdio
+```
+
+All state lives under `JOY_HOME` (`/home/joy/.joy` in the image), so one volume
+carries it. The image installs `bubblewrap`, which is what the Linux sandbox
+backend needs — without it `run_command` refuses to execute anything, by
+design. A Homebrew formula template lives in `packaging/homebrew/joy.rb`
+(source build via `cargo install`; fill in the release tarball's sha256).
+
 ## Scheduled jobs
 
 `joy schedule` is a resident process that fires declarative jobs on a five-field

@@ -1,0 +1,8 @@
+# 构建上下文里不要带这些东西：镜像用不着，而且会让 build 慢得离谱。
+joy-rs/target/
+joy-ts/node_modules/
+joy-ts/**/dist/
+.joy/
+.git/
+**/*.db
+**/__pycache__/
