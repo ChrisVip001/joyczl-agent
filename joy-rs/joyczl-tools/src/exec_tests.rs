@@ -39,16 +39,30 @@ fn an_empty_allowlist_denies_everything() {
     assert!(error.contains("JOY_EXEC_ALLOW"), "得说清怎么放开：{error}");
 }
 
+/// 只看**放行表**这一道闸门：匹配上就是 Ok，没匹配上要把拒因交出来。
+///
+/// 沙箱那一道闸门跟规则匹配无关，而且它在这台机器上有没有是环境决定的 ——
+/// 测试得把两件事分开，否则「CI 上没有沙箱」会被误读成「规则写错了」。
+fn allowlist_verdict(command: &str, rules: &[&str]) -> Result<(), String> {
+    match vet(command, &policy(rules)) {
+        Ok(()) => Ok(()),
+        // 被放行表挡下的：这就是要观察的结果。
+        Err(why) if why.contains("没有匹配的放行规则") => Err(why),
+        // 被后面那道闸门（沙箱）挡下的 —— 说明规则这一关过了。
+        Err(_) => Ok(()),
+    }
+}
+
 #[test]
 fn rules_match_exactly_or_by_trailing_star() {
     // 整串相等。
-    assert!(vet("git status", &policy(&["git status"])).is_ok());
-    assert!(vet("git status --short", &policy(&["git status"])).is_err());
+    assert!(allowlist_verdict("git status", &["git status"]).is_ok());
+    assert!(allowlist_verdict("git status --short", &["git status"]).is_err());
     // 末尾 * 是前缀匹配。
-    assert!(vet("cargo test --workspace", &policy(&["cargo test*"])).is_ok());
-    assert!(vet("cargo build", &policy(&["cargo test*"])).is_err());
+    assert!(allowlist_verdict("cargo test --workspace", &["cargo test*"]).is_ok());
+    assert!(allowlist_verdict("cargo build", &["cargo test*"]).is_err());
     // 不匹配时的拒因要带上现有规则，模型才能解释。
-    let error = vet("rm -rf build", &policy(&["cargo test*"])).expect_err("不匹配");
+    let error = allowlist_verdict("rm -rf build", &["cargo test*"]).expect_err("不匹配");
     assert!(error.contains("cargo test*"), "{error}");
 }
 
