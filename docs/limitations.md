@@ -132,8 +132,10 @@ means "we would like this, nobody has built it".
   and are skipped if the process was not running at that minute. Missed runs
   are not backfilled.
   → `joy-rs/joyczl-cli/src/schedule.rs` (`due_now`, `run`)
-* **Gap** — The Homebrew formula is a template: the release tarball's `sha256`
-  still has to be filled in. No packages are published.
+* **Gap** — The Homebrew formula is complete for `v0.5.0` (real `sha256`, checked
+  against the tag archive) but it lives in the repo, not in a tap: today
+  `brew install ./packaging/homebrew/joy.rb` needs a checkout, and publishing a
+  tap is a separate decision. The hash must be refreshed on every release.
   → `packaging/homebrew/joy.rb`
 
 ## Quality system

@@ -113,8 +113,9 @@
 * **刻意** —— 定时任务按分钟粒度触发、一次一条；那一分钟进程没在跑就跳过。
   漏掉的执行不会补跑。
   → `joy-rs/joyczl-cli/src/schedule.rs`（`due_now`、`run`）
-* **未做** —— Homebrew formula 是模板：发布 tarball 的 `sha256` 还要填。没有发布
-  任何包。
+* **未做** —— Homebrew formula 对 `v0.5.0` 已经完整（真实 `sha256`，对着 tag 归档
+  核过），但它住在仓库里、不在 tap 里：今天 `brew install ./packaging/homebrew/joy.rb`
+  得先有 checkout，而发布 tap 是另一个决定。每次发版都要重算哈希。
   → `packaging/homebrew/joy.rb`
 
 ## 质量体系
