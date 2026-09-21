@@ -26,6 +26,12 @@ pub struct Skill {
     pub schedule: Option<String>,
     /// 可选版本号（`version: 1.2.0`）：`joy skill update` 靠它判断要不要换。
     pub version: Option<String>,
+    /// `allow-model-invocation: false` —— 作者声明「别让模型自己想起来用我」。
+    /// 这种技能只走**显式引用**（消息里写 `$技能名`）。默认 true。
+    pub allow_model_invocation: bool,
+    /// `dependencies: a, b` —— 兑现这个技能还需要哪些技能在场。
+    /// 缺了依赖的技能不参与隐式触发（它的正文多半在假设别人已经铺好路）。
+    pub dependencies: Vec<String>,
 }
 
 /// 解析 SKILL.md 的文本（loader 与 create_skill 工具共用同一套校验）。
@@ -46,6 +52,8 @@ pub fn parse_skill_text(text: &str) -> Option<Skill> {
     let mut description = None;
     let mut schedule = None;
     let mut version = None;
+    let mut allow_model_invocation = true;
+    let mut dependencies: Vec<String> = Vec::new();
     for line in front.lines() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
@@ -57,6 +65,19 @@ pub fn parse_skill_text(text: &str) -> Option<Skill> {
             // 空值等于没写 —— 一条 `schedule:` 后面什么都没有，不是任务。
             "schedule" if !value.is_empty() => schedule = Some(value.to_string()),
             "version" if !value.is_empty() => version = Some(value.to_string()),
+            // 两种拼法都认：写成下划线却静默失效，是那种要读源码才查得清的坑。
+            "allow-model-invocation" | "allow_model_invocation" => {
+                allow_model_invocation =
+                    !matches!(value.to_lowercase().as_str(), "false" | "no" | "0");
+            }
+            "dependencies" => {
+                dependencies = value
+                    .split([',', ' '])
+                    .map(str::trim)
+                    .filter(|d| !d.is_empty())
+                    .map(str::to_string)
+                    .collect();
+            }
             _ => {}
         }
     }
@@ -67,6 +88,8 @@ pub fn parse_skill_text(text: &str) -> Option<Skill> {
         path: PathBuf::new(),
         schedule,
         version,
+        allow_model_invocation,
+        dependencies,
     })
 }
 
@@ -171,14 +194,20 @@ impl SkillLoader {
 
     /// 透明触发：消息与 name+description 的关键词重合数 ≥ 2 才算命中，
     /// 取重合最多的前 `max_skills` 个。目录变了就先重扫。
+    ///
+    /// 两类技能不参与隐式触发：作者声明 `allow-model-invocation: false` 的，
+    /// 以及依赖缺失的（见 `dangling_dependencies`）。
     pub fn match_message(&mut self, message: &str, max_skills: usize) -> Vec<&Skill> {
         if self.scan_sig() != self.sig {
             self.refresh();
         }
+        let loaded: Vec<String> = self.skills.iter().map(|s| s.name.clone()).collect();
         let msg_words: std::collections::HashSet<String> = tokens(message).into_iter().collect();
         let mut scored: Vec<(usize, &Skill)> = self
             .skills
             .iter()
+            .filter(|skill| skill.allow_model_invocation)
+            .filter(|skill| missing_dependency(skill, &loaded).is_none())
             .map(|skill| {
                 let mut skill_words = tokens(&skill.name);
                 skill_words.extend(tokens(&skill.description));
@@ -198,15 +227,95 @@ impl SkillLoader {
             .collect()
     }
 
-    /// 拼进 system prompt 的技能段落。空串 = 没匹配上，调用方就不加标题。
-    pub fn matching_skills(&mut self, message: &str) -> String {
-        let matched = self.match_message(message, 2);
-        matched
+    /// 技能段落的构造结果。
+    pub fn hits(&mut self, message: &str) -> SkillHits {
+        if self.scan_sig() != self.sig {
+            self.refresh();
+        }
+
+        // 显式引用：`$名字` 强制载入那个技能的正文，不靠关键词重合 ——
+        // 作者把 `allow-model-invocation` 关掉之后，这是**唯一**的入口。
+        // 先只收**名字**：`match_message` 要可变借用，持有 &Skill 会和它打架。
+        let mut chosen: Vec<String> = Vec::new();
+        let mut hints: Vec<String> = Vec::new();
+        let mut stripped = String::new();
+        for word in message.split_whitespace() {
+            let Some(raw) = word.strip_prefix('$') else {
+                stripped.push_str(word);
+                stripped.push(' ');
+                continue;
+            };
+            let name = raw.trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+            if self.skills.iter().any(|skill| skill.name == name) {
+                chosen.push(name.to_string());
+            } else {
+                // 不报错（用户可能只是打了个 $），但要让模型知道这件事，
+                // 它才能回一句「没有叫 x 的技能」而不是装作没看见。
+                hints.push(format!("用户引用了 ${name}，但没有叫 '{name}' 的技能。"));
+            }
+        }
+        let stripped = stripped.trim().to_string();
+
+        for skill in self.match_message(&stripped, 2) {
+            if !chosen.iter().any(|name| name == &skill.name) {
+                chosen.push(skill.name.clone());
+            }
+        }
+
+        // 顺序即优先级：显式引用的排在前面。
+        let section = chosen
             .iter()
+            .filter_map(|name| self.skills.iter().find(|skill| &skill.name == name))
             .map(|s| format!("### {}\n{}", s.name, s.body))
             .collect::<Vec<_>>()
-            .join("\n\n")
+            .join("\n\n");
+
+        SkillHits {
+            section,
+            message: if stripped.is_empty() {
+                // 整条消息就是一个引用（`$weekly-review`）：剥完只剩空的，
+                // 那就把引用本身还给模型，别让它面对一条空消息。
+                message.to_string()
+            } else {
+                stripped
+            },
+            hints,
+        }
     }
+
+    /// 依赖指向了不存在（或没装）的技能：返回缺的那个名字。
+    pub fn dangling_dependencies(&mut self) -> Vec<(String, String)> {
+        if self.scan_sig() != self.sig {
+            self.refresh();
+        }
+        let loaded: Vec<String> = self.skills.iter().map(|s| s.name.clone()).collect();
+        self.skills
+            .iter()
+            .filter_map(|skill| {
+                missing_dependency(skill, &loaded).map(|missing| (skill.name.clone(), missing))
+            })
+            .collect()
+    }
+}
+
+/// 技能段落的构造结果。
+#[derive(Debug, Clone, Default)]
+pub struct SkillHits {
+    /// 拼进 system prompt 的段落。空串 = 一个都没命中，调用方就不加标题。
+    pub section: String,
+    /// **剥掉 `$技能名` 之后**的消息（引用是给 loader 看的，模型看正文就够）。
+    pub message: String,
+    /// 显式引用了不存在的技能时的提示，交给模型去回一句。
+    pub hints: Vec<String>,
+}
+
+/// 这个技能的依赖里，哪一个不在场。
+fn missing_dependency(skill: &Skill, loaded: &[String]) -> Option<String> {
+    skill
+        .dependencies
+        .iter()
+        .find(|dep| !loaded.iter().any(|name| name == *dep))
+        .cloned()
 }
 
 /// `joy skill list` 的一行。
@@ -219,6 +328,10 @@ pub struct LoadedSkill {
     pub schedule: Option<String>,
     /// 带上就能被 `joy skill update` 认版本。
     pub version: Option<String>,
+    /// 作者声明「别让模型自动用我」（只走 `$技能名` 显式引用）。
+    pub allow_model_invocation: bool,
+    /// 需要哪些技能在场。
+    pub dependencies: Vec<String>,
 }
 
 /// 全部已装载技能，按名字去重，`home/skills` 的同名技能赢过其它目录
@@ -252,6 +365,8 @@ pub fn loaded_skills(home: &Path) -> Vec<LoadedSkill> {
                     folder,
                     schedule: skill.schedule,
                     version: skill.version,
+                    allow_model_invocation: skill.allow_model_invocation,
+                    dependencies: skill.dependencies,
                 },
             );
         }

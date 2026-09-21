@@ -15,6 +15,54 @@ async fn temp_db(name: &str) -> SqlitePool {
     pool
 }
 
+/// 类别：认得的按原样存，不认得的一律落 `fact`（收敛在写入口）。
+#[tokio::test]
+async fn fact_kinds_are_normalised_at_the_write_entry() {
+    let facts = Facts::new(temp_db("kinds.db").await);
+    facts
+        .add("a", "写歪的类别", "user", "PREFERENCE")
+        .await
+        .unwrap();
+    let rows = facts.recent(10, 0).await.unwrap();
+    assert_eq!(rows[0].kind, "fact", "未知类别落兜底");
+
+    facts
+        .add("b", "正经类别", "user", "feedback")
+        .await
+        .unwrap();
+    let rows = facts.recent(10, 0).await.unwrap();
+    assert!(rows.iter().any(|row| row.kind == "feedback"));
+    // 大小写不敏感（模型可能写成 Feedback）。
+    facts
+        .add("c", "大小写", "user", "  Project ")
+        .await
+        .unwrap();
+    let rows = facts.recent(10, 0).await.unwrap();
+    assert!(rows.iter().any(|row| row.kind == "project"));
+}
+
+/// 提炼失败会**退避**：同一批坏行不该每轮都被重试一遍。
+#[tokio::test]
+async fn failed_consolidation_rows_are_backed_off() {
+    let chat = Chat::new(temp_db("backoff.db").await);
+    chat.append_exchange("m", "r", "default", "cli", None)
+        .await
+        .unwrap();
+    let rows = chat.unconsolidated().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+
+    chat.mark_consolidation_failed(&ids).await.unwrap();
+    assert_eq!(
+        chat.unconsolidated().await.unwrap().len(),
+        0,
+        "退避期间捞不到"
+    );
+
+    // 行还在（失败不丢日志），而且没有被标成已提炼。
+    assert_eq!(chat.session_history("default").await.unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn open_creates_the_schema() {
     let pool = temp_db("schema.db").await;
@@ -36,11 +84,11 @@ async fn facts_search_finds_by_keyword() {
     let pool = temp_db("facts.db").await;
     let facts = Facts::new(pool);
     facts
-        .add("alex", "Alex prefers morning meetings", "user")
+        .add("alex", "Alex prefers morning meetings", "user", "user")
         .await
         .unwrap();
     facts
-        .add("project", "The Acme demo is on Friday", "user")
+        .add("project", "The Acme demo is on Friday", "user", "user")
         .await
         .unwrap();
 
@@ -57,7 +105,7 @@ async fn search_never_errors_on_junk_input() {
     let pool = temp_db("junk.db").await;
     let facts = Facts::new(pool);
     facts
-        .add("alex", "Alex prefers morning meetings", "user")
+        .add("alex", "Alex prefers morning meetings", "user", "user")
         .await
         .unwrap();
 
@@ -73,7 +121,7 @@ async fn deleting_a_fact_keeps_the_index_in_sync() {
     let pool = temp_db("delete.db").await;
     let facts = Facts::new(pool);
     facts
-        .add("alex", "Alex prefers morning meetings", "user")
+        .add("alex", "Alex prefers morning meetings", "user", "user")
         .await
         .unwrap();
     assert_eq!(facts.search("morning", 4).await.unwrap().len(), 1);
@@ -213,7 +261,7 @@ async fn chinese_search_works_character_wise() {
     let pool = temp_db("cjk.db").await;
     let facts = Facts::new(pool);
     facts
-        .add("阿明", "阿明喜欢早上的会议", "user")
+        .add("阿明", "阿明喜欢早上的会议", "user", "user")
         .await
         .unwrap();
 

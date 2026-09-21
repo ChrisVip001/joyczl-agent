@@ -30,6 +30,29 @@ description: Summarize the week and draft the Monday brief
    built-in tools (e.g. create_event), but once exported to another agent
    those tools do not exist.
 
+## Two policy fields
+
+```markdown
+---
+name: weekly-review
+description: summarize the week
+allow-model-invocation: false
+dependencies: changelog, calendar
+---
+```
+
+* `allow-model-invocation: false` — the author says "do not summon me by
+  accident". Such a skill never fires from keyword overlap; it loads when the
+  message names it: `$weekly-review help me with this week`.
+* `dependencies: a, b` — skills that must be present for this one to make
+  sense. A skill with a missing dependency does not fire implicitly, and the
+  startup line names what is missing.
+
+`$name` is the explicit channel: it forces the body into the prompt (no keyword
+overlap needed) and is stripped from the message the model sees. A reference to
+a skill that does not exist is not an error — the model gets a line saying so,
+and can answer honestly.
+
 ## Versioning and `joy skill update`
 
 A skill can carry `version: 1.2.0` in its frontmatter. Point Joy at an index

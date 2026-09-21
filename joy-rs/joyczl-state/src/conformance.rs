@@ -14,7 +14,7 @@ use crate::{EpisodicStore, SemanticStore};
 /// 语义记忆六动作的验收。失败 = 实现违反契约，`Err` 里说明违反了哪条。
 pub async fn exercise_semantic(store: &impl SemanticStore) -> Result<()> {
     // 写入 → 检索命中。
-    let fact = store.add("alex", "喜欢早上的会议", "user").await?;
+    let fact = store.add("alex", "喜欢早上的会议", "user", "user").await?;
     assert_eq!(fact.subject, "alex");
     let hits = store.search("alex", 4).await?;
     assert!(
@@ -39,8 +39,8 @@ pub async fn exercise_semantic(store: &impl SemanticStore) -> Result<()> {
     assert!(!store.delete(fact.id).await?, "删两次第二次必须 false");
 
     // forget_subject：按计数报，删光了再删是 0 —— 不报错。
-    store.add("bob", "a", "user").await?;
-    store.add("bob", "b", "user").await?;
+    store.add("bob", "a", "user", "fact").await?;
+    store.add("bob", "b", "user", "fact").await?;
     assert_eq!(store.forget_subject("bob").await?, 2);
     assert_eq!(store.forget_subject("bob").await?, 0);
 

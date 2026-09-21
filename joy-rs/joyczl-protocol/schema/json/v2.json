@@ -268,6 +268,10 @@
           "format": "int32",
           "type": "integer"
         },
+        "kind": {
+          "description": "这条事实**关于什么**：`user` / `feedback` / `project` / `reference` / `fact`（兜底）。分类不出来的都落在 `fact`。",
+          "type": "string"
+        },
         "source": {
           "description": "`user`（直接告诉它的）或 `consolidation`（从对话里提炼的）。",
           "type": "string"
@@ -279,6 +283,7 @@
       "required": [
         "content",
         "id",
+        "kind",
         "source",
         "subject"
       ],

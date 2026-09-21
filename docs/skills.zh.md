@@ -26,6 +26,26 @@ description: Summarize the week and draft the Monday brief
 3. **只描述做法，不假借工具。** 技能可以引用 Joy 的内置工具（如
    create_event），但 exported 到别的 agent 后那些工具不存在。
 
+## 两个策略字段
+
+```markdown
+---
+name: weekly-review
+description: 汇总这一周
+allow-model-invocation: false
+dependencies: changelog, calendar
+---
+```
+
+* `allow-model-invocation: false` —— 作者声明「别不小心把我叫出来」。这种技能**不
+  会因为关键词重合而被触发**，只有消息里点名才载入：`$weekly-review 帮我看看这周`。
+* `dependencies: a, b` —— 这个技能要成立，还得有哪些技能在场。依赖缺失的技能不
+  参与隐式触发，启动那一行会点名说缺了什么。
+
+`$技能名` 是显式通道：强制把正文放进 prompt（不需要关键词重合），并且会从模型
+看到的消息里被剥掉。引用了不存在的技能不算错误 —— 模型会收到一句提示，从而能
+如实回答。
+
 ## 版本与 `joy skill update`
 
 技能可以在 frontmatter 里带 `version: 1.2.0`。给 Joy 一个索引，它会把更新的

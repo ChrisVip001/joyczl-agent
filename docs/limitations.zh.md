@@ -59,6 +59,11 @@
   调用）附在结论后面。
   → `joy-rs/joyczl-app-server/src/subagent.rs`
 
+* **刻意** —— 记忆类别是固定的五种（`fact` 兜底）；模型自创的分类会落进
+  `fact`，而不是长出一套分类学。检索目前**不按类别过滤** —— 它被存下来、被
+  返回，但还没被用来筛。
+  → `joy-rs/joyczl-state/src/facts.rs`（`KINDS`）
+
 ## 记忆
 
 * **未做** —— 写入时没有去重/合并。`facts` 没有唯一约束、`add` 总是插入，

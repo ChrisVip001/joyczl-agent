@@ -128,7 +128,7 @@ impl MemoryServer {
         let content = require_str(args, "content")?;
         let fact = self
             .facts
-            .add(&subject, &content, "mcp")
+            .add(&subject, &content, "mcp", "fact")
             .await
             .map_err(|e| e.to_string())?;
         Ok(format!(

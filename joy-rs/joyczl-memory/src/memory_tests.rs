@@ -115,7 +115,7 @@ fn extract_json_picks_the_braces() {
 async fn retrieve_context_formats_facts_and_episodes() {
     let (facts, episodes, _chat) = stores().await;
     facts
-        .add("alex", "Alex prefers morning meetings", "user")
+        .add("alex", "Alex prefers morning meetings", "user", "user")
         .await
         .unwrap();
     episodes
@@ -246,11 +246,16 @@ async fn consolidation_failure_keeps_the_log() {
         .await
         .unwrap();
     assert_eq!(written, 0);
+    // 失败之后**退避**：这批行还在（一行都不丢），但已经排到未来，所以
+    // 「马上再试一次」捞不到它们 —— 同一批坏行不该每轮都被重试一遍。
     assert_eq!(
         chat.unconsolidated().await.unwrap().len(),
-        12,
-        "日志一行都不能丢"
+        0,
+        "失败过的行要退避，不能立刻又捞出来"
     );
+    // 行本身留在库里，没有被标记成已提炼。
+    let log = chat.session_history("default").await.unwrap();
+    assert_eq!(log.len(), 6, "日志一行都不能丢");
 
     // 空的 subject / content 也不该写进去。
     let mock = Mock::new(vec![Mock::text(
@@ -288,6 +293,88 @@ fn temporary_statements_are_kept_out_of_long_term_memory() {
     assert!(temporary_marker("The release is on October 15").is_none());
     // 大小写不敏感。
     assert!(temporary_marker("FOR NOW keep it simple").is_some());
+}
+
+// ---- skills：策略元数据与显式引用 --------------------------------------------
+
+#[test]
+fn a_skill_can_opt_out_of_implicit_invocation_and_be_summoned_by_name() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let home = dir.path().to_path_buf();
+    let folder = home.join("skills").join("weekly-review");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("SKILL.md"),
+        "---\nname: weekly-review\ndescription: plan the quarterly roadmap review\nallow-model-invocation: false\n---\n只走显式引用。\n",
+    )
+    .unwrap();
+
+    let mut loader = SkillLoader::new(SkillLoader::dirs_for(&home));
+    // 关键词明明重合（quarterly / roadmap / review）：隐式触发仍然不碰它。
+    let implicit = loader.hits("help me plan the quarterly roadmap review");
+    assert!(
+        implicit.section.is_empty(),
+        "声明了 allow-model-invocation: false 就不该被隐式触发：{}",
+        implicit.section
+    );
+
+    // 显式引用（`$名字`）强制载入正文，并且把引用本身从消息里剥掉。
+    let explicit = loader.hits("$weekly-review 帮我看看这周");
+    assert!(
+        explicit.section.contains("只走显式引用。"),
+        "{}",
+        explicit.section
+    );
+    assert_eq!(explicit.message, "帮我看看这周");
+    assert!(explicit.hints.is_empty());
+}
+
+#[test]
+fn a_reference_to_an_unknown_skill_becomes_a_hint_not_an_error() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let home = dir.path().to_path_buf();
+    std::fs::create_dir_all(home.join("skills")).unwrap();
+
+    let mut loader = SkillLoader::new(SkillLoader::dirs_for(&home));
+    let hits = loader.hits("$nope 帮我做点什么");
+    assert!(hits.section.is_empty());
+    assert_eq!(hits.message, "帮我做点什么");
+    assert_eq!(hits.hints.len(), 1);
+    assert!(
+        hits.hints[0].contains("没有叫 'nope' 的技能"),
+        "{:?}",
+        hits.hints
+    );
+}
+
+#[test]
+fn a_skill_with_a_missing_dependency_does_not_fire_implicitly() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let home = dir.path().to_path_buf();
+    let folder = home.join("skills").join("deploy");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("SKILL.md"),
+        "---\nname: deploy\ndescription: ship the quarterly roadmap release\ndependencies: changelog, nobody\n---\n正文\n",
+    )
+    .unwrap();
+
+    let mut loader = SkillLoader::new(SkillLoader::dirs_for(&home));
+    let hits = loader.hits("ship the quarterly roadmap release");
+    assert!(
+        hits.section.is_empty(),
+        "依赖缺失就不参与隐式触发：{}",
+        hits.section
+    );
+
+    // 缺哪个要说出来（启动时打一行日志用的就是这个）。
+    let dangling = loader.dangling_dependencies();
+    assert_eq!(dangling.len(), 1);
+    assert_eq!(dangling[0].0, "deploy");
+    assert!(
+        dangling[0].1 == "changelog" || dangling[0].1 == "nobody",
+        "报告一个缺失的依赖即可：{dangling:?}"
+    );
 }
 
 // ---- skills ----------------------------------------------------------------
@@ -330,11 +417,13 @@ fn trigger_is_transparent_keyword_overlap() {
     let mut loader = SkillLoader::new(vec![skills]);
 
     // 「weekly」「review」「brief」三个词重合 —— 远超 2 的门槛。
-    let hit = loader.matching_skills("help me do the weekly review of my inbox");
+    let hit = loader
+        .hits("help me do the weekly review of my inbox")
+        .section;
     assert!(hit.contains("Pull last week's episodes"), "{hit}");
 
     // 不相关的消息：一个正文都进不来（渐进披露的全部意义）。
-    let miss = loader.matching_skills("2+2 等于几");
+    let miss = loader.hits("2+2 等于几").section;
     assert!(miss.is_empty(), "不该触发：{miss}");
 }
 
@@ -343,9 +432,7 @@ fn a_skill_created_mid_session_is_live_next_match() {
     let dir = tempfile::tempdir().expect("临时目录");
     let skills = dir.path().join("skills");
     let mut loader = SkillLoader::new(vec![skills.clone()]);
-    assert!(loader
-        .matching_skills("plan the quarterly roadmap")
-        .is_empty());
+    assert!(loader.hits("plan the quarterly roadmap").section.is_empty());
 
     // 会话中途写进来一个技能（create_skill 干的事）。
     std::fs::create_dir_all(skills.join("roadmap-planning")).unwrap();
@@ -355,14 +442,17 @@ fn a_skill_created_mid_session_is_live_next_match() {
     )
     .unwrap();
 
-    let hit = loader.matching_skills("let us plan the quarterly roadmap now");
+    let hit = loader.hits("let us plan the quarterly roadmap now").section;
     assert!(hit.contains("Step one"), "目录变了必须重扫：{hit}");
 }
 
 #[tokio::test]
 async fn memory_mirror_lands_as_markdown() {
     let (facts, episodes, _chat) = stores().await;
-    facts.add("alex", "prefers mornings", "user").await.unwrap();
+    facts
+        .add("alex", "prefers mornings", "user", "user")
+        .await
+        .unwrap();
     episodes
         .add("2026-09-01", "planned the demo")
         .await

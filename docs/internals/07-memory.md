@@ -94,6 +94,17 @@ client.create →
 记忆库等于往档案里塞草稿。这是一张词表而不是分类器——会漏掉不常见的表达，
 但漏掉只是回到「多记一条」，不会误伤真事实（见 `docs/limitations.md`）。
 
+### 类别（`kind`）与提炼退避
+
+`facts.kind` 是「一条事实关于什么」：`user` / `feedback` / `project` /
+`reference`，兜底 `fact`。**收敛在写入口**（`facts::normalise_kind`）：库里只会有
+这五种，读的地方不必各自容错；模型写歪的分类落 `fact`，不丢。
+
+提炼失败现在会**退避**（`chat::mark_consolidation_failed`）：`tries` 加一，
+`next_at = now + min(60 × 2^tries, 3600)` 秒，`unconsolidated()` 只捞到点的行。
+从前失败是「下次再来」—— 同一批坏行每轮都被重试一次，白烧模型调用，看起来还像
+卡住了。成功仍然是 `consolidated = 1`，两套语义并行。
+
 ## 7.3 `compaction.rs`：上下文压缩
 
 **要解决的问题**：滑窗（`JOY_HISTORY_TURNS`）是硬边界，更老的轮次不再进 prompt。
@@ -311,6 +322,21 @@ parse_skill_text 失败 → Err
 - **对方改过 → 默认保留**（"kept yours …"，`--force` 才覆盖）——那可能是人家在
   另一个 agent 里做的修改；
 - 否则 `remove_dir_all` + `copy_dir`（递归复制，跳过 `.DS_Store` 与 `__pycache__`）。
+
+### 两个策略字段与显式引用（`skills.rs`）
+
+`allow-model-invocation: false` 的技能不参与隐式触发（`match_message` 里过滤），
+依赖缺失的技能同样不参与（`missing_dependency`；启动时 `dangling_dependencies`
+打一行日志）。两者之外的唯一入口是 `$技能名`。
+
+`hits()` 是唯一入口，返回三样东西：拼进 system prompt 的段落、**剥掉 `$引用`
+之后的消息**（引用是给 loader 看的，模型看正文就够）、以及引用了不存在的技能时
+给模型的一句提示。剥掉的消息只影响**送给模型的那一份**；落库的历史仍是用户原话
+（那是 `run_turn` 那边存的）。
+
+一个易错点：`hits()` 里先只收**名字**再统一取正文 —— 先拿 `&Skill` 再调
+`match_message(&mut self)` 会和借用检查器打架，而那不是「加个 clone」就完了的
+问题：它提示的是「同一轮里技能的集合不应该变两次」。
 
 ## 7.6 `install.rs`：技能更新（取回→校验→比对→暂存→备份→原子替换）
 

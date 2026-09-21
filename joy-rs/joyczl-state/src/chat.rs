@@ -76,11 +76,44 @@ impl Chat {
     /// 待提炼的行（按时间顺序）。consolidation 的原料。
     pub async fn unconsolidated(&self) -> Result<Vec<(i64, String, String)>> {
         let rows = sqlx::query_as::<_, (i64, String, String)>(
-            "SELECT id, role, content FROM chat_log WHERE consolidated = 0 ORDER BY id",
+            // 只取**到点了**的行：提炼失败的那批会带着 `consolidation_next_at`
+            // 排到未来，时间没到就不该再被捞出来（否则每轮都白烧一次模型调用）。
+            "SELECT id, role, content FROM chat_log
+             WHERE consolidated = 0
+               AND (consolidation_next_at IS NULL OR consolidation_next_at <= datetime('now'))
+             ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    /// 提炼失败：记一笔，并按指数退避排到未来。
+    ///
+    /// 与「成功才 mark_consolidated」并行不冲突：成功走 `consolidated = 1`，
+    /// 失败走这里。1 分钟起、每次翻倍、上限 1 小时 —— 一条永远提炼不出来的
+    /// 记录不该让每一轮都重试它，但也不该被彻底放弃（模型可能只是这会儿抖动）。
+    pub async fn mark_consolidation_failed(&self, ids: &[i64]) -> Result<()> {
+        for id in ids {
+            let tries: i64 =
+                sqlx::query_scalar("SELECT consolidation_tries FROM chat_log WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&self.pool)
+                    .await?
+                    .unwrap_or(0);
+            let backoff = (60i64 * 2i64.pow(tries.min(6) as u32)).min(3_600);
+            sqlx::query(
+                "UPDATE chat_log
+                 SET consolidation_tries = consolidation_tries + 1,
+                     consolidation_next_at = datetime('now', ?)
+                 WHERE id = ?",
+            )
+            .bind(format!("+{backoff} seconds"))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
     }
 
     /// 把一批行标记为已提炼。**只在提炼成功后调用** ——

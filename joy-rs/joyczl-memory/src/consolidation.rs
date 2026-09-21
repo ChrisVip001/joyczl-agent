@@ -25,8 +25,15 @@ From the exchanges below, extract:
    only things worth remembering in a month; skip chit-chat and one-offs.
 2. one single-sentence episode summarizing what happened in this conversation.
 
+For each fact also pick a kind:
+  - \"user\"      who the user is (role, people, preferences, habits)
+  - \"project\"   what is being worked on (state, decisions, deadlines)
+  - \"feedback\"  how they want you to work (corrections, style, rules)
+  - \"reference\"  pointers worth keeping (links, ids, commands, file paths)
+  - \"fact\"      anything else
+
 Reply with ONLY this JSON:
-{\"facts\": [{\"subject\": \"<who/what>\", \"content\": \"<one sentence>\"}], \"episode\": \"<one sentence>\"}
+{\"facts\": [{\"subject\": \"<who/what>\", \"content\": \"<one sentence>\", \"kind\": \"user|project|feedback|reference|fact\"}], \"episode\": \"<one sentence>\"}
 
 Exchanges:
 {log}";
@@ -61,16 +68,24 @@ pub async fn consolidate_if_due(
         max_tokens: 4096,
     };
 
+    let ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+    // 失败的三条路径（模型挂了、JSON 读不出来、JSON 不合法）都走**退避**：
+    // 把这批行排到未来某个时刻再来。从前是「下次再来」，于是同一批坏行每轮
+    // 都被重试一次 —— 白烧模型调用，而且看起来像卡住了。
     let text = match client.create(request).await {
         Ok(response) => response.text(),
-        // 模型挂了：留着这批行，下次再试。
-        Err(_) => return Ok(0),
+        Err(_) => {
+            chat.mark_consolidation_failed(&ids).await?;
+            return Ok(0);
+        }
     };
 
     let Some(json_text) = crate::gate::extract_json(&text) else {
+        chat.mark_consolidation_failed(&ids).await?;
         return Ok(0);
     };
     let Ok(distilled) = serde_json::from_str::<Value>(&json_text) else {
+        chat.mark_consolidation_failed(&ids).await?;
         return Ok(0);
     };
 
@@ -79,6 +94,8 @@ pub async fn consolidate_if_due(
         for fact in list {
             let subject = fact.get("subject").and_then(|v| v.as_str()).map(str::trim);
             let content = fact.get("content").and_then(|v| v.as_str()).map(str::trim);
+            // 分类缺失或写歪了都落 `fact`（收敛在写入口，见 facts.rs）。
+            let kind = fact.get("kind").and_then(|v| v.as_str()).unwrap_or("fact");
             if let (Some(subject), Some(content)) = (subject, content) {
                 if subject.is_empty() || content.is_empty() {
                     continue;
@@ -89,7 +106,7 @@ pub async fn consolidate_if_due(
                     eprintln!("(joy) 跳过一条临时陈述（命中 '{marker}'）：{content}");
                     continue;
                 }
-                facts.add(subject, content, "consolidation").await?;
+                facts.add(subject, content, "consolidation", kind).await?;
                 written += 1;
             }
         }
@@ -106,8 +123,7 @@ pub async fn consolidate_if_due(
         }
     }
 
-    // 只在全部写成功之后才标记。
-    let ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+    // 只在全部写成功之后才标记（`ids` 在上面算过 —— 失败路径也要用它）。
     chat.mark_consolidated(&ids).await?;
 
     Ok(written)

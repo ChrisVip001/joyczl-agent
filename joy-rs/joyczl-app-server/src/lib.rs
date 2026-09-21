@@ -133,6 +133,17 @@ impl Server {
         let resolved = Arc::new(RwLock::new(resolved));
         // 工具表要连 MCP（若有配置），所以是 async 的 —— 装配顺序上只能
         // 先把它建好，再塞进 Server。
+        // 技能的依赖缺失在**启动时**说一次（而不是每轮都说）：它影响的是
+        // 「这个技能还能不能隐式触发」，那是个装载期的事实。
+        {
+            let mut loader = joyczl_memory::skills::SkillLoader::new(
+                joyczl_memory::skills::SkillLoader::dirs_for(&snapshot.home),
+            );
+            for (skill, missing) in loader.dangling_dependencies() {
+                eprintln!("(joy) 技能 '{skill}' 依赖的 '{missing}' 不在，它不参与隐式触发");
+            }
+        }
+
         let mut tools = builtin_tools(&snapshot).await;
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());

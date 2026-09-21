@@ -53,6 +53,12 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
   tools / model / provider / latency / interrupted / guardHits / retries）。
   meta 随对话落库。
 
+### `Fact.kind`
+
+记忆的类别：`user` / `feedback` / `project` / `reference` / `fact`（兜底）。
+`memory/search`、`memory/list` 的应答与 `turn/*` 的检索上下文都带着它；
+`memory/remember` 可以传，写歪了一律收敛成 `fact`。
+
 ## 错误码
 
 | 码 | 含义 |

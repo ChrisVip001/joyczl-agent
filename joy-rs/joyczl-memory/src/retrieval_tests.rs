@@ -14,6 +14,7 @@ fn row(id: i64, content: &str) -> FactRow {
         subject: format!("s{id}"),
         content: content.to_string(),
         source: "test".to_string(),
+        kind: "fact".to_string(),
         created_at: None,
     }
 }
@@ -66,10 +67,13 @@ async fn without_an_embedder_retrieval_is_exactly_keyword() {
     let facts = joyczl_state::Facts::new(pool);
 
     facts
-        .add("alex", "prefers morning meetings", "user")
+        .add("alex", "prefers morning meetings", "user", "user")
         .await
         .unwrap();
-    facts.add("bob", "ships on Fridays", "user").await.unwrap();
+    facts
+        .add("bob", "ships on Fridays", "user", "user")
+        .await
+        .unwrap();
 
     let hybrid = search_hybrid(&facts, None, "morning", 4).await;
     let keyword = facts.search("morning", 4).await.unwrap();

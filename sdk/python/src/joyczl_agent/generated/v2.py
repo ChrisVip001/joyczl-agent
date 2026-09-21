@@ -85,6 +85,12 @@ class Fact(BaseModel):
     content: str
     createdAt: str | None = None
     id: int
+    kind: Annotated[
+        str,
+        Field(
+            description='这条事实**关于什么**：`user` / `feedback` / `project` / `reference` / `fact`（兜底）。分类不出来的都落在 `fact`。'
+        ),
+    ]
     source: Annotated[
         str,
         Field(

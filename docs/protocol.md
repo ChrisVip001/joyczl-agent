@@ -56,6 +56,13 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
   tools / model / provider / latency / interrupted / guardHits / retries).
   The meta is persisted with the conversation.
 
+### `Fact.kind`
+
+What a memory is about: `user` / `feedback` / `project` / `reference` /
+`fact` (the fallback). It travels in `memory/search` and `memory/list`
+responses and in the retrieval context; `memory/remember` may send it, and an
+unknown value is normalised to `fact`.
+
 ## Error codes
 
 | Code | Meaning |

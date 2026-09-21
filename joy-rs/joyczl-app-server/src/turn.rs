@@ -449,7 +449,16 @@ async fn full_turn(
     let mut skill_loader = joyczl_memory::skills::SkillLoader::new(
         joyczl_memory::skills::SkillLoader::dirs_for(&settings.home),
     );
-    let skills = skill_loader.matching_skills(message);
+    let skill_hits = skill_loader.hits(message);
+    let skills = skill_hits.section;
+    // 显式引用（`$技能名`）剥掉之后再送模型 —— 引用是给 loader 看的，模型看正文
+    // 就够；引用了不存在的技能就附一句提示，让它能回一句而不是装作没看见。
+    // 落库的历史仍然是**用户原话**（那是 run_turn 那边的事）。
+    let prompt_message = if skill_hits.hints.is_empty() {
+        skill_hits.message.clone()
+    } else {
+        format!("{}\n\n{}", skill_hits.hints.join("\n"), skill_hits.message)
+    };
 
     // ---- 工作记忆：滑窗 + 滚动摘要 + token 预算。
     //
@@ -537,7 +546,7 @@ async fn full_turn(
             model: &resolved.model,
             system: system.clone(),
             history: history.clone(),
-            user_message: message.to_string(),
+            user_message: prompt_message.clone(),
             tools: &server.tools,
             ctx: ctx.clone(),
             max_iterations: settings.max_iterations,

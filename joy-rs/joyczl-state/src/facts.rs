@@ -12,12 +12,38 @@ pub struct FactRow {
     pub content: String,
     /// `user` = 用户直接说的；`consolidation` = 从对话里提炼的。
     pub source: String,
+    /// 这条事实**关于什么**（`user` / `feedback` / `project` / `reference` /
+    /// `fact`）。分类不出来的落 `fact`，永远不丢。
+    pub kind: String,
     pub created_at: Option<String>,
+}
+
+/// 记忆的类别。`fact` 是兜底：分类不出来、或者老行，都在这里。
+pub const KINDS: [&str; 5] = ["fact", "user", "feedback", "project", "reference"];
+
+/// 把外来的类别收敛到已知的那几个 —— 未知的一律当 `fact`。
+///
+/// 收敛放在**写入口**：库里只会有这五种，读的地方不必各自容错。
+pub fn normalise_kind(kind: &str) -> &'static str {
+    let trimmed = kind.trim().to_lowercase();
+    KINDS
+        .iter()
+        .find(|known| **known == trimmed)
+        .copied()
+        .unwrap_or("fact")
 }
 
 /// `all_with_embedding` 的原始行：FactRow 的五个字段 + 向量文本
 /// （`None` = 这一列还是 NULL，虽然查询已经过滤过，留着类型诚实）。
-type FactWithEmbedding = (i64, String, String, String, Option<String>, Option<String>);
+type FactWithEmbedding = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 #[derive(Clone)]
 pub struct Facts {
@@ -31,14 +57,21 @@ impl Facts {
 
     /// 写一条事实，返回写进去的完整行（含 id 和 created_at）——
     /// 这样调用方不必为了拿 id 再查一次。
-    pub async fn add(&self, subject: &str, content: &str, source: &str) -> Result<FactRow> {
+    pub async fn add(
+        &self,
+        subject: &str,
+        content: &str,
+        source: &str,
+        kind: &str,
+    ) -> Result<FactRow> {
         let row = sqlx::query_as::<_, FactRow>(
-            "INSERT INTO facts (subject, content, source) VALUES (?, ?, ?)
-             RETURNING id, subject, content, source, created_at",
+            "INSERT INTO facts (subject, content, source, kind) VALUES (?, ?, ?, ?)
+             RETURNING id, subject, content, source, kind, created_at",
         )
         .bind(subject)
         .bind(content)
         .bind(source)
+        .bind(normalise_kind(kind))
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -60,13 +93,13 @@ impl Facts {
     /// （见 0005 迁移里的理由），不值得为它引一个向量扩展。
     pub async fn all_with_embedding(&self) -> Result<Vec<(FactRow, Vec<f32>)>> {
         let rows: Vec<FactWithEmbedding> = sqlx::query_as(
-            "SELECT id, subject, content, source, created_at, embedding
+            "SELECT id, subject, content, source, kind, created_at, embedding
              FROM facts WHERE embedding IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::new();
-        for (id, subject, content, source, created_at, embedding) in rows {
+        for (id, subject, content, source, kind, created_at, embedding) in rows {
             // 解析不了的向量当没有：它不该让整次检索失败。
             let Some(vector) = embedding.and_then(|raw| serde_json::from_str(&raw).ok()) else {
                 continue;
@@ -77,6 +110,7 @@ impl Facts {
                     subject,
                     content,
                     source,
+                    kind,
                     created_at,
                 },
                 vector,
@@ -88,7 +122,7 @@ impl Facts {
     /// 还没算过向量的事实（`joy memory reindex` 用）。
     pub async fn missing_embedding(&self, limit: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
-            "SELECT id, subject, content, source, created_at
+            "SELECT id, subject, content, source, kind, created_at
              FROM facts WHERE embedding IS NULL ORDER BY id LIMIT ?",
         )
         .bind(limit as i64)
@@ -106,7 +140,7 @@ impl Facts {
     pub async fn search(&self, query: &str, top_k: u32) -> Result<Vec<FactRow>> {
         if let Some(expr) = to_match_expr(query) {
             let hits = sqlx::query_as::<_, FactRow>(
-                "SELECT f.id, f.subject, f.content, f.source, f.created_at
+                "SELECT f.id, f.subject, f.content, f.source, f.kind, f.created_at
                  FROM facts_fts
                  JOIN facts f ON f.id = facts_fts.rowid
                  WHERE facts_fts MATCH ?
@@ -126,7 +160,7 @@ impl Facts {
             return Ok(Vec::new());
         };
         sqlx::query_as::<_, FactRow>(
-            "SELECT id, subject, content, source, created_at
+            "SELECT id, subject, content, source, kind, created_at
              FROM facts
              WHERE subject LIKE ? OR content LIKE ?
              ORDER BY id DESC
@@ -142,7 +176,7 @@ impl Facts {
 
     pub async fn recent(&self, limit: u32, offset: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
-            "SELECT id, subject, content, source, created_at
+            "SELECT id, subject, content, source, kind, created_at
              FROM facts ORDER BY id DESC LIMIT ? OFFSET ?",
         )
         .bind(limit as i64)
@@ -156,7 +190,7 @@ impl Facts {
     /// 同一主题的事实待在一起才像一份记忆。
     pub async fn all_by_subject(&self, limit: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
-            "SELECT id, subject, content, source, created_at
+            "SELECT id, subject, content, source, kind, created_at
              FROM facts ORDER BY subject, id LIMIT ?",
         )
         .bind(limit as i64)

@@ -43,6 +43,20 @@ than mysterious; the REPL prints a line and the dashboard shows a chip. A
 provider that reports `Retry-After` is obeyed, within the caps. There is no
 provider failover — that is a separate decision.
 
+### Skills gain policy fields, memories gain kinds
+
+A skill can now say `allow-model-invocation: false` ("do not summon me by
+accident") and `dependencies: a, b`. Opted-out and dependency-broken skills do
+not fire from keyword overlap; `$skill-name` in a message forces the body in
+(and is stripped from what the model sees). A reference to something that does
+not exist is a hint, not an error.
+
+Facts carry a `kind` (`user` / `feedback` / `project` / `reference` / `fact`),
+chosen by the summarizer and normalised on write, exposed through
+`memory/search`, `memory/list` and the protocol's `Fact`. Failed consolidation
+now backs off exponentially (1 min doubling to 1 hour) instead of retrying the
+same broken rows every turn.
+
 ### Interactive approval (`JOY_APPROVAL=on-request`)
 
 A command that the allowlist does not match can now be asked about instead of

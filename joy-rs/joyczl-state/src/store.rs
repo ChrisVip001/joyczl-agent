@@ -28,7 +28,7 @@ use crate::{EpisodeRow, Episodes, FactRow, Facts};
 #[allow(async_fn_in_trait)]
 pub trait SemanticStore {
     /// 存一条事实。`source` 记录谁说的（"user" / "consolidation"），来源要可追溯。
-    async fn add(&self, subject: &str, content: &str, source: &str) -> Result<FactRow>;
+    async fn add(&self, subject: &str, content: &str, source: &str, kind: &str) -> Result<FactRow>;
     /// 按关键词检索，相关性降序。没命中返回空 vec，绝不报错。
     async fn search(&self, query: &str, top_k: u32) -> Result<Vec<FactRow>>;
     /// 最近的事实（按 id 倒序），dashboard 与 list_memory 用。
@@ -51,8 +51,8 @@ pub trait EpisodicStore {
 }
 
 impl SemanticStore for Facts {
-    async fn add(&self, subject: &str, content: &str, source: &str) -> Result<FactRow> {
-        Facts::add(self, subject, content, source).await
+    async fn add(&self, subject: &str, content: &str, source: &str, kind: &str) -> Result<FactRow> {
+        Facts::add(self, subject, content, source, kind).await
     }
     async fn search(&self, query: &str, top_k: u32) -> Result<Vec<FactRow>> {
         Facts::search(self, query, top_k).await

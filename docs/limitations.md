@@ -72,6 +72,12 @@ means "we would like this, nobody has built it".
   (including failed calls) is appended to that conclusion.
   → `joy-rs/joyczl-app-server/src/subagent.rs`
 
+* **Deliberate** — Memory kinds are a closed set of five (`fact` is the
+  fallback); a model inventing its own category lands in `fact` rather than
+  creating a taxonomy. Nothing groups by kind in retrieval yet — it is stored
+  and returned, not used to filter.
+  → `joy-rs/joyczl-state/src/facts.rs` (`KINDS`)
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

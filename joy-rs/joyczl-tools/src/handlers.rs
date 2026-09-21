@@ -32,7 +32,9 @@ pub fn memory_tools() -> Vec<Tool> {
                 Box::pin(async move {
                     let subject = require_str(&args, "subject")?;
                     let content = require_str(&args, "content")?;
-                    let row = ctx.facts.add(&subject, &content, "user").await?;
+                    // 类别可选：模型不写就是 `fact`（写入口会收敛未知值）。
+                    let kind = args.get("kind").and_then(Value::as_str).unwrap_or("fact");
+                    let row = ctx.facts.add(&subject, &content, "user", kind).await?;
                     Ok(format!(
                         "已记住：**{}** — {}（存在 {} 的 facts 表，可随时用 search_memory 找回）",
                         row.subject,

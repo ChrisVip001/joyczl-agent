@@ -111,7 +111,7 @@ async fn dispatch(
                 .unwrap_or_else(|| "user".to_string());
             let row = server
                 .facts
-                .add(&p.subject, &p.content, &source)
+                .add(&p.subject, &p.content, &source, "fact")
                 .await
                 .map_err(internal)?;
             respond(MemoryRememberResponse { fact: to_fact(row) })
@@ -313,6 +313,7 @@ fn to_fact(row: joyczl_state::FactRow) -> joyczl_protocol::Fact {
         subject: row.subject,
         content: row.content,
         source: row.source,
+        kind: row.kind,
         created_at: iso_opt(row.created_at),
     }
 }

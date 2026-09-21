@@ -36,7 +36,7 @@ async fn sqlite_episodic_store_honours_the_contract() {
 #[tokio::test]
 async fn trait_objects_and_inherent_calls_agree() {
     let (facts, _episodes) = stores().await;
-    let fact = SemanticStore::add(&facts, "alex", "likes mornings", "user")
+    let fact = SemanticStore::add(&facts, "alex", "likes mornings", "user", "user")
         .await
         .unwrap();
     assert_eq!(facts.search("mornings", 4).await.unwrap().len(), 1);
