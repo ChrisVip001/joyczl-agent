@@ -73,6 +73,33 @@ async with await JoyClient.connect() as client:   # 拉起 joy app-server 子进
 环境变量由嵌入方进程决定（子进程继承）；`JOY_BIN` 可指定二进制。
 打包：`just build-python-bin` 产出分平台 wheel。
 
+## 定时任务
+
+`joy schedule` 是常驻进程，按五字段 cron（`*`、`*/步长`、`a-b`、`a,b`）触发
+声明式任务。两种声明方式：
+
+* 技能的 frontmatter 里带一行 schedule：
+
+  ```markdown
+  ---
+  name: weekly-review
+  description: 汇总这一周并起草周一简报
+  schedule: 0 8 * * 1
+  ---
+  ```
+
+* `<home>/schedules.json` 里的一条：
+
+  ```json
+  {"jobs": [{"name": "standup", "cron": "0 9 * * 1-5", "prompt": "今天有什么安排？"}]}
+  ```
+
+每次触发都在自己的会话里跑完整一轮（`schedule:<任务名>`），所以每条任务带着
+自己的历史与滚动摘要；结果写进 `<home>/outbox/schedule-<名>-<时刻>.md`，
+而不是往聊天里塞。同一分钟最多触发一次，任务串行执行，技能改动不用重启就
+生效。交给 launchd/systemd 常驻 —— 或者干脆不用它，用系统 cron 直接调
+`joy gather`。
+
 ## 数据与备份
 
 `<home>/` 下值得备份的只有几样：`state.db`（记忆与对话，事实来源）、

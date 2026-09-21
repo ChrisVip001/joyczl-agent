@@ -26,6 +26,21 @@ description: Summarize the week and draft the Monday brief
 3. **只描述做法，不假借工具。** 技能可以引用 Joy 的内置工具（如
    create_event），但 exported 到别的 agent 后那些工具不存在。
 
+## 让技能按时跑
+
+frontmatter 里加一行，技能就同时是一条定时任务：
+
+```markdown
+---
+name: weekly-review
+description: 汇总这一周并起草周一简报
+schedule: 0 8 * * 1
+---
+```
+
+`joy schedule`（常驻进程）按时触发它，在技能自己的会话里跑完整一轮，结果写进
+`<home>/outbox/`。cron 细节与 JSON 声明方式见 [operations.zh.md](operations.zh.md)。
+
 ## 安装与分发
 
 ```bash

@@ -79,6 +79,34 @@ Environment variables are decided by the embedding process (the subprocess
 inherits them); `JOY_BIN` can point at the binary. Packaging:
 `just build-python-bin` produces per-platform wheels.
 
+## Scheduled jobs
+
+`joy schedule` is a resident process that fires declarative jobs on a five-field
+cron (`*`, `*/step`, `a-b`, `a,b`). Two ways to declare one:
+
+* a skill whose frontmatter carries a schedule:
+
+  ```markdown
+  ---
+  name: weekly-review
+  description: summarize the week and draft the Monday brief
+  schedule: 0 8 * * 1
+  ---
+  ```
+
+* an entry in `<home>/schedules.json`:
+
+  ```json
+  {"jobs": [{"name": "standup", "cron": "0 9 * * 1-5", "prompt": "what's on today?"}]}
+  ```
+
+Each firing runs a full turn in its own session (`schedule:<name>`), so jobs
+carry their own history and rolling summary; the answer lands in
+`<home>/outbox/schedule-<name>-<stamp>.md` rather than interrupting chat. One
+firing per minute at most, jobs run one at a time, skill edits are picked up
+without a restart. Run it under launchd/systemd — or skip it entirely and call
+`joy gather` from system cron if that is all you need.
+
 ## Data and backups
 
 Only a few things under `<home>/` are worth backing up: `state.db` (memory

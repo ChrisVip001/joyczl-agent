@@ -30,6 +30,22 @@ description: Summarize the week and draft the Monday brief
    built-in tools (e.g. create_event), but once exported to another agent
    those tools do not exist.
 
+## Letting a skill run on a schedule
+
+Adding one frontmatter line turns a skill into a scheduled job:
+
+```markdown
+---
+name: weekly-review
+description: summarize the week and draft the Monday brief
+schedule: 0 8 * * 1
+---
+```
+
+`joy schedule` (a resident process) fires it, running a full turn in the
+skill's own session and writing the answer to `<home>/outbox/`. See
+[operations.md](operations.md) for the cron details and the JSON alternative.
+
 ## Install and distribute
 
 ```bash
