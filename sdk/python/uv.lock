@@ -238,7 +238,7 @@ wheels = [
 
 [[package]]
 name = "joyczl-agent"
-version = "0.1.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -272,7 +272,7 @@ dev = [
 
 [[package]]
 name = "joyczl-agent-bin"
-version = "0.1.0"
+version = "0.5.0"
 source = { editable = "../python-bin" }
 
 [[package]]
