@@ -27,7 +27,8 @@ joy-rs/
 joy-ts/                 @joy/client、@joy/gateway、@joy/dashboard
 sdk/python/             Python 薄客户端（pydantic 模型为生成物）
 evals/                  确定性 eval 与 judge 用例（JSONL）
-docs/                   架构 / 配置 / 协议 / 测试 / 运行 / 技能 / 已知边界 文档
+docs/                   架构 / 配置 / 协议 / 测试 / 运行 / 技能 / 已知边界
+                        internals/ —— 实现原理教程（每层一章） 文档
 scripts/                schema 生成与 4 条端到端冒烟
 ```
 

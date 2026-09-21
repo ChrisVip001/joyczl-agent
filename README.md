@@ -82,6 +82,7 @@ Tool failures return to the model as text — the loop never crashes on one.
 | [docs/testing.md](docs/testing.md) | the four-layer quality system and the latest test report |
 | [docs/operations.md](docs/operations.md) | running every shape, backups, troubleshooting |
 | [docs/limitations.md](docs/limitations.md) | every known boundary — deliberate or not — with the file to open next |
+| [docs/internals/](docs/internals/README.md) | the tutorial: every crate's algorithms, data flow and invariants, chapter by chapter |
 | [docs/skills.md](docs/skills.md) | skill authoring: format, triggers, install and export |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | engineering discipline and commit rules |
 | [SECURITY.md](SECURITY.md) | the security model: credentials, capability boundaries, OAuth |
