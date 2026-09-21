@@ -380,16 +380,19 @@ async fn full_turn(
     );
     let skills = skill_loader.matching_skills(message);
 
+    // ---- 工作记忆：滑窗 + 滚动摘要。滑窗外被挤出去的老轮次折进摘要，
+    // 摘要是往前滚的，存 state.db（见 joyczl-memory 的 compaction.rs）。
+    let (history, summary) =
+        load_history(&server.chat, resolved, session_id, settings.history_turns).await;
+
     let system = build_system(
         &load_soul(&settings.home),
         &resolved.model,
         &resolved.provider_id,
         &memory_context,
         &skills,
+        summary.as_deref(),
     );
-
-    // ---- 工作记忆：滑窗。老对话在 state.db 里，靠门 + 情景记忆找回来。
-    let history = load_history(&server.chat, session_id, settings.history_turns).await;
 
     // 流式出口：模型的文本增量一到就推给客户端。
     let delta_sink = sink.clone();
@@ -703,7 +706,14 @@ fn graph_event(sink: &EventSink, event: GraphEvent) {
     }
 }
 
-fn build_system(soul: &str, model: &str, provider: &str, memory: &str, skills: &str) -> String {
+fn build_system(
+    soul: &str,
+    model: &str,
+    provider: &str,
+    memory: &str,
+    skills: &str,
+    summary: Option<&str>,
+) -> String {
     let now = Local::now();
     let mut parts = vec![
         soul.to_string(),
@@ -727,19 +737,39 @@ fn build_system(soul: &str, model: &str, provider: &str, memory: &str, skills: &
     if !skills.is_empty() {
         parts.push(format!("\nRelevant skill instructions:\n{skills}"));
     }
+    if let Some(section) = summary.and_then(joyczl_memory::compaction::summary_section) {
+        parts.push(section);
+    }
     parts.join("\n")
 }
 
-/// 只取最近 N 轮。没有这个上限，一个长会话每轮都把全部历史塞进 prompt，
-/// 直到上下文爆炸。
+/// 只取最近 N 轮，外加一份滚动摘要。
+///
+/// 没有滑窗，一个长会话每轮都把全部历史塞进 prompt，直到上下文爆炸；
+/// 只有滑窗，被挤出去的那部分就等于失忆。所以：被挤出去的老轮次交给
+/// `compaction` 折成一段摘要（失败开放，最差也是截断摘录），随会话存库，
+/// 每轮拼进 system prompt。返回 `(工作记忆, 摘要)`。
 async fn load_history(
     chat: &joyczl_state::Chat,
+    resolved: &Resolved,
     session_id: &str,
     history_turns: i32,
-) -> Vec<Message> {
+) -> (Vec<Message>, Option<String>) {
     let pairs = chat.session_history(session_id).await.unwrap_or_default();
     let window = history_turns.max(0) as usize;
-    pairs
+
+    let summary = joyczl_memory::compaction::refresh(
+        chat,
+        resolved.client.as_ref(),
+        &resolved.small_model,
+        session_id,
+        &pairs,
+        window,
+    )
+    .await
+    .unwrap_or(None);
+
+    let messages = pairs
         .iter()
         .rev()
         .take(window)
@@ -755,7 +785,8 @@ async fn load_history(
                 },
             ]
         })
-        .collect()
+        .collect();
+    (messages, summary)
 }
 
 fn fold_tool_activity(reply: &str, calls: &[joyczl_loop::ToolOutcome]) -> String {

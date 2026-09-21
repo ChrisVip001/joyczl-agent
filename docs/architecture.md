@@ -90,6 +90,10 @@ interface and run the same tests.
   memory.
 * **Consolidation**: every N turns, unconsolidated dialogue is distilled into
   facts (source-labelled) and one episode; failure never loses the raw log.
+* **Compaction**: turns pushed out of the working-memory window are folded
+  into a rolling per-session summary (stored in state.db, carried forward —
+  never recomputed from scratch). A dead summarizer falls back to a
+  deterministic excerpt, so eviction never means amnesia.
 * **Skills (procedural memory)**: `SKILL.md` (Agent Skills format) with
   progressive disclosure — frontmatter is scanned every turn (cheap), the
   body enters the system prompt only when the message matches. `MEMORY.md` is

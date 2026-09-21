@@ -25,7 +25,7 @@ reads them once at process start and never again. Joy **does not read any
 |---|---|---|
 | `JOY_MAX_ITERATIONS` | `10` | hard iteration cap for one loop |
 | `JOY_MAX_TOKENS` | `8192` | per-call output cap (headroom for reasoning models) |
-| `JOY_HISTORY_TURNS` | `12` | working-memory window: only the last N turns enter the prompt |
+| `JOY_HISTORY_TURNS` | `12` | working-memory window: only the last N turns enter the prompt (older turns are folded into a rolling summary, not dropped) |
 | `JOY_CONSOLIDATE_EVERY` | `6` | run consolidation every N new turns |
 | `JOY_RETRIEVAL_TOP_K` | `4` | facts fetched when the gate opens |
 | `JOY_GRAPH_WORKFLOWS` | `0` | enable the triage front-door graph (fail-open, costs time only) |

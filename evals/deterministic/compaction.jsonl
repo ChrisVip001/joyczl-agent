@@ -1,0 +1,6 @@
+# 上下文压缩：滑窗（history_turns=0）把老轮次挤出 prompt 后，它们必须以摘要的
+# 形式回来 —— 而且摘要调不动模型时，原文也绝不能丢。一行一个用例。
+# 脚本队列的顺序 = 真实调用顺序：每轮先检索门；第二轮在门之后、loop 之前还会
+# 夹一次摘要调用（load_history 里的 compaction），所以它的应答排在该轮最前。
+{"id":"rolling-summary-replaces-evicted-turns","description":"被滑窗挤出去的轮次折进摘要回到 prompt","settings":{"history_turns":0},"turns":[{"message":"记住这个代号：zeta-secret-9","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"好的。"}]},{"message":"刚才的代号是什么？","gate":{"retrieve":false,"query":"","reason":"recall"},"responses":[{"text":"用户给过一个代号，助手确认了。"},{"text":"你给过一个代号。"}]}],"expect":{"last_prompt_contains":["用户给过一个代号"],"last_prompt_not_contains":["zeta-secret-9"]}}
+{"id":"summarizer-failure-falls-back-to-excerpt","description":"摘要调用失败：确定性兜底兜住原文，绝不丢内容","settings":{"history_turns":0},"turns":[{"message":"记住这个代号：zeta-secret-9","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"好的。"}]},{"message":"刚才的代号是什么？","gate":{"retrieve":false,"query":"","reason":"recall"},"responses":[{"text":"   "},{"text":"你给过一个代号。"}]}],"expect":{"last_prompt_contains":["模型摘要不可用","zeta-secret-9"]}}

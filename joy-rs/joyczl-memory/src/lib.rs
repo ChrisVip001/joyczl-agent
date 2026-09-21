@@ -9,6 +9,7 @@
 //! 前两者都刻意**失败开放**：gate 出错就照常检索（过时的记忆也好过丢失的），
 //! consolidation 出错就让日志留着不提炼（下次再来，原始记录绝不丢）。
 
+pub mod compaction;
 pub mod consolidation;
 pub mod gate;
 pub mod skills;
@@ -16,6 +17,10 @@ pub mod skills;
 #[cfg(test)]
 #[path = "memory_tests.rs"]
 mod memory_tests;
+
+#[cfg(test)]
+#[path = "compaction_tests.rs"]
+mod compaction_tests;
 
 use std::path::Path;
 

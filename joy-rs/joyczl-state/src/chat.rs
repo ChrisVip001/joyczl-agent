@@ -126,6 +126,43 @@ impl Chat {
         Ok(pairs)
     }
 
+    /// 这个会话的滚动摘要：(覆盖了多少轮, 摘要)。
+    ///
+    /// 没有摘要、或表里那行读不出来，都当「还没有」—— 摘要只是省 token 的
+    /// 手段，坏了顶多让 prompt 多塞几轮原文，不该让一轮对话起不来。
+    pub async fn load_rollup(&self, session_id: &str) -> Result<Option<(i32, String)>> {
+        let row = sqlx::query_as::<_, (i64, String)>(
+            "SELECT covered_turns, summary FROM context_rollups WHERE session_id = ?",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(covered, summary)| (covered as i32, summary)))
+    }
+
+    /// 覆盖滚动摘要。同一会话一行，后来的盖掉先前的 —— 摘要只往前滚。
+    pub async fn save_rollup(
+        &self,
+        session_id: &str,
+        covered_turns: i32,
+        summary: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO context_rollups (session_id, covered_turns, summary, updated_at)
+             VALUES (?, ?, ?, datetime('now'))
+             ON CONFLICT(session_id) DO UPDATE SET
+                covered_turns = excluded.covered_turns,
+                summary = excluded.summary,
+                updated_at = excluded.updated_at",
+        )
+        .bind(session_id)
+        .bind(covered_turns as i64)
+        .bind(summary)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// 一个会话的消息，**最新的在最前**。
     ///
     /// 方向跟对话本身相反是有原因的：这个方法要么拿「最近的一页」，

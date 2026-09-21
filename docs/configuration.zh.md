@@ -24,7 +24,7 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 |---|---|---|
 | `JOY_MAX_ITERATIONS` | `10` | 单轮 loop 的迭代上限（硬停护栏） |
 | `JOY_MAX_TOKENS` | `8192` | 单次模型调用输出上限（给推理模型留思考余量） |
-| `JOY_HISTORY_TURNS` | `12` | 工作记忆滑窗：只把最近 N 轮塞进 prompt |
+| `JOY_HISTORY_TURNS` | `12` | 工作记忆滑窗：只把最近 N 轮塞进 prompt（更老的折进滚动摘要，不是丢掉） |
 | `JOY_CONSOLIDATE_EVERY` | `6` | 每 N 轮新对话触发一次 consolidation |
 | `JOY_RETRIEVAL_TOP_K` | `4` | 检索门放行时拉回的 facts 条数 |
 | `JOY_GRAPH_WORKFLOWS` | `0` | 打开 triage 前门图（失败开放，只能更快不能更差） |
