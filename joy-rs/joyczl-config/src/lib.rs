@@ -25,6 +25,89 @@ fn env_int(name: &str, default: i32) -> i32 {
     env(name).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
+// ---- 旋钮的边界：唯一来源 ----------------------------------------------------
+//
+// 两个入口共用这张表：**启动期**（`Settings::validate`，非法值当场退出）与
+// **config/write**（`validate_patch_values`，非法补丁整个拒绝）。此前只有后者
+// 校验，于是 `JOY_HISTORY_TURNS=-5`、`JOY_EXEC_TIMEOUT=abc` 这类值会在启动时
+// 静默变成默认值或零窗口 —— 「配错了」于是变成运行期的惊喜。
+//
+// 表里同时带补丁字段名与环境变量名：报错时按来源挑一个念给人听。
+
+pub struct Bound {
+    /// `SettingsPatch` 里的字段名（`config/write` 路径用）。
+    /// `None` = 只能从环境变量来（目前是两个超时）。
+    pub patch_name: Option<&'static str>,
+    pub env_name: &'static str,
+    pub min: i64,
+    pub max: i64,
+}
+
+pub const BOUNDS: &[Bound] = &[
+    Bound {
+        patch_name: Some("maxIterations"),
+        env_name: "JOY_MAX_ITERATIONS",
+        min: 1,
+        max: 100,
+    },
+    Bound {
+        patch_name: Some("maxTokens"),
+        env_name: "JOY_MAX_TOKENS",
+        min: 128,
+        max: 200_000,
+    },
+    Bound {
+        patch_name: Some("historyTurns"),
+        env_name: "JOY_HISTORY_TURNS",
+        min: 0,
+        max: 1_000,
+    },
+    Bound {
+        patch_name: Some("consolidateEvery"),
+        env_name: "JOY_CONSOLIDATE_EVERY",
+        min: 1,
+        max: 1_000,
+    },
+    Bound {
+        patch_name: Some("retrievalTopK"),
+        env_name: "JOY_RETRIEVAL_TOP_K",
+        min: 1,
+        max: 100,
+    },
+    Bound {
+        patch_name: None,
+        env_name: "JOY_LLM_TIMEOUT",
+        min: 1,
+        max: 3_600,
+    },
+    Bound {
+        patch_name: None,
+        env_name: "JOY_EXEC_TIMEOUT",
+        min: 1,
+        max: 3_600,
+    },
+];
+
+/// 放行规则的条数与单条长度上限。规则是手写的，几百条或几千字符的「规则」
+/// 只可能是一次误粘贴（比如把整个脚本贴进了环境变量）。
+const MAX_EXEC_RULES: usize = 64;
+const MAX_EXEC_RULE_CHARS: usize = 200;
+
+/// 按补丁字段名或环境变量名查边界并报错。
+fn check_bound(key: &str, value: i64) -> Result<(), String> {
+    let bound = BOUNDS
+        .iter()
+        .find(|b| b.env_name == key || b.patch_name == Some(key))
+        .expect("边界表里没有这个旋钮 —— 这是代码 bug，不是用户配错了");
+    if value < bound.min || value > bound.max {
+        return Err(format!(
+            "{key} 应该在 {} 到 {} 之间，收到 {value}",
+            bound.min, bound.max
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     // ---- LLM：选一个 provider，配它的 key。见 joyczl-provider 的 PROVIDERS。
@@ -152,6 +235,45 @@ impl Settings {
         Ok(())
     }
 
+    /// 启动期校验：非法值**当场报错**，不静默变默认值。
+    ///
+    /// 调用方（`app-server` 的 `open`）拿到 `Err` 就退出并打印原因 ——
+    /// 「启动失败」比「跑起来但行为不对」便宜得多，也容易查得多。
+    pub fn validate(&self) -> Result<(), String> {
+        check_bound("JOY_MAX_ITERATIONS", self.max_iterations as i64)?;
+        check_bound("JOY_MAX_TOKENS", self.max_tokens as i64)?;
+        check_bound("JOY_HISTORY_TURNS", self.history_turns as i64)?;
+        check_bound("JOY_CONSOLIDATE_EVERY", self.consolidate_every as i64)?;
+        check_bound("JOY_RETRIEVAL_TOP_K", self.retrieval_top_k as i64)?;
+        check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
+        check_bound("JOY_EXEC_TIMEOUT", self.exec_timeout_secs)?;
+
+        // 放行规则：空表合法（= 什么都不放行，那是默认）。但表里每一条都得是
+        // 一条**能用的**规则 —— 写坏的规则会静默地永不匹配，而命令被拒时
+        // 拒因里还列着它，查起来很费劲。
+        if self.exec_allow.len() > MAX_EXEC_RULES {
+            return Err(format!(
+                "JOY_EXEC_ALLOW 最多 {MAX_EXEC_RULES} 条规则，收到 {} 条",
+                self.exec_allow.len()
+            ));
+        }
+        for rule in &self.exec_allow {
+            let rule = rule.trim();
+            if rule.is_empty() {
+                return Err("JOY_EXEC_ALLOW 里有空规则 —— 空串不是一条规则".to_string());
+            }
+            if rule.contains(['\n', '\r']) {
+                return Err(format!("JOY_EXEC_ALLOW 的规则不能含换行：{rule:?}"));
+            }
+            if rule.chars().count() > MAX_EXEC_RULE_CHARS {
+                return Err(format!(
+                    "JOY_EXEC_ALLOW 的规则最长 {MAX_EXEC_RULE_CHARS} 字符：{rule:?}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// `config/read` 的载荷：读出来的就该是完整现状，所以字段全量且非可选。
     pub fn view(&self) -> SettingsView {
         SettingsView {
@@ -182,6 +304,25 @@ impl Settings {
 /// `<home>/settings.json` —— `config/write` 的持久化位置。
 pub fn patch_path(home: &std::path::Path) -> std::path::PathBuf {
     home.join("settings.json")
+}
+
+/// `config/write` 补丁的**数值**校验：与启动期共用 `BOUNDS`。
+///
+/// provider 的存在性不在这里查 —— `joyczl-config` 不认识 `PROVIDERS`
+/// （那是 provider 层的事），调用方（app-server）把那一步补上。
+pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(), String> {
+    for (key, value) in [
+        ("maxIterations", patch.max_iterations),
+        ("maxTokens", patch.max_tokens),
+        ("historyTurns", patch.history_turns),
+        ("consolidateEvery", patch.consolidate_every),
+        ("retrievalTopK", patch.retrieval_top_k),
+    ] {
+        if let Some(v) = value {
+            check_bound(key, v as i64)?;
+        }
+    }
+    Ok(())
 }
 
 /// 读已保存的补丁。文件不存在、解析不了都当「没有补丁」：
@@ -387,5 +528,100 @@ mod config_tests {
         assert!(load_patch(dir.path()).is_empty());
         // 文件不存在也一样。
         assert!(load_patch(std::path::Path::new("/definitely/not/here")).is_empty());
+    }
+
+    // ---- 启动期校验 ---------------------------------------------------------
+
+    #[test]
+    fn the_defaults_pass_validation() {
+        assert!(Settings::default().validate().is_ok());
+    }
+
+    #[test]
+    fn an_out_of_range_number_names_the_env_var() {
+        // 报错必须指出**哪个变量**错了，否则用户要在二十几个旋钮里猜。
+        let s = Settings {
+            history_turns: -5,
+            ..Settings::default()
+        };
+        let error = s.validate().expect_err("负数窗口要被抓到");
+        assert!(error.contains("JOY_HISTORY_TURNS"), "{error}");
+        assert!(error.contains("-5"), "要说清收到的值：{error}");
+
+        let s = Settings {
+            exec_timeout_secs: 0,
+            ..Settings::default()
+        };
+        assert!(s
+            .validate()
+            .expect_err("0 秒超时没意义")
+            .contains("JOY_EXEC_TIMEOUT"));
+
+        let s = Settings {
+            max_tokens: 4,
+            ..Settings::default()
+        };
+        assert!(s
+            .validate()
+            .expect_err("4 个 token 什么都答不出来")
+            .contains("JOY_MAX_TOKENS"));
+    }
+
+    #[test]
+    fn broken_exec_allow_rules_are_caught_at_startup() {
+        // 空串：不是一条规则（`from_env` 会过滤掉，但补丁路径塞得进来）。
+        let s = Settings {
+            exec_allow: vec!["cargo test".to_string(), "   ".to_string()],
+            ..Settings::default()
+        };
+        assert!(s.validate().expect_err("空规则要被抓到").contains("空规则"));
+
+        // 换行：多半是把整个脚本贴进了环境变量。
+        let s = Settings {
+            exec_allow: vec!["cargo test\nrm -rf /".to_string()],
+            ..Settings::default()
+        };
+        assert!(s.validate().expect_err("换行规则要被抓到").contains("换行"));
+
+        // 超长。
+        let s = Settings {
+            exec_allow: vec!["x".repeat(300)],
+            ..Settings::default()
+        };
+        assert!(s.validate().expect_err("超长规则要被抓到").contains("最长"));
+
+        // 条数。
+        let s = Settings {
+            exec_allow: vec!["ls".to_string(); 100],
+            ..Settings::default()
+        };
+        assert!(s.validate().expect_err("规则太多要被抓到").contains("最多"));
+
+        // 空表合法：什么都不放行是**默认**，不是错误。
+        let s = Settings {
+            exec_allow: Vec::new(),
+            ..Settings::default()
+        };
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn patch_validation_reuses_the_same_bounds() {
+        // 补丁路径与启动期共用 BOUNDS：同样的越界，同样的数字。
+        use joyczl_protocol::SettingsPatch;
+        let bad = SettingsPatch {
+            max_tokens: Some(1),
+            ..Default::default()
+        };
+        let error = validate_patch_values(&bad).expect_err("越界补丁要拒");
+        assert!(error.contains("maxTokens"), "{error}");
+        assert!(error.contains("128"), "要说清下界：{error}");
+
+        let ok = SettingsPatch {
+            max_tokens: Some(4096),
+            history_turns: Some(0),
+            ..Default::default()
+        };
+        assert!(validate_patch_values(&ok).is_ok());
     }
 }

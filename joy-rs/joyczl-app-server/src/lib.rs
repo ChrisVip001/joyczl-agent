@@ -239,9 +239,11 @@ impl Server {
     }
 }
 
-/// config/write 的字段校验。宁可在这里多啰嗦一句，也不让一个非法值
-/// 悄悄住进 settings.json，每一轮都发作一次。
+/// config/write 的字段校验：数值边界走 `joyczl-config` 的 `BOUNDS`（与启动期
+/// 同一张表），这里只补「provider 必须存在」这一条 —— `joyczl-config` 不认识
+/// `PROVIDERS`，那是 provider 层的事。
 fn validate_patch(patch: &SettingsPatch) -> Result<(), String> {
+    joyczl_config::validate_patch_values(patch)?;
     if let Some(provider) = &patch.provider {
         let provider = provider.trim();
         if joyczl_provider::lookup(provider).is_none() {
@@ -251,19 +253,6 @@ fn validate_patch(patch: &SettingsPatch) -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(format!("未知的 provider '{provider}'。可选：{ids}"));
-        }
-    }
-    for (value, name, min) in [
-        (patch.max_iterations, "maxIterations", 1),
-        (patch.max_tokens, "maxTokens", 128),
-        (patch.history_turns, "historyTurns", 0),
-        (patch.consolidate_every, "consolidateEvery", 1),
-        (patch.retrieval_top_k, "retrievalTopK", 1),
-    ] {
-        if let Some(v) = value {
-            if v < min {
-                return Err(format!("{name} 至少是 {min}，收到 {v}"));
-            }
         }
     }
     Ok(())
@@ -276,6 +265,20 @@ pub async fn open(settings: &Settings) -> Result<Server> {
     let mut settings = settings.clone();
     let saved = joyczl_config::load_patch(&settings.home);
     joyczl_config::apply_patch(&saved, &mut settings);
+
+    // ---- 启动期校验：非法配置当场退出。
+    //
+    // 这就是「把错误配置变成启动期错误，而不是运行期惊喜」那条纪律的落点。
+    // 检查的是**叠加之后**的最终值：环境变量与 settings.json 谁配错了都能
+    // 在这一处报出来，而且报的是「哪个变量/字段错了」。
+    if let Err(why) = settings.validate() {
+        anyhow::bail!(
+            "配置有问题，Joy 不启动：{why}\n\
+             （改好那个变量，或删掉 <home>/settings.json 里对应的覆盖；\
+             边界表见 joyczl-config 的 BOUNDS 与 docs/configuration.md）"
+        );
+    }
+
     settings.ensure_home()?;
     let pool = joyczl_state::open(&settings.home.join("state.db")).await?;
     Ok(Server::boot(pool, settings).await)

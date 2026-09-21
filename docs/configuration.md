@@ -8,6 +8,29 @@ reads them once at process start and never again. Joy **does not read any
 (`set -a; source .env; set +a`). Runtime changes go through `config/write`
 (persisted to `<home>/settings.json`, surviving restarts).
 
+## Invalid values fail at startup
+
+`Settings::validate` runs once, **after** the environment and
+`<home>/settings.json` are merged, and a bad value aborts the process with the
+variable named in the message — a misconfiguration should not quietly become a
+default that only surfaces later as strange behaviour. The same bounds table
+(`BOUNDS` in `joyczl-config`) validates `config/write` patches, so the two entry
+points cannot disagree.
+
+| Variable | Range |
+|---|---|
+| `JOY_MAX_ITERATIONS` | 1 – 100 |
+| `JOY_MAX_TOKENS` | 128 – 200000 |
+| `JOY_HISTORY_TURNS` | 0 – 1000 |
+| `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
+| `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
+| `JOY_LLM_TIMEOUT` | 1 – 3600 |
+| `JOY_EXEC_TIMEOUT` | 1 – 3600 |
+
+`JOY_EXEC_ALLOW` is checked too: at most 64 rules, each non-empty, no newlines,
+at most 200 characters. An **empty** allowlist is valid — it means "allow
+nothing", which is the default.
+
 ## Core variables
 
 | Variable | Default | Purpose |

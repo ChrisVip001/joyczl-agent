@@ -7,6 +7,26 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 （`set -a; source .env; set +a`）。运行中的配置变更走 `config/write`
 （持久化到 `<home>/settings.json`，重启后仍生效）。
 
+## 非法值在启动期就报错
+
+`Settings::validate` 只跑一次，位置在**环境变量与 `<home>/settings.json` 合并
+之后**；非法值直接终止进程，并在消息里点名是哪个变量 —— 配错不该静默变成默认值、
+过一会儿才以「行为有点怪」的形式暴露出来。同一张边界表（`joyczl-config` 的
+`BOUNDS`）也校验 `config/write` 的补丁，所以两个入口不会各说各话。
+
+| 变量 | 范围 |
+|---|---|
+| `JOY_MAX_ITERATIONS` | 1 – 100 |
+| `JOY_MAX_TOKENS` | 128 – 200000 |
+| `JOY_HISTORY_TURNS` | 0 – 1000 |
+| `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
+| `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
+| `JOY_LLM_TIMEOUT` | 1 – 3600 |
+| `JOY_EXEC_TIMEOUT` | 1 – 3600 |
+
+`JOY_EXEC_ALLOW` 也在校验范围内：最多 64 条、每条非空、不含换行、不超 200 字符。
+**空表是合法的** —— 它表示「什么都不放行」，而那正是默认。
+
 ## 核心变量
 
 | 变量 | 默认 | 说明 |
