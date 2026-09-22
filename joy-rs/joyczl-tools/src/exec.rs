@@ -437,49 +437,18 @@ pub async fn execute(
         combined.push_str("\n--- stderr ---\n");
         combined.push_str(&err);
     }
-    truncate(combined, policy.spill_dir.as_deref())
-}
-
-/// 超长就截断；能落盘就先落一份完整的，再把路径告诉模型。
-///
-/// 落盘失败**不影响返回值**：回到「截断 + 诚实标注」—— 一次写不进磁盘不该让
-/// 命令本身的输出也拿不到。
-fn truncate(mut text: String, spill_dir: Option<&Path>) -> String {
-    let total = text.chars().count();
-    if total <= MAX_OUTPUT_CHARS {
-        return text;
+    // 超长就换成「放得下的桩」：完整原文落盘、上下文里留头尾各一半的**完整行**。
+    // 落盘失败不影响返回值 —— 一次写不进磁盘不该让命令本身的输出也拿不到。
+    // 实现与轮内工具结果预算共用一处（`crate::spill`）。
+    match crate::spill::stub(
+        policy.spill_dir.as_deref(),
+        &combined,
+        MAX_OUTPUT_CHARS,
+        "command",
+    ) {
+        Some(stub) => stub.text,
+        None => combined,
     }
-    // **先落盘完整的，再截断。** 反过来的话落下去的就是截断后的那份 —— 那这个
-    // 文件等于白存（第一版就是这么写的，被测试当场抓住）。
-    let spilled = spill_dir.and_then(|dir| spill(&text, dir));
-    let cut: String = text.chars().take(MAX_OUTPUT_CHARS).collect();
-    text = cut;
-    match spilled {
-        Some(path) => text.push_str(&format!(
-            "\n…（输出共 {total} 字符，已截断到前 {MAX_OUTPUT_CHARS}；完整输出在 {path}）"
-        )),
-        None => text.push_str(&format!(
-            "\n…（输出共 {total} 字符，已截断到前 {MAX_OUTPUT_CHARS}）"
-        )),
-    }
-    text
-}
-
-/// 把完整输出写进 `<spill>/<日期>/<时间戳>-<随机>.txt`，返回**相对 home 的**
-/// 路径（相对路径好读，也不把绝对路径泄漏给模型）。
-fn spill(text: &str, spill_dir: &Path) -> Option<String> {
-    let day = chrono::Local::now().format("%Y%m%d").to_string();
-    let stamp = chrono::Local::now().format("%H%M%S%.3f").to_string();
-    let dir = spill_dir.join(&day);
-    std::fs::create_dir_all(&dir).ok()?;
-    let file = dir.join(format!("{stamp}-{}.txt", std::process::id()));
-    std::fs::write(&file, text).ok()?;
-    // 相对 home（spill 的父目录）—— 读起来就是「去 spill/… 看」。
-    let relative = spill_dir
-        .parent()
-        .and_then(|home| file.strip_prefix(home).ok())
-        .unwrap_or(&file);
-    Some(relative.display().to_string())
 }
 
 /// 清掉 `spill/` 里超过 `max_age_days` 天的文件。启动时跑一次。

@@ -22,6 +22,7 @@ async fn ctx() -> joyczl_tools::ToolCtx {
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     joyczl_tools::ToolCtx {
         approval: None,
+        session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
         chat: joyczl_state::Chat::new(pool.clone()),
@@ -46,6 +47,7 @@ async fn turn<'a>(
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        tool_result_budget: Default::default(),
         observer,
         on_text: None,
         interrupt: None,
@@ -168,6 +170,7 @@ async fn iteration_limit_stops_the_loop() {
         ctx,
         max_iterations: 2, // 故意卡在两条工具应答上
         max_tokens: 1024,
+        tool_result_budget: Default::default(),
         observer: None,
         on_text: None,
         interrupt: None,
@@ -263,6 +266,7 @@ async fn streaming_emits_text_deltas_in_order() {
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        tool_result_budget: Default::default(),
         observer: Some(observer),
         on_text: Some(on_text),
         interrupt: None,
@@ -322,6 +326,7 @@ async fn streaming_works_across_tool_rounds() {
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        tool_result_budget: Default::default(),
         observer: None,
         on_text: Some(on_text),
         interrupt: None,
@@ -358,6 +363,7 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
         ctx: ctx().await,
         max_iterations: 5,
         max_tokens: 1024,
+        tool_result_budget: Default::default(),
         observer: None,
         on_text: None,
         interrupt: Some(interrupt),
@@ -408,6 +414,7 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        tool_result_budget: Default::default(),
         observer: Some(observer),
         on_text: None,
         interrupt: Some(interrupt),
@@ -461,4 +468,97 @@ async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
         result.tool_calls.iter().all(|call| call.ok()),
         "这三次调用本身都是成功的"
     );
+}
+
+/// 轮内预算真的在跑：第二次请求里那条 10 万字符的结果已经被换成桩，
+/// 而且桩指向的文件里有完整原文。
+#[tokio::test]
+async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
+    use joyczl_tools::{BoxFut, Tool, ToolRegistry};
+    use serde_json::Value;
+
+    let home = tempfile::tempdir().expect("临时目录");
+    let pool = joyczl_state::open(&home.path().join("state.db"))
+        .await
+        .expect("打开库");
+    let ctx = joyczl_tools::ToolCtx {
+        approval: None,
+        session_id: "budget".to_string(),
+        facts: joyczl_state::Facts::new(pool.clone()),
+        episodes: joyczl_state::Episodes::new(pool.clone()),
+        chat: joyczl_state::Chat::new(pool.clone()),
+        calendar: joyczl_state::Calendar::new(pool),
+        home: home.path().to_path_buf(),
+    };
+
+    // 一个「MCP 式」的工具：没人管它的输出，回 10 万字符。
+    let big: Tool = Tool {
+        name: "mcp__demo__fetch".to_string(),
+        description: "回一大段文本".to_string(),
+        input_schema: json!({"type": "object", "properties": {}}),
+        handler: Arc::new(|_ctx: joyczl_tools::ToolCtx, _args: Value| {
+            Box::pin(async move { Ok("z".repeat(100_000)) }) as BoxFut
+        }),
+    };
+    let mut tools = ToolRegistry::new();
+    tools.register(big);
+
+    let mock = Mock::new(vec![
+        Mock::tool_use("call-1", "mcp__demo__fetch", json!({})),
+        Mock::text("看完了。"),
+    ]);
+
+    let result = run(Turn {
+        client: &mock,
+        model: "test-model",
+        system: "你是 Joy".to_string(),
+        history: vec![],
+        user_message: "把那段文本拿来看看".to_string(),
+        tools: &tools,
+        ctx,
+        max_iterations: 4,
+        max_tokens: 1024,
+        tool_result_budget: crate::budget::ToolResultBudget {
+            total_chars: 10_000,
+            per_result_chars: 5_000,
+        },
+        observer: None,
+        on_text: None,
+        interrupt: None,
+    })
+    .await
+    .expect("loop 跑完");
+
+    assert_eq!(result.reply, "看完了。");
+    let requests = mock.received.lock().unwrap();
+    assert_eq!(requests.len(), 2, "一次工具往返 = 两次模型调用");
+
+    let second = &requests[1];
+    let stub = second
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .find_map(|block| match block {
+            joyczl_provider::ContentBlock::ToolResult { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("第二次请求里该有工具结果");
+    assert!(
+        stub.contains("已截断") && stub.chars().count() < 5_000,
+        "超限结果该换成桩：{} 字符",
+        stub.chars().count()
+    );
+    assert!(stub.contains("完整输出在 spill/"), "{stub}");
+
+    // 桩指的文件里是完整原文（10 万字符）。
+    let relative = stub
+        .split("完整输出在 ")
+        .nth(1)
+        .and_then(|rest| rest.split('）').next())
+        .expect("路径");
+    let saved = std::fs::read_to_string(home.path().join(relative)).expect("读回落盘");
+    assert_eq!(saved.chars().count(), 100_000);
+
+    // 落盘的文件在会话目录下（`spill/日期/…`）。
+    assert!(relative.starts_with("spill/"), "{relative}");
 }

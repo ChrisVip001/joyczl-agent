@@ -195,6 +195,8 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         exec_enabled: scenario.settings.exec_enabled.unwrap_or(false),
         delegate_enabled: scenario.settings.delegate_enabled.unwrap_or(false),
         exec_allow: scenario.settings.exec_allow.clone().unwrap_or_default(),
+        tool_result_total_chars: scenario.settings.tool_result_total_chars.unwrap_or(200_000),
+        tool_result_max_chars: scenario.settings.tool_result_max_chars.unwrap_or(30_000),
         ..joyczl_config::Settings::default()
     };
     settings.ensure_home()?;

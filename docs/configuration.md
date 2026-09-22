@@ -24,6 +24,8 @@ points cannot disagree.
 | `JOY_HISTORY_TURNS` | 0 – 1000 |
 | `JOY_CONTEXT_WINDOW` | 1024 – 10000000, and must exceed `JOY_MAX_TOKENS` |
 | `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
+| `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
+| `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
@@ -55,6 +57,8 @@ nothing", which is the default.
 | `JOY_HISTORY_TURNS` | `12` | working-memory window **ceiling**: only the last N turns enter the prompt (older turns are folded into a rolling summary, not dropped) |
 | `JOY_CONTEXT_WINDOW` | provider default | override the context-window estimate (local models differ wildly; the table holds common defaults) |
 | `JOY_COMPACT_THRESHOLD` | `0.8` | start compacting at this fraction of the window — tokens are the real gate, turns are the ceiling |
+| `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | per-turn cap on the total size of tool results; over it the largest are replaced with stubs (`0` disables) |
+| `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | a single result must exceed this to be stubbed (`0` disables) |
 | `JOY_CONSOLIDATE_EVERY` | `6` | run consolidation every N new turns |
 | `JOY_RETRIEVAL_TOP_K` | `4` | facts fetched when the gate opens |
 | `JOY_GRAPH_WORKFLOWS` | `0` | enable the triage front-door graph (fail-open, costs time only) |
@@ -76,6 +80,26 @@ cosine are not the same unit, and pretending otherwise is inventing data. A
 dead embedding service degrades to keyword-only with a warning; it never
 becomes "I remember nothing". Facts written before the switch was on have no
 vector: run `joy memory reindex` to backfill.
+
+## Per-turn tool-result budget
+
+History has a sliding window and a token budget; the turn itself did not. `run_command`
+caps itself at 8000 characters and `search_web` at 400, but **MCP tools answer to
+nobody** — ten calls returning 50k characters each put half a million characters into a
+single request.
+
+When the total size of a turn's tool results exceeds `JOY_TOOL_RESULT_TOTAL_CHARS`, the
+largest results are replaced with a stub: the full text goes to `<home>/spill/<date>/`,
+and the context keeps the head and tail — **complete lines only** — plus
+`…（结果共 N 字符，已截断，省略了 M 行；完整输出在 spill/…）`.
+
+* Only results above `JOY_TOOL_RESULT_MAX_CHARS` are touched. A hundred medium results
+  overflowing the cap cost more in files than the context they save, so that case is
+  logged on stderr and left alone.
+* Never half a line — half a JSON object reads worse than one line fewer.
+* A failed spill still stubs (without promising a path it does not have) and never turns
+  a successful call into an error.
+* Tools that budget themselves (`run_command`) are skipped; the pass is idempotent.
 
 ## Running commands
 

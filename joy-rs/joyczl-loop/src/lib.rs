@@ -29,13 +29,19 @@ use joyczl_provider::{
 use joyczl_tools::{ToolCtx, ToolRegistry};
 use serde_json::Value;
 
+pub mod budget;
 pub mod guard;
 
+use budget::ToolResultBudget;
 use guard::{GuardReport, StallGuard};
 
 #[cfg(test)]
 #[path = "guard_tests.rs"]
 mod guard_tests;
+
+#[cfg(test)]
+#[path = "budget_tests.rs"]
+mod budget_tests;
 
 /// 一轮 turn 的打断开关。`turn/interrupt` 在别的任务里把它拨下去，
 /// loop 在下一个安全点（模型调用、工具执行的途中以 select 竞速）收兵。
@@ -133,6 +139,12 @@ pub struct LoopResult {
     pub interrupted: bool,
     /// 这一轮里循环护栏的账（命中几次、最后说了什么）。
     pub guard: GuardReport,
+    /// 最后一次请求的**本地估算**输入 token 数（0 = 还没发过请求）。
+    /// 只用来与 provider 回报的 `usage` 配对，做下一轮的校准 —— 它本身不是账。
+    pub estimated_input_tokens: usize,
+    /// 最后一次调用的**实测**输入 token（provider 回报的 prefill）。
+    /// 与 `estimated_input_tokens` 是同一个请求的两个数字：相除就是估算的偏差。
+    pub observed_input_tokens: usize,
 }
 
 pub struct Turn<'a> {
@@ -146,6 +158,8 @@ pub struct Turn<'a> {
     pub ctx: ToolCtx,
     pub max_iterations: i32,
     pub max_tokens: i32,
+    /// 轮内工具结果的预算（默认关；见 `budget.rs`）。
+    pub tool_result_budget: ToolResultBudget,
     /// 每个事件都会经过它 —— gateway 拿它画界面，trace 拿它落盘。
     /// 用 Arc 而不是引用，是为了能和 `on_text` 一起被搬进 'static 闭包。
     pub observer: Option<Arc<dyn Fn(LoopEvent) + Send + Sync>>,
@@ -163,6 +177,11 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
 
     let mut tool_calls: Vec<ToolOutcome> = Vec::new();
     let mut usage = Usage::default();
+    // 落盘目录：`ToolCtx` 已经有 home，不用再穿一层参数。
+    let spill_dir = turn.ctx.home.join("spill");
+    // 最后一次请求的本地估算 + 实测（给 app-server 做「用实测校准估算」）。
+    let mut last_estimate = 0usize;
+    let mut last_observed = 0usize;
     // 本轮内的循环检测（跨轮的重复由 app-server 的 fold_tool_activity 负责）。
     let mut guard = StallGuard::new();
 
@@ -186,22 +205,42 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             .as_ref()
             .is_some_and(|cancel| cancel.is_cancelled())
         {
-            return Ok(interrupted_result(
+            return Ok(interrupted_result(Scene {
                 streamed,
                 tool_calls,
-                iteration - 1,
+                iterations: iteration - 1,
                 usage,
                 messages,
-                GuardReport::close(&guard),
-            ));
+                guard: GuardReport::close(&guard),
+                estimated_input_tokens: last_estimate,
+                observed_input_tokens: last_observed,
+            }));
         }
 
+        // ---- 轮内工具结果预算：组装请求前把太大的结果换成桩。
+        //
+        // 放在这里而不是工具执行完之后：换桩只该影响**发给模型的文本**，
+        // 而每一轮都可能又攒了几条结果，所以在请求前统一过一遍最省心
+        // （函数本身幂等，已是桩的直接跳过）。
+        budget::trim_tool_results(
+            &mut messages,
+            Some(&spill_dir),
+            &turn.tool_result_budget,
+            &turn.ctx.session_id,
+        );
+
         // ---- reason：带着当前工作记忆调一次模型
+        let schemas = turn.tools.schemas();
+        // 估算 = 消息 + system + 工具声明。与 provider 回报的 usage 配对，
+        // 用来校准下一轮的预算（估歪了只会让压缩早/晚发生，不会算错账）。
+        last_estimate = joyczl_provider::tokens::estimate_messages(&messages)
+            + joyczl_provider::tokens::estimate_text(&turn.system)
+            + joyczl_provider::tokens::estimate_tools(&schemas);
         let request = CreateRequest {
             model: turn.model.to_string(),
             system: Some(turn.system.clone()),
             messages: messages.clone(),
-            tools: turn.tools.schemas(),
+            tools: schemas,
             max_tokens: turn.max_tokens,
         };
 
@@ -247,14 +286,16 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             Some(cancel) => {
                 tokio::select! {
                     _ = cancel.wait() => {
-                        return Ok(interrupted_result(
-                            streamed,
-                            tool_calls,
-                            iteration - 1,
-                            usage,
-                            messages,
-                            GuardReport::close(&guard),
-                        ));
+                                return Ok(interrupted_result(Scene {
+                                    streamed,
+                                    tool_calls,
+                                    iterations: iteration - 1,
+                                    usage,
+                                    messages,
+                                    guard: GuardReport::close(&guard),
+                                    estimated_input_tokens: last_estimate,
+                                    observed_input_tokens: last_observed,
+                                }));
                     }
                     response = fut => response?,
                 }
@@ -264,6 +305,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
 
         usage.input_tokens += response.usage.input_tokens;
         usage.output_tokens += response.usage.output_tokens;
+        last_observed = response.usage.input_tokens.max(0) as usize;
         if let Some(notify) = &notify {
             notify(LoopEvent::Llm {
                 iteration,
@@ -290,6 +332,8 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 messages,
                 interrupted: false,
                 guard: GuardReport::close(&guard),
+                estimated_input_tokens: last_estimate,
+                observed_input_tokens: last_observed,
             });
         }
 
@@ -309,27 +353,31 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             // 它拉起的子进程/连接由各自的 Drop 收尾。
             let output = match turn.interrupt.as_ref() {
                 Some(cancel) if cancel.is_cancelled() => {
-                    return Ok(interrupted_result(
+                    return Ok(interrupted_result(Scene {
                         streamed,
                         tool_calls,
-                        iteration - 1,
+                        iterations: iteration - 1,
                         usage,
                         messages,
-                        GuardReport::close(&guard),
-                    ));
+                        guard: GuardReport::close(&guard),
+                        estimated_input_tokens: last_estimate,
+                        observed_input_tokens: last_observed,
+                    }));
                 }
                 Some(cancel) => {
                     let fut = turn.tools.execute(turn.ctx.clone(), name, input.clone());
                     tokio::select! {
                         _ = cancel.wait() => {
-                            return Ok(interrupted_result(
-                                streamed,
-                                tool_calls,
-                                iteration - 1,
-                                usage,
-                                messages,
-                                GuardReport::close(&guard),
-                            ));
+                                    return Ok(interrupted_result(Scene {
+                                        streamed,
+                                        tool_calls,
+                                        iterations: iteration - 1,
+                                        usage,
+                                        messages,
+                                        guard: GuardReport::close(&guard),
+                                        estimated_input_tokens: last_estimate,
+                                        observed_input_tokens: last_observed,
+                                    }));
                         }
                         output = fut => output,
                     }
@@ -378,19 +426,37 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         messages,
         interrupted: false,
         guard: GuardReport::close(&guard),
+        estimated_input_tokens: last_estimate,
+        observed_input_tokens: last_observed,
     })
 }
 
 /// 打断时的收兵结果：reply 是已经流出来的文本（没有就一句话说明），
 /// `interrupted: true` 让上层如实落库，而不是把半截话当成完整回答。
-fn interrupted_result(
+/// 收兵现场。打断与「迭代上限」都从这里拼 `LoopResult` —— 参数超过七八个之后，
+/// 一个结构体比一长串实参好读，也少一次「又加了一个字段、四处调用都得改」。
+struct Scene {
     streamed: Arc<Mutex<String>>,
     tool_calls: Vec<ToolOutcome>,
     iterations: i32,
     usage: Usage,
     messages: Vec<Message>,
     guard: GuardReport,
-) -> LoopResult {
+    estimated_input_tokens: usize,
+    observed_input_tokens: usize,
+}
+
+fn interrupted_result(scene: Scene) -> LoopResult {
+    let Scene {
+        streamed,
+        tool_calls,
+        iterations,
+        usage,
+        messages,
+        guard,
+        estimated_input_tokens,
+        observed_input_tokens,
+    } = scene;
     let partial = streamed.lock().expect("streamed 锁不该中毒").clone();
     let reply = if partial.trim().is_empty() {
         "（这轮被打断了。）".to_string()
@@ -405,6 +471,8 @@ fn interrupted_result(
         messages,
         interrupted: true,
         guard,
+        estimated_input_tokens,
+        observed_input_tokens,
     }
 }
 

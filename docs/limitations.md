@@ -97,6 +97,16 @@ means "we would like this, nobody has built it".
   corrupt anything.
   → `joy-rs/joyczl-provider/src/tokens.rs`
 
+* **Deliberate** — The per-turn tool-result budget only touches results that are
+  individually large. A hundred medium results overflowing the cap are left alone (one
+  stderr line, no content change): a file per result would cost more than the context it
+  saves.
+  → `joy-rs/joyczl-loop/src/budget.rs`
+* **Deliberate** — Calibration is a **ratio** (observed / estimated) clamped to 0.5–2.0,
+  so one odd request cannot drag the budget off. Anything sharper means a real tokenizer
+  per provider family.
+  → `joy-rs/joyczl-state/src/chat.rs` (`context_factor`)
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

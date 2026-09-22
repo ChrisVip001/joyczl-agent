@@ -190,6 +190,18 @@ fn interrupted_result(streamed, tool_calls, iterations, usage, messages) -> Loop
 跨轮的重复不归它管 —— 那是 `fold_tool_activity`（把工具活动折进历史）的职责；
 护栏每个 turn 新建一个，只看本轮。
 
+## 5.6c 轮内工具结果预算：`budget.rs`
+
+`run_command` 会自己截断自己，MCP 工具不会 —— 这是轮内唯一无人看管的增长点。所以
+每轮**组装请求之前**过一遍 `trim_tool_results`：总量超 `JOY_TOOL_RESULT_TOTAL_CHARS`
+时，从最大的开始把 > `JOY_TOOL_RESULT_MAX_CHARS` 的结果换成桩（落盘完整原文 +
+头尾各一半的**完整行** + 省略说明），装得下就停手（与 deepseek-harness 的
+`if total <= max: break` 同一条）。
+
+三个容易写错的地方都留了测试：**幂等**（每轮都跑，已是桩的跳过）、**落盘在切之前**
+（顺序反了存下去的是切过的那份）、**桩的预算必须显著小于门槛**（门槛配小时若桩的
+目标比门槛还大，就会「够格换桩却换不掉」—— 真踩过）。
+
 ## 5.7 `LoopResult` 与 `ok()`
 
 ```rust

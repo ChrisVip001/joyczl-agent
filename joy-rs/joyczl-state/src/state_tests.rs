@@ -15,6 +15,37 @@ async fn temp_db(name: &str) -> SqlitePool {
     pool
 }
 
+/// 实测校准估算：比值 = 实测 / 估算，夹在 0.5..=2.0。
+#[tokio::test]
+async fn context_observations_pair_measured_with_estimated() {
+    let chat = Chat::new(temp_db("context.db").await);
+    assert_eq!(
+        chat.context_factor("s").await.unwrap(),
+        None,
+        "没有记录就不校准"
+    );
+
+    chat.observe_context("s", 1000, 800).await.unwrap();
+    let factor = chat.context_factor("s").await.unwrap().unwrap();
+    assert!(
+        (factor - 1.25).abs() < 1e-9,
+        "实测比估算大 → 1.25，实际 {factor}"
+    );
+
+    // 覆盖写：只关心最近一次（模型/工具集变了，旧比值就不作数）。
+    chat.observe_context("s", 900, 1800).await.unwrap();
+    let factor = chat.context_factor("s").await.unwrap().unwrap();
+    assert!(factor < 1.0, "这次估多了：{factor}");
+
+    // 0 值不记（图路径不走 loop，拿 0 算比值会得出荒唐的倍率）。
+    chat.observe_context("zero", 0, 100).await.unwrap();
+    assert_eq!(chat.context_factor("zero").await.unwrap(), None);
+
+    // 极端值夹住：一次异常请求不该把预算带偏。
+    chat.observe_context("wild", 100_000, 10).await.unwrap();
+    assert_eq!(chat.context_factor("wild").await.unwrap(), Some(2.0));
+}
+
 /// 类别：认得的按原样存，不认得的一律落 `fact`（收敛在写入口）。
 #[tokio::test]
 async fn fact_kinds_are_normalised_at_the_write_entry() {

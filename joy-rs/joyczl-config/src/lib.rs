@@ -80,6 +80,18 @@ pub const BOUNDS: &[Bound] = &[
     },
     Bound {
         patch_name: None,
+        env_name: "JOY_TOOL_RESULT_TOTAL_CHARS",
+        min: 0,
+        max: 4_000_000,
+    },
+    Bound {
+        patch_name: None,
+        env_name: "JOY_TOOL_RESULT_MAX_CHARS",
+        min: 0,
+        max: 1_000_000,
+    },
+    Bound {
+        patch_name: None,
         env_name: "JOY_APPROVAL_TIMEOUT",
         min: 5,
         max: 3_600,
@@ -184,6 +196,15 @@ pub struct Settings {
     /// `JOY_EMBED_MODEL`：embedding 模型名（如 nomic-embed-text）。
     pub embed_model: Option<String>,
 
+    // ---- 轮内工具结果预算（见 joyczl-loop 的 budget.rs）
+    /// `JOY_TOOL_RESULT_TOTAL_CHARS`：一轮里所有工具结果的字符总量上限。
+    /// 超了就从最大的开始换成桩（完整原文落盘 + 头尾预览）。
+    /// 默认 200000 —— 只有病态输出才会碰到；设 0 关闭。
+    pub tool_result_total_chars: i64,
+    /// `JOY_TOOL_RESULT_MAX_CHARS`：单条结果超过它才有资格被换桩。
+    /// 默认 30000（约 8k token）。设 0 关闭。
+    pub tool_result_max_chars: i64,
+
     // ---- 执行（`run_command`，见 joyczl-tools 的 exec.rs）
     /// `JOY_DELEGATE`：开了才会把 `delegate_task` 注册进工具表。默认关 ——
     /// 「把活交出去自己跑」是能力也是风险（多一份上下文、多一段没人看的
@@ -242,6 +263,8 @@ impl Default for Settings {
             embeddings_enabled: false,
             embed_model: None,
             delegate_enabled: false,
+            tool_result_total_chars: 200_000,
+            tool_result_max_chars: 30_000,
             exec_enabled: false,
             exec_allow: Vec::new(),
             exec_timeout_secs: 30,
@@ -280,6 +303,14 @@ impl Settings {
             embeddings_enabled: env_bool("JOY_EMBEDDINGS"),
             embed_model: env("JOY_EMBED_MODEL"),
             delegate_enabled: env_bool("JOY_DELEGATE"),
+            tool_result_total_chars: env_int(
+                "JOY_TOOL_RESULT_TOTAL_CHARS",
+                d.tool_result_total_chars as i32,
+            ) as i64,
+            tool_result_max_chars: env_int(
+                "JOY_TOOL_RESULT_MAX_CHARS",
+                d.tool_result_max_chars as i32,
+            ) as i64,
             exec_enabled: env_bool("JOY_EXEC"),
             exec_allow: env("JOY_EXEC_ALLOW")
                 .map(|raw| {
@@ -329,6 +360,8 @@ impl Settings {
         check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
         check_bound("JOY_EXEC_TIMEOUT", self.exec_timeout_secs)?;
         check_bound("JOY_APPROVAL_TIMEOUT", self.approval_timeout_secs)?;
+        check_bound("JOY_TOOL_RESULT_TOTAL_CHARS", self.tool_result_total_chars)?;
+        check_bound("JOY_TOOL_RESULT_MAX_CHARS", self.tool_result_max_chars)?;
         if !matches!(self.approval.as_str(), "never" | "on-request") {
             return Err(format!(
                 "JOY_APPROVAL 只能是 never 或 on-request，收到 '{}'",

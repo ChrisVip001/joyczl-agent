@@ -21,6 +21,8 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_HISTORY_TURNS` | 0 – 1000 |
 | `JOY_CONTEXT_WINDOW` | 1024 – 10000000，且必须大于 `JOY_MAX_TOKENS` |
 | `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
+| `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
+| `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
@@ -51,6 +53,8 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 | `JOY_HISTORY_TURNS` | `12` | 工作记忆滑窗的**上限**：只把最近 N 轮塞进 prompt（更老的折进滚动摘要，不是丢掉） |
 | `JOY_CONTEXT_WINDOW` | provider 默认 | 覆盖上下文窗口的估算值（本地模型窗口差异极大，表里只是常见默认） |
 | `JOY_COMPACT_THRESHOLD` | `0.8` | 用到窗口的这个比例就开始压缩 —— token 才是闸门，轮数是上限 |
+| `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | 一轮里所有工具结果的字符总量上限；超了就从最大的开始换成桩（`0` 关闭） |
+| `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | 单条结果超过它才有资格被换桩（`0` 关闭） |
 | `JOY_CONSOLIDATE_EVERY` | `6` | 每 N 轮新对话触发一次 consolidation |
 | `JOY_RETRIEVAL_TOP_K` | `4` | 检索门放行时拉回的 facts 条数 |
 | `JOY_GRAPH_WORKFLOWS` | `0` | 打开 triage 前门图（失败开放，只能更快不能更差） |
@@ -70,6 +74,29 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 融合（RRF，k=60）而不是按分数——bm25 与余弦不是同一个量纲，硬凑等于编数据。
 embedding 服务不可用会降级成纯关键词并警告，绝不会变成「什么都想不起来」。
 开关打开之前写入的事实没有向量，用 `joy memory reindex` 补齐。
+
+## 轮内工具结果预算
+
+历史有滑窗和 token 预算，但**轮内**没有 —— `run_command` 自己会截到 8000 字符、
+`search_web` 自己截到 400，而 MCP 工具的输出没人管。一轮里十次 MCP 调用各回 5 万
+字符，就是 50 万字符进请求。
+
+打开之后（默认就是打开的，阈值很大），一轮里工具结果的**字符总量**超过
+`JOY_TOOL_RESULT_TOTAL_CHARS` 时，从最大的那条开始换成一个「桩」：完整原文写进
+`<home>/spill/<日期>/`，上下文里只留**头尾各一半的完整行**和一句说明
+（`…（结果共 N 字符，已截断，省略了 M 行；完整输出在 spill/…）`）。
+
+几条规矩：
+
+* **只动够大的**：单条没超过 `JOY_TOOL_RESULT_MAX_CHARS` 的结果不换 —— 一百条中等
+  结果撑爆预算时，给每条都建一个文件比省下的上下文更贵。那种情况只在 stderr 记
+  一行，不改内容。
+* **绝不切半行**：半个 JSON、半条日志比少一行更难读，模型还会以为那就是全部。
+  首行本身就超预算时如实说明，不硬塞。
+* **落盘失败照样成立**：桩里不写路径（「完整输出在 …」而文件不存在，比不写更坏），
+  更不会把一次成功的调用变成错误。
+* **自预算的工具不碰**：`run_command` 自己就落盘了。
+* 换桩是**幂等**的：每轮请求前都过一遍，已经是桩的直接跳过。
 
 ## 执行命令
 

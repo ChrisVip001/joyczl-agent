@@ -2,6 +2,23 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.7.0 — Aligning with the state of the art
+
+### Per-turn tool-result budget
+
+History had a sliding window and a token budget; the turn itself did not, and MCP tools
+can return anything. `JOY_TOOL_RESULT_TOTAL_CHARS` / `JOY_TOOL_RESULT_MAX_CHARS` now
+replace the largest results with stubs — full text spilled, head/tail in complete lines,
+tools that budget themselves skipped, idempotent, and a failed spill never turns a
+successful call into an error. The defaults are deliberately large (200k / 30k).
+
+### The estimator is calibrated by measurement
+
+`usage.input_tokens` was recorded but never fed back. The loop now returns the estimate
+and the measurement for the *same* request, the app-server pairs them in
+`session_context` (migration 0007), and the next turn's budget is corrected by their
+ratio (clamped to 0.5–2.0, so one odd request cannot drag it off).
+
 ## 0.6.0 — Guardrails, budgets, and an offline sandbox
 
 ### Configuration is validated at startup

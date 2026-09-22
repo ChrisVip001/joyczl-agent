@@ -23,6 +23,7 @@ pub mod exec;
 pub mod handlers;
 pub mod memory_admin;
 pub mod messages;
+pub mod spill;
 pub mod subagent;
 pub mod web;
 
@@ -42,6 +43,10 @@ mod subagent_tests;
 #[path = "approval_tests.rs"]
 mod approval_tests;
 
+#[cfg(test)]
+#[path = "spill_tests.rs"]
+mod spill_tests;
+
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。
 #[derive(Clone)]
@@ -51,6 +56,9 @@ pub struct ToolCtx {
     pub chat: Chat,
     pub calendar: Calendar,
     pub home: PathBuf,
+    /// 这一轮属于哪个会话。日志与落盘用它归属（子代理给一个自己的名字，
+    /// 于是「这条超长结果是谁弄出来的」查得到）。
+    pub session_id: String,
     /// 有人可以问批准吗？`None` = 没有（子代理、`JOY_APPROVAL=never`、或没有
     /// 交互界面的调用方）—— 于是需要批准的动作直接拒绝，正如 `approval.rs` 的
     /// 「默认拒绝」。

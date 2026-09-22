@@ -192,6 +192,7 @@ impl Server {
     /// `approval` 是这一轮的批准通道：子代理传 `None`（它不该阻塞在人类身上）。
     pub(crate) fn tool_ctx(
         &self,
+        session_id: &str,
         approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
     ) -> ToolCtx {
         let settings = self.settings();
@@ -201,6 +202,7 @@ impl Server {
             &self.chat,
             &self.calendar,
             &settings.home,
+            session_id,
             approval,
         )
     }
@@ -521,12 +523,22 @@ async fn builtin_tools(settings: &Settings) -> ToolRegistry {
 
 /// 工具执行环境的**唯一**构造处。turn 与子代理都走它 —— 两处各写一遍
 /// 就是等着某天加字段时漏掉一个（子代理拿到半个 ctx 会很难查）。
+/// 轮内工具结果预算（`JOY_TOOL_RESULT_*`）。turn 与子代理共用同一份策略 ——
+/// 子代理继承父的执行纪律，这是既有约定。
+pub(crate) fn tool_result_budget(settings: &Settings) -> joyczl_loop::budget::ToolResultBudget {
+    joyczl_loop::budget::ToolResultBudget {
+        total_chars: settings.tool_result_total_chars.max(0) as usize,
+        per_result_chars: settings.tool_result_max_chars.max(0) as usize,
+    }
+}
+
 pub(crate) fn tool_ctx(
     facts: &Facts,
     episodes: &Episodes,
     chat: &Chat,
     calendar: &Calendar,
     home: &std::path::Path,
+    session_id: &str,
     approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
 ) -> ToolCtx {
     ToolCtx {
@@ -535,6 +547,7 @@ pub(crate) fn tool_ctx(
         chat: chat.clone(),
         calendar: calendar.clone(),
         home: home.to_path_buf(),
+        session_id: session_id.to_string(),
         approval,
     }
 }

@@ -267,6 +267,20 @@ pub async fn run_turn(
             data: None,
         })?;
 
+    // ---- 用实测校准估算：这一轮最后一次请求的 (实测 prefill, 本地估算) 存下来，
+    // 下一轮算预算时按比值修正。失败只喊一声 —— 校准是优化，不是这一轮的账。
+    if let Err(e) = server
+        .chat
+        .observe_context(
+            &session_id,
+            result.observed_input_tokens as i64,
+            result.estimated_input_tokens as i64,
+        )
+        .await
+    {
+        eprintln!("(joy) 记上下文实测值失败（不影响这一轮）：{e}");
+    }
+
     // ---- 攒够了就提炼。失败不丢数据，consolidation 内部保证。
     let new_facts = joyczl_memory::consolidation::consolidate_if_due(
         &server.chat,
@@ -364,11 +378,24 @@ const SUMMARY_RESERVE_TOKENS: usize = 800;
 /// 这一轮的上下文预算（token）：窗口（`JOY_CONTEXT_WINDOW` 优先，否则用
 /// provider 表里的近似值）× 比例。下限 1024 —— 比例配得再小，也不该把窗口
 /// 压到连一轮对话都装不下。
-fn budget_tokens(resolved: &Resolved, settings: &joyczl_config::Settings) -> usize {
+///
+/// `factor` 是上一轮实测 / 估算的比值（见 `session_context`）：**用实测校准估算**。
+/// 估算偏小（factor > 1）时把预算缩回来，压缩就会早一点发生；偏大时放开。
+/// 没有记录（第一轮、或走了图）就不校准。
+fn budget_tokens(
+    resolved: &Resolved,
+    settings: &joyczl_config::Settings,
+    factor: Option<f64>,
+) -> usize {
     let window = settings
         .context_window
         .unwrap_or_else(|| resolved.context_window());
-    ((window as f64 * settings.compact_threshold) as usize).max(1024)
+    let raw = window as f64 * settings.compact_threshold;
+    let calibrated = match factor {
+        Some(factor) if factor > 0.0 => raw / factor,
+        _ => raw,
+    };
+    (calibrated as usize).max(1024)
 }
 
 /// 这个错误是「上下文溢出」吗？loop 把 provider 的错误包进了 anyhow，
@@ -473,7 +500,9 @@ async fn full_turn(
         + joyczl_provider::tokens::estimate_tools(&server.tools.schemas())
         + settings.max_tokens.max(0) as usize
         + SUMMARY_RESERVE_TOKENS;
-    let history_budget = budget_tokens(resolved, &settings).saturating_sub(reserve);
+    // 上一轮的实测/估算比值：拿它校准这一次的估算（没有记录就不校准）。
+    let factor = server.chat.context_factor(session_id).await.unwrap_or(None);
+    let history_budget = budget_tokens(resolved, &settings, factor).saturating_sub(reserve);
 
     let (mut history, mut summary) = load_history(
         &server.chat,
@@ -506,7 +535,7 @@ async fn full_turn(
     // ---- THE LOOP
     // 工具环境只有一处构造（见 lib.rs 的 tool_ctx）—— 子代理走同一个（它传 None）。
     // 批准通道按这一轮建：`never` 模式下是 None，需要批准的动作直接拒绝。
-    let ctx = server.tool_ctx(server.approval_bridge(turn_id, sink));
+    let ctx = server.tool_ctx(session_id, server.approval_bridge(turn_id, sink));
 
     // 工具**开始**的通知得在执行前发出去：客户端才能画出"正在调用 X"。
     // 图里的节点事件出口（inner）若也在，就两个都叫 —— 互不挡道。
@@ -551,6 +580,7 @@ async fn full_turn(
             ctx: ctx.clone(),
             max_iterations: settings.max_iterations,
             max_tokens: settings.max_tokens,
+            tool_result_budget: crate::tool_result_budget(&settings),
             observer: observer.clone(),
             on_text: Some(on_text.clone()),
             interrupt: interrupt.clone(),
@@ -762,6 +792,9 @@ async fn graph_route(
                         messages: Vec::new(),
                         interrupted: false,
                         guard: joyczl_loop::guard::GuardReport::default(),
+                        // 图自己跑完了（没走 loop），没有可配对的本地估算。
+                        estimated_input_tokens: 0,
+                        observed_input_tokens: 0,
                     },
                     gate: None,
                 },

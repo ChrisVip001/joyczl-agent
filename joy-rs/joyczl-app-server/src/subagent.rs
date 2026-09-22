@@ -85,7 +85,24 @@ impl SubagentRunner for Delegated {
             let child_tools = tools.without(joyczl_tools::subagent::NAME);
             // 子代理**没有批准通道**（`None`）：它不该阻塞在人类身上，所以
             // 需要批准的动作在它那儿直接按拒绝处理 —— 见 limitations.md。
-            let ctx = crate::tool_ctx(&facts, &episodes, &chat, &calendar, &home, None);
+            //
+            // 会话名给一个自己的：日志与 spill 归属查得到「这是谁弄出来的」。
+            let child_session = format!(
+                "subagent:{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            );
+            let ctx = crate::tool_ctx(
+                &facts,
+                &episodes,
+                &chat,
+                &calendar,
+                &home,
+                &child_session,
+                None,
+            );
 
             let result = joyczl_loop::run(joyczl_loop::Turn {
                 client: resolved.client.as_ref(),
@@ -98,6 +115,7 @@ impl SubagentRunner for Delegated {
                 ctx,
                 max_iterations: iterations,
                 max_tokens: SUBAGENT_MAX_TOKENS,
+                tool_result_budget: crate::tool_result_budget(&settings),
                 observer: None,
                 on_text: None,
                 interrupt: None,

@@ -484,6 +484,7 @@ async fn tool_ctx() -> joyczl_tools::ToolCtx {
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     joyczl_tools::ToolCtx {
         approval: None,
+        session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
         chat: joyczl_state::Chat::new(pool.clone()),

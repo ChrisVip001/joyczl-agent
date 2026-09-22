@@ -159,6 +159,55 @@ impl Chat {
         Ok(pairs)
     }
 
+    /// 记一次「实测 × 估算」的配对（用 provider 回报的 usage 校准本地估算）。
+    ///
+    /// 两个数都不为正时什么都不记 —— 图路径（不走 loop）就是这种情况，
+    /// 拿 0 去算比值会得出一个荒唐的倍率。
+    pub async fn observe_context(
+        &self,
+        session_id: &str,
+        observed: i64,
+        estimated: i64,
+    ) -> Result<()> {
+        if observed <= 0 || estimated <= 0 {
+            return Ok(());
+        }
+        sqlx::query(
+            "INSERT INTO session_context (session_id, observed_input_tokens, estimated_input_tokens, updated_at)
+             VALUES (?, ?, ?, datetime('now'))
+             ON CONFLICT(session_id) DO UPDATE SET
+                observed_input_tokens = excluded.observed_input_tokens,
+                estimated_input_tokens = excluded.estimated_input_tokens,
+                updated_at = excluded.updated_at",
+        )
+        .bind(session_id)
+        .bind(observed)
+        .bind(estimated)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 最近一次的实测/估算比值，夹在 `0.5..=2.0`。
+    ///
+    /// 夹住是刻意的：一次异常请求（比如 1 token 的探针）能把比值推到天上，
+    /// 而预算被那样一个数带偏，比不校准更糟。没有记录时返回 `None`（不校准）。
+    pub async fn context_factor(&self, session_id: &str) -> Result<Option<f64>> {
+        let row = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT observed_input_tokens, estimated_input_tokens
+             FROM session_context WHERE session_id = ?",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|(observed, estimated)| {
+            if observed <= 0 || estimated <= 0 {
+                return None;
+            }
+            Some((observed as f64 / estimated as f64).clamp(0.5, 2.0))
+        }))
+    }
+
     /// 这个会话的滚动摘要：(覆盖了多少轮, 摘要)。
     ///
     /// 没有摘要、或表里那行读不出来，都当「还没有」—— 摘要只是省 token 的

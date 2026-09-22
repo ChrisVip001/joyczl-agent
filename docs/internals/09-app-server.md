@@ -7,6 +7,18 @@
 （`lib.rs`（Server 装配）、`turn.rs`（一轮的全流程）、`dispatch.rs`（13 个方法）、
 `stdio.rs`（传输）、`trace.rs`（落盘）、`subagent.rs`（子代理执行体））。
 
+## 用实测校准估算（`session_context`）
+
+每轮请求都有两个数字：provider 回报的 `usage.input_tokens`（实测 prefill，权威）与
+本地 tiktoken 估算（近似）。loop 把**同一个请求**的两个数一起返回
+（`LoopResult.estimated_input_tokens` / `observed_input_tokens`），app-server 在轮末
+配对写进 `session_context`（迁移 0007），下一轮算预算时按比值修正。
+
+* 比值夹在 `0.5..=2.0`：一次异常请求不该把预算带偏。
+* 两个数都不为正时**不记**（图路径不走 loop）—— 拿 0 算比值会得出荒唐的倍率。
+* 只留最近一次：模型或工具集变了，旧比值就不作数。
+* 校准失败只往 stderr 喊一声：它是优化，不是这一轮的账。
+
 ## 批准等待表（`approval.rs`）
 
 `Server.approvals` 的键是 `turn_id → request_id → Waiting { tx, command }`，
