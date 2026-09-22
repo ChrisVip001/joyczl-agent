@@ -65,6 +65,10 @@
   调用）附在结论后面。
   → `joy-rs/joyczl-app-server/src/subagent.rs`
 
+* **刻意** —— 记忆去重的键是 `(subject, 规范化 content)`（大小写与首尾空白不算
+  区别），**不含 kind**：同一句话先以 `fact` 记下、后来被标成 `feedback` 时，留下
+  的是**先到的那条**的分类。判重不跨语言（同一句话的中英两版是两条）。
+  → `joy-rs/joyczl-state/migrations/0008_memory_dedup.sql`
 * **刻意** —— 记忆类别是固定的五种（`fact` 兜底）；模型自创的分类会落进
   `fact`，而不是长出一套分类学。检索目前**不按类别过滤** —— 它被存下来、被
   返回，但还没被用来筛。

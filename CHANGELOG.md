@@ -21,6 +21,15 @@ the gates do that. `delegate_task` also takes an optional `result_schema`: the a
 must be JSON matching it, one retry carries the validation error back to the child, and
 a second failure falls back to prose with the reason attached.
 
+### Memories stop piling up
+
+`facts` now carries a unique index on `(subject, lower(trim(content)))`, and
+`Facts::add` returns `(row, was_new)`: a repeat hands back the existing row instead of
+storing a second copy. Consolidation counts only genuinely new facts, and `save_note`
+says "already remembered" rather than pretending to store it again. Migration 0008
+collapses the duplicates that already existed before creating the index — a unique
+index that cannot be created would break every later write.
+
 ### MCP: a broken server stops costing a timeout per turn
 
 A connection carries a breaker (3 consecutive failures → 60s, isolated per server):

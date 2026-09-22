@@ -52,7 +52,8 @@ pub trait EpisodicStore {
 
 impl SemanticStore for Facts {
     async fn add(&self, subject: &str, content: &str, source: &str, kind: &str) -> Result<FactRow> {
-        Facts::add(self, subject, content, source, kind).await
+        // 存储抽象不需要「是不是新记的」这个细节，只把行交出去（去重仍然发生）。
+        Ok(Facts::add(self, subject, content, source, kind).await?.0)
     }
     async fn search(&self, query: &str, top_k: u32) -> Result<Vec<FactRow>> {
         Facts::search(self, query, top_k).await

@@ -109,7 +109,7 @@ async fn dispatch(
                 .source
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "user".to_string());
-            let row = server
+            let (row, _) = server
                 .facts
                 .add(&p.subject, &p.content, &source, "fact")
                 .await

@@ -433,11 +433,14 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
 /// 但 `tool_calls` 里记的仍是**真结果**（trace 与通知该看到真的）。
 #[tokio::test]
 async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
-    let args = json!({"subject": "alex", "content": "喜欢早会"});
+    // 用 `search_memory` 而不是 `save_note`：后者现在会去重，第一次的答复
+    // （「已记住 #1」）和后来的（「已经记过了」）不一样，恰好构不成「三次完全相同」。
+    // 护栏要的是**同一个调用、同一份结果**，所以挑一个输出稳定的只读工具。
+    let args = json!({"query": "查不到的东西"});
     let mock = Mock::new(vec![
-        Mock::tool_use("tu_1", "save_note", args.clone()),
-        Mock::tool_use("tu_2", "save_note", args.clone()),
-        Mock::tool_use("tu_3", "save_note", args.clone()),
+        Mock::tool_use("tu_1", "search_memory", args.clone()),
+        Mock::tool_use("tu_2", "search_memory", args.clone()),
+        Mock::tool_use("tu_3", "search_memory", args.clone()),
         Mock::text("好了。"),
     ]);
     let tools = handlers::build_default();

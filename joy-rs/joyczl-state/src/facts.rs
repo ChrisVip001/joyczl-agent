@@ -57,24 +57,46 @@ impl Facts {
 
     /// 写一条事实，返回写进去的完整行（含 id 和 created_at）——
     /// 这样调用方不必为了拿 id 再查一次。
+    /// 记一条事实。返回 `(那条事实, 是不是新记的)`。
+    ///
+    /// **重复的不入库**（迁移 0008 立的唯一索引：`(subject, lower(trim(content)))`）：
+    /// 已经有了就返回**已存在的那条**，并把 `false` 交出来让调用方自己决定怎么说。
+    /// 「重复」不是错误 —— 提炼每 N 轮跑一次、模型也常重复说同一件事，把它当错误
+    /// 只会把噪声变成故障。
     pub async fn add(
         &self,
         subject: &str,
         content: &str,
         source: &str,
         kind: &str,
-    ) -> Result<FactRow> {
-        let row = sqlx::query_as::<_, FactRow>(
+    ) -> Result<(FactRow, bool)> {
+        let inserted = sqlx::query_as::<_, FactRow>(
             "INSERT INTO facts (subject, content, source, kind) VALUES (?, ?, ?, ?)
+             ON CONFLICT DO NOTHING
              RETURNING id, subject, content, source, kind, created_at",
         )
         .bind(subject)
         .bind(content)
         .bind(source)
         .bind(normalise_kind(kind))
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = inserted {
+            return Ok((row, true));
+        }
+        // 撞上了已有的那条：读回来交出去（调用方要的是「这条事实」，不是「我新写的」）。
+        let existing = sqlx::query_as::<_, FactRow>(
+            "SELECT id, subject, content, source, kind, created_at
+             FROM facts
+             WHERE subject = ? AND lower(trim(content)) = lower(trim(?))
+             ORDER BY id LIMIT 1",
+        )
+        .bind(subject)
+        .bind(content)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row)
+        Ok((existing, false))
     }
 
     /// 存一条事实的向量（JSON 数组文本）。算不出来就不算 —— 这一列是

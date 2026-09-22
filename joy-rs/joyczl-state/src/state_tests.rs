@@ -15,6 +15,39 @@ async fn temp_db(name: &str) -> SqlitePool {
     pool
 }
 
+/// 重复的事实不入库：返回已存在的那条，并把「不是新记的」交出来。
+#[tokio::test]
+async fn a_duplicate_fact_is_not_stored_twice() {
+    let facts = Facts::new(temp_db("dedup.db").await);
+
+    let (first, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
+    assert!(is_new, "第一次当然是新记的");
+
+    // 一模一样：不新记，把已有的那条交回来。
+    let (again, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
+    assert!(!is_new);
+    assert_eq!(again.id, first.id);
+
+    // 大小写与首尾空白不算区别（模型与提炼的排版会有出入）；来源与类别也算不上
+    // 区别 —— 说的还是同一件事。
+    let (spaced, is_new) = facts
+        .add("alex", "  喜欢早会  ", "consolidation", "fact")
+        .await
+        .unwrap();
+    assert!(!is_new, "首尾空白不该让它变成新的一条");
+    assert_eq!(spaced.id, first.id);
+
+    // 内容真的不同才新记。
+    let (other, is_new) = facts
+        .add("alex", "喜欢下午的会", "user", "user")
+        .await
+        .unwrap();
+    assert!(is_new);
+    assert!(other.id > first.id);
+
+    assert_eq!(facts.recent(10, 0).await.unwrap().len(), 2, "库里就两条");
+}
+
 /// 实测校准估算：比值 = 实测 / 估算，夹在 0.5..=2.0。
 #[tokio::test]
 async fn context_observations_pair_measured_with_estimated() {

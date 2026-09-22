@@ -80,6 +80,11 @@ means "we would like this, nobody has built it".
   (including failed calls) is appended to that conclusion.
   → `joy-rs/joyczl-app-server/src/subagent.rs`
 
+* **Deliberate** — Memory de-duplication keys on `(subject, normalised content)`
+  (case and surrounding whitespace do not count) and **not** on `kind`: if the same
+  sentence was first stored as `fact` and later arrives as `feedback`, the **first**
+  classification stays. It does not deduplicate across languages.
+  → `joy-rs/joyczl-state/migrations/0008_memory_dedup.sql`
 * **Deliberate** — Memory kinds are a closed set of five (`fact` is the
   fallback); a model inventing its own category lands in `fact` rather than
   creating a taxonomy. Nothing groups by kind in retrieval yet — it is stored

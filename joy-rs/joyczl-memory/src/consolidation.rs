@@ -106,8 +106,14 @@ pub async fn consolidate_if_due(
                     eprintln!("(joy) 跳过一条临时陈述（命中 '{marker}'）：{content}");
                     continue;
                 }
-                facts.add(subject, content, "consolidation", kind).await?;
-                written += 1;
+                // 重复的不算「写进去了」：written 是「这一轮新增了多少」，
+                // 把重复计进去会让账虚高，也会让人以为提炼一直在产出。
+                let (_, is_new) = facts.add(subject, content, "consolidation", kind).await?;
+                if is_new {
+                    written += 1;
+                } else {
+                    eprintln!("(joy) 跳过一条已经存在的事实：{subject} —— {content}");
+                }
             }
         }
     }

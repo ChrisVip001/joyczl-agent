@@ -126,15 +126,19 @@ impl MemoryServer {
     async fn remember(&self, args: &Value) -> Result<String, String> {
         let subject = require_str(args, "subject")?;
         let content = require_str(args, "content")?;
-        let fact = self
+        let (fact, is_new) = self
             .facts
             .add(&subject, &content, "mcp", "fact")
             .await
             .map_err(|e| e.to_string())?;
-        Ok(format!(
-            "已记住（#{id}）：{subject} — {content}",
-            id = fact.id
-        ))
+        Ok(if is_new {
+            format!("已记住（#{id}）：{subject} — {content}", id = fact.id)
+        } else {
+            format!(
+                "这条已经记过了（没重复入库）：#{id} {subject} — {content}",
+                id = fact.id
+            )
+        })
     }
 
     async fn forget(&self, args: &Value) -> Result<String, String> {

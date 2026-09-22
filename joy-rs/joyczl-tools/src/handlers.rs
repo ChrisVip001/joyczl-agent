@@ -34,7 +34,15 @@ pub fn memory_tools() -> Vec<Tool> {
                     let content = require_str(&args, "content")?;
                     // 类别可选：模型不写就是 `fact`（写入口会收敛未知值）。
                     let kind = args.get("kind").and_then(Value::as_str).unwrap_or("fact");
-                    let row = ctx.facts.add(&subject, &content, "user", kind).await?;
+                    let (row, is_new) = ctx.facts.add(&subject, &content, "user", kind).await?;
+                    if !is_new {
+                        // 直说「已经记过了」：模型据此就不必再存一遍，用户也知道
+                        // 自己的话没有被记成两条。
+                        return Ok(format!(
+                            "这条已经记过了（没有重复入库）：#{} {} — {}",
+                            row.id, row.subject, row.content
+                        ));
+                    }
                     Ok(format!(
                         "已记住：**{}** — {}（存在 {} 的 facts 表，可随时用 search_memory 找回）",
                         row.subject,

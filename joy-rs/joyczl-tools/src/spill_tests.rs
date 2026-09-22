@@ -72,10 +72,12 @@ fn one_line_longer_than_the_budget_gets_no_fake_head() {
         "桩必须放得下：{}",
         stub.text.chars().count()
     );
+    // 「不放半行」要按**行**验：整段文本里可能有别的字符（路径里就会出现 y），
+    // 但没有一行是那条超长原文的碎片。
     assert!(
-        !stub.text.contains('y'),
-        "放不下一整行就别放半行：{}",
-        &stub.text[..stub.text.len().min(80)]
+        stub.text.lines().all(|line| line.chars().count() < 200),
+        "放不下一整行就别放半行：{:?}",
+        stub.text
     );
     assert!(stub.text.contains("完整输出在"), "{}", stub.text);
 }
