@@ -105,6 +105,11 @@ means "we would like this, nobody has built it".
   corrupt anything.
   → `joy-rs/joyczl-provider/src/tokens.rs`
 
+* **Deliberate** — The MCP circuit breaker is **in-process** and fixed at "3
+  consecutive failures → 60 seconds": no persistence, no knob, and after a server
+  restarts Joy will still try once. It exists to stop a dead server costing one
+  timeout per turn, not to be an availability metric.
+  → `joy-rs/joyczl-mcp/src/lib.rs` (`Breaker`)
 * **Deliberate** — The per-turn tool-result budget only touches results that are
   individually large. A hundred medium results overflowing the cap are left alone (one
   stderr line, no content change): a file per result would cost more than the context it

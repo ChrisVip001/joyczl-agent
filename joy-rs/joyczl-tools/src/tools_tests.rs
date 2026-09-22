@@ -489,3 +489,48 @@ async fn valid_arguments_pass_the_schema() {
         .await;
     assert!(out.contains("已记住"), "{out}");
 }
+
+/// 同名工具**不覆盖**：一个名字只能有一个实现。
+///
+/// 这条守的是「不知道是谁在执行」这类意外：MCP 服务器、技能、内建工具都可能撞名，
+/// 而悄悄换掉一个实现比少一个工具危险得多。
+#[tokio::test]
+async fn a_duplicate_tool_name_does_not_replace_the_first() {
+    use std::sync::Arc;
+
+    use serde_json::Value;
+
+    fn fixed(name: &str, answer: &str) -> super::Tool {
+        let answer = answer.to_string();
+        super::Tool {
+            name: name.to_string(),
+            description: "测试用".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            handler: Arc::new(move |_ctx: super::ToolCtx, _args: Value| {
+                let answer = answer.clone();
+                Box::pin(async move { Ok(answer) })
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>,
+                    >
+            }),
+        }
+    }
+
+    let mut registry = super::ToolRegistry::new();
+    registry.register(fixed("dup", "第一个"));
+    registry.register(fixed("dup", "第二个"));
+
+    assert_eq!(
+        registry
+            .names()
+            .iter()
+            .filter(|name| **name == "dup")
+            .count(),
+        1,
+        "只该有一个"
+    );
+    let out = registry
+        .execute(ctx().await, "dup", serde_json::json!({}))
+        .await;
+    assert_eq!(out, "第一个", "先到的保留，后到的被拒");
+}

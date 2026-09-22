@@ -121,6 +121,19 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: Tool) {
+        // 同名**不覆盖**：后到的那个被拒。
+        //
+        // 一个名字只能有一个实现 —— 内建工具、MCP 服务器、技能都可能撞名，而
+        // 「悄悄换掉一个工具的实现」是最不该发生的意外（一个叫 run_command 的
+        // MCP 工具绝不能顶掉真正的 run_command）。宁可少一个工具，不接受一个
+        // 不知道是谁在执行的工具。
+        if self.tools.contains_key(&tool.name) {
+            eprintln!(
+                "(joy) 工具名 '{}' 已经被占用了，后到的这个被拒绝注册（不覆盖已有的）",
+                tool.name
+            );
+            return;
+        }
         let validator = match jsonschema::validator_for(&tool.input_schema) {
             Ok(validator) => Some(validator),
             Err(e) => {

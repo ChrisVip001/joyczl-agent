@@ -12,6 +12,25 @@ replace the largest results with stubs — full text spilled, head/tail in compl
 tools that budget themselves skipped, idempotent, and a failed spill never turns a
 successful call into an error. The defaults are deliberately large (200k / 30k).
 
+### Subagent reports are transcriptions, and can be structured
+
+A report carries a header saying it is the subagent's own account, lines imitating a
+role prefix or our own control markers get a backslash, and the model is told how many
+were defused. It does not judge maliciousness and does not touch permission checks —
+the gates do that. `delegate_task` also takes an optional `result_schema`: the answer
+must be JSON matching it, one retry carries the validation error back to the child, and
+a second failure falls back to prose with the reason attached.
+
+### MCP: a broken server stops costing a timeout per turn
+
+A connection carries a breaker (3 consecutive failures → 60s, isolated per server):
+while it is open, calls return an explanation instead of knocking, and after the
+cooldown one probe is allowed — a success clears the count. Tool names that collapse
+into each other (`a`+`b_c` vs `a_b`+`c`) are de-duplicated with a suffix, and the rename
+is printed because that name is what the model and the user see.
+`ToolRegistry::register` refuses to replace an existing name instead of silently
+swapping an implementation.
+
 ### The estimator is calibrated by measurement
 
 `usage.input_tokens` was recorded but never fed back. The loop now returns the estimate

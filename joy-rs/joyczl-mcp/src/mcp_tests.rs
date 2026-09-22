@@ -578,3 +578,105 @@ async fn a_server_that_cannot_start_is_skipped_with_a_warning() {
         "MCP 服务器 'ghost' 没有连上。"
     );
 }
+
+// ---- 熔断与命名去重（第三批）----------------------------------------------
+
+/// 一台连续失败的服务器会被熔断：熔断期间**不再敲门**，冷到点后放一次探针。
+#[tokio::test]
+async fn a_failing_server_gets_circuit_broken() {
+    use crate::{BreakerPolicy, Connection, Transport};
+    use std::time::Duration;
+
+    let fake = fake_http(vec![
+        // 握手（成功的）
+        Reply {
+            status: 200,
+            content_type: "application/json",
+            body: r#"{"jsonrpc":"2.0","id":@id,"result":{"protocolVersion":"2025-06-18"}}"#
+                .to_string(),
+        },
+        // 握手的第二条：`notifications/initialized` 的 202
+        Reply {
+            status: 202,
+            content_type: "application/json",
+            body: String::new(),
+        },
+        // 之后每次都 500（脚本的最后一条会被反复用）
+        Reply {
+            status: 500,
+            content_type: "application/json",
+            body: "boom".to_string(),
+        },
+    ])
+    .await;
+
+    let mut session = HttpSession::new(&fake.url, None);
+    session.initialize().await.expect("握手");
+
+    // 阈值 2 次、冷却 150 毫秒：测试不为了一根断路器等 60 秒。
+    let connection = Connection::with_policy(
+        "flaky",
+        Transport::Http(session),
+        BreakerPolicy {
+            failures: 2,
+            cooldown: Duration::from_millis(150),
+        },
+    );
+
+    let first = connection.call("do", json!({})).await;
+    let second = connection.call("do", json!({})).await;
+    assert!(first.contains("失败"), "{first}");
+    assert!(second.contains("失败"), "{second}");
+
+    // 第三次：断路器开着 —— 不该再去打扰它。
+    let before = fake.seen.lock().await.len();
+    let skipped = connection.call("do", json!({})).await;
+    assert!(skipped.contains("断路器"), "{skipped}");
+    assert!(skipped.contains("被跳过"), "{skipped}");
+    assert_eq!(
+        fake.seen.lock().await.len(),
+        before,
+        "熔断期间一次都不该发出去"
+    );
+
+    // 冷到点：放一次探针（半开）。
+    tokio::time::sleep(Duration::from_millis(220)).await;
+    let probe = connection.call("do", json!({})).await;
+    assert!(
+        !probe.contains("断路器"),
+        "冷却过后要允许探一次，实际：{probe}"
+    );
+    assert!(probe.contains("失败"), "探针也是真的去敲了门：{probe}");
+}
+
+/// 两台服务器各报一个会塌成同名的工具：谁都不覆盖谁。
+#[test]
+fn two_servers_that_collide_get_distinct_names() {
+    use std::collections::HashSet;
+
+    let mut taken: HashSet<String> = HashSet::new();
+    // `a` + `b_c` 与 `a_b` + `c` 都会变成 `a_b_c`。
+    let (first, renamed) = config::model_safe_name_unique("a", "b_c", &mut taken);
+    assert_eq!(first, "a_b_c");
+    assert!(!renamed);
+
+    let (second, renamed) = config::model_safe_name_unique("a_b", "c", &mut taken);
+    assert!(renamed, "重名要改");
+    assert_ne!(second, first, "不能覆盖先到的那个");
+    assert!(second.starts_with("a_b_c_"), "{second}");
+    assert!(second.len() <= 64, "仍然要满足 64 字符上限：{second}");
+}
+
+/// 长名字加序号之后也不能越过 64 字符。
+#[test]
+fn a_renamed_long_tool_name_still_fits() {
+    use std::collections::HashSet;
+
+    let mut taken: HashSet<String> = HashSet::new();
+    let long = "x".repeat(200);
+    let (first, _) = config::model_safe_name_unique("s", &long, &mut taken);
+    let (second, renamed) = config::model_safe_name_unique("s", &long, &mut taken);
+    assert!(renamed);
+    assert!(second.len() <= 64, "{second}");
+    assert_ne!(first, second);
+}

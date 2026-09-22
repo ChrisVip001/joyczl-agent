@@ -143,6 +143,40 @@ pub fn auth_hint(transport: &Transport) -> Option<String> {
 /// 就被拒掉。
 ///
 /// 只改模型读到的那个名字。回给服务器的仍是原名，所以改名不可能弄坏派发。
+/// 同 [`model_safe_name`]，但保证在 `taken` 里**唯一**。
+///
+/// 为什么需要：`{server}_{tool}` 会塌 —— 服务器 `a` 的工具 `b_c` 与服务器 `a_b`
+/// 的工具 `c` 都变成 `a_b_c`。两个服务器各报一个同名工具是现实里会发生的事，而
+/// 「谁覆盖谁」取决于注册顺序，那是最难查的一类问题。重名时加 `_2`、`_3`……
+///
+/// 返回 `(最终名字, 是否改过)`：**改过就要说出来** —— 这个名字模型和用户都会看到，
+/// 悄悄改掉等于让人对着一份对不上的工具名排查。
+pub fn model_safe_name_unique(
+    server: &str,
+    tool: &str,
+    taken: &mut std::collections::HashSet<String>,
+) -> (String, bool) {
+    let base = model_safe_name(server, tool);
+    if taken.insert(base.clone()) {
+        return (base, false);
+    }
+    for n in 2u32.. {
+        let candidate = with_suffix(&base, n);
+        if taken.insert(candidate.clone()) {
+            return (candidate, true);
+        }
+    }
+    unreachable!("序号总能找到空位")
+}
+
+/// 加后缀并守住 64 字符上限：**保头**（服务器前缀在头上，区分度最高）。
+fn with_suffix(base: &str, n: u32) -> String {
+    let suffix = format!("_{n}");
+    let keep = 64usize.saturating_sub(suffix.len());
+    let head: String = base.chars().take(keep).collect();
+    format!("{head}{suffix}")
+}
+
 pub fn model_safe_name(server: &str, tool: &str) -> String {
     let safe: String = format!("{server}_{tool}")
         .chars()
