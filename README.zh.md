@@ -96,6 +96,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P5 ✅ | 本地推理（Ollama，不需要 key）、`joy mcp serve`（把记忆暴露成 MCP 服务器）、Homebrew formula + Dockerfile |
 | P6 ✅ | `JOY_EXEC` 三道闸门的沙箱执行（硬拒名单 + 放行表 + seatbelt/bwrap）、上下文压缩（滚动摘要）、声明式定时任务（`joy schedule`） |
 | P7 ✅ | 混合检索（`JOY_EMBEDDINGS`，RRF）、临时陈述过滤、技能更新（`joy skill update`） |
+| P8 ✅ | 启动期配置校验、工具参数 schema 校验、循环护栏、token 预算、沙箱且默认断网的执行、可见的重试、超长输出落盘、子代理、交互式批准、技能策略字段、记忆类别 |
 | 下一步 | 分发：PyPI wheel + npm shim，均未发布 |
 
 ## 命名

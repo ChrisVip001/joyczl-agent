@@ -15,6 +15,7 @@ bin = ["joyczl-agent-bin"]
 # 只在生成代码时用。v2.py 是 datamodel-codegen 从 JSON Schema 生成的，
 # 钉死版本是因为生成器的次版本会改输出，而这两个文件是提交进仓库的。
 dev = [
+    "coverage>=7",
     "datamodel-code-generator==0.82.0",
     "mypy>=1.11",
     "pytest>=8",
@@ -35,10 +36,21 @@ packages = ["src/joyczl_agent"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.coverage.run]
+# 只量**我们的**代码：不写 `source` 的话，coverage 会把测试自身、以及运行环境里
+# 顺手被导入的东西（比如 IDE 注入的 sitecustomize.py）一起算进分母，那样出来的
+# 百分比既不是我们的水平、也没法当门用。
+source = ["src/joyczl_agent"]
+# 生成物不算：它由 datamodel-codegen 产出，改不了也不该被要求覆盖。
+omit = ["src/joyczl_agent/generated/*"]
+
+[tool.coverage.report]
+# 趋势门，不是目标：低于它就说明这一轮把没测过的代码塞进来了。
+show_missing = true
+
 [tool.mypy]
 # 开发环境是 3.13，但这个包声明支持 3.10 —— 差着的正是类型语法能用到哪一步。
 # 钉在这里，免得本地过了、装到 3.10 上炸。
 python_version = "3.10"
 # SDK 的类型标注就是它卖的东西，别让「忘了标注」悄悄溜过去。
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
+strict = true

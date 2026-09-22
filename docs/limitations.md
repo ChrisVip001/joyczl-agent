@@ -78,6 +78,25 @@ means "we would like this, nobody has built it".
   and returned, not used to filter.
   → `joy-rs/joyczl-state/src/facts.rs` (`KINDS`)
 
+* **Deliberate** — The sandbox is Unix-only (macOS `sandbox-exec`, Linux
+  `bubblewrap`). On Windows there is no backend, so `run_command` refuses to
+  run anything — which is the intended reading of "no sandbox, no execution",
+  not a bug. CI has a Windows job that runs everything *except* the sandbox
+  tests, named so the boundary is visible.
+  → `.github/workflows/ci.yml`, `joy-rs/joyczl-tools/src/exec.rs`
+* **Deliberate** — Context compaction does not preserve file-operation state
+  (which files were read or written earlier in the session, the way pi's
+  harness does). What survives eviction is the rolling summary plus the
+  `[tools used: …]` fold; a model that needs the exact earlier diff has to read
+  the file again.
+  → `joy-rs/joyczl-memory/src/compaction.rs`, `joy-rs/joyczl-app-server/src/turn.rs`
+* **Deliberate** — Token counts are estimated with a tiktoken encoding, applied
+  across providers that do not use it. The estimate decides *when* to compact,
+  never what is billed: the provider's reported `usage` is the authoritative
+  number. Being wrong here moves compaction earlier or later, it does not
+  corrupt anything.
+  → `joy-rs/joyczl-provider/src/tokens.rs`
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

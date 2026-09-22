@@ -48,9 +48,34 @@ fn list(home: &Path) -> Result<()> {
         );
         return Ok(());
     }
+    let loaded_names: Vec<String> = loaded.iter().map(|s| s.name.clone()).collect();
     for skill in loaded {
-        let version = skill.version.map(|v| format!(" v{v}")).unwrap_or_default();
-        println!("- {}{version}  {}", skill.name, skill.description);
+        let version = skill
+            .version
+            .as_deref()
+            .map(|v| format!(" v{v}"))
+            .unwrap_or_default();
+        // 两个策略字段直接印出来：装上之后最常见的疑问是「它为什么没被触发」，
+        // 而答案就在这两条里（不隐式触发 / 依赖不在）。
+        let mut notes = Vec::new();
+        if !skill.allow_model_invocation {
+            notes.push("只走 $名字 显式引用".to_string());
+        }
+        let missing: Vec<&str> = skill
+            .dependencies
+            .iter()
+            .filter(|dep| !loaded_names.iter().any(|name| name == *dep))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            notes.push(format!("依赖缺失：{}", missing.join(", ")));
+        }
+        let note = if notes.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", notes.join("；"))
+        };
+        println!("- {}{version}  {}{note}", skill.name, skill.description);
     }
     Ok(())
 }

@@ -24,6 +24,47 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  rust-coverage:
+    # 趋势门，不是目标。阈值按**实测基线**定：本地一次 `cargo llvm-cov
+    # --workspace --summary-only` 量到 65.9% 行覆盖，门设在 60 —— 宁可低而真。
+    # 设高了只会逼出「为了过门而写的测试」，那比没有门更糟。
+    name: Rust (coverage floor 60%)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: joy-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: joy-rs
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --fail-under-lines 60 --summary-only
+
+  windows:
+    # 显式记录平台边界，而不是假装支持：exec 的沙箱是 Unix-only
+    # （macOS seatbelt / Linux bubblewrap），测试里凡是要真沙箱的都跳过。
+    # 这一 job 只证明**除沙箱外的部分**在 Windows 上照样编译、照样过测。
+    name: Windows (build + tests, sandbox tests not applicable)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: joy-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: joy-rs
+      - run: cargo build -p joyczl-cli
+      # joyczl-tools 整个排除：exec 的沙箱后端在 Windows 上不存在，
+      # 而它的测试里有一部分是「真起一个沙箱」的。
+      - run: cargo test --workspace --exclude joyczl-tools
+      - run: cargo test -p joyczl-tools -- --skip sandbox --skip spill
+
   schema:
     name: Protocol artifacts (drift check)
     runs-on: ubuntu-latest
@@ -50,7 +91,9 @@ jobs:
         working-directory: joy-ts
 
   python:
-    name: Python SDK (mypy / test)
+    # mypy 是 `strict = true`（见 pyproject.toml）：SDK 的类型标注就是它卖的东西。
+    # 覆盖率同样是趋势门，阈值按实测基线（63%）定在 60；生成物不计入分母。
+    name: Python SDK (mypy strict / pytest + coverage floor 60%)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +102,9 @@ jobs:
         working-directory: sdk/python
       - run: uv run mypy src/joyczl_agent tests
         working-directory: sdk/python
-      - run: uv run pytest
+      - run: uv run coverage run -m pytest
+        working-directory: sdk/python
+      - run: uv run coverage report --fail-under=60
         working-directory: sdk/python
 
   gate:

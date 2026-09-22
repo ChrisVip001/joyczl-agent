@@ -31,7 +31,7 @@ class FakeTransport(Transport):
     """把 app-server 换成一根内存管子。"""
 
     def __init__(self) -> None:
-        self.written: list[dict] = []
+        self.written: list[dict[str, Any]] = []
         self.logs: list[str] = []
         self.started = False
         self.closed = False
@@ -57,7 +57,7 @@ class FakeTransport(Transport):
     async def close(self) -> None:
         self.closed = True
 
-    def feed(self, frame: dict) -> None:
+    def feed(self, frame: dict[str, Any]) -> None:
         for handler in list(self._line):
             handler(json.dumps(frame))
 
@@ -95,7 +95,7 @@ async def _fire(
     return task
 
 
-async def _abandon(task: asyncio.Task) -> None:
+async def _abandon(task: asyncio.Task[Any]) -> None:
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
 
@@ -135,7 +135,7 @@ def test_unset_optional_params_are_left_out() -> None:
 def test_notification_reaches_the_handler_as_a_model() -> None:
     async def scenario() -> None:
         transport, client = await _connected()
-        seen: list = []
+        seen: list[Any] = []
         client.on_notification(seen.append)
 
         transport.feed(
@@ -159,7 +159,7 @@ def test_notification_reaches_the_handler_as_a_model() -> None:
 def test_notification_that_does_not_fit_is_reported_not_raised() -> None:
     async def scenario() -> None:
         transport, client = await _connected()
-        seen: list = []
+        seen: list[Any] = []
         client.on_notification(seen.append)
 
         # 少了 delta。

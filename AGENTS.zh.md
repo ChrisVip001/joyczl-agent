@@ -14,13 +14,13 @@ joy-rs/
   joyczl-protocol/      跨语言契约，唯一事实来源（schema/ 生成物 check-in）
   joyczl-config/        JOY_* 环境变量，启动读一次
   joyczl-state/         SQLite + FTS5(trigram)；记忆后端契约与 conformance
-  joyczl-provider/      12 家厂商（含本地 Ollama），两种 wire format + SSE
-  joyczl-tools/         工具注册表 + 内置工具
+  joyczl-provider/      12 家厂商（含本地 Ollama），两种 wire format + SSE，重试与 token 估算
+  joyczl-tools/         工具注册表（带 schema 校验）+ 内置工具、沙箱执行、子代理、批准
   joyczl-loop/          agent 主循环（可打断）
   joyczl-graph/         波次 DAG 引擎 + triage / gather 工作流
   joyczl-mcp/           MCP 客户端（stdio/HTTP）+ 浏览器 OAuth + 记忆服务器（`joy mcp serve`）
   joyczl-memory/        检索门 + consolidation + Skills + MEMORY.md 镜像
-  joyczl-app-server/    JSON-RPC over stdio，唯一持有 state.db
+  joyczl-app-server/    JSON-RPC over stdio，唯一持有 state.db，一轮的全流程与批准等待表
   joyczl-ops/           驾驶舱后端（axum + SSE）
   joyczl-cli/           joy 二进制（REPL / dashboard / gather / eval / mcp / skill）
   joyczl-eval/          确定性 eval + judge + release gate
