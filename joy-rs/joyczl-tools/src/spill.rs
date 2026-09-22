@@ -39,11 +39,15 @@ pub fn spill_text(dir: &Path, text: &str, tag: &str) -> Option<String> {
     let file = folder.join(format!("{tag}-{stamp}-{}.txt", std::process::id()));
     std::fs::write(&file, text).ok()?;
     // 相对 home（spill 的父目录）：读起来就是「去 spill/… 看」。
+    //
+    // 分隔符统一成 `/`：这个字符串是**写给模型看**的，而 Windows 上 `display()`
+    // 给的是反斜杠 —— 同一句话在两种平台长得不一样，测试也就跟着分成两套。
+    // 统一的 `/` 在 Windows 上照样能 join 回来（系统 API 两种都认）。
     let relative = dir
         .parent()
         .and_then(|home| file.strip_prefix(home).ok())
         .unwrap_or(&file);
-    Some(relative.display().to_string())
+    Some(relative.display().to_string().replace('\\', "/"))
 }
 
 /// 给超长文本做一个放得下的桩。文本本来就不超预算时返回 `None`。

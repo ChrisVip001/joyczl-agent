@@ -1,0 +1,11 @@
+Normalise spill paths to forward slashes
+
+The Windows job caught this, and only the Windows job could have: the relative
+path in the stub notice came from Path::display(), so on Windows the model read
+"spill\20260923\..." while every test and the docs say "spill/...". The separator
+is now normalised at the source — that string is written for the model to read,
+and a path whose shape changes per platform is a path nobody can trust. Joining
+it back still works on Windows, which accepts both separators.
+
+Also gave the breaker test more slack: a 150ms cooldown with a 220ms wait is
+fine on a laptop and optimistic on a loaded CI runner.
