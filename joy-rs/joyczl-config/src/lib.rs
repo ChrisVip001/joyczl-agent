@@ -805,14 +805,16 @@ mod config_tests {
         };
         assert!(ok.validate().is_ok());
 
+        // 「不存在」这一条要用**本平台也认的绝对路径**来测：`/x/y` 在 Windows
+        // 上根本不是绝对路径（没有盘符），会先被上面那条规则拦下 —— 于是断言
+        // 「说不存在」在 Windows 上必然失败。用临时目录底下的一个不存在名字，
+        // 两边都落在「不存在」这条分支上。
         let missing = Settings {
-            exec_writable_roots: vec![PathBuf::from("/definitely/not/here")],
+            exec_writable_roots: vec![std::env::temp_dir().join("joy-not-here-9f3a1")],
             ..Settings::default()
         };
-        assert!(missing
-            .validate()
-            .expect_err("不存在的目录要被抓到")
-            .contains("不存在"));
+        let why = missing.validate().expect_err("不存在的目录要被抓到");
+        assert!(why.contains("不存在"), "要落在「不存在」这条分支上：{why}");
 
         let relative = Settings {
             exec_writable_roots: vec![PathBuf::from("build")],
