@@ -81,6 +81,55 @@ dead embedding service degrades to keyword-only with a warning; it never
 becomes "I remember nothing". Facts written before the switch was on have no
 vector: run `joy memory reindex` to backfill.
 
+## Lifecycle hooks (`JOY_HOOKS`)
+
+With `JOY_HOOKS=1`, Joy reads `<home>/hooks.json` and runs **your shell commands** on
+twelve events — the place to add behaviour without editing the loop: auditing, policy
+gates, formatting, feeding tool calls to something else.
+
+```json
+{ "disableAllHooks": false,
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "run_command", "timeout": 30, "command": "path/to/hook.sh", "args": [] }
+    ],
+    "PostToolUse": [ { "matcher": "*", "command": "audit.sh" } ] } }
+```
+
+**Events** (named as in Claude Code / codex): `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `PermissionRequest`, `SessionStart`, `SessionEnd`, `Stop`,
+`StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`.
+
+**What the command gets**: a JSON payload on stdin (`hook_event_name`, `session_id`,
+`cwd`, `tool_name`, `tool_input`, `tool_output`, `matcher`, …).
+
+**How it answers**:
+
+| Exit / output | Meaning |
+|---|---|
+| `exit 0` | allow; a JSON stdout is parsed as below |
+| `exit 2` | **block** (the only exit code that blocks), reason from `reason` or stderr |
+| any other code | a non-blocking error: one stderr line, the action proceeds — a broken hook must not disable every tool |
+| `{"decision":"block","reason":"…"}` | same, via JSON |
+| `{"updatedInput":{…}}` | rewrite tool input (re-validated afterwards; a bad rewrite says the hook did it) |
+| `{"updatedOutput":"…"}` | rewrite the tool result |
+| `{"additionalContext":"…"}` | add context for the model (`SessionStart` folds it into this turn) |
+| `{"hookSpecificOutput":{"permissionDecision":"allow\|deny"}}` | answer a `PermissionRequest` on the user's behalf |
+
+**Timeouts split two ways**: policy events (`PreToolUse`, `PermissionRequest`, `Stop`)
+time out **closed** — a gate that cannot answer in time must not wave things through;
+observation events time out **open**. Per-entry `timeout` wins, then
+`JOY_HOOKS_TIMEOUT`, then the event default (30s for interaction-sensitive events,
+600s otherwise).
+
+**A changed file is not executed**: the content hash is recorded at load; if
+`hooks.json` changes while running (another process writing it), the new content is
+**not** run and stderr says so. Swapping a live policy hook is the kind of silent
+change that should stop and be seen.
+
+A blocking `Stop` re-runs the turn **once**: it is the ancestor of the goal loop
+(`goal/set`), without the round cap, judge or human-authority boundary.
+
 ## Per-turn tool-result budget
 
 History has a sliding window and a token budget; the turn itself did not. `run_command`
@@ -105,6 +154,8 @@ and the context keeps the head and tail — **complete lines only** — plus
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `JOY_HOOKS` | `0` | read `<home>/hooks.json` and run your shell commands on twelve lifecycle events (below) |
+| `JOY_HOOKS_TIMEOUT` | `30` | default hook timeout in seconds; a per-entry `timeout` wins |
 | `JOY_EXEC` | `0` | enable the `run_command` tool (off = the model never sees it) |
 | `JOY_DELEGATE` | `0` | enable the `delegate_task` tool (a subagent gets its own context; it cannot delegate again) |
 | `JOY_EXEC_ALLOW` | — | allowlist, comma separated, trailing `*` wildcards (`cargo test,git status,ls *`). Empty = deny everything |

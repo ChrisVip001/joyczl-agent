@@ -107,6 +107,18 @@ fn pipes_into_a_shell(command: &str) -> bool {
     })
 }
 
+/// 「已经有人答应了」—— `PermissionRequest` hook 放行时用它替掉批准流程。
+///
+/// 只在这一处用：钩子明确回了 `permissionDecision: allow`，那就是有人替用户拍了板，
+/// 不该再弹一次问题。
+struct AlreadyApproved;
+
+impl crate::approval::ApprovalBroker for AlreadyApproved {
+    fn request(&self, _request: crate::approval::ApprovalRequest) -> crate::approval::ApprovalFut {
+        Box::pin(async { true })
+    }
+}
+
 /// 闸门给出的三种结局。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Gate {
@@ -518,9 +530,36 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     writable.push(cwd.clone());
                 }
                 writable.push(ctx.home.clone());
+
+                // PermissionRequest：在**问人之前**给钩子一次表态的机会 —— 它可以
+                // 替人拍板「行」（于是不打扰用户），也可以直接拒绝。
+                let mut approval = ctx.approval.clone();
+                if let Some(hooks) = &ctx.hooks {
+                    let outcome = hooks
+                        .fire(
+                            crate::hooks::HookEvent::PermissionRequest,
+                            serde_json::json!({
+                                "session_id": ctx.session_id,
+                                "cwd": cwd,
+                                "tool_name": "run_command",
+                                "tool_input": { "command": command },
+                            }),
+                        )
+                        .await;
+                    if let Some(why) = outcome.blocked {
+                        return Ok(format!(
+                            "Error: {why}（PermissionRequest hook 拒绝了这条命令）"
+                        ));
+                    }
+                    if outcome.allowed {
+                        eprintln!("(joy) PermissionRequest hook 放行了这条命令：{command}");
+                        approval = Some(Arc::new(AlreadyApproved));
+                    }
+                }
+
                 // `JOY_EXEC_WRITABLE_ROOTS` 由 execute 自己并进来（策略在
                 // 任何调用路径上都生效，不靠调用方记得合并）。
-                Ok(execute(&command, &policy, &writable, ctx.approval.as_deref()).await)
+                Ok(execute(&command, &policy, &writable, approval.as_deref()).await)
             })
         }),
     }

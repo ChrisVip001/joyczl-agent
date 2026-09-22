@@ -104,6 +104,40 @@ pub async fn run_turn(
         ts: Local::now().to_rfc3339(),
     }));
 
+    // ---- SessionStart：这个会话的第一次。返回的 `additionalContext` 并进这一轮的
+    // 话里（钩子想给模型铺点背景，比如「这个仓库的规矩在 CONTRIBUTING.md」）。
+    let mut message = params.message.clone();
+    if server
+        .chat
+        .session_history(&session_id)
+        .await
+        .unwrap_or_default()
+        .is_empty()
+    {
+        let payload = serde_json::json!({
+            "session_id": session_id,
+            "cwd": std::env::current_dir().ok(),
+            "user_message": params.message,
+        });
+        let outcome = crate::fire_hook(
+            &server.hooks,
+            joyczl_tools::hooks::HookEvent::SessionStart,
+            payload,
+        )
+        .await;
+        if let Some(context) = outcome.context {
+            // 明说这段来自钩子：模型不该以为这是用户说的话。
+            message = format!("{context}\n\n{message}");
+        }
+        if let Some(reason) = outcome.blocked {
+            return Err(joyczl_protocol::ErrorObject {
+                code: joyczl_protocol::codes::INTERNAL_ERROR,
+                message: format!("SessionStart hook 拒绝了这次会话：{reason}"),
+                data: None,
+            });
+        }
+    }
+
     // ---- 重试通知：**每次必发**。
     //
     // 计数也走这里 —— `meta.retries` 因此是实测值而不是猜的。用户看到的应该
@@ -131,36 +165,96 @@ pub async fn run_turn(
     //
     // 整段（图与 full_turn）都套在通知出口里：模型调用可能发生在两条路径的
     // 任何一处，重试通知不该只覆盖其中一条。
-    let (graph, full) = joyczl_provider::retry::with_note_sink(retry_sink, async {
-        match graph_route(
+    // 显式标注错误类型：这里不再用 `?` 往上抛，编译器需要知道它是什么。
+    let dispatched: Result<_, joyczl_protocol::ErrorObject> =
+        joyczl_provider::retry::with_note_sink(retry_sink, async {
+            match graph_route(
+                server,
+                &resolved,
+                &message,
+                &session_id,
+                &turn_id,
+                sink,
+                Some(interrupt.clone()),
+            )
+            .await?
+            {
+                Some(routed) => Ok((Some(routed.info), routed.turn)),
+                None => Ok((
+                    None,
+                    full_turn(
+                        server,
+                        &resolved,
+                        &message,
+                        &session_id,
+                        &turn_id,
+                        sink,
+                        None,
+                        Some(interrupt.clone()),
+                    )
+                    .await?,
+                )),
+            }
+        })
+        .await;
+
+    let (graph, mut full) = match dispatched {
+        Ok(pair) => pair,
+        Err(e) => {
+            // StopFailure：这一轮**没跑完**（模型挂了、图炸了……）。观察事件 ——
+            // 钩子自己出问题不该把原来的错误盖掉。
+            crate::fire_hook(
+                &server.hooks,
+                joyczl_tools::hooks::HookEvent::StopFailure,
+                serde_json::json!({
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "error": e.message,
+                }),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+
+    // ---- Stop：这一轮跑完了。钩子要求继续（exit 2 / decision: block）就再跑一轮，
+    // 上限 1 次。通用的「自动续轮」是目标循环（`goal/set`）的事，这里只兑现
+    // 「Stop 能拦住结束」这一点，不把它做成第二套循环。
+    let mut stop_rounds = 0usize;
+    loop {
+        let payload = serde_json::json!({
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "reply": full.result.reply,
+            "iterations": full.result.iterations,
+        });
+        let outcome =
+            crate::fire_hook(&server.hooks, joyczl_tools::hooks::HookEvent::Stop, payload).await;
+        let Some(reason) = outcome.blocked else {
+            break;
+        };
+        if stop_rounds >= MAX_STOP_CONTINUATIONS {
+            // 续过之后还要求继续：如实说出来，不假装它满意了。
+            full.result
+                .reply
+                .push_str(&format!("\n\n（Stop hook 仍要求继续：{reason}）"));
+            break;
+        }
+        stop_rounds += 1;
+        eprintln!("(joy) Stop hook 要求继续（第 {stop_rounds} 次）：{reason}");
+        full = full_turn(
             server,
             &resolved,
-            &params.message,
+            &reason,
             &session_id,
             &turn_id,
             sink,
+            None,
             Some(interrupt.clone()),
         )
-        .await?
-        {
-            Some(routed) => Ok((Some(routed.info), routed.turn)),
-            None => Ok((
-                None,
-                full_turn(
-                    server,
-                    &resolved,
-                    &params.message,
-                    &session_id,
-                    &turn_id,
-                    sink,
-                    None,
-                    Some(interrupt.clone()),
-                )
-                .await?,
-            )),
-        }
-    })
-    .await?;
+        .await?;
+    }
+
     let FullTurn { result, gate } = full;
 
     for call in &result.tool_calls {
@@ -511,6 +605,7 @@ async fn full_turn(
         settings.history_turns,
         history_budget,
         None,
+        &server.hooks,
     )
     .await;
     let mut system = build_system(
@@ -599,6 +694,7 @@ async fn full_turn(
                     settings.history_turns,
                     0,
                     Some(FORCED_RETRY_TURNS),
+                    &server.hooks,
                 )
                 .await;
                 history = forced_history;
@@ -906,6 +1002,9 @@ pub(crate) fn build_system(
     parts.join("\n")
 }
 
+/// 一轮里最多因为 Stop hook 继续几次。通用机制是目标循环（`goal/set`）。
+const MAX_STOP_CONTINUATIONS: usize = 1;
+
 /// 只取最近 N 轮，外加一份滚动摘要。
 ///
 /// 没有滑窗，一个长会话每轮都把全部历史塞进 prompt，直到上下文爆炸；
@@ -922,6 +1021,7 @@ async fn load_history(
     history_turns: i32,
     token_budget: usize,
     window_override: Option<usize>,
+    hooks: &Option<Arc<joyczl_tools::hooks::Hooks>>,
 ) -> (Vec<Message>, Option<String>) {
     let pairs = chat.session_history(session_id).await.unwrap_or_default();
     let ceiling = history_turns.max(0) as usize;
@@ -934,6 +1034,22 @@ async fn load_history(
         )),
     };
 
+    // PreCompact 要在**动手之前**发（事后补一条就不叫 Pre 了）。是否真会压由
+    // `compaction::due` 一处判定 —— 钩子不该在「其实没压」的时候也响。
+    let will_compact = joyczl_memory::compaction::due(chat, session_id, &pairs, window).await;
+    if will_compact {
+        let outcome = crate::fire_hook(
+            hooks,
+            joyczl_tools::hooks::HookEvent::PreCompact,
+            serde_json::json!({ "session_id": session_id, "window": window, "turns": pairs.len() }),
+        )
+        .await;
+        // 观察事件：钩子的话只是旁注，不能拦住压缩（拦住了这一轮就可能溢出）。
+        if let Some(note) = outcome.note {
+            eprintln!("(joy) PreCompact：{note}");
+        }
+    }
+
     let summary = joyczl_memory::compaction::refresh(
         chat,
         resolved.client.as_ref(),
@@ -944,6 +1060,18 @@ async fn load_history(
     )
     .await
     .unwrap_or(None);
+
+    if will_compact {
+        crate::fire_hook(
+            hooks,
+            joyczl_tools::hooks::HookEvent::PostCompact,
+            serde_json::json!({
+                "session_id": session_id,
+                "summary_chars": summary.as_ref().map(String::len).unwrap_or(0),
+            }),
+        )
+        .await;
+    }
 
     let messages = pairs
         .iter()

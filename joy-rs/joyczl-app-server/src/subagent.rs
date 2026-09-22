@@ -45,6 +45,8 @@ pub(crate) struct Delegated {
     /// 与 `Server` 共享的设置与模型句柄（运行时现读，见模块文档）。
     pub(crate) settings: Arc<RwLock<Settings>>,
     pub(crate) resolved: Arc<RwLock<Option<Resolved>>>,
+    /// 子代理的工具调用也走钩子（工具级事件由 `ToolRegistry::execute` 发）。
+    pub(crate) hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
 }
 
 /// 这一次要喂给子代理的东西。
@@ -104,6 +106,7 @@ impl SubagentRunner for Delegated {
         let tools = self.tools.clone();
         let settings = self.settings.clone();
         let resolved = self.resolved.clone();
+        let hooks = self.hooks.clone();
         let facts = self.facts.clone();
         let episodes = self.episodes.clone();
         let chat = self.chat.clone();
@@ -120,6 +123,8 @@ impl SubagentRunner for Delegated {
             let iterations = max_iterations
                 .unwrap_or(DEFAULT_ITERATIONS)
                 .clamp(1, MAX_ITERATIONS);
+            // 事件载荷用任务的前一小段：整段可能很长，而钩子要的是「在干什么」。
+            let task_preview: String = task.chars().take(400).collect();
 
             let soul = crate::turn::load_soul(&home);
             let system = crate::turn::build_system(
@@ -153,11 +158,30 @@ impl SubagentRunner for Delegated {
                 &chat,
                 &calendar,
                 &home,
-                &child_session,
-                None,
+                crate::Injections {
+                    session_id: child_session.clone(),
+                    // 子代理没有批准通道（它不该阻塞在人类身上），但有钩子：工具级
+                    // 事件照常走（用子代理自己的 session 名）。
+                    approval: None,
+                    hooks: hooks.clone(),
+                },
             );
 
             let budget = crate::tool_result_budget(&settings);
+
+            // SubagentStart：派出去的活也要显形（审计与「谁在动我的东西」）。
+            // 观察事件 —— 钩子的话不会拦住这次委派。
+            crate::fire_hook(
+                &hooks,
+                joyczl_tools::hooks::HookEvent::SubagentStart,
+                serde_json::json!({
+                    "session_id": child_session,
+                    "task": task_preview,
+                    "max_iterations": iterations,
+                }),
+            )
+            .await;
+
             let result = run_child(
                 &resolved,
                 &child_tools,
@@ -173,6 +197,17 @@ impl SubagentRunner for Delegated {
             )
             .await
             .map_err(|e| anyhow::anyhow!("模型调用失败：{e}"))?;
+
+            crate::fire_hook(
+                &hooks,
+                joyczl_tools::hooks::HookEvent::SubagentStop,
+                serde_json::json!({
+                    "session_id": child_session,
+                    "iterations": result.iterations,
+                    "interrupted": result.interrupted,
+                }),
+            )
+            .await;
 
             let mut summary = result.reply.trim().to_string();
 

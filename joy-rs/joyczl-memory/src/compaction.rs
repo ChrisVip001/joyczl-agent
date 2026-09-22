@@ -167,6 +167,30 @@ pub fn summary_section(summary: &str) -> Option<String> {
 }
 
 /// 便捷入口：算 + 存 + 返回要用的摘要。`Ok(None)` 表示这次不需要动。
+/// 这次会真的压缩吗？
+///
+/// `refresh` 与 app-server 的 `PreCompact` 钩子都要知道这件事 —— 判断只写一处，
+/// 否则钩子会在「其实没压」的时候也响（或者反过来漏掉真正的压缩）。
+pub async fn due(
+    chat: &joyczl_state::Chat,
+    session_id: &str,
+    pairs: &[(String, String)],
+    window: usize,
+) -> bool {
+    let covered = covered_upto(chat, session_id).await;
+    !newly_evicted(pairs, window, covered).is_empty()
+}
+
+/// 已经折进摘要的轮数。
+async fn covered_upto(chat: &joyczl_state::Chat, session_id: &str) -> i32 {
+    chat.load_rollup(session_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|(covered, _)| covered)
+        .unwrap_or(0)
+}
+
 pub async fn refresh(
     chat: &joyczl_state::Chat,
     client: &dyn Provider,
@@ -176,7 +200,7 @@ pub async fn refresh(
     window: usize,
 ) -> Result<Option<String>> {
     let previous = chat.load_rollup(session_id).await.unwrap_or(None);
-    let covered = previous.as_ref().map(|(c, _)| *c).unwrap_or(0);
+    let covered = covered_upto(chat, session_id).await;
     let fresh = newly_evicted(pairs, window, covered);
     if fresh.is_empty() {
         return Ok(previous.map(|(_, summary)| summary));

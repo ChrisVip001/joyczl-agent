@@ -197,6 +197,7 @@ async fn bind_web(home: &std::path::Path) -> WebScanFn {
         .expect("打开库");
     let ctx = ToolCtx {
         approval: None,
+        hooks: None,
         session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),

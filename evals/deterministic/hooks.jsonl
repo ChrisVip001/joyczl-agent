@@ -1,0 +1,5 @@
+# 生命周期钩子：PreToolUse 拦住一次工具调用 —— 模型看到的是钩子给的理由。
+# 用 `files` 夹具把 hooks.json 写进这个场景的家目录，再开 JOY_HOOKS。
+# （钩子跑的是 shell 命令，所以这条场景在没有 sh 的平台上会失败 —— 与工具的
+#   沙箱测试同一条纪律：Unix-only 的部分如实标出来，不假装跨平台。）
+{"id":"a-pre-tool-use-hook-can-block-a-call","description":"PreToolUse 拦住工具调用，理由原样交给模型","files":{"hooks.json":"{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"save_note\",\"command\":\"sh\",\"args\":[\"-c\",\"cat >/dev/null; echo 这个仓库不许写笔记 >&2; exit 2\"]}]}}"},"settings":{"hooks_enabled":true},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"tool_use":{"name":"save_note","args":{"subject":"alex","content":"喜欢早会"}}},{"text":"那我就不记了。"}],"expect":{"tools_used":["save_note"],"tool_output_contains":["这个仓库不许写笔记","PreToolUse hook"],"reply_contains":["不记了"]}}

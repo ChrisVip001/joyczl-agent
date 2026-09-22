@@ -18,6 +18,16 @@
 还接受可选的 `result_schema`：结论必须是符合它的 JSON，不合规会带着报错重试一次，
 两次都不合规就回落成散文并写明原因。
 
+### 生命周期钩子（`JOY_HOOKS`）
+
+12 个事件（`PreToolUse`/`PostToolUse`/`PostToolUseFailure`/`PermissionRequest`/
+`SessionStart`/`SessionEnd`/`Stop`/`StopFailure`/`SubagentStart`/`SubagentStop`/
+`PreCompact`/`PostCompact`）可以从 `<home>/hooks.json` 跑你的 shell 命令：exit 2 阻断，
+决策 JSON 能改写入参、改写结果、补上下文，`PermissionRequest` 还能替用户拍板。策略
+事件超时 fail-closed、观察事件 fail-open；运行中改过的 `hooks.json` 拒绝执行并说明
+原因；阻断 `Stop` 让这一轮再跑一次。只做 shell handler、Unix 优先 —— 两条都是刻意的，
+都写进了 limitations。
+
 ### 记忆不再堆积重复
 
 `facts` 上多了一条唯一索引 `(subject, lower(trim(content)))`，`Facts::add` 返回

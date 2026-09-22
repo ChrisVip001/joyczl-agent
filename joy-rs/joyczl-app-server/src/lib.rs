@@ -115,6 +115,8 @@ pub struct Server {
     /// 在等人回答的批准请求：`approval/respond` 按 turn_id + request_id 找到
     /// 它，把回答送回去。与 `turns` 同一条生命周期纪律（一轮结束整桶摘掉）。
     pub(crate) approvals: approval::Pending,
+    /// 生命周期钩子（`<home>/hooks.json`）。`None` = 没配或没开。
+    pub(crate) hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -148,7 +150,33 @@ impl Server {
             }
         }
 
+        // 生命周期钩子：**默认关着**（`JOY_HOOKS=1` 才读 hooks.json）。开了就打印
+        // 一行说清跑了几条、来自哪个文件 —— 让外部命令挂在每个工具调用上必须显形。
+        let hooks = if snapshot.hooks_enabled {
+            match joyczl_tools::hooks::Hooks::load(
+                &snapshot.home,
+                Some(std::time::Duration::from_secs(
+                    snapshot.hooks_timeout_secs.max(1) as u64,
+                )),
+            ) {
+                Some(hooks) => {
+                    eprintln!("(joy) hooks 已启用：{}", hooks.summary());
+                    Some(Arc::new(hooks))
+                }
+                None => {
+                    eprintln!(
+                        "(joy) JOY_HOOKS=1 但 {} 不存在或一条都没配 —— 这次不启用",
+                        snapshot.home.join("hooks.json").display()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let mut tools = builtin_tools(&snapshot).await;
+        tools.set_hooks(hooks.clone());
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
         let chat = Chat::new(pool.clone());
@@ -172,6 +200,7 @@ impl Server {
                     // 共享句柄，不是快照：换 provider 之后进来的这一轮要用新的。
                     settings: settings.clone(),
                     resolved: resolved.clone(),
+                    hooks: hooks.clone(),
                 },
             )));
         }
@@ -186,6 +215,7 @@ impl Server {
             tools: Arc::new(tools),
             turns: Arc::new(Mutex::new(HashMap::new())),
             approvals: Arc::new(Mutex::new(HashMap::new())),
+            hooks,
             pool,
         }
     }
@@ -206,8 +236,11 @@ impl Server {
             &self.chat,
             &self.calendar,
             &settings.home,
-            session_id,
-            approval,
+            Injections {
+                session_id: session_id.to_string(),
+                approval,
+                hooks: self.hooks.clone(),
+            },
         )
     }
 
@@ -536,14 +569,24 @@ pub(crate) fn tool_result_budget(settings: &Settings) -> joyczl_loop::budget::To
     }
 }
 
+/// 这一轮注入给 handler 的东西：会话名、批准通道、钩子。
+///
+/// 收成一个结构体而不是继续加参数：它们**总是一起变**（每加一个注入句柄，四个
+/// 调用点就得各加一行），而 clippy 也会在第 8 个参数上拦下来。
+#[derive(Clone, Default)]
+pub(crate) struct Injections {
+    pub session_id: String,
+    pub approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
+    pub hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
+}
+
 pub(crate) fn tool_ctx(
     facts: &Facts,
     episodes: &Episodes,
     chat: &Chat,
     calendar: &Calendar,
     home: &std::path::Path,
-    session_id: &str,
-    approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
+    injected: Injections,
 ) -> ToolCtx {
     ToolCtx {
         facts: facts.clone(),
@@ -551,8 +594,24 @@ pub(crate) fn tool_ctx(
         chat: chat.clone(),
         calendar: calendar.clone(),
         home: home.to_path_buf(),
-        session_id: session_id.to_string(),
-        approval,
+        session_id: injected.session_id,
+        approval: injected.approval,
+        hooks: injected.hooks,
+    }
+}
+
+/// 发一个生命周期事件（没配钩子时是零成本的 no-op）。
+///
+/// 生命周期事件在 app-server 这边发：`SessionStart`/`Stop` 这些只有它知道什么时候
+/// 发生；工具类事件在 `ToolRegistry::execute` 里发（那才是唯一收口）。
+pub(crate) async fn fire_hook(
+    hooks: &Option<Arc<joyczl_tools::hooks::Hooks>>,
+    event: joyczl_tools::hooks::HookEvent,
+    payload: serde_json::Value,
+) -> joyczl_tools::hooks::HookOutcome {
+    match hooks {
+        Some(hooks) => hooks.fire(event, payload).await,
+        None => joyczl_tools::hooks::HookOutcome::default(),
     }
 }
 

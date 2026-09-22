@@ -102,6 +102,23 @@ handler 里那条兜底分支只在 schema 编译失败时才会走到）。
   —— 这个名字模型和用户都会看到，悄悄改掉等于让人对着一份对不上的工具名排查。
   64 字符上限（提供商的要求）在改名后仍然守住，保头截尾。
 
+### 生命周期钩子（`hooks.rs`）
+
+`JOY_HOOKS=1` 之后，12 个事件上可以挂用户的 shell 命令。三处值得记：
+
+* **两个挂点**：工具类（`PreToolUse` / `PostToolUse` / `PostToolUseFailure`）在
+  `ToolRegistry::execute` —— 那才是唯一收口；生命周期类（`SessionStart` / `Stop` /
+  `PreCompact` / `SubagentStart`…）在 app-server，因为只有它知道什么时候发生。
+  `PermissionRequest` 特殊：它在 `run_command` 的 handler 里发，因为「要不要问人」
+  这个决定只有那儿知道。
+* **改写之后重新校验**：`PreToolUse` 可以改工具入参，改完**必须**再过一遍 schema
+  —— 钩子也会改坏，而报错要说清是钩子改坏的（否则模型会以为是自己写错了参数）。
+* **超时分两分**：策略事件 fail-closed（闸门没能在时限内表态就不放行）、观察事件
+  fail-open。这条抄的是 hermes，理由是「一个卡住的观察者不该影响已经发生的事」。
+
+装载时的内容哈希拦的是「运行中被人改了配置」：改过的新内容不执行、说清原因。
+`Stop` 的阻断会让这一轮再跑一次（上限 1），它是目标循环的前身。
+
 ### 一台服务器挂了不该拖垮每一轮（熔断）
 
 `Connection` 里带一个**按连接隔离**的断路器（抄 hermes 的参数）：连续 3 次失败开

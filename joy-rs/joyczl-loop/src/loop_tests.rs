@@ -22,6 +22,7 @@ async fn ctx() -> joyczl_tools::ToolCtx {
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     joyczl_tools::ToolCtx {
         approval: None,
+        hooks: None,
         session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
@@ -486,6 +487,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         .expect("打开库");
     let ctx = joyczl_tools::ToolCtx {
         approval: None,
+        hooks: None,
         session_id: "budget".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),

@@ -89,6 +89,9 @@ pub struct SettingsOverrides {
     pub delegate_enabled: Option<bool>,
     #[serde(default)]
     pub exec_allow: Option<Vec<String>>,
+    /// 生命周期钩子（`JOY_HOOKS`）。
+    #[serde(default)]
+    pub hooks_enabled: Option<bool>,
     /// 轮内工具结果预算（见 joyczl-loop 的 budget.rs）。
     #[serde(default)]
     pub tool_result_total_chars: Option<i64>,

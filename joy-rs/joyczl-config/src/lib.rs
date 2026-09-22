@@ -110,6 +110,12 @@ pub const BOUNDS: &[Bound] = &[
     },
     Bound {
         patch_name: None,
+        env_name: "JOY_HOOKS_TIMEOUT",
+        min: 1,
+        max: 300,
+    },
+    Bound {
+        patch_name: None,
         env_name: "JOY_EXEC_TIMEOUT",
         min: 1,
         max: 3_600,
@@ -205,6 +211,13 @@ pub struct Settings {
     /// 默认 30000（约 8k token）。设 0 关闭。
     pub tool_result_max_chars: i64,
 
+    // ---- 生命周期钩子（见 joyczl-tools 的 hooks.rs）
+    /// `JOY_HOOKS`：开了才会读 `<home>/hooks.json` 并跑里面的命令。默认关 ——
+    /// 让外部命令挂在每个工具调用上，开关必须是用户亲手按下的。
+    pub hooks_enabled: bool,
+    /// `JOY_HOOKS_TIMEOUT`：hook 的默认超时（秒）。条目里写了 `timeout` 就以它为准。
+    pub hooks_timeout_secs: i64,
+
     // ---- 执行（`run_command`，见 joyczl-tools 的 exec.rs）
     /// `JOY_DELEGATE`：开了才会把 `delegate_task` 注册进工具表。默认关 ——
     /// 「把活交出去自己跑」是能力也是风险（多一份上下文、多一段没人看的
@@ -265,6 +278,8 @@ impl Default for Settings {
             delegate_enabled: false,
             tool_result_total_chars: 200_000,
             tool_result_max_chars: 30_000,
+            hooks_enabled: false,
+            hooks_timeout_secs: 30,
             exec_enabled: false,
             exec_allow: Vec::new(),
             exec_timeout_secs: 30,
@@ -311,6 +326,8 @@ impl Settings {
                 "JOY_TOOL_RESULT_MAX_CHARS",
                 d.tool_result_max_chars as i32,
             ) as i64,
+            hooks_enabled: env_bool("JOY_HOOKS"),
+            hooks_timeout_secs: env_int("JOY_HOOKS_TIMEOUT", d.hooks_timeout_secs as i32) as i64,
             exec_enabled: env_bool("JOY_EXEC"),
             exec_allow: env("JOY_EXEC_ALLOW")
                 .map(|raw| {
@@ -358,6 +375,7 @@ impl Settings {
         check_bound("JOY_RETRIEVAL_TOP_K", self.retrieval_top_k as i64)?;
         check_bound("JOY_LLM_RETRIES", self.llm_retries as i64)?;
         check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
+        check_bound("JOY_HOOKS_TIMEOUT", self.hooks_timeout_secs)?;
         check_bound("JOY_EXEC_TIMEOUT", self.exec_timeout_secs)?;
         check_bound("JOY_APPROVAL_TIMEOUT", self.approval_timeout_secs)?;
         check_bound("JOY_TOOL_RESULT_TOTAL_CHARS", self.tool_result_total_chars)?;

@@ -75,6 +75,54 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 embedding 服务不可用会降级成纯关键词并警告，绝不会变成「什么都想不起来」。
 开关打开之前写入的事实没有向量，用 `joy memory reindex` 补齐。
 
+## 生命周期钩子（`JOY_HOOKS`）
+
+`JOY_HOOKS=1` 之后，Joy 会读 `<home>/hooks.json`，在 12 个事件上跑**你自己的 shell
+命令**。这是「不改循环就能加行为」的口子：审计、策略门禁、格式化、把工具调用喂给
+外部系统。
+
+```json
+{ "disableAllHooks": false,
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "run_command", "timeout": 30, "command": "path/to/hook.sh", "args": [] }
+    ],
+    "PostToolUse": [ { "matcher": "*", "command": "audit.sh" } ] } }
+```
+
+**事件**（名字与 Claude Code / codex 一致，抄配置不必学第二套）：`PreToolUse` /
+`PostToolUse` / `PostToolUseFailure` / `PermissionRequest` / `SessionStart` /
+`SessionEnd` / `Stop` / `StopFailure` / `SubagentStart` / `SubagentStop` /
+`PreCompact` / `PostCompact`。
+
+**命令收到什么**：一段 JSON 在 stdin 上（`hook_event_name`、`session_id`、`cwd`、
+`tool_name`、`tool_input`、`tool_output`、`matcher`…）。
+
+**怎么表态**：
+
+| 退出码 / 输出 | 含义 |
+|---|---|
+| `exit 0` | 放行；stdout 若是 JSON 就按下面的字段处理 |
+| `exit 2` | **阻断**（唯一靠退出码阻断的方式），理由取 stdout 的 `reason` 或 stderr |
+| 其它退出码 | **非阻塞错误**：记一行 stderr，动作照常 —— 钩子写坏了不该让所有工具瘫痪 |
+| `{"decision":"block","reason":"…"}` | 同上，走 JSON |
+| `{"updatedInput":{…}}` | 改写工具入参（改写后会**重新校验 schema**，写坏了会明说是钩子改坏的） |
+| `{"updatedOutput":"…"}` | 改写工具结果 |
+| `{"additionalContext":"…"}` | 给模型补一句背景（`SessionStart` 会并进这一轮的话里） |
+| `{"hookSpecificOutput":{"permissionDecision":"allow\|deny"}}` | 在 `PermissionRequest` 上替用户拍板 |
+
+**超时的两分法**：策略事件（`PreToolUse` / `PermissionRequest` / `Stop`）超时按
+**阻断**处理 —— 闸门没能在时限内表态就不该默认放行；观察事件超时按**放行**处理。
+单条可用 `timeout` 指定，没写就用 `JOY_HOOKS_TIMEOUT`，再没有就按事件的默认值
+（交互敏感的 30 秒，其余 600 秒）。
+
+**文件被改过就不执行**：装载时记下 `hooks.json` 的内容哈希，运行中一旦变了（别的
+进程写的），新的内容**不会执行**，并在 stderr 说明。改掉一个正在生效的策略钩是
+「悄悄换了闸门」那种事，宁可停下来让人看见。
+
+`Stop` 的阻断会让这一轮**再跑一次**（上限 1 次）：它因此是目标循环（`goal/set`）的
+前身，但不像目标循环那样带轮次上限、判断器与人类授权边界。
+
 ## 轮内工具结果预算
 
 历史有滑窗和 token 预算，但**轮内**没有 —— `run_command` 自己会截到 8000 字符、
@@ -102,6 +150,8 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
+| `JOY_HOOKS` | `0` | 读 `<home>/hooks.json` 并在 12 个生命周期事件上跑你的 shell 命令（见下） |
+| `JOY_HOOKS_TIMEOUT` | `30` | 钩子的默认超时（秒）；条目里的 `timeout` 优先 |
 | `JOY_EXEC` | `0` | 开启 `run_command` 工具（关着 = 模型看不见它） |
 | `JOY_DELEGATE` | `0` | 开启 `delegate_task` 工具（子代理有自己的上下文，且不能再派生） |
 | `JOY_EXEC_ALLOW` | — | 放行表，逗号分隔，支持末尾 `*` 通配（`cargo test,git status,ls *`）。空 = 全部拒绝 |

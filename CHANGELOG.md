@@ -21,6 +21,17 @@ the gates do that. `delegate_task` also takes an optional `result_schema`: the a
 must be JSON matching it, one retry carries the validation error back to the child, and
 a second failure falls back to prose with the reason attached.
 
+### Lifecycle hooks (`JOY_HOOKS`)
+
+Twelve events (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`,
+`SessionStart`, `SessionEnd`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`,
+`PreCompact`, `PostCompact`) can run your shell commands from `<home>/hooks.json`:
+exit 2 blocks, a JSON decision can rewrite input, rewrite output or add context, and a
+`PermissionRequest` hook can answer on the user's behalf. Policy events time out closed,
+observation events open; a `hooks.json` changed while running is refused with a reason;
+a blocking `Stop` re-runs the turn once. Shell handlers only, Unix-first — both
+deliberate, both in limitations.
+
 ### Memories stop piling up
 
 `facts` now carries a unique index on `(subject, lower(trim(content)))`, and

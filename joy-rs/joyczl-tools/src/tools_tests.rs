@@ -17,6 +17,7 @@ async fn ctx() -> ToolCtx {
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     ToolCtx {
         approval: None,
+        hooks: None,
         session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
@@ -533,4 +534,62 @@ async fn a_duplicate_tool_name_does_not_replace_the_first() {
         .execute(ctx().await, "dup", serde_json::json!({}))
         .await;
     assert_eq!(out, "第一个", "先到的保留，后到的被拒");
+}
+
+/// 工具级钩子接在**唯一收口**上：PreToolUse 能拦下一次调用，PostToolUse 能改结果。
+#[cfg(unix)]
+#[tokio::test]
+async fn tool_hooks_block_before_and_rewrite_after() {
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    std::fs::write(
+        dir.path().join("hooks.json"),
+        r#"{ "hooks": {
+             "PreToolUse": [ { "matcher": "blocked_tool", "command": "sh",
+               "args": ["-c", "cat >/dev/null; echo 这个工具现在不许用 >&2; exit 2"] } ],
+             "PostToolUse": [ { "matcher": "rewritten_tool", "command": "sh",
+               "args": ["-c", "cat >/dev/null; printf %s '{\"updatedOutput\":\"被钩子改写过了\"}'"] } ]
+           } }"#,
+    )
+    .expect("写 hooks.json");
+    let hooks = Arc::new(super::hooks::Hooks::load(dir.path(), None).expect("装载"));
+
+    let mut registry = super::ToolRegistry::new();
+    registry.register(tool("blocked_tool", "原样返回"));
+    registry.register(tool("rewritten_tool", "原样返回"));
+    registry.set_hooks(Some(hooks));
+
+    let blocked = registry
+        .execute(ctx().await, "blocked_tool", serde_json::json!({}))
+        .await;
+    assert!(blocked.starts_with("Error:"), "{blocked}");
+    assert!(blocked.contains("这个工具现在不许用"), "{blocked}");
+
+    let rewritten = registry
+        .execute(ctx().await, "rewritten_tool", serde_json::json!({}))
+        .await;
+    assert_eq!(rewritten, "被钩子改写过了");
+}
+
+/// 一个回固定文本的工具（钩子测试用）。
+#[cfg(unix)]
+fn tool(name: &str, answer: &str) -> super::Tool {
+    use std::sync::Arc;
+
+    use serde_json::Value;
+
+    let answer = answer.to_string();
+    super::Tool {
+        name: name.to_string(),
+        description: "测试用".to_string(),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        handler: Arc::new(move |_ctx: super::ToolCtx, _args: Value| {
+            let answer = answer.clone();
+            Box::pin(async move { Ok(answer) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>,
+                >
+        }),
+    }
 }

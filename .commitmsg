@@ -1,11 +1,43 @@
-Normalise spill paths to forward slashes
+Add lifecycle hooks: twelve events, shell handlers only
 
-The Windows job caught this, and only the Windows job could have: the relative
-path in the stub notice came from Path::display(), so on Windows the model read
-"spill\20260923\..." while every test and the docs say "spill/...". The separator
-is now normalised at the source — that string is written for the model to read,
-and a path whose shape changes per platform is a path nobody can trust. Joining
-it back still works on Windows, which accepts both separators.
+JOY_HOOKS=1 makes Joy read <home>/hooks.json and run the user's own shell
+commands on twelve events — PreToolUse, PostToolUse, PostToolUseFailure,
+PermissionRequest, SessionStart, SessionEnd, Stop, StopFailure, SubagentStart,
+SubagentStop, PreCompact, PostCompact. Event names match Claude Code and codex,
+so a config copied from either does not need translating.
 
-Also gave the breaker test more slack: a 150ms cooldown with a 220ms wait is
-fine on a laptop and optimistic on a loaded CI runner.
+Two places fire them, deliberately: tool events live in ToolRegistry::execute
+(the single choke point, where schema validation already happens) and lifecycle
+events live in the app-server, the only layer that knows when a session starts
+or a turn ends. PermissionRequest is the odd one: it fires in run_command's
+handler, because "should we ask the human" is only known there.
+
+Contract: the payload arrives on stdin as JSON; exit 2 is the only exit code
+that blocks (reason from stdout's `reason` or stderr); any other non-zero code
+is a non-blocking error that says so on stderr, because a mistyped path must not
+disable every tool; a JSON stdout can rewrite tool input, rewrite the result, add
+context, or answer a PermissionRequest on the user's behalf. A rewritten input is
+re-validated — a hook can break it too, and the error says the hook did it rather
+than letting the model think it wrote bad arguments.
+
+Timeouts split two ways (hermes' rule): policy events fail closed, observation
+events fail open — a gate that cannot answer in time must not wave things
+through, while a stuck observer must not affect what already happened.
+
+A hooks.json changed while running is not executed, with the reason printed:
+swapping a live policy hook is the kind of silent change that should stop and be
+seen (codex's trusted_hash idea, minus the approval UI we do not have).
+
+Stop's block re-runs the turn once. That is the ancestor of the goal loop
+(goal/set) without its round cap, judge or human-authority boundary — building
+the general mechanism twice would be worse than having only one of them for now.
+
+Shell handlers only and Unix-first are both deliberate and both in limitations:
+want HTTP? curl. Want an LLM to judge? call one. Windows needs a real
+executable, and the CI Windows job skips these tests rather than pretending.
+
+13 new tests (config parsing incl. junk entries, exit-2 vs exit-1, decision JSON,
+the timeout split, matchers, the changed-file refusal, and a registry-level pair
+showing a blocked call and a rewritten result) plus one eval that blocks a tool
+call end to end. Docs: configuration, limitations, internals 6, .env.example,
+CHANGELOG — EN + zh.

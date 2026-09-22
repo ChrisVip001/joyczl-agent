@@ -21,6 +21,7 @@ pub mod approval;
 pub mod calendar;
 pub mod exec;
 pub mod handlers;
+pub mod hooks;
 pub mod memory_admin;
 pub mod messages;
 pub mod report;
@@ -52,6 +53,10 @@ mod spill_tests;
 #[path = "report_tests.rs"]
 mod report_tests;
 
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod hooks_tests;
+
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。
 #[derive(Clone)]
@@ -68,6 +73,12 @@ pub struct ToolCtx {
     /// 交互界面的调用方）—— 于是需要批准的动作直接拒绝，正如 `approval.rs` 的
     /// 「默认拒绝」。
     pub approval: Option<Arc<dyn crate::approval::ApprovalBroker>>,
+    /// 生命周期钩子。`None` = 没配（一次子进程都不起）。
+    ///
+    /// 工具**入参改写与阻断**由 `ToolRegistry::execute` 用自己那份钩子做（它才是
+    /// 唯一收口）；这里带一份是为了让 handler 也能发事件 —— 目前只有
+    /// `run_command` 的批准路径要发 `PermissionRequest`。
+    pub hooks: Option<Arc<crate::hooks::Hooks>>,
 }
 
 pub type BoxFut = Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;
@@ -94,6 +105,8 @@ impl Tool {
 
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
+    /// 生命周期钩子（见 `hooks.rs`）。装载在 app-server 那边做（它知道 home）。
+    hooks: Option<Arc<crate::hooks::Hooks>>,
     tools: BTreeMap<String, Tool>,
     /// 每个工具**预编译**好的参数校验器。注册时编一次，调用时零解析。
     ///
@@ -105,6 +118,11 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// 装上生命周期钩子（app-server 在 `builtin_tools` 之后调一次）。
+    pub fn set_hooks(&mut self, hooks: Option<Arc<crate::hooks::Hooks>>) {
+        self.hooks = hooks;
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -181,10 +199,66 @@ impl ToolRegistry {
             }
         }
 
-        match (tool.handler)(ctx, args).await {
+        // ---- PreToolUse：可以阻断，也可以改写入参。
+        let mut args = args;
+        if let Some(hooks) = &self.hooks {
+            let payload = serde_json::json!({
+                "session_id": ctx.session_id,
+                "cwd": std::env::current_dir().ok(),
+                "tool_name": name,
+                "tool_input": args,
+            });
+            let outcome = hooks
+                .fire(crate::hooks::HookEvent::PreToolUse, payload)
+                .await;
+            if let Some(reason) = outcome.blocked {
+                // 以 `Error:` 交出去：对模型来说这就是一次被拒绝的调用，它该据此改。
+                return format!("Error: {reason}（PreToolUse hook 拒绝执行 {name}）");
+            }
+            if let Some(rewritten) = outcome.input {
+                // 改写之后**重新校验**：钩子也可能改坏，而「谁改坏的」要说清楚，
+                // 否则模型会以为是自己写错了参数。
+                if let Some(Some(validator)) = self.validators.get(name) {
+                    if let Err(why) = describe_violations(validator, &rewritten) {
+                        return format!(
+                            "Error: PreToolUse hook 改写后的参数不符合 {name} 的 schema —— {why}"
+                        );
+                    }
+                }
+                args = rewritten;
+            }
+        }
+
+        let output = match (tool.handler)(ctx.clone(), args).await {
             Ok(output) => output,
             Err(e) => format!("Error: 执行 {name} 失败：{e}"),
+        };
+
+        // ---- PostToolUse / PostToolUseFailure：可以改写结果；阻断就把结果换成理由
+        //（对模型来说「被拒绝」比「一个被改过的成功结果」更诚实）。
+        let Some(hooks) = &self.hooks else {
+            return output;
+        };
+        let failed = output.starts_with("Error:");
+        let event = if failed {
+            crate::hooks::HookEvent::PostToolUseFailure
+        } else {
+            crate::hooks::HookEvent::PostToolUse
+        };
+        let payload = serde_json::json!({
+            "session_id": ctx.session_id,
+            "cwd": std::env::current_dir().ok(),
+            "tool_name": name,
+            "tool_output": output,
+        });
+        let outcome = hooks.fire(event, payload).await;
+        if let Some(reason) = outcome.blocked {
+            return format!(
+                "Error: {reason}（{} hook 拒绝了 {name} 的结果）",
+                event.name()
+            );
         }
+        outcome.output.unwrap_or(output)
     }
 }
 

@@ -125,6 +125,20 @@ means "we would like this, nobody has built it".
   per provider family.
   → `joy-rs/joyczl-state/src/chat.rs` (`context_factor`)
 
+* **Deliberate** — Hooks are **shell handlers only** (not Claude Code's http /
+  mcp_tool / prompt / agent variants): each of those needs its own contract, and a
+  shell already expresses them (`curl`, `joy mcp`, a model CLI). Want HTTP? `curl`.
+  Want an LLM to judge? Call one.
+* **Deliberate** — Hooks are **Unix-first**: commands run through `sh`, so Windows
+  needs a real executable. The CI Windows job skips these tests rather than pretending
+  they pass.
+* **Deliberate** — A `hooks.json` changed while running is **not executed** (with the
+  reason printed); a restart picks up the new content. That trades a little
+  convenience for "nothing can swap your gate silently".
+* **Deliberate** — A blocking `Stop` re-runs the turn **once**. Real automatic
+  continuation is the goal loop's job, with its round cap, judge and human-authority
+  boundary.
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and
