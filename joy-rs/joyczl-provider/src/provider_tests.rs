@@ -273,6 +273,41 @@ fn context_overflow_is_recognised_from_the_wordings_providers_actually_use() {
 
 // ---- 分级退避重试 ------------------------------------------------------------
 
+/// 把一次请求**读完**（头部 + `Content-Length` 指的 body）再回话。
+///
+/// 不等读完就回、然后关连接，会把还在写 body 的客户端顶掉 —— macOS/Linux 上
+/// 多半没事，Windows 上表现为 RST，客户端那边看到的是
+/// 「error sending request」，于是「服务器明明回了」变成一条网络错误。
+/// 这个测试的请求带着整份 system prompt 与工具表，body 超过一次 read 的量，
+/// 所以它只在 Windows 上稳定复现。
+async fn drain_request(socket: &mut tokio::net::TcpStream) {
+    // 导入写在函数里：这两个测试文件各自在别处按需 use，别处不引这个 trait。
+    use tokio::io::AsyncReadExt;
+
+    let mut seen: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match socket.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(read) => {
+                seen.extend_from_slice(&chunk[..read]);
+                let Some(head_end) = seen.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&seen[..head_end]).to_lowercase();
+                let want: usize = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0);
+                if seen.len() >= head_end + 4 + want {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// 一个只够用的 HTTP 服务器：按剧本逐个应答。
 ///
 /// 手写而不是引测试框架 —— 我们要的就是「第一次 429、第二次 200」这种最小
@@ -283,7 +318,7 @@ struct Scripted {
 }
 
 async fn scripted(responses: Vec<(u16, &'static str)>) -> Scripted {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -295,9 +330,8 @@ async fn scripted(responses: Vec<(u16, &'static str)>) -> Scripted {
     tokio::spawn(async move {
         let mut index = 0usize;
         while let Ok((mut socket, _)) = listener.accept().await {
-            // 请求内容不看，读掉一段就够。
-            let mut buf = vec![0u8; 4096];
-            let _ = socket.read(&mut buf).await;
+            // 请求内容不看，但必须**读完**（见 drain_request 的说明）。
+            drain_request(&mut socket).await;
             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
             let (status, body) = responses.get(index).copied().unwrap_or((200, "{}"));
