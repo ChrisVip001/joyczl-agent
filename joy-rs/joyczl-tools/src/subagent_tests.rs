@@ -7,10 +7,18 @@ use serde_json::json;
 use super::subagent::{delegate_task, SubagentRunner, NAME};
 use super::{BoxFut, ToolRegistry};
 
+/// 一次委派被调用时的入参（断言透传用）。
+#[derive(Debug, Clone)]
+struct Seen {
+    task: String,
+    max_iterations: Option<i32>,
+    schema: Option<serde_json::Value>,
+}
+
 /// 一次假委派：记下收到的任务，返回写死的答案。
 struct Fake {
     answer: Result<String, String>,
-    seen: Mutex<Vec<(String, Option<i32>)>>,
+    seen: Mutex<Vec<Seen>>,
 }
 
 impl Fake {
@@ -30,8 +38,17 @@ impl Fake {
 }
 
 impl SubagentRunner for Fake {
-    fn run(&self, task: String, max_iterations: Option<i32>) -> BoxFut {
-        self.seen.lock().expect("锁").push((task, max_iterations));
+    fn run(
+        &self,
+        task: String,
+        max_iterations: Option<i32>,
+        result_schema: Option<serde_json::Value>,
+    ) -> BoxFut {
+        self.seen.lock().expect("锁").push(Seen {
+            task,
+            max_iterations,
+            schema: result_schema,
+        });
         let answer = self.answer.clone();
         Box::pin(async move { answer.map_err(anyhow::Error::msg) })
     }
@@ -69,11 +86,12 @@ async fn a_delegation_returns_the_summary_with_a_label() {
     assert!(out.contains("十点有会。"), "{out}");
     let seen = runner.seen.lock().expect("锁");
     assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].0, "查今天的安排");
+    assert_eq!(seen[0].task, "查今天的安排");
     assert_eq!(
-        seen[0].1, None,
+        seen[0].max_iterations, None,
         "没给 max_iterations 就是 None（由 runner 定默认）"
     );
+    assert_eq!(seen[0].schema, None, "没给 schema 就是 None");
 }
 
 /// 委派失败是**文本**，不是错误 —— 与这一层所有工具一致。
@@ -113,4 +131,30 @@ async fn the_task_is_required() {
     registry.register(delegate_task(Fake::ok("结论")));
     let out = registry.execute(ctx().await, NAME, json!({})).await;
     assert!(out.starts_with("Error:") && out.contains("task"), "{out}");
+}
+
+/// `result_schema` 原样透传给 runner（工具层不解释它），结论回来时带「转述」声明。
+#[tokio::test]
+async fn a_result_schema_is_passed_through_and_the_report_is_labelled() {
+    let runner = Fake::ok("十点有会。");
+    let tool = delegate_task(runner.clone());
+    let schema = json!({"type": "object", "required": ["answer"]});
+
+    let out = match (tool.handler)(
+        ctx().await,
+        json!({"task": "查一下", "result_schema": schema}),
+    )
+    .await
+    {
+        Ok(out) => out,
+        Err(e) => panic!("不该失败：{e}"),
+    };
+
+    assert_eq!(
+        runner.seen.lock().expect("锁")[0].schema,
+        Some(schema),
+        "schema 该原样交给 runner"
+    );
+    assert!(out.contains("转述"), "子代理的话必须标明是转述：{out}");
+    assert!(out.contains("十点有会。"), "{out}");
 }

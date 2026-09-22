@@ -62,6 +62,14 @@ means "we would like this, nobody has built it".
   something.
   → `joy-rs/joyczl-provider/src/retry.rs`
 
+* **Deliberate** — The report hardening is a **speed bump, not a sandbox**: lines
+  imitating a role prefix (`Human:` / `System:`) or our own control markers
+  (`<system-reminder>`, `[tools used:`) get a backslash, and the report carries a
+  "this is a transcription" header. It does **not** judge maliciousness (that is
+  neither possible nor reassuring) and it does **not** change any tool call's
+  permission check — permissions are the gates' business. The real defences are the
+  sandbox, the allowlist and approval.
+  → `joy-rs/joyczl-tools/src/report.rs`
 * **Deliberate** — A subagent has no approval path: where the parent would
   ask you, the child simply is refused (`JOY_APPROVAL` never reaches it). A
   subagent that blocks on a human is worse than a subagent that cannot do the

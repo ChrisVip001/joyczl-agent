@@ -26,7 +26,16 @@ pub const NAME: &str = "delegate_task";
 /// 执行一次委派。实现放在 app-server（它才有 Server、模型与工具表）。
 pub trait SubagentRunner: Send + Sync {
     /// 跑一件活，返回**结论文本**。失败返回一句给人看的原因。
-    fn run(&self, task: String, max_iterations: Option<i32>) -> BoxFut;
+    ///
+    /// `result_schema` 给了就要求结论是符合它的 JSON：校验与「重试一次」都是
+    /// 实现方的责任（工具层不认识校验器，也不该认识）。仍不合规时回散文并在
+    /// 文本里写明原因 —— 一次没按格式回话，不该让整件活白跑。
+    fn run(
+        &self,
+        task: String,
+        max_iterations: Option<i32>,
+        result_schema: Option<Value>,
+    ) -> BoxFut;
 }
 
 /// 注册进工具表的 `delegate_task`。只有 `JOY_DELEGATE=1` 时才会被注册 ——
@@ -51,6 +60,12 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                     "minimum": 1,
                     "maximum": 10,
                     "description": "子代理最多跑几轮（默认 5，上限 10）"
+                },
+                "result_schema": {
+                    "type": "object",
+                    "description": "想要结构化结论就给一份 JSON Schema：子代理必须回符合它的 \
+                                   JSON。不合规会带着报错重试一次，仍不合规就回落成散文并在 \
+                                   文本里说明 —— 结论的形状由你定，不靠它自觉。"
                 }
             },
             "required": ["task"]
@@ -63,8 +78,10 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                     .get("max_iterations")
                     .and_then(Value::as_i64)
                     .map(|value| value as i32);
-                match runner.run(task, max_iterations).await {
-                    Ok(summary) => Ok(format!("子代理回话了：\n{summary}")),
+                let result_schema = args.get("result_schema").cloned().filter(|v| !v.is_null());
+                match runner.run(task, max_iterations, result_schema).await {
+                    // 子代理的话是**转述**：过一遍转义与声明头，别让它看起来像系统消息。
+                    Ok(summary) => Ok(crate::report::as_report(&summary)),
                     Err(why) => Ok(format!("Error: 子代理没跑成：{why}")),
                 }
             })

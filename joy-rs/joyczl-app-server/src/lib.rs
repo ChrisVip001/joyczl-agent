@@ -29,6 +29,10 @@ mod turn_tests;
 #[path = "approval_tests.rs"]
 mod approval_tests;
 
+#[cfg(test)]
+#[path = "subagent_tests.rs"]
+mod subagent_tests;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 

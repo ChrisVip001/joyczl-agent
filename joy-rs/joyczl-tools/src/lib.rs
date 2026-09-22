@@ -23,6 +23,7 @@ pub mod exec;
 pub mod handlers;
 pub mod memory_admin;
 pub mod messages;
+pub mod report;
 pub mod spill;
 pub mod subagent;
 pub mod web;
@@ -46,6 +47,10 @@ mod approval_tests;
 #[cfg(test)]
 #[path = "spill_tests.rs"]
 mod spill_tests;
+
+#[cfg(test)]
+#[path = "report_tests.rs"]
+mod report_tests;
 
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。
@@ -168,6 +173,16 @@ impl ToolRegistry {
             Err(e) => format!("Error: 执行 {name} 失败：{e}"),
         }
     }
+}
+
+/// 用一份 schema 校验一个 JSON 值，报错就是给模型读的那句话（合规为 `Ok(())`）。
+///
+/// 工具参数的校验走同一条路（`describe_violations`），子代理的结构化结果也用它
+/// —— 两处的措辞因此一致，模型不必学两套。
+pub fn validate_value(schema: &Value, value: &Value) -> Result<(), String> {
+    let validator =
+        jsonschema::validator_for(schema).map_err(|e| format!("这份 schema 本身编译不了：{e}"))?;
+    describe_violations(&validator, value)
 }
 
 /// 把 schema 违规翻译成一句给模型读的话：最多列三处，每处带字段路径。
