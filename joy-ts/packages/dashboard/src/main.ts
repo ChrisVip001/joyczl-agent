@@ -6,7 +6,7 @@
 // 这是这套分层最值钱的地方。
 
 import type { TurnCompletedNotification } from "./protocol";
-import { fetchDashboard, fetchMessages, respondApproval, talk } from "./api";
+import { fetchDashboard, fetchMessages, respondApproval, setGoal, talk } from "./api";
 import {
   chip,
   el,
@@ -40,6 +40,10 @@ const dom = {
   messages: must("messages"),
   composer: must<HTMLFormElement>("composer"),
   input: must<HTMLTextAreaElement>("input"),
+  goal: must<HTMLInputElement>("goal"),
+  goalSet: must<HTMLButtonElement>("goal-set"),
+  goalClear: must<HTMLButtonElement>("goal-clear"),
+  goalState: must<HTMLElement>("goal-state"),
   send: must<HTMLButtonElement>("send"),
   refresh: must<HTMLButtonElement>("refresh"),
   older: must<HTMLButtonElement>("older"),
@@ -77,6 +81,32 @@ async function boot(): Promise<void> {
 
   await refresh();
   await open(current);
+  // 目标条：设/撤都走同一处（`goal/set`）—— 与终端里的 `/goal` 是同一件事。
+  const applyGoal = (condition: string | null) => {
+    void setGoal({ sessionId: current, condition })
+      .then((response) => {
+        dom.goalState.textContent = response.active
+          ? `进行中（最多 ${response.maxRounds} 轮）`
+          : "没有目标";
+        if (!response.active) dom.goal.value = "";
+      })
+      .catch((error: unknown) => {
+        dom.goalState.textContent = `没设上：${String(error)}`;
+      });
+  };
+  dom.goalSet.addEventListener("click", () => {
+    const condition = dom.goal.value.trim();
+    if (condition !== "") applyGoal(condition);
+  });
+  dom.goalClear.addEventListener("click", () => applyGoal(null));
+  dom.goal.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const condition = dom.goal.value.trim();
+      if (condition !== "") applyGoal(condition);
+    }
+  });
+
   dom.input.focus();
 }
 
@@ -188,6 +218,18 @@ async function send(text: string): Promise<void> {
           trace.append(row);
           break;
         }
+
+        case "goalRound":
+          // 目标循环续了一轮：把「为什么还没结束」说出来，否则界面自己动了一轮
+          // 却没人知道为什么。
+          trace.append(
+            chip(
+              `目标 · 第 ${notification.round}/${notification.maxRounds} 轮 · ${notification.status} — ${notification.reason}`,
+              "gate",
+            ),
+          );
+          dom.goalState.textContent = `${notification.status}（第 ${notification.round}/${notification.maxRounds} 轮）`;
+          break;
 
         case "retry":
           // 重试从不静默：看到这一句就知道「刚才那几秒不是卡住」。

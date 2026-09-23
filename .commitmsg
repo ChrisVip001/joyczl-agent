@@ -1,40 +1,15 @@
-Add a goal loop: keep going until the thing is actually done
+Let the dashboard set and clear goals
 
-A turn ending means "this step finished", not "the goal is met". goal/set (and
-/goal in the REPL) attaches a natural-language condition to a session; when the
-main loop stops, a judge decides whether the goal holds, and if not its reason
-becomes the next user message and another round runs in the same session.
+POST /api/goal forwards goal/set to the app-server subprocess, the same way
+/api/approval forwards approval/respond — the dashboard is not a second
+implementation, just another client of the one method.
 
-Three constraints, all borrowed from implementations that learned them:
+The bar carries an input, set/clear buttons and the current state; goalRound
+notifications render as a chip with round, status and reason, because a turn that
+runs itself again without saying why is exactly the kind of thing this project
+keeps refusing to ship. Goals are settable from the terminal (/goal) and the
+dashboard (this) — and from the model at neither: it has no tool for it.
 
-- The judge is a cheap model with no tools and only the conversation. Its
-  question is "does this conversation show the goal met" — give it tools and it
-  becomes a second executor whose verdict was supposed to be side-effect free.
-- Rounds are capped (JOY_GOAL_MAX_ROUNDS, default 5). Hitting the cap sets
-  round-limit and says the goal was NOT met: no pretending, and the goal is not
-  cleared, because a record of an unfinished goal is worth more than a clean
-  slate.
-- Goals are set and cleared by humans only. The model has no tool for it, so
-  "the model assigning itself work" is not forbidden here — the path does not
-  exist.
-
-The judge's answer is validated: ok and impossible are mutually exclusive, and a
-reply that sets both is treated as not-done rather than letting the loop retire
-on an answer that contradicts itself. A judge that fails to answer sets blocked,
-stops the loop and keeps the goal. Terminal outcomes are recorded on the goal
-(Goal.status) so the loop does not re-ask the same question every turn — that
-would both cost money and dress up a stopped loop as a running one.
-
-Server::goal_set holds the single implementation (dispatch and the REPL both call
-it; two copies would eventually disagree about max_rounds). Every judgement
-emits GoalRound — the only answer to "why did it run again" — and the REPL prints
-a line for it, including the statuses that mean "gave up", which are exactly the
-ones worth reading.
-
-Since the goal loop lives in run_turn rather than in the loop driver, the eval
-harness cannot set a goal yet, so the coverage is an end-to-end app-server test
-with a real turn: continuing then satisfied, meta.goalRounds == 2, the reason fed
-back as the next message, plus round-limit honesty, judge-failure blocking and
-the contradiction rule. 5 tests; protocol regenerated (goal/set, GoalRound,
-TurnMeta.goalStatus/goalRounds) including the Python constants. Docs:
-configuration, protocol, limitations, internals 9, CHANGELOG — EN + zh.
+Both SDKs needed the new method in their pairing tables (Methods -> response type),
+and the Python drift guard caught that before CI could: its tests exist precisely
+because a missing row there shows up as NotImplementedError far from the cause.

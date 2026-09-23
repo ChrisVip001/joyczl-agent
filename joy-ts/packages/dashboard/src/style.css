@@ -569,3 +569,19 @@ main {
   opacity: 0.45;
   cursor: default;
 }
+
+/* 目标条：一行输入 + 两个按钮 + 当前状态。 */
+.goal {
+  gap: 6px;
+}
+
+.goal input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #d8d5cd);
+  background: transparent;
+}

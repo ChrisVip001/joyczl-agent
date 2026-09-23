@@ -29,6 +29,17 @@
           </p>
           <button class="ghost" id="older" type="button" hidden>更早的 ↑</button>
         </div>
+        <div class="bar goal">
+          <input
+            id="goal"
+            type="text"
+            placeholder="目标（比如：让测试全绿）。没达成会自动续轮，直到你说撤掉"
+            aria-label="目标"
+          />
+          <button class="ghost" id="goal-set" type="button">设目标</button>
+          <button class="ghost" id="goal-clear" type="button">撤掉</button>
+          <span class="hint" id="goal-state"></span>
+        </div>
         <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
         <form class="composer" id="composer" autocomplete="off">
           <textarea

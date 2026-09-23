@@ -6,6 +6,8 @@ import type {
   ConfigReadResponse,
   ConfigWriteParams,
   ConfigWriteResponse,
+  GoalSetParams,
+  GoalSetResponse,
   ErrorObject,
   JsonRpcError,
   JsonRpcMessage,
@@ -53,6 +55,10 @@ export interface Methods {
   [METHODS.APPROVAL_RESPOND]: {
     params: ApprovalRespondParams;
     result: ApprovalRespondResponse;
+  };
+  [METHODS.GOAL_SET]: {
+    params: GoalSetParams;
+    result: GoalSetResponse;
   };
   [METHODS.SESSION_LIST]: {
     params: SessionListParams;

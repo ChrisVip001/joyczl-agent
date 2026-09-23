@@ -16,9 +16,9 @@ use chrono::Local;
 use futures_util::stream::{self, Stream};
 use joyczl_protocol::{
     codes, methods, ApprovalRespondParams, ApprovalRespondResponse, ConfigReadResponse,
-    DashboardData, ErrorObject, MemoryListEpisodesResponse, MemoryListResponse, ServerNotification,
-    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, TurnStartParams,
-    TurnStartResponse,
+    DashboardData, ErrorObject, GoalSetParams, GoalSetResponse, MemoryListEpisodesResponse,
+    MemoryListResponse, ServerNotification, SessionListResponse, SessionMessagesParams,
+    SessionMessagesResponse, TurnStartParams, TurnStartResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -98,6 +98,24 @@ pub async fn session(
 }
 
 /// `POST /api/approval` —— 回答一次「要不要执行」。
+/// `POST /api/goal` —— 设或清一个目标（`condition` 缺省/为空 = 清除）。
+///
+/// 与 turn 走同一条路：app-server 是子进程，`goal/set` 也是它的一个方法。
+/// **驾驶舱不是唯一入口**：终端里的 `/goal` 与它是同一件事。
+pub async fn goal(
+    State(app): State<Arc<AppServer>>,
+    Json(params): Json<GoalSetParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("GoalSetParams 一定能序列化");
+    match app
+        .request::<GoalSetResponse>(methods::GOAL_SET, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
 ///
 /// 载荷是协议里的 `ApprovalRespondParams`。**不是 SSE**：这是一问一答，
 /// 答完就没了。太晚送达时返回 `accepted: false`（那一轮早已不等了），

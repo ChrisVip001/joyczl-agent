@@ -8,6 +8,8 @@ import type {
   ApprovalRespondParams,
   ApprovalRespondResponse,
   DashboardData,
+  GoalSetParams,
+  GoalSetResponse,
   ErrorObject,
   ServerNotification,
   SessionMessagesResponse,
@@ -93,6 +95,22 @@ export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotif
     // 否则浏览器会攥着一个没人读的流，直到它自己超时。
     await reader.cancel().catch(() => undefined);
   }
+}
+
+/**
+ * 设或清一个目标。`condition` 为空 = 清除。
+ *
+ * 目标是**只有人**能设的东西：模型没有这条路径，所以「模型给自己派活」在这里不是
+ * 被禁止，而是不存在。
+ */
+export async function setGoal(params: GoalSetParams): Promise<GoalSetResponse> {
+  const response = await fetch("/api/goal", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as GoalSetResponse;
 }
 
 /**

@@ -26,6 +26,8 @@ from .protocol import (
 
     ApprovalRespondParams,
     ApprovalRespondResponse,
+    GoalSetParams,
+    GoalSetResponse,
     Codes,
     ConfigReadParams,
     ConfigReadResponse,
@@ -79,6 +81,7 @@ _RESPONSES: dict[Methods, type[BaseModel]] = {
     Methods.TURN_START: TurnStartResponse,
     Methods.TURN_INTERRUPT: TurnInterruptResponse,
     Methods.APPROVAL_RESPOND: ApprovalRespondResponse,
+    Methods.GOAL_SET: GoalSetResponse,
     Methods.SESSION_LIST: SessionListResponse,
     Methods.SESSION_NEW: SessionNewResponse,
     Methods.SESSION_MESSAGES: SessionMessagesResponse,
