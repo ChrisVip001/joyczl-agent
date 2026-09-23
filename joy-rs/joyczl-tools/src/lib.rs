@@ -27,6 +27,7 @@ pub mod messages;
 pub mod report;
 pub mod spill;
 pub mod subagent;
+pub mod todo;
 pub mod web;
 
 #[cfg(test)]
@@ -56,6 +57,10 @@ mod report_tests;
 #[cfg(test)]
 #[path = "hooks_tests.rs"]
 mod hooks_tests;
+
+#[cfg(test)]
+#[path = "todo_tests.rs"]
+mod todo_tests;
 
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。

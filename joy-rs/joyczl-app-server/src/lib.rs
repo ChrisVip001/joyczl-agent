@@ -30,6 +30,10 @@ mod turn_tests;
 mod approval_tests;
 
 #[cfg(test)]
+#[path = "todo_tests.rs"]
+mod todo_tests;
+
+#[cfg(test)]
 #[path = "subagent_tests.rs"]
 mod subagent_tests;
 
@@ -117,6 +121,9 @@ pub struct Server {
     pub(crate) approvals: approval::Pending,
     /// 生命周期钩子（`<home>/hooks.json`）。`None` = 没配或没开。
     pub(crate) hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
+    /// 会话 -> 待办清单（见 joyczl-tools 的 todo.rs）。每轮把它注入 system prompt，
+    /// 所以它不依赖历史、压缩也冲不掉。
+    pub(crate) todo: Arc<joyczl_tools::todo::TodoBoard>,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -186,6 +193,11 @@ impl Server {
         // 副本」——**注意 `tools.clone()` 在 register 之前求值**，所以副本里
         // 没有 `delegate_task`：递归派生于是不是「被拒绝」，而是根本不存在
         // 这个选项。顺序反过来就等于把递归打开。
+        // 待办清单：**默认就有**（它不碰权限、不落库、也不阻塞任何东西，只是一张
+        // 每轮都看得见的纸）。子代理的表里会把它去掉 —— 见 subagent.rs。
+        let todo = Arc::new(joyczl_tools::todo::TodoBoard::new());
+        tools.register(joyczl_tools::todo::todo_write(todo.clone()));
+
         if snapshot.delegate_enabled {
             eprintln!(
                 "(joy) 子代理已启用：delegate_task 可用了（子代理不能再派生子代理、不参与批准）"
@@ -216,6 +228,7 @@ impl Server {
             turns: Arc::new(Mutex::new(HashMap::new())),
             approvals: Arc::new(Mutex::new(HashMap::new())),
             hooks,
+            todo,
             pool,
         }
     }

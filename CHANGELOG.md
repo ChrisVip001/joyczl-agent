@@ -4,6 +4,15 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art
 
+### A todo list the model maintains itself
+
+`todo_write` keeps a per-session list (whole-table replace, monotonic revision, 20
+items, 4000 characters each, one `in_progress` at a time) and it is **injected into
+the system prompt every turn** rather than kept in history — a list that survives
+compaction is worth more than a list that survives nothing. Reading is the same tool
+with `todos` omitted. Subagents do not get it: the list belongs to the parent's task
+line.
+
 ### Per-turn tool-result budget
 
 History had a sliding window and a token budget; the turn itself did not, and MCP tools

@@ -139,6 +139,13 @@ means "we would like this, nobody has built it".
   continuation is the goal loop's job, with its round cap, judge and human-authority
   boundary.
 
+* **Deliberate** — The todo list is **in-process**: one per session, gone on
+  restart. It is working memory for this run; anything that must survive goes to
+  `save_note` or `schedule`. It is also capped (20 items, 4000 characters each,
+  one `in_progress` at a time) — a list is working memory, not a log. Subagents do
+  not have it: the list belongs to the **parent** task line.
+  → `joy-rs/joyczl-tools/src/todo.rs`
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

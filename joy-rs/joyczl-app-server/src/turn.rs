@@ -614,6 +614,7 @@ async fn full_turn(
         &resolved.provider_id,
         &memory_context,
         &skills,
+        server.todo.render(session_id).as_deref(),
         summary.as_deref(),
     );
 
@@ -705,6 +706,7 @@ async fn full_turn(
                     &resolved.provider_id,
                     &memory_context,
                     &skills,
+                    server.todo.render(session_id).as_deref(),
                     summary.as_deref(),
                 );
             }
@@ -971,6 +973,7 @@ pub(crate) fn build_system(
     provider: &str,
     memory: &str,
     skills: &str,
+    todo: Option<&str>,
     summary: Option<&str>,
 ) -> String {
     let now = Local::now();
@@ -990,6 +993,11 @@ pub(crate) fn build_system(
              inside Joy, a local-first open-source agent harness."
         ),
     ];
+    // 待办清单排在记忆与方法之前：它是**这一趟正在做的事**，比背景知识更该先看到。
+    // 而且它是注入的，不进历史 —— 压缩、滑窗都冲不掉它。
+    if let Some(todo) = todo {
+        parts.push(format!("\n{todo}"));
+    }
     if !memory.is_empty() {
         parts.push(format!("\nRelevant memory:\n{memory}"));
     }

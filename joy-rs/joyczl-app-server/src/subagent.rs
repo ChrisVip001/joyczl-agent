@@ -133,6 +133,8 @@ impl SubagentRunner for Delegated {
                 &resolved.provider_id,
                 "",
                 "",
+                // 子代理没有待办清单：那张表属于父轮的任务线，它也不该去写。
+                None,
                 None,
             ) + "\n\nYou are a subagent: do the one task below and answer with the \
                  conclusion only. Whoever asked cannot see your steps, and you cannot ask \
@@ -140,7 +142,12 @@ impl SubagentRunner for Delegated {
 
             // 工具表用**父轮的副本**，只是其中没有 delegate_task —— 于是递归
             // 派生不是「被拒绝」，而是根本不存在的选项。
-            let child_tools = tools.without(joyczl_tools::subagent::NAME);
+            // 子代理的表里既没有 `delegate_task`（递归结构性不存在），
+            // 也没有 `todo_write`：清单属于**父轮那条任务线**，子代理写它会
+            // 把父轮的计划表覆盖掉。
+            let child_tools = tools
+                .without(joyczl_tools::subagent::NAME)
+                .without("todo_write");
             // 子代理**没有批准通道**（`None`）：它不该阻塞在人类身上，所以
             // 需要批准的动作在它那儿直接按拒绝处理 —— 见 limitations.md。
             //

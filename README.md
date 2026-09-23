@@ -66,6 +66,7 @@ persisted with the conversation.
 | `send_message` | message drafts into the outbox — never actually sends |
 | `search_web` | DuckDuckGo HTML, or Tavily with `TAVILY_API_KEY` |
 | `create_skill` | persist an agreed workflow as procedural memory |
+| `todo_write` | keep a per-session todo list, re-injected every turn (whole-table replace; one `in_progress` at a time) |
 | `current_time` | local time with weekday and timezone |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
 | `delegate_task` | hand one self-contained job to a subagent — off unless `JOY_DELEGATE=1`, cannot delegate again; pass `result_schema` for a structured answer (retried once, then prose) |
