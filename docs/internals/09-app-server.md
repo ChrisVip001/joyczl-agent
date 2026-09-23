@@ -5,7 +5,20 @@
 
 目录：`joy-rs/joyczl-app-server/src/`
 （`lib.rs`（Server 装配）、`turn.rs`（一轮的全流程）、`dispatch.rs`（13 个方法）、
-`stdio.rs`（传输）、`trace.rs`（落盘）、`subagent.rs`（子代理执行体））。
+`stdio.rs`（传输）、`trace.rs`（落盘）、`subagent.rs`（子代理执行体）、`goal.rs`（目标循环））。
+
+### 目标循环（`goal.rs`）
+
+主循环停下来**不代表目标达成**：停下来只说明「这一步做完了」。设了目标的会话，
+`run_turn` 会叫判断器（便宜模型、无工具、只看对话）看一遍，没达成就把理由当成下一条
+用户消息**回到同一个会话**再跑一轮。
+
+三处纪律都在代码里：轮次上限（`JOY_GOAL_MAX_ROUNDS`）到了就置 `round-limit` 并如实
+说没完成；判断器调用失败就置 `blocked` 停续轮**并保住目标**；终止态记在目标上
+（`Goal.status`），循环不再自己跑 —— 否则每一轮都会把同一个判断再问一遍。目标只有人
+能设（`/goal` 或 `goal/set`），模型连这条路径都看不见。
+
+`GoalRound` 通知是「为什么又跑了一轮」的唯一答案，REPL 每次都会打一行。
 
 ## 用实测校准估算（`session_context`）
 

@@ -105,6 +105,34 @@ class GateDecisionKind(str, Enum):
     skip = 'skip'
 
 
+class GoalRoundNotification(BaseModel):
+    maxRounds: int
+    reason: Annotated[str, Field(description='判断器给的理由（或出口的原因）。')]
+    round: Annotated[int, Field(description='第几轮（从 1 开始）。')]
+    status: Annotated[
+        str,
+        Field(
+            description='`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。'
+        ),
+    ]
+    turnId: str
+
+
+class GoalSetParams(BaseModel):
+    condition: Annotated[
+        str | None,
+        Field(description='目标条件（自然语言，比如「让测试全绿」）。空/不传 = 清除。'),
+    ] = None
+    sessionId: str
+
+
+class GoalSetResponse(BaseModel):
+    active: Annotated[bool, Field(description='现在有活跃目标吗。')]
+    condition: str | None = None
+    maxRounds: int
+    roundsUsed: Annotated[int | None, Field(description='这个目标已经续了几轮。')] = 0
+
+
 class GraphEndedNotification(BaseModel):
     error: str | None = None
     ms: int
@@ -296,13 +324,27 @@ class ServerNotification5(BaseModel):
 
 
 class ServerNotification6(BaseModel):
+    maxRounds: int
+    reason: Annotated[str, Field(description='判断器给的理由（或出口的原因）。')]
+    round: Annotated[int, Field(description='第几轮（从 1 开始）。')]
+    status: Annotated[
+        str,
+        Field(
+            description='`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。'
+        ),
+    ]
+    turnId: str
+    type: Literal['goalRound']
+
+
+class ServerNotification7(BaseModel):
     args: Annotated[Any, Field(description='模型给的参数，结构随工具而定。')]
     tool: str
     turnId: str
     type: Literal['toolStarted']
 
 
-class ServerNotification8(BaseModel):
+class ServerNotification9(BaseModel):
     newFacts: Annotated[
         int,
         Field(description='这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。'),
@@ -310,13 +352,13 @@ class ServerNotification8(BaseModel):
     type: Literal['consolidationCompleted']
 
 
-class ServerNotification9(BaseModel):
+class ServerNotification10(BaseModel):
     nodes: list[str]
     type: Literal['graphStarted']
     workflow: str
 
 
-class ServerNotification10(BaseModel):
+class ServerNotification11(BaseModel):
     node: str
     type: Literal['graphNodeStarted']
     visit: Annotated[
@@ -325,7 +367,7 @@ class ServerNotification10(BaseModel):
     workflow: str
 
 
-class ServerNotification11(BaseModel):
+class ServerNotification12(BaseModel):
     error: Annotated[
         str | None,
         Field(
@@ -339,7 +381,7 @@ class ServerNotification11(BaseModel):
     workflow: str
 
 
-class ServerNotification12(BaseModel):
+class ServerNotification13(BaseModel):
     error: str | None = None
     ms: int
     path: list[str]
@@ -348,7 +390,7 @@ class ServerNotification12(BaseModel):
     workflow: str
 
 
-class ServerNotification14(BaseModel):
+class ServerNotification15(BaseModel):
     code: int
     data: Any | None = None
     message: str
@@ -566,7 +608,7 @@ class ServerNotification3(BaseModel):
     type: Literal['gateDecided']
 
 
-class ServerNotification7(BaseModel):
+class ServerNotification8(BaseModel):
     durationMs: int | None = None
     output: Annotated[
         str,
@@ -606,6 +648,15 @@ class ToolCompletedNotification(BaseModel):
 
 class TurnMeta(BaseModel):
     gate: GateDecision | None = None
+    goalRounds: Annotated[
+        int | None, Field(description='这个目标到这一轮为止续了几轮。没设目标就是 0。')
+    ] = 0
+    goalStatus: Annotated[
+        str | None,
+        Field(
+            description='目标循环的出口（`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`）。没设目标就是 `None`。'
+        ),
+    ] = None
     graph: Annotated[GraphInfo | None, Field(description='graph 没介入时为 null。')] = (
         None
     )
@@ -679,7 +730,7 @@ class Message(BaseModel):
     role: MessageRole
 
 
-class ServerNotification13(BaseModel):
+class ServerNotification14(BaseModel):
     iterations: int
     meta: TurnMeta
     reply: str
@@ -704,6 +755,7 @@ class ServerNotification(
         | ServerNotification12
         | ServerNotification13
         | ServerNotification14
+        | ServerNotification15
     ]
 ):
     root: Annotated[
@@ -720,7 +772,8 @@ class ServerNotification(
         | ServerNotification11
         | ServerNotification12
         | ServerNotification13
-        | ServerNotification14,
+        | ServerNotification14
+        | ServerNotification15,
         Field(
             description='一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。',
             title='ServerNotification',

@@ -156,6 +156,16 @@ means "we would like this, nobody has built it".
   around approval. There is no PTY either — interactive programs (`vi`, `top`) do
   not belong in the background to begin with.
 
+* **Deliberate** — The goal loop's judge **sees only the conversation**: a
+  cheap model, no tools, no retrieval. Its question is "does this conversation show
+  the goal met", and giving it more would just have it start doing the work. It
+  follows that its verdict can be wrong — which is why it may only *continue a
+  round*, never let anything past a permission check.
+* **Deliberate** — Goals are set, changed and cleared by humans only (`/goal` or
+  `goal/set`): the model has no path to them. After a terminal outcome (satisfied /
+  impossible / round-limit / judge failure) the loop stops by itself and waits for a
+  human.
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

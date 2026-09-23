@@ -6,14 +6,14 @@
 
 use joyczl_protocol::{
     codes, methods, ApprovalRespondParams, ApprovalRespondResponse, ConfigReadParams,
-    ConfigReadResponse, ConfigWriteParams, ConfigWriteResponse, ErrorObject, JsonRpcError,
-    JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, MemoryForgetParams, MemoryForgetResponse,
-    MemoryListEpisodesParams, MemoryListEpisodesResponse, MemoryListParams, MemoryListResponse,
-    MemoryRememberParams, MemoryRememberResponse, MemorySearchParams, MemorySearchResponse,
-    MessageRole, ModelInfo, ModelListParams, ModelListResponse, RequestId, SessionListParams,
-    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
-    SessionNewResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
-    JSONRPC_VERSION,
+    ConfigReadResponse, ConfigWriteParams, ConfigWriteResponse, ErrorObject, GoalSetParams,
+    JsonRpcError, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, MemoryForgetParams,
+    MemoryForgetResponse, MemoryListEpisodesParams, MemoryListEpisodesResponse, MemoryListParams,
+    MemoryListResponse, MemoryRememberParams, MemoryRememberResponse, MemorySearchParams,
+    MemorySearchResponse, MessageRole, ModelInfo, ModelListParams, ModelListResponse, RequestId,
+    SessionListParams, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
+    SessionNewParams, SessionNewResponse, TurnInterruptParams, TurnInterruptResponse,
+    TurnStartParams, JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -243,6 +243,12 @@ async fn dispatch(
             // turnCompleted 通知）由正在跑的那轮自己完成。
             let interrupted = server.interrupt_turn(&p.turn_id);
             respond(TurnInterruptResponse { interrupted })
+        }
+
+        methods::GOAL_SET => {
+            let p: GoalSetParams = parse(params, method)?;
+            // 只有人能到这里：模型没有这个工具，也没有别的方法能碰目标表。
+            respond(server.goal_set(&p.session_id, p.condition.as_deref()))
         }
 
         methods::APPROVAL_RESPOND => {

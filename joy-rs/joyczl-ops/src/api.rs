@@ -253,6 +253,7 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
         N::GateDecided(n) => Some(&n.turn_id),
         N::Retry(n) => Some(&n.turn_id),
         N::ApprovalRequested(n) => Some(&n.turn_id),
+        N::GoalRound(n) => Some(&n.turn_id),
         N::ToolStarted(n) => Some(&n.turn_id),
         N::ToolCompleted(n) => Some(&n.turn_id),
         N::TurnCompleted(n) => Some(&n.turn_id),

@@ -45,4 +45,13 @@ export type TurnMeta = {
    * 这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。
    */
   retries: number;
+  /**
+   * 目标循环的出口（`continuing` / `satisfied` / `impossible` /
+   * `round-limit` / `blocked`）。没设目标就是 `None`。
+   */
+  goalStatus: string | null;
+  /**
+   * 这个目标到这一轮为止续了几轮。没设目标就是 0。
+   */
+  goalRounds: number;
 };

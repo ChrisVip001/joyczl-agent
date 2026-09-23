@@ -3,6 +3,7 @@ import type { ApprovalRequestedNotification } from "./ApprovalRequestedNotificat
 import type { ConsolidationCompletedNotification } from "./ConsolidationCompletedNotification";
 import type { ErrorNotification } from "./ErrorNotification";
 import type { GateDecidedNotification } from "./GateDecidedNotification";
+import type { GoalRoundNotification } from "./GoalRoundNotification";
 import type { GraphEndedNotification } from "./GraphEndedNotification";
 import type { GraphNodeEndedNotification } from "./GraphNodeEndedNotification";
 import type { GraphNodeStartedNotification } from "./GraphNodeStartedNotification";
@@ -26,6 +27,7 @@ export type ServerNotification =
   | ({ type: "gateDecided" } & GateDecidedNotification)
   | ({ type: "retry" } & RetryNotification)
   | ({ type: "approvalRequested" } & ApprovalRequestedNotification)
+  | ({ type: "goalRound" } & GoalRoundNotification)
   | ({ type: "toolStarted" } & ToolStartedNotification)
   | ({ type: "toolCompleted" } & ToolCompletedNotification)
   | ({ type: "consolidationCompleted" } & ConsolidationCompletedNotification)

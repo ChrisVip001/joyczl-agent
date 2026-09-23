@@ -98,6 +98,12 @@ pub const BOUNDS: &[Bound] = &[
     },
     Bound {
         patch_name: None,
+        env_name: "JOY_GOAL_MAX_ROUNDS",
+        min: 1,
+        max: 20,
+    },
+    Bound {
+        patch_name: None,
         env_name: "JOY_LLM_RETRIES",
         min: 0,
         max: 5,
@@ -160,6 +166,9 @@ pub struct Settings {
     pub home: PathBuf,
 
     // ---- Loop 护栏
+    /// `JOY_GOAL_MAX_ROUNDS`：一个目标最多自动续几轮（默认 5）。超了就如实
+    /// 置 `round-limit` —— 不伪装完成、也不清掉目标。
+    pub goal_max_rounds: i32,
     /// `JOY_LLM_RETRIES`：限流/临时故障时最多退避重试几次（默认 2，上限 5，
     /// 0 = 关闭）。只重试「再试一次有意义」的错误，而且**每次必发通知** ——
     /// 见 joyczl-provider 的 retry.rs。
@@ -260,6 +269,7 @@ impl Default for Settings {
             model: None,
             small_model: None,
             home: PathBuf::from(".joy"),
+            goal_max_rounds: 5,
             llm_retries: 2,
             llm_timeout_secs: 120,
             max_iterations: 10,
@@ -302,6 +312,7 @@ impl Settings {
             model: env("JOY_MODEL"),
             small_model: env("JOY_SMALL_MODEL"),
             home: env("JOY_HOME").map(PathBuf::from).unwrap_or(d.home),
+            goal_max_rounds: env_int("JOY_GOAL_MAX_ROUNDS", d.goal_max_rounds),
             llm_retries: env_int("JOY_LLM_RETRIES", d.llm_retries),
             llm_timeout_secs: env_int("JOY_LLM_TIMEOUT", d.llm_timeout_secs as i32) as i64,
             max_iterations: env_int("JOY_MAX_ITERATIONS", d.max_iterations),
@@ -373,6 +384,7 @@ impl Settings {
         check_bound("JOY_HISTORY_TURNS", self.history_turns as i64)?;
         check_bound("JOY_CONSOLIDATE_EVERY", self.consolidate_every as i64)?;
         check_bound("JOY_RETRIEVAL_TOP_K", self.retrieval_top_k as i64)?;
+        check_bound("JOY_GOAL_MAX_ROUNDS", self.goal_max_rounds as i64)?;
         check_bound("JOY_LLM_RETRIES", self.llm_retries as i64)?;
         check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
         check_bound("JOY_HOOKS_TIMEOUT", self.hooks_timeout_secs)?;

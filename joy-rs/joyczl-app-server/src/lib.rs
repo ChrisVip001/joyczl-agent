@@ -17,6 +17,7 @@
 
 mod approval;
 mod dispatch;
+mod goal;
 mod jobs;
 mod stdio;
 mod subagent;
@@ -37,6 +38,10 @@ mod todo_tests;
 #[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod jobs_tests;
+
+#[cfg(test)]
+#[path = "goal_tests.rs"]
+mod goal_tests;
 
 #[cfg(test)]
 #[path = "subagent_tests.rs"]
@@ -131,12 +136,37 @@ pub struct Server {
     pub(crate) todo: Arc<joyczl_tools::todo::TodoBoard>,
     /// 后台作业表（跟着 `JOY_EXEC` 一起开关）。
     pub(crate) jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
+    /// 会话 -> 目标（见 goal.rs）。只有人能设，模型连这条路径都看不见。
+    pub(crate) goals: goal::Goals,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
 
 impl Server {
     /// 从 state.db 装配。provider 解析失败不致命 —— 记下原因，等 turn 再报。
+    /// 设/清目标。**只有人能到这里** —— 模型没有 `goal/set` 这个工具。
+    ///
+    /// dispatch 与 REPL 走同一处实现：两遍实现早晚会有一遍忘了校验或忘了带
+    /// `max_rounds`。
+    pub fn goal_set(
+        &self,
+        session_id: &str,
+        condition: Option<&str>,
+    ) -> joyczl_protocol::GoalSetResponse {
+        let goal = goal::set(&self.goals, session_id, condition);
+        let max_rounds = self
+            .settings
+            .read()
+            .expect("settings 锁不该中毒")
+            .goal_max_rounds;
+        joyczl_protocol::GoalSetResponse {
+            active: goal.is_some(),
+            condition: goal.as_ref().map(|goal| goal.condition.clone()),
+            rounds_used: goal.as_ref().map(|goal| goal.rounds).unwrap_or(0),
+            max_rounds,
+        }
+    }
+
     pub async fn boot(pool: SqlitePool, settings: Settings) -> Self {
         let settings = Arc::new(RwLock::new(settings));
         // 读锁只在表达式里拿一下：**绝不跨 await 持有**（clippy 会拦，也确实
@@ -237,6 +267,7 @@ impl Server {
             hooks,
             todo,
             jobs: jobs_handle,
+            goals: goal::store(),
             pool,
         }
     }

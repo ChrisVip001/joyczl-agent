@@ -1,32 +1,40 @@
-Run long commands in the background
+Add a goal loop: keep going until the thing is actually done
 
-A cargo test takes three minutes. In the foreground that is three minutes of a
-frozen turn — the user stares at a motionless prompt and nothing else happens.
-run_command now takes background=true, and the command runs in its own process
-while the conversation moves on.
+A turn ending means "this step finished", not "the goal is met". goal/set (and
+/goal in the REPL) attaches a natural-language condition to a session; when the
+main loop stops, a judge decides whether the goal holds, and if not its reason
+becomes the next user message and another round runs in the same session.
 
-The gate is the same one the foreground uses, and that is the point: exec.rs had
-its "pass the gate" and "build the sandboxed command" halves pulled out into
-pass_gate and spawn_sandboxed so both paths share them. Skipping approval in the
-background would make approval decorative, since "put it in the background and
-let it run" is the natural way around a prompt.
+Three constraints, all borrowed from implementations that learned them:
 
-Ownership is a fence, not secrecy (deepseek-harness' rule): ids are predictable
-(j1, j2), and only the session that started a job can read or stop it — another
-session asking gets "no job called jN", which does not even confirm it exists.
-The exec policy, sandbox and offline default are the same object the foreground
-built, so a background command cannot be sandboxed differently.
+- The judge is a cheap model with no tools and only the conversation. Its
+  question is "does this conversation show the goal met" — give it tools and it
+  becomes a second executor whose verdict was supposed to be side-effect free.
+- Rounds are capped (JOY_GOAL_MAX_ROUNDS, default 5). Hitting the cap sets
+  round-limit and says the goal was NOT met: no pretending, and the goal is not
+  cleared, because a record of an unfinished goal is worth more than a clean
+  slate.
+- Goals are set and cleared by humans only. The model has no tool for it, so
+  "the model assigning itself work" is not forbidden here — the path does not
+  exist.
 
-Output goes into a fixed 64 KiB ring. Overflow drops the oldest bytes and the
-read reports how many were dropped rather than failing: a chatty command should
-not fill memory, and reading a slice of it should not be an error. Reads use
-absolute cursors, wait=true waits at most 20s and then says it is still running
-instead of letting the tool call time out. A finished job's remaining output is
-written to <home>/outbox/jobs/ so it can be read after the process is gone —
-in-process by design, since children are kill_on_drop and "keeps running across
-a restart" is a supervisor's job, not this one.
+The judge's answer is validated: ok and impossible are mutually exclusive, and a
+reply that sets both is treated as not-done rather than letting the loop retire
+on an answer that contradicts itself. A judge that fails to answer sets blocked,
+stops the loop and keeps the goal. Terminal outcomes are recorded on the goal
+(Goal.status) so the loop does not re-ask the same question every turn — that
+would both cost money and dress up a stopped loop as a running one.
 
-Tests: 3 real-process tests (spawn, read, finish, land in the outbox; another
-session refused; kill a running job) that skip without a sandbox, 2 ring tests
-(overflow drops the oldest and says so; one huge write keeps the tail) and 2
-evals. Docs: README tool rows, limitations, internals 6, CHANGELOG — EN + zh.
+Server::goal_set holds the single implementation (dispatch and the REPL both call
+it; two copies would eventually disagree about max_rounds). Every judgement
+emits GoalRound — the only answer to "why did it run again" — and the REPL prints
+a line for it, including the statuses that mean "gave up", which are exactly the
+ones worth reading.
+
+Since the goal loop lives in run_turn rather than in the loop driver, the eval
+harness cannot set a goal yet, so the coverage is an end-to-end app-server test
+with a real turn: continuing then satisfied, meta.goalRounds == 2, the reason fed
+back as the next message, plus round-limit honesty, judge-failure blocking and
+the contradiction rule. 5 tests; protocol regenerated (goal/set, GoalRound,
+TurnMeta.goalStatus/goalRounds) including the Python constants. Docs:
+configuration, protocol, limitations, internals 9, CHANGELOG — EN + zh.

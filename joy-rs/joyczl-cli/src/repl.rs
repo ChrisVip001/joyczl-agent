@@ -19,7 +19,7 @@ const HELP: &str = "\
   /sessions      列出历史会话
   /new           开一个新会话
   /quit          退出（/exit 也行）
-其他任何输入都会作为消息发给 Joy。";
+其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉";
 
 /// 进入终端对话。拿到的是已装配好的 Server。
 pub async fn run(server: Server) -> Result<()> {
@@ -51,6 +51,7 @@ pub async fn run(server: Server) -> Result<()> {
             }
             "/sessions" => list_sessions(&server).await,
             s if s.starts_with("/memory") => show_memory(&server, s).await,
+            s if s.starts_with("/goal") => set_goal(&server, &session_id, s),
             s if s.starts_with('/') => {
                 println!("不认识的命令 {s}。/help 看有哪些。");
             }
@@ -59,6 +60,26 @@ pub async fn run(server: Server) -> Result<()> {
     }
     println!("再见。");
     Ok(())
+}
+
+/// `/goal <条件>` 设一个目标，`/goal clear`（或 `/goal` 后面什么都不写）清掉。
+///
+/// 目标是**只有人**能设的东西：模型看不见这条路径，所以「模型给自己派活」在这里
+/// 不是被禁止，而是不存在。
+fn set_goal(server: &Server, session_id: &str, input: &str) {
+    let condition = input.trim_start_matches("/goal").trim();
+    let cleared = condition.is_empty() || condition.eq_ignore_ascii_case("clear");
+    let response = server.goal_set(session_id, if cleared { None } else { Some(condition) });
+
+    if !response.active {
+        println!("目标已清除（这个会话现在没有目标）。");
+        return;
+    }
+    println!(
+        "目标已设置：{}\n（最多自动续 {} 轮；停下来的理由每次都会打在这里；\n  /goal clear 可以随时撤掉）",
+        response.condition.unwrap_or_default(),
+        response.max_rounds
+    );
 }
 
 /// 问一次批准：打印预览、读一行回答、把回答送回去。
@@ -152,6 +173,26 @@ async fn chat_turn(server: &Server, session_id: &str, message: &str) {
             ServerNotification::ApprovalRequested(ask) => {
                 end_streamed_line(&mut streamed);
                 ask_approval(server, ask).await;
+            }
+            // 目标循环续了一轮：说清楚「为什么还没结束」，否则用户只会看到
+            // 界面又自己动了一轮。
+            ServerNotification::GoalRound(round) => {
+                end_streamed_line(&mut streamed);
+                match round.status.as_str() {
+                    "continuing" => println!(
+                        "…目标还没达成（第 {}/{} 轮）：{}",
+                        round.round, round.max_rounds, round.reason
+                    ),
+                    "satisfied" => println!("…目标达成（第 {} 轮）：{}", round.round, round.reason),
+                    "impossible" => {
+                        println!("…目标做不到（第 {} 轮）：{}", round.round, round.reason)
+                    }
+                    "round-limit" => println!(
+                        "…到达轮次上限（{} 轮），停在这里：{}",
+                        round.max_rounds, round.reason
+                    ),
+                    other => println!("…目标循环停了（{other}）：{}", round.reason),
+                }
             }
             // 重试**从不静默**：与其让用户对着一个卡住的界面猜，不如说清楚
             // 「限流了，等一会儿再来一次」。

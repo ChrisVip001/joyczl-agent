@@ -24,6 +24,8 @@ pub mod methods {
     pub const TURN_START: &str = "turn/start";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const APPROVAL_RESPOND: &str = "approval/respond";
+    /// 设/清一个目标（条件）。**只有人能让它开始或停下** —— 模型没有这个能力。
+    pub const GOAL_SET: &str = "goal/set";
     pub const SESSION_LIST: &str = "session/list";
     pub const SESSION_NEW: &str = "session/new";
     pub const SESSION_MESSAGES: &str = "session/messages";
@@ -150,6 +152,46 @@ pub struct ApprovalRespondParams {
     pub remember: bool,
 }
 
+/// `goal/set` 的参数。`condition` 为空 = 清除目标。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct GoalSetParams {
+    pub session_id: String,
+    /// 目标条件（自然语言，比如「让测试全绿」）。空/不传 = 清除。
+    #[serde(default)]
+    pub condition: Option<String>,
+}
+
+/// `goal/set` 的应答：设完之后的权威状态。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct GoalSetResponse {
+    /// 现在有活跃目标吗。
+    pub active: bool,
+    pub condition: Option<String>,
+    /// 这个目标已经续了几轮。
+    #[serde(default)]
+    pub rounds_used: i32,
+    pub max_rounds: i32,
+}
+
+/// 目标循环每判一次就发一条 —— 「为什么又跑了一轮」从来不靠猜。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct GoalRoundNotification {
+    pub turn_id: String,
+    /// 第几轮（从 1 开始）。
+    pub round: i32,
+    pub max_rounds: i32,
+    /// `continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。
+    pub status: String,
+    /// 判断器给的理由（或出口的原因）。
+    pub reason: String,
+}
+
 /// `approval/respond` 的应答。
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -194,6 +236,13 @@ pub struct TurnMeta {
     /// 这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。
     #[serde(default)]
     pub retries: i32,
+    /// 目标循环的出口（`continuing` / `satisfied` / `impossible` /
+    /// `round-limit` / `blocked`）。没设目标就是 `None`。
+    #[serde(default)]
+    pub goal_status: Option<String>,
+    /// 这个目标到这一轮为止续了几轮。没设目标就是 0。
+    #[serde(default)]
+    pub goal_rounds: i32,
 }
 
 // ===========================================================================
@@ -869,6 +918,7 @@ pub enum ServerNotification {
     Retry(RetryNotification),
     /// 有一条命令在等人批准：先回它，那一轮才会继续。
     ApprovalRequested(ApprovalRequestedNotification),
+    GoalRound(GoalRoundNotification),
     ToolStarted(ToolStartedNotification),
     ToolCompleted(ToolCompletedNotification),
     ConsolidationCompleted(ConsolidationCompletedNotification),

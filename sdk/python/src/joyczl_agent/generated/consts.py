@@ -35,6 +35,7 @@ class Methods(str, Enum):
     APPROVAL_RESPOND = "approval/respond"
     CONFIG_READ = "config/read"
     CONFIG_WRITE = "config/write"
+    GOAL_SET = "goal/set"
     MEMORY_FORGET = "memory/forget"
     MEMORY_LIST = "memory/list"
     MEMORY_LIST_EPISODES = "memory/list-episodes"

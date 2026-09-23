@@ -339,6 +339,92 @@
       "title": "GateDecisionKind",
       "type": "string"
     },
+    "GoalRoundNotification": {
+      "description": "目标循环每判一次就发一条 —— 「为什么又跑了一轮」从来不靠猜。",
+      "properties": {
+        "maxRounds": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "reason": {
+          "description": "判断器给的理由（或出口的原因）。",
+          "type": "string"
+        },
+        "round": {
+          "description": "第几轮（从 1 开始）。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "status": {
+          "description": "`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。",
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "maxRounds",
+        "reason",
+        "round",
+        "status",
+        "turnId"
+      ],
+      "title": "GoalRoundNotification",
+      "type": "object"
+    },
+    "GoalSetParams": {
+      "description": "`goal/set` 的参数。`condition` 为空 = 清除目标。",
+      "properties": {
+        "condition": {
+          "default": null,
+          "description": "目标条件（自然语言，比如「让测试全绿」）。空/不传 = 清除。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "GoalSetParams",
+      "type": "object"
+    },
+    "GoalSetResponse": {
+      "description": "`goal/set` 的应答：设完之后的权威状态。",
+      "properties": {
+        "active": {
+          "description": "现在有活跃目标吗。",
+          "type": "boolean"
+        },
+        "condition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxRounds": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "roundsUsed": {
+          "default": 0,
+          "description": "这个目标已经续了几轮。",
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "active",
+        "maxRounds"
+      ],
+      "title": "GoalSetResponse",
+      "type": "object"
+    },
     "GraphEndedNotification": {
       "properties": {
         "error": {
@@ -1085,6 +1171,46 @@
             "reason",
             "requestId",
             "tool",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "目标循环每判一次就发一条 —— 「为什么又跑了一轮」从来不靠猜。",
+          "properties": {
+            "maxRounds": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "reason": {
+              "description": "判断器给的理由（或出口的原因）。",
+              "type": "string"
+            },
+            "round": {
+              "description": "第几轮（从 1 开始）。",
+              "format": "int32",
+              "type": "integer"
+            },
+            "status": {
+              "description": "`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。",
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "goalRound"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "maxRounds",
+            "reason",
+            "round",
+            "status",
             "turnId",
             "type"
           ],
@@ -1880,6 +2006,20 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "goalRounds": {
+          "default": 0,
+          "description": "这个目标到这一轮为止续了几轮。没设目标就是 0。",
+          "format": "int32",
+          "type": "integer"
+        },
+        "goalStatus": {
+          "default": null,
+          "description": "目标循环的出口（`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`）。没设目标就是 `None`。",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "graph": {

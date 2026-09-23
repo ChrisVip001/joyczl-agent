@@ -14,7 +14,21 @@
 |---|---|---|
 | `turn/start` | `TurnStartParams` → `TurnStartResponse` | 跑一轮对话；应答在全部通知之后发出 |
 | `turn/interrupt` | `TurnInterruptParams` → `TurnInterruptResponse` |
-| `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | 回答一次「要不要执行」；太晚送达时 `accepted: false` | 打断在跑的 turn；`interrupted:false` = 已跑完 |
+| `goal/set`（设/清一个目标）、通知 `GoalRound`（每判一次发一条）：
+
+```
+you>  /goal 让测试全绿
+       → goal/set  {sessionId, condition: "让测试全绿"}
+       ← {active: true, condition: "让测试全绿", roundsUsed: 0, maxRounds: 5}
+… 一轮跑完，判断器说不算达成 …
+       ← GoalRound {turnId, round: 1, maxRounds: 5, status: "continuing", reason: "还有两条红"}
+… 又跑一轮 …
+       ← GoalRound {turnId, round: 2, maxRounds: 5, status: "satisfied", reason: "全绿了"}
+```
+
+`TurnMeta.goalStatus` / `goalRounds` 把出口与轮次也带进这一轮的元数据。
+
+`approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | 回答一次「要不要执行」；太晚送达时 `accepted: false` | 打断在跑的 turn；`interrupted:false` = 已跑完 |
 | `session/new` | `SessionNewParams` → `SessionNewResponse` | 新会话标签（不建任何实体） |
 | `session/list` | `SessionListParams` → `SessionListResponse` | 会话列表（游标分页） |
 | `session/messages` | `SessionMessagesParams` → `SessionMessagesResponse` | 一个会话的消息，最新在前，往上翻页 |

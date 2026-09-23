@@ -27,12 +27,12 @@ use joyczl_graph::{
 use joyczl_loop::{LoopEvent, LoopResult};
 use joyczl_protocol::{
     codes, ConsolidationCompletedNotification, ErrorObject, GateDecidedNotification, GateDecision,
-    GateDecisionKind, GraphEndedNotification, GraphInfo, GraphNodeEndedNotification,
-    GraphNodeStartedNotification, GraphRouteKind, GraphStartedNotification, JsonRpcMessage,
-    JsonRpcResponse, RequestId, RetryNotification, ServerNotification, TextDeltaNotification,
-    TokenUsage, ToolCallRecord, ToolCompletedNotification, ToolStartedNotification, ToolStatus,
-    TurnCompletedNotification, TurnMeta, TurnStartParams, TurnStartResponse,
-    TurnStartedNotification, JSONRPC_VERSION,
+    GateDecisionKind, GoalRoundNotification, GraphEndedNotification, GraphInfo,
+    GraphNodeEndedNotification, GraphNodeStartedNotification, GraphRouteKind,
+    GraphStartedNotification, JsonRpcMessage, JsonRpcResponse, RequestId, RetryNotification,
+    ServerNotification, TextDeltaNotification, TokenUsage, ToolCallRecord,
+    ToolCompletedNotification, ToolStartedNotification, ToolStatus, TurnCompletedNotification,
+    TurnMeta, TurnStartParams, TurnStartResponse, TurnStartedNotification, JSONRPC_VERSION,
 };
 use joyczl_provider::{ContentBlock, CreateRequest, Message, Resolved, Role, TextSink, Usage};
 
@@ -255,6 +255,107 @@ pub async fn run_turn(
         .await?;
     }
 
+    // ---- 目标循环：主循环停下来**不代表目标达成**。
+    //
+    // 只有人能设目标（`goal/set`，模型连这个工具都没有），所以这里续轮不是
+    // 「模型给自己派活」—— 是人在前面说过「一直做到 X 为止」。
+    let mut goal_status: Option<String> = None;
+    let mut goal_rounds = 0i32;
+    if let Some(goal) = crate::goal::active(&server.goals, &session_id) {
+        let max_rounds = server
+            .settings
+            .read()
+            .expect("settings 锁不该中毒")
+            .goal_max_rounds;
+        eprintln!(
+            "(joy) 目标循环开始：{condition}",
+            condition = goal.condition
+        );
+        loop {
+            goal_rounds = crate::goal::bump(&server.goals, &session_id);
+            let transcript = judge_transcript(server, &session_id, &full.result.reply).await;
+            let verdict = crate::goal::judge(&resolved, &goal.condition, &transcript).await;
+
+            let judgement = match verdict {
+                Ok(judgement) => judgement,
+                Err(why) => {
+                    // 判断器挂了：停续轮、**保住目标**（不清、不假装达成）。
+                    notify_goal(sink, &turn_id, goal_rounds, max_rounds, "blocked", &why);
+                    eprintln!("(joy) 目标循环停了：{why}");
+                    goal_status = Some("blocked".to_string());
+                    crate::goal::finish(&server.goals, &session_id, "blocked");
+                    break;
+                }
+            };
+
+            if judgement.ok {
+                notify_goal(
+                    sink,
+                    &turn_id,
+                    goal_rounds,
+                    max_rounds,
+                    "satisfied",
+                    &judgement.reason,
+                );
+                goal_status = Some("satisfied".to_string());
+                crate::goal::finish(&server.goals, &session_id, "satisfied");
+                break;
+            }
+            if judgement.impossible {
+                notify_goal(
+                    sink,
+                    &turn_id,
+                    goal_rounds,
+                    max_rounds,
+                    "impossible",
+                    &judgement.reason,
+                );
+                goal_status = Some("impossible".to_string());
+                crate::goal::finish(&server.goals, &session_id, "impossible");
+                break;
+            }
+            if goal_rounds >= max_rounds {
+                // 上限到了就**如实说没完成**：不伪装完成，也不清掉目标。
+                notify_goal(
+                    sink,
+                    &turn_id,
+                    goal_rounds,
+                    max_rounds,
+                    "round-limit",
+                    &format!("续了 {max_rounds} 轮还没达成：{}", judgement.reason),
+                );
+                goal_status = Some("round-limit".to_string());
+                crate::goal::finish(&server.goals, &session_id, "round-limit");
+                break;
+            }
+
+            notify_goal(
+                sink,
+                &turn_id,
+                goal_rounds,
+                max_rounds,
+                "continuing",
+                &judgement.reason,
+            );
+            eprintln!(
+                "(joy) 目标循环第 {goal_rounds} 轮（上限 {max_rounds}）：{}",
+                judgement.reason
+            );
+            // 把理由当成下一条用户消息，**回到同一个会话**再跑一轮。
+            full = full_turn(
+                server,
+                &resolved,
+                &judgement.reason,
+                &session_id,
+                &turn_id,
+                sink,
+                None,
+                Some(interrupt.clone()),
+            )
+            .await?;
+        }
+    }
+
     let FullTurn { result, gate } = full;
 
     for call in &result.tool_calls {
@@ -313,6 +414,8 @@ pub async fn run_turn(
         guard_hits: result.guard.hits,
         guard_note: result.guard.note.clone(),
         retries: retries.load(Ordering::Relaxed),
+        goal_status: goal_status.clone(),
+        goal_rounds,
     };
 
     let meta_json = serde_json::to_string(&meta).ok();
@@ -1008,6 +1111,46 @@ pub(crate) fn build_system(
         parts.push(section);
     }
     parts.join("\n")
+}
+
+/// 给判断器看的对话记录：这个会话的最近几轮，末尾补上这一轮的答复。
+///
+/// 判断器**只看对话**（没有工具、没有检索）：它要回答的是「这段对话说明目标达成了
+/// 吗」，多看别的只会让它开始替模型干活。
+async fn judge_transcript(server: &Server, session_id: &str, reply: &str) -> String {
+    let history = server
+        .chat
+        .session_history(session_id)
+        .await
+        .unwrap_or_default();
+    if history.is_empty() {
+        return format!("assistant: {reply}");
+    }
+    let mut out = String::new();
+    let recent = history.len().saturating_sub(8);
+    for (role, content) in &history[recent..] {
+        out.push_str(&format!("{role}: {content}\n"));
+    }
+    out.push_str(&format!("assistant: {reply}"));
+    out
+}
+
+/// 发一条目标循环的通知（`GoalRound` 是「为什么又跑了一轮」的唯一答案）。
+fn notify_goal(
+    sink: &crate::EventSink,
+    turn_id: &str,
+    round: i32,
+    max_rounds: i32,
+    status: &str,
+    reason: &str,
+) {
+    sink.notification(ServerNotification::GoalRound(GoalRoundNotification {
+        turn_id: turn_id.to_string(),
+        round,
+        max_rounds,
+        status: status.to_string(),
+        reason: reason.to_string(),
+    }));
 }
 
 /// 一轮里最多因为 Stop hook 继续几次。通用机制是目标循环（`goal/set`）。

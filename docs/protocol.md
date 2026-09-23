@@ -15,7 +15,23 @@ before the response). Every type is defined in
 |---|---|---|
 | `turn/start` | `TurnStartParams` → `TurnStartResponse` | run one conversation turn; the response follows all notifications |
 | `turn/interrupt` | `TurnInterruptParams` → `TurnInterruptResponse` |
-| `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | answer one approval request; `accepted: false` when it arrived too late | cancel a running turn; `interrupted:false` = already finished |
+| `goal/set` (set or clear a goal) and the `GoalRound` notification (one per
+judgement):
+
+```
+you>  /goal make the tests green
+       → goal/set  {sessionId, condition: "make the tests green"}
+       ← {active: true, condition: "make the tests green", roundsUsed: 0, maxRounds: 5}
+… the turn ends without satisfying it …
+       ← GoalRound {turnId, round: 1, maxRounds: 5, status: "continuing", reason: "two red"}
+… another round …
+       ← GoalRound {turnId, round: 2, maxRounds: 5, status: "satisfied", reason: "all green"}
+```
+
+`TurnMeta.goalStatus` / `goalRounds` carry the outcome and the count into the turn's
+metadata.
+
+`approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | answer one approval request; `accepted: false` when it arrived too late | cancel a running turn; `interrupted:false` = already finished |
 | `session/new` | `SessionNewParams` → `SessionNewResponse` | new session label (creates nothing) |
 | `session/list` | `SessionListParams` → `SessionListResponse` | session list (cursor-paged) |
 | `session/messages` | `SessionMessagesParams` → `SessionMessagesResponse` | a conversation's messages, newest first, paging upward |

@@ -4,6 +4,22 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art
 
+### Goals: keep going until the thing is actually done
+
+`goal/set` (and `/goal` in the REPL) attaches a condition to a session. When the main
+loop stops, a judge — cheap model, no tools, conversation only — decides whether the
+goal is met; if not, its reason becomes the next user message and another round runs
+in the same session. Every judgement emits `GoalRound` (round, max, status, reason)
+so the extra rounds are explained, and `TurnMeta.goalStatus` / `goalRounds` carry the
+outcome into the turn's metadata.
+
+Bounded and honest: `JOY_GOAL_MAX_ROUNDS` (default 5) caps it, and hitting the cap
+sets `round-limit` and says the goal was not met rather than pretending. A judge that
+fails to answer sets `blocked`, stops the loop and **keeps** the goal. Terminal
+outcomes are recorded on the goal so the loop does not re-ask the same question every
+turn. Goals are set and cleared by humans only — the model has no tool for it, so
+"the model assigning itself work" is not forbidden here, it is impossible.
+
 ### Long commands can run in the background
 
 `run_command` gained `background=true`: the command is spawned, and a bounded
