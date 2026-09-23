@@ -22,6 +22,7 @@ pub mod calendar;
 pub mod exec;
 pub mod handlers;
 pub mod hooks;
+pub mod jobs;
 pub mod memory_admin;
 pub mod messages;
 pub mod report;
@@ -78,6 +79,8 @@ pub struct ToolCtx {
     /// 交互界面的调用方）—— 于是需要批准的动作直接拒绝，正如 `approval.rs` 的
     /// 「默认拒绝」。
     pub approval: Option<Arc<dyn crate::approval::ApprovalBroker>>,
+    /// 后台作业宿主。`None` = 没开（它跟着 `JOY_EXEC` 一起开关）。
+    pub jobs: Option<Arc<dyn crate::jobs::JobRegistry>>,
     /// 生命周期钩子。`None` = 没配（一次子进程都不起）。
     ///
     /// 工具**入参改写与阻断**由 `ToolRegistry::execute` 用自己那份钩子做（它才是

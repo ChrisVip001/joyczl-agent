@@ -1,31 +1,32 @@
-Add todo_write: a plan the model keeps for itself
+Run long commands in the background
 
-A long task drifts when the plan lives only in the conversation: compaction trims
-it, the sliding window drops it, and the model re-derives a slightly different
-plan every turn. todo_write keeps a per-session list and, crucially, the list is
-**injected into the system prompt** rather than stored in history — a list that
-survives compaction is worth more than one that survives nothing.
+A cargo test takes three minutes. In the foreground that is three minutes of a
+frozen turn — the user stares at a motionless prompt and nothing else happens.
+run_command now takes background=true, and the command runs in its own process
+while the conversation moves on.
 
-Only planning, never execution: the list changes no permission, blocks no call,
-and is not persisted. Anything that must outlive the process belongs to
-save_note or schedule, not to this table.
+The gate is the same one the foreground uses, and that is the point: exec.rs had
+its "pass the gate" and "build the sandboxed command" halves pulled out into
+pass_gate and spawn_sandboxed so both paths share them. Skipping approval in the
+background would make approval decorative, since "put it in the background and
+let it run" is the natural way around a prompt.
 
-Three hard limits, all borrowed from implementations that learned them the hard
-way: whole-table replace (per-item editing leaves "who deleted item 3" with no
-answer), one in_progress at a time (deepseek-harness makes this a required
-deployment choice and we take the strict branch), and caps of 20 items and 4000
-characters each (hermes' numbers). A rejected write changes nothing at all —
-half a list is worse than none.
+Ownership is a fence, not secrecy (deepseek-harness' rule): ids are predictable
+(j1, j2), and only the session that started a job can read or stop it — another
+session asking gets "no job called jN", which does not even confirm it exists.
+The exec policy, sandbox and offline default are the same object the foreground
+built, so a background command cannot be sandboxed differently.
 
-One tool does both jobs: passing todos writes, omitting them reads back the
-authoritative list, so the model never has to guess what it wrote.
+Output goes into a fixed 64 KiB ring. Overflow drops the oldest bytes and the
+read reports how many were dropped rather than failing: a chatty command should
+not fill memory, and reading a slice of it should not be an error. Reads use
+absolute cursors, wait=true waits at most 20s and then says it is still running
+instead of letting the tool call time out. A finished job's remaining output is
+written to <home>/outbox/jobs/ so it can be read after the process is gone —
+in-process by design, since children are kill_on_drop and "keeps running across
+a restart" is a supervisor's job, not this one.
 
-Subagents get neither this tool nor delegate_task: the list belongs to the
-parent's task line, and a child writing it would silently overwrite the plan it
-was sent to execute.
-
-7 tool tests (the three limits, whole-table replace, revision, read-back,
-per-session isolation, a rejected write leaving the old list intact, the stable
-injection header) and 2 app-server tests (the list appears in the next turn's
-system prompt; a session with no list gets no section) plus 2 evals. Docs:
-README tool row, limitations, internals 6, CHANGELOG — EN + zh.
+Tests: 3 real-process tests (spawn, read, finish, land in the outbox; another
+session refused; kill a running job) that skip without a sandbox, 2 ring tests
+(overflow drops the oldest and says so; one huge write keeps the tail) and 2
+evals. Docs: README tool rows, limitations, internals 6, CHANGELOG — EN + zh.

@@ -167,6 +167,8 @@ impl SubagentRunner for Delegated {
                 &home,
                 crate::Injections {
                     session_id: child_session.clone(),
+                    // 子代理不碰后台作业：那是父轮的活，它也没有批准通道。
+                    jobs: None,
                     // 子代理没有批准通道（它不该阻塞在人类身上），但有钩子：工具级
                     // 事件照常走（用子代理自己的 session 名）。
                     approval: None,

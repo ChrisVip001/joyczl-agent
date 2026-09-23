@@ -361,6 +361,65 @@ pub(crate) fn sandbox_argv(
     }
 }
 
+/// 闸门 + 批准。`Ok(())` = 可以跑；`Err(理由)` = 不跑（理由给模型读）。
+///
+/// **前台执行与后台作业共用这一处**：一条后台命令若能绕过批准，那批准就形同虚设
+/// —— 而「先放后台再慢慢跑」正是绕过它最自然的方式。
+pub async fn pass_gate(
+    command: &str,
+    policy: &ExecPolicy,
+    approval: Option<&dyn crate::approval::ApprovalBroker>,
+) -> Result<(), String> {
+    match vet(command, policy) {
+        Gate::Deny(why) => Err(why),
+        Gate::Allow => Ok(()),
+        Gate::NeedsApproval { reason } => {
+            // 没人能问、问了没人答、答得太晚 —— 都是拒绝。放行只有一种来源：
+            // 一个明确的「可以」。
+            let Some(broker) = approval else {
+                return Err(format!(
+                    "{reason}\n（也没人在问你：JOY_APPROVAL=on-request 时，从终端或 \
+                     驾驶舱提问才有人能回答。）"
+                ));
+            };
+            let request = crate::approval::ApprovalRequest {
+                tool: "run_command".to_string(),
+                args_preview: command.to_string(),
+                reason,
+                timeout_secs: policy.approval_timeout_secs,
+            };
+            if broker.request(request).await {
+                Ok(())
+            } else {
+                Err("这次执行没有被批准（或没人回答），已跳过。".to_string())
+            }
+        }
+    }
+}
+
+/// 把策略落成一条**可以直接 spawn** 的命令：沙箱参数、可写根合并、断网开关都在
+/// 这一处。前台执行与后台作业共用 —— 两条路径各写一遍沙箱参数，早晚会有一条忘了
+/// 加 `--unshare-net`。
+pub fn spawn_sandboxed(
+    command: &str,
+    policy: &ExecPolicy,
+    writable: &[PathBuf],
+) -> Result<tokio::process::Child, String> {
+    let backend = sandbox_backend().ok_or_else(|| "这台机器上没有可用的沙箱".to_string())?;
+
+    let mut roots: Vec<PathBuf> = writable.to_vec();
+    roots.extend(policy.extra_roots.iter().cloned());
+
+    let mut command_builder = sandbox_command(backend, command, &roots, policy.network);
+    command_builder
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("命令起不来：{e}"))
+}
+
 /// 执行一条命令。**永不返回 Err** —— 拒绝、超时、非零退出码都是文本。
 ///
 /// `writable` 是调用方**动态**决定的那些根（工作目录、home）；
@@ -373,43 +432,12 @@ pub async fn execute(
     writable: &[PathBuf],
     approval: Option<&dyn crate::approval::ApprovalBroker>,
 ) -> String {
-    match vet(command, policy) {
-        Gate::Deny(why) => return format!("Error: {why}"),
-        Gate::Allow => {}
-        Gate::NeedsApproval { reason } => {
-            // 没人能问、问了没人答、答得太晚 —— 都是拒绝。放行只有一种来源：
-            // 一个明确的「可以」。
-            let Some(broker) = approval else {
-                return format!(
-                    "Error: {reason}\n（也没人在问你：JOY_APPROVAL=on-request 时，从终端或 \
-                     驾驶舱提问才有人能回答。）"
-                );
-            };
-            let request = crate::approval::ApprovalRequest {
-                tool: "run_command".to_string(),
-                args_preview: command.to_string(),
-                reason,
-                timeout_secs: policy.approval_timeout_secs,
-            };
-            if !broker.request(request).await {
-                return "Error: 这次执行没有被批准（或没人回答），已跳过。".to_string();
-            }
-        }
+    if let Err(why) = pass_gate(command, policy, approval).await {
+        return format!("Error: {why}");
     }
-    let backend = sandbox_backend().expect("vet 已经把沙箱不可用挡在外头");
-
-    let mut roots: Vec<PathBuf> = writable.to_vec();
-    roots.extend(policy.extra_roots.iter().cloned());
-
-    let mut child = match sandbox_command(backend, command, &roots, policy.network)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+    let mut child = match spawn_sandboxed(command, policy, writable) {
         Ok(child) => child,
-        Err(e) => return format!("Error: 命令起不来：{e}"),
+        Err(why) => return format!("Error: {why}"),
     };
 
     let timeout = Duration::from_secs(policy.timeout_secs.max(1) as u64);
@@ -509,7 +537,13 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "要执行的 shell 命令"},
-                "cwd": {"type": "string", "description": "工作目录（默认：Joy 启动时所在目录）"}
+                "cwd": {"type": "string", "description": "工作目录（默认：Joy 启动时所在目录）"},
+                "background": {
+                    "type": "boolean",
+                    "description": "丢到后台跑（默认 false = 这一轮等它结束）。适合几分钟以上的命令：\
+                                   起完立刻拿到 job id，用 job_output 看进度、job_list 看全部、\
+                                   job_kill 停掉。沙箱与批准规则与前台完全一致。"
+                }
             },
             "required": ["command"]
         }),
@@ -517,6 +551,10 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
             let policy = policy.clone();
             Box::pin(async move {
                 let command = require_str(&args, "command")?;
+                let background = args
+                    .get("background")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 // 可写的根：显式给的工作目录（或进程当前目录）+ home。
                 // home 在列表里是因为 Joy 自己的状态（outbox 等）就住那儿。
                 let cwd = args
@@ -555,6 +593,31 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                         eprintln!("(joy) PermissionRequest hook 放行了这条命令：{command}");
                         approval = Some(Arc::new(AlreadyApproved));
                     }
+                }
+
+                if background {
+                    // 后台也走同一道闸门：跳过它，「先放后台再慢慢跑」就成了
+                    // 绕过批准最自然的方式。
+                    if let Err(why) = pass_gate(&command, &policy, approval.as_deref()).await {
+                        return Ok(format!("Error: {why}"));
+                    }
+                    let Some(jobs) = ctx.jobs.clone() else {
+                        return Ok(
+                            "Error: 这台机器上没有开启后台作业（它跟着 run_command 一起开关：\
+                             JOY_EXEC=1）。"
+                                .to_string(),
+                        );
+                    };
+                    let cwd_text = cwd.as_ref().map(|p| p.display().to_string());
+                    return Ok(
+                        match jobs.spawn(&ctx.session_id, &command, cwd_text).await {
+                            Ok(id) => format!(
+                            "已在后台跑起来：{id}（{command}）\n用 job_output 看进度、job_list \
+                             看全部、job_kill 停掉。"
+                        ),
+                            Err(why) => format!("Error: {why}"),
+                        },
+                    );
                 }
 
                 // `JOY_EXEC_WRITABLE_ROOTS` 由 execute 自己并进来（策略在

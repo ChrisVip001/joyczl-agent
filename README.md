@@ -66,6 +66,7 @@ persisted with the conversation.
 | `send_message` | message drafts into the outbox — never actually sends |
 | `search_web` | DuckDuckGo HTML, or Tavily with `TAVILY_API_KEY` |
 | `create_skill` | persist an agreed workflow as procedural memory |
+| `job_output` / `job_list` / `job_kill` | read, list and stop background jobs (started with `run_command`'s `background=true`) |
 | `todo_write` | keep a per-session todo list, re-injected every turn (whole-table replace; one `in_progress` at a time) |
 | `current_time` | local time with weekday and timezone |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |

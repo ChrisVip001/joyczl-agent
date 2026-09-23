@@ -4,6 +4,17 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art
 
+### Long commands can run in the background
+
+`run_command` gained `background=true`: the command is spawned, and a bounded
+64 KiB ring collects its output while the turn moves on. `job_output` reads a slice
+(cursor-based, `wait=true` bounded at 20s and honest when it times out), `job_list`
+shows this session's jobs and `job_kill` stops one. Ownership is a fence, not
+secrecy: only the session that started a job can read or stop it. The gate is the
+same one the foreground uses — sandbox, offline, allowlist and approval all apply,
+because "put it in the background and let it run" is the natural way around an
+approval prompt. A finished job's tail lands in `<home>/outbox/jobs/`.
+
 ### A todo list the model maintains itself
 
 `todo_write` keeps a per-session list (whole-table replace, monotonic revision, 20

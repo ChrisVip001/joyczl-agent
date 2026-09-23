@@ -146,6 +146,16 @@ means "we would like this, nobody has built it".
   not have it: the list belongs to the **parent** task line.
   → `joy-rs/joyczl-tools/src/todo.rs`
 
+* **Deliberate** — Background jobs are **in-process**: they live and die with
+  Joy (children are `kill_on_drop`), the output ring is a fixed 64 KiB and drops the
+  oldest bytes while saying how many were dropped. This is not a supervisor — "keep
+  running across a restart" does not exist, and the tail of the output lands in
+  `<home>/outbox/jobs/` for later reading.
+* **Deliberate** — Background commands go through the **same gate** as foreground
+  ones (sandbox, network, allowlist, approval): the background is not a side door
+  around approval. There is no PTY either — interactive programs (`vi`, `top`) do
+  not belong in the background to begin with.
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

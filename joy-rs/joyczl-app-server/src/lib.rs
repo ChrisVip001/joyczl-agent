@@ -17,6 +17,7 @@
 
 mod approval;
 mod dispatch;
+mod jobs;
 mod stdio;
 mod subagent;
 mod trace;
@@ -32,6 +33,10 @@ mod approval_tests;
 #[cfg(test)]
 #[path = "todo_tests.rs"]
 mod todo_tests;
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod jobs_tests;
 
 #[cfg(test)]
 #[path = "subagent_tests.rs"]
@@ -124,6 +129,8 @@ pub struct Server {
     /// 会话 -> 待办清单（见 joyczl-tools 的 todo.rs）。每轮把它注入 system prompt，
     /// 所以它不依赖历史、压缩也冲不掉。
     pub(crate) todo: Arc<joyczl_tools::todo::TodoBoard>,
+    /// 后台作业表（跟着 `JOY_EXEC` 一起开关）。
+    pub(crate) jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -182,7 +189,7 @@ impl Server {
             None
         };
 
-        let mut tools = builtin_tools(&snapshot).await;
+        let (mut tools, jobs_handle) = builtin_tools(&snapshot).await;
         tools.set_hooks(hooks.clone());
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
@@ -229,6 +236,7 @@ impl Server {
             approvals: Arc::new(Mutex::new(HashMap::new())),
             hooks,
             todo,
+            jobs: jobs_handle,
             pool,
         }
     }
@@ -253,6 +261,7 @@ impl Server {
                 session_id: session_id.to_string(),
                 approval,
                 hooks: self.hooks.clone(),
+                jobs: self.jobs.clone(),
             },
         )
     }
@@ -488,8 +497,16 @@ pub async fn open(settings: &Settings) -> Result<Server> {
 /// 一个 MCP 服务器连不上只是往 stderr 留一句警告，Joy 照常启动 ——
 /// 配错的服务器不该让整个助理起不来（跟「工具执行失败不该让一轮对话崩掉」
 /// 是同一条规矩）。没有 mcp.json 就等于没配，不读文件、不起进程、不连网。
-async fn builtin_tools(settings: &Settings) -> ToolRegistry {
+/// 内建工具表 + 后台作业表（作业表要跟着 `run_command` 一起建，两者共用同一份
+/// 执行策略，所以从同一个地方返回）。
+async fn builtin_tools(
+    settings: &Settings,
+) -> (
+    ToolRegistry,
+    Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
+) {
     let mut tools = joyczl_tools::handlers::build_default();
+    let mut jobs_handle: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>> = None;
     // 执行工具：**默认关着**，开了才注册 —— 没开的时候模型连它的名字都
     // 看不见。权限最高的一件事，开关必须是用户亲手按下的。
     if settings.exec_enabled {
@@ -532,19 +549,30 @@ async fn builtin_tools(settings: &Settings) -> ToolRegistry {
         eprintln!(
             "(joy) 执行工具已启用：沙箱 {sandbox}，{network}，放行规则：{allow}{approval}{extra}"
         );
-        tools.register(joyczl_tools::exec::run_command(
-            joyczl_tools::exec::ExecPolicy {
-                allow: settings.exec_allow.clone(),
-                timeout_secs: settings.exec_timeout_secs,
-                network: settings.exec_network,
-                // 批准只影响放行表那一关：没匹配上时是拒绝，还是问一句。
-                approval: settings.approval == "on-request",
-                approval_timeout_secs: settings.approval_timeout_secs,
-                // 超长输出落盘：截断仍然发生（上下文要保住），但原文还在。
-                spill_dir: Some(settings.home.join("spill")),
-                extra_roots: settings.exec_writable_roots.clone(),
-            },
-        ));
+        let policy = joyczl_tools::exec::ExecPolicy {
+            allow: settings.exec_allow.clone(),
+            timeout_secs: settings.exec_timeout_secs,
+            network: settings.exec_network,
+            // 批准只影响放行表那一关：没匹配上时是拒绝，还是问一句。
+            approval: settings.approval == "on-request",
+            approval_timeout_secs: settings.approval_timeout_secs,
+            // 超长输出落盘：截断仍然发生（上下文要保住），但原文还在。
+            spill_dir: Some(settings.home.join("spill")),
+            extra_roots: settings.exec_writable_roots.clone(),
+        };
+        tools.register(joyczl_tools::exec::run_command(policy.clone()));
+
+        // 后台作业：与 run_command 共用同一份策略（沙箱、断网、放行表、批准全一致）
+        // —— 后台不是绕过它们的侧门。
+        let jobs: Arc<dyn joyczl_tools::jobs::JobRegistry> =
+            Arc::new(jobs::Jobs::new(policy, settings.home.clone()));
+        tools.register(joyczl_tools::jobs::job_output(Some(jobs.clone())));
+        tools.register(joyczl_tools::jobs::job_list(Some(jobs.clone())));
+        tools.register(joyczl_tools::jobs::job_kill(Some(jobs.clone())));
+        jobs_handle = Some(jobs);
+        eprintln!(
+            "(joy) 后台作业可用：run_command 的 background=true，配 job_output / job_list / job_kill"
+        );
     }
     // 启动时顺手打扫 spill/：只保留最近 7 天（见 docs/limitations.md 里
     // 「不做配额轮转」那条）。与 exec 开关无关 —— 文件在那儿就该打扫。
@@ -568,7 +596,7 @@ async fn builtin_tools(settings: &Settings) -> ToolRegistry {
             servers.join(", ")
         );
     }
-    tools
+    (tools, jobs_handle)
 }
 
 /// 工具执行环境的**唯一**构造处。turn 与子代理都走它 —— 两处各写一遍
@@ -591,6 +619,7 @@ pub(crate) struct Injections {
     pub session_id: String,
     pub approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
     pub hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
+    pub jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
 }
 
 pub(crate) fn tool_ctx(
@@ -610,6 +639,7 @@ pub(crate) fn tool_ctx(
         session_id: injected.session_id,
         approval: injected.approval,
         hooks: injected.hooks,
+        jobs: injected.jobs,
     }
 }
 

@@ -1,0 +1,4 @@
+# 后台作业：长命令丢到后台，随后用 job_output 读回来 —— 整轮不被它堵住。
+# 要沙箱（命令一律在沙箱里跑），所以在没有沙箱的机器上如实跳过。
+{"id":"a-background-job-can-be-read-back","description":"background=true 起作业，job_output 读回它的输出","prereq":"sandbox","settings":{"exec_enabled":true,"exec_allow":["echo*"]},"gate":{"retrieve":false,"query":"","reason":"tool"},"responses":[{"tool_use":{"name":"run_command","args":{"command":"echo 后台第一行","background":true}}},{"tool_use":{"name":"job_output","args":{"id":"j1","wait":true}}},{"text":"它说：后台第一行。"}],"expect":{"tools_used":["run_command","job_output"],"tool_output_contains":["已在后台跑起来","后台第一行"],"reply_contains":["后台第一行"]}}
+{"id":"job-tools-answer-honestly-when-disabled","description":"没开 JOY_EXEC 时后台能力也不在：工具根本不存在","gate":{"retrieve":false,"query":"","reason":"tool"},"responses":[{"tool_use":{"name":"run_command","args":{"command":"echo 不该跑","background":true}}},{"text":"这台机器上没开执行工具。"}],"expect":{"tool_output_contains":["没有叫 'run_command' 的工具"],"reply_contains":["没开"]}}

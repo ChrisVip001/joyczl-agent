@@ -91,6 +91,22 @@ Error: …也没人在问你：JOY_APPROVAL=on-request 时，从终端或驾驶�
 （比如 `manage_memory` 的未知 action 现在由 schema 的 enum 先挡下，
 handler 里那条兜底分支只在 schema 编译失败时才会走到）。
 
+### 后台作业（`jobs.rs` + app-server 的 `jobs.rs`）
+
+`run_command` 的 `background=true` 起一个作业，`job_output` / `job_list` /
+`job_kill` 管它。三处值得记：
+
+* **闸门只有一条路**：`exec.rs` 把「过闸门」抽成 `pass_gate`、把「造命令」抽成
+  `spawn_sandboxed`，前台与后台共用。后台若能绕过批准，「先放后台再慢慢跑」就是
+  绕过它最自然的方式。
+* **授权靠 owner 围栏，不靠 id 保密**：id 是可预测的 `j1`、`j2`，但只有起它的
+  会话能读能停。别的会话拿到 id 只会得到「没有叫 jN 的作业」—— 不透露存在性。
+* **环是有界的**：64 KiB，溢出丢最旧的字节并把 `dropped` 告诉模型。读用绝对
+  cursor，`wait=true` 有界地等（20 秒），等不到就如实说还在跑 —— 而不是让工具调用
+  超时。
+
+收尾把环里剩下的内容写到 `<home>/outbox/jobs/<id>.txt`：进程退出后仍可回查。
+
 ### 待办清单为什么是**注入**的（`todo.rs`）
 
 `todo_write` 维护一张会话级清单，每轮把它拼进 system prompt。关键在于它**不进

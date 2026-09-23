@@ -22,6 +22,7 @@ async fn ctx(session: &str) -> super::ToolCtx {
         home,
         session_id: session.to_string(),
         approval: None,
+        jobs: None,
         hooks: None,
     }
 }

@@ -60,6 +60,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `send_message` | 消息草稿进 outbox——**从不真的发送** |
 | `search_web` | DuckDuckGo HTML，设 `TAVILY_API_KEY` 升级 Tavily |
 | `create_skill` | 把约定的工作流存成过程记忆 |
+| `job_output` / `job_list` / `job_kill` | 读写后台作业（`run_command` 的 `background=true` 起的那些） |
 | `todo_write` | 维护一张每轮重新注入的待办清单（整表替换；同时只能一项 `in_progress`） |
 | `current_time` | 本地时间（含星期与时区） |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)） |

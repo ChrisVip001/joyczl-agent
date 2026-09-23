@@ -17,6 +17,7 @@ async fn ctx() -> ToolCtx {
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     ToolCtx {
         approval: None,
+        jobs: None,
         hooks: None,
         session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
