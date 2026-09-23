@@ -131,7 +131,8 @@ means "we would like this, nobody has built it".
   Want an LLM to judge? Call one.
 * **Deliberate** — Hooks are **Unix-first**: commands run through `sh`, so Windows
   needs a real executable. The CI Windows job skips these tests rather than pretending
-  they pass.
+  they pass. Making Windows first-class means adding a `cmd /C` branch and hook tests
+  that run there.
 * **Deliberate** — A `hooks.json` changed while running is **not executed** (with the
   reason printed); a restart picks up the new content. That trades a little
   convenience for "nothing can swap your gate silently".
@@ -150,7 +151,9 @@ means "we would like this, nobody has built it".
   Joy (children are `kill_on_drop`), the output ring is a fixed 64 KiB and drops the
   oldest bytes while saying how many were dropped. This is not a supervisor — "keep
   running across a restart" does not exist, and the tail of the output lands in
-  `<home>/outbox/jobs/` for later reading.
+  `<home>/outbox/jobs/` for later reading. If something must outlive a restart, make
+  it a `joy schedule` entry (or a supervisor of its own) rather than persisting this
+  table.
 * **Deliberate** — Background commands go through the **same gate** as foreground
   ones (sandbox, network, allowlist, approval): the background is not a side door
   around approval. There is no PTY either — interactive programs (`vi`, `top`) do

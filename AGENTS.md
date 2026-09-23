@@ -17,12 +17,14 @@ joy-rs/
   joyczl-config/        JOY_* environment variables, read once at boot
   joyczl-state/         SQLite + FTS5(trigram); memory-backend contract & conformance
   joyczl-provider/      12 providers (incl. local Ollama), two wire formats + SSE, retry + token estimation
-  joyczl-tools/         tool registry (schema-checked) + built-in tools, sandboxed exec, subagents, approval
+  joyczl-tools/         tool registry (schema-checked) + built-in tools, sandboxed exec, subagents,
+                        approval, lifecycle hooks, the todo list, the background-job host trait
   joyczl-loop/          the agent loop (cancellable)
   joyczl-graph/         wave-based DAG engine + triage / gather workflows
   joyczl-mcp/           MCP client (stdio/HTTP) + browser OAuth + memory server (`joy mcp serve`)
   joyczl-memory/        retrieval gate + consolidation + Skills + MEMORY.md mirror
-  joyczl-app-server/    JSON-RPC over stdio, the only holder of state.db
+  joyczl-app-server/    JSON-RPC over stdio, the only holder of state.db, and with it the whole turn:
+                        approval, hooks, todo injection, background jobs, the goal loop
   joyczl-ops/           dashboard backend (axum + SSE)
   joyczl-cli/           the joy binary (REPL / dashboard / gather / eval / mcp / skill)
   joyczl-eval/          deterministic evals + judge + release gate
@@ -65,6 +67,18 @@ just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # end-to-end smokes
   protocol payloads, or logs; OAuth tokens go to `mcp-auth/` (0600).
 - **Propose, never act**: the gather graph stays tool-free; `send_message`
   never actually sends.
+- **Extensions are injected**: the tool layer knows only traits (`SubagentRunner`,
+  `ApprovalBroker`, `HookRunner`, `JobRegistry`); every implementation lives in
+  app-server and `ToolCtx` only gains fields. The dependency points one way — the
+  other way is a cycle.
+- **Capabilities are switched on by humans**: `JOY_EXEC` / `JOY_DELEGATE` /
+  `JOY_HOOKS` are off by default, and the paths only a human may start (approval,
+  goals, memory writes) are not exposed to the model at all — no tool, no route.
+  "The model assigning itself work" is not forbidden here, it is impossible.
+- **Never silent**: retries, circuit breaking, skipped duplicate writes, goal
+  rounds, finished background jobs and hooks refused by a trust hash each owe the
+  user a stderr line or a protocol notification. Watching a frozen screen and
+  guessing why is the class of problem this round kept fixing.
 
 ## Testing
 

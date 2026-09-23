@@ -113,18 +113,22 @@ impl Jobs {
         }
     }
 
+    /// 「查不到」就这一句话，**两条路径共用**：读与停必须给出同一个答复 ——
+    /// 措辞一旦分岔，就等于把「有这个东西但不是你的」泄露出去。
+    fn unknown(id: &str) -> String {
+        format!("没有叫 {id} 的作业（用 job_list 看看有哪些）")
+    }
+
     /// 找一个作业，并确认它属于这个会话。别人的 id 猜到了也没用。
     fn owned<'a>(
         jobs: &'a mut HashMap<JobId, Job>,
         owner: &str,
         id: &str,
     ) -> Result<&'a mut Job, String> {
-        let job = jobs
-            .get_mut(id)
-            .ok_or_else(|| format!("没有叫 {id} 的作业（用 job_list 看看有哪些）"))?;
+        let job = jobs.get_mut(id).ok_or_else(|| Self::unknown(id))?;
         if job.owner != owner {
             // 不透露「有这个东西但不是你的」：只说查不到。
-            return Err(format!("没有叫 {id} 的作业（用 job_list 看看有哪些）"));
+            return Err(Self::unknown(id));
         }
         Ok(job)
     }
@@ -262,7 +266,7 @@ impl JobRegistry for Jobs {
                 let job = jobs
                     .get(&id)
                     .filter(|job| job.owner == owner)
-                    .ok_or_else(|| format!("没有叫 {id} 的作业（用 job_list 看看有哪些）"))?;
+                    .ok_or_else(|| Self::unknown(&id))?;
                 (job.ring.clone(), job.status.clone())
             };
 

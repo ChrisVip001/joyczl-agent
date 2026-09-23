@@ -1,15 +1,26 @@
-Let the dashboard set and clear goals
+Sync the docs with this round, and cut what the review found
 
-POST /api/goal forwards goal/set to the app-server subprocess, the same way
-/api/approval forwards approval/respond — the dashboard is not a second
-implementation, just another client of the one method.
+Docs: testing.md/zh gets the real numbers (317 Rust tests, 37/37 evals, 39
+app-server cases), a per-crate split that now mentions the hook event matrix,
+the todo limits, the job ring and the goal loop, and a new section on what evals
+cannot assert — multi-turn state, real processes, and anything a human has to
+start — with the test that covers each instead. README gains the P9 roadmap row
+and the background flag; AGENTS gains hooks/jobs/goals in the module map plus
+three conventions this round kept re-learning: extensions are injected (tool
+layer knows traits, app-server holds implementations), capabilities are switched
+on by humans and the human-only paths have no tool at all, and nothing may be
+silent.
 
-The bar carries an input, set/clear buttons and the current state; goalRound
-notifications render as a chip with round, status and reason, because a turn that
-runs itself again without saying why is exactly the kind of thing this project
-keeps refusing to ship. Goals are settable from the terminal (/goal) and the
-dashboard (this) — and from the model at neither: it has no tool for it.
+ponytail-debt: zero `ponytail:` markers in the repo — this project tracks
+deferrals in docs/limitations.md instead, and all six new ones are there in both
+languages. Two of them named a ceiling but no trigger to revisit, which is how a
+deferral rots: Windows hooks now say what first-class support would take, and the
+in-process job table says to reach for `joy schedule` rather than persisting it.
 
-Both SDKs needed the new method in their pairing tables (Methods -> response type),
-and the Python drift guard caught that before CI could: its tests exist precisely
-because a missing row there shows up as NotImplementedError far from the cause.
+ponytail-review: the cuts that survived are small. `find_ascii_ci` is now a
+`windows().position()` instead of a hand-rolled index loop, and the job registry's
+"no such job" answer is one function shared by the read and kill paths — two
+copies of that string is how "someone else's job" leaks by wording alone. One
+finding was rejected by its own test: the permission-mention flag in the
+subagent report scanner looked like unused plumbing, but a test covers it and it
+is deliberate, so it stayed. Net: -6 lines.

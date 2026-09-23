@@ -15,12 +15,14 @@ joy-rs/
   joyczl-config/        JOY_* 环境变量，启动读一次
   joyczl-state/         SQLite + FTS5(trigram)；记忆后端契约与 conformance
   joyczl-provider/      12 家厂商（含本地 Ollama），两种 wire format + SSE，重试与 token 估算
-  joyczl-tools/         工具注册表（带 schema 校验）+ 内置工具、沙箱执行、子代理、批准
+  joyczl-tools/         工具注册表（带 schema 校验）+ 内置工具、沙箱执行、子代理、批准、
+                        生命周期钩子、待办清单、后台作业宿主接口
   joyczl-loop/          agent 主循环（可打断）
   joyczl-graph/         波次 DAG 引擎 + triage / gather 工作流
   joyczl-mcp/           MCP 客户端（stdio/HTTP）+ 浏览器 OAuth + 记忆服务器（`joy mcp serve`）
   joyczl-memory/        检索门 + consolidation + Skills + MEMORY.md 镜像
-  joyczl-app-server/    JSON-RPC over stdio，唯一持有 state.db，一轮的全流程与批准等待表
+  joyczl-app-server/    JSON-RPC over stdio，唯一持有 state.db，一轮的全流程、批准等待表、
+                        钩子落地、待办注入、后台作业与目标循环
   joyczl-ops/           驾驶舱后端（axum + SSE）
   joyczl-cli/           joy 二进制（REPL / dashboard / gather / eval / mcp / skill）
   joyczl-eval/          确定性 eval + judge + release gate
@@ -58,6 +60,15 @@ just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # 端到端冒烟
 - **凭证只走环境变量**：不进任何文件、协议载荷或日志；OAuth token 落
   `mcp-auth/`（0600）。
 - **只提议，绝不行动**：gather 图保持无工具；`send_message` 永不真发。
+- **扩展一律注入**：工具层只认 trait（`SubagentRunner` / `ApprovalBroker` /
+  `HookRunner` / `JobRegistry`），实现全在 app-server，`ToolCtx` 只加字段。
+  工具层不认识 app-server —— 依赖方向反过来就会成环。
+- **能力要人亲手开**：`JOY_EXEC` / `JOY_DELEGATE` / `JOY_HOOKS` 默认关；
+  批准、目标、记忆写入这些「只有人能发起」的路径**不暴露给模型**（连工具都
+  没有），所以「模型给自己派活」不是被禁止，而是不存在。
+- **不静默**：重试、熔断、跳过重复写入、目标续轮、后台作业结束、钩子被信任哈希
+  挡下 —— 每一条都要有一行 stderr 或一条协议通知。用户对着不动的界面猜原因，
+  是我们这一轮反复在修的同一类问题。
 
 ## 测试
 

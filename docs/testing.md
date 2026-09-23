@@ -15,27 +15,27 @@ passing 100% is the release gate** — one failure blocks the release.
 | Frontend | joy-ts (node --test + tsc) | 99 passed / 0 failed | |
 | Python SDK | sdk/python (pytest + mypy) | 13 passed / 0 failed; mypy clean on 8 files | |
 | End-to-end smokes | scripts/smoke*.sh | real app-server / gateways / dashboard / SDK | 4/4 pass |
-| Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 30/30 pass, gate exit 0 |
+| Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 37/37 pass, gate exit 0 |
 | Judge | evals/judge/*.jsonl | real model answers, referee grades (0-10) | scores reported, not blocking |
 
 ## Unit test distribution (per crate)
 
 | Crate | Cases | Covers |
 |---|---|---|
-| joyczl-state | 19 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff |
-| joyczl-tools | 39 | tool behavior and output wording (honest destinations), create_event idempotence, SKILL.md validation, argument schema validation, the three execution gates and approval (including that the sandbox really blocks a write outside the allowed roots), output spilling, and a subagent's tool table lacking delegate_task |
+| joyczl-state | 21 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff |
+| joyczl-tools | 73 | tool behavior and output wording (honest destinations), create_event idempotence, SKILL.md validation, argument schema validation, the three execution gates and approval (including that the sandbox really blocks a write outside the allowed roots), output spilling, and a subagent's tool table lacking delegate_task; and this round's additions: the twelve hook events' blocking/rewriting/timeout split plus trust hashes, the todo list's three hard limits, and the background job ring overflow and owner fence |
 | joyczl-provider | 24 | both wire formats, SSE parsing, 429 backoff retry against real HTTP, token estimation, local inference (a provider that needs no key) |
-| joyczl-loop | 16 | both guard exits, tool round-trip, streaming delta order, interrupt shutdown |
+| joyczl-loop | 25 | both guard exits, tool round-trip, streaming delta order, interrupt shutdown |
 | joyczl-graph | 24 | wave execution, routing, collision detection, on_error draining, full triage/gather paths |
-| joyczl-mcp | 30 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
+| joyczl-mcp | 33 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
 | joyczl-memory | 38 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
-| joyczl-app-server | 25 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents |
+| joyczl-app-server | 39 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; plus this round: the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths |
 | joyczl-config | 18 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear |
 | joyczl-cli | 7 | cron semantics, once-per-minute firing, job loading from both sources, and one firing that lands in the outbox |
 | joyczl-protocol | 7 | RPC envelope serialization (the export test runs on demand) |
 | joyczl-ops | 8 | the HTTP translation layer |
 
-## Test report (full run, 2026-09-21)
+## Test report (full run, 2026-09-23)
 
 | Suite | Result |
 |---|---|
@@ -49,7 +49,7 @@ passing 100% is the release gate** — one failure blocks the release.
 | scripts/smoke-gateway.sh (four gateway stubbed chains) | pass |
 | scripts/smoke-dashboard.sh (real dashboard HTTP/SSE) | pass |
 | scripts/smoke-sdk-python.sh (SDK subprocess lifecycle) | pass |
-| joy eval (deterministic evals, release gate) | **30/30, exit 0** (the sandbox scenarios report as skipped on machines without a usable sandbox) |
+| joy eval (deterministic evals, release gate) | **37/37, exit 0** (the sandbox scenarios report as skipped on machines without a usable sandbox) |
 | joy judge (deepseek-v4-pro live) | 2 cases scored; the referee caught one "claimed saved but save_note never ran" fabrication (0/10) |
 
 ## The seven CI jobs

@@ -136,12 +136,15 @@ fn escape_token(text: &str, token: &str) -> String {
 /// （`İ` 之类会变成两三个字符），那样切出来的下标落在字符中间，直接 panic。
 /// 这里只折叠 ASCII 大小写，长度一一对应。
 fn find_ascii_ci(haystack: &str, needle: &str, from: usize) -> Option<usize> {
-    let hay = haystack.as_bytes();
-    let need = needle.as_bytes();
-    if need.is_empty() || hay.len() < need.len() || from > hay.len() - need.len() {
+    let (hay, need) = (haystack.as_bytes(), needle.as_bytes());
+    if need.is_empty() || from > hay.len() {
         return None;
     }
-    (from..=hay.len() - need.len()).find(|&i| hay[i..i + need.len()].eq_ignore_ascii_case(need))
+    // `windows` 在窗口比切片长时给空迭代器，所以长度不必自己判。
+    hay[from..]
+        .windows(need.len())
+        .position(|window| window.eq_ignore_ascii_case(need))
+        .map(|at| at + from)
 }
 
 fn starts_with_ascii_ci(text: &str, prefix: &str) -> bool {
