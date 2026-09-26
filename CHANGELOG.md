@@ -2,7 +2,7 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
-## 0.7.0 — Aligning with the state of the art
+## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
 ### Goals: keep going until the thing is actually done
 

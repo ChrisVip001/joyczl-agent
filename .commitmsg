@@ -1,26 +1,13 @@
-Sync the docs with this round, and cut what the review found
+Bump the workspace version to 0.7.0, the version the changelog already claims
 
-Docs: testing.md/zh gets the real numbers (317 Rust tests, 37/37 evals, 39
-app-server cases), a per-crate split that now mentions the hook event matrix,
-the todo limits, the job ring and the goal loop, and a new section on what evals
-cannot assert — multi-turn state, real processes, and anything a human has to
-start — with the test that covers each instead. README gains the P9 roadmap row
-and the background flag; AGENTS gains hooks/jobs/goals in the module map plus
-three conventions this round kept re-learning: extensions are injected (tool
-layer knows traits, app-server holds implementations), capabilities are switched
-on by humans and the human-only paths have no tool at all, and nothing may be
-silent.
+Running `joy --version` printed 0.5.0 while CHANGELOG's top section was 0.7.0:
+two rounds of work went out under their own changelog headings without the
+version ever moving, so the binary, the MCP `clientInfo` and `joy mcp serve`'s
+`serverInfo` all still announced the previous release.
 
-ponytail-debt: zero `ponytail:` markers in the repo — this project tracks
-deferrals in docs/limitations.md instead, and all six new ones are there in both
-languages. Two of them named a ceiling but no trigger to revisit, which is how a
-deferral rots: Windows hooks now say what first-class support would take, and the
-in-process job table says to reach for `joy schedule` rather than persisting it.
+0.7.0 is what the code in the tree is; v0.5.0 stays the last tagged release, and
+the Homebrew formula keeps pointing at that tag's archive (a formula pins a
+release, it does not float). The changelog heading now says both of those things
+so the next person does not have to work it out from `git tag`.
 
-ponytail-review: the cuts that survived are small. `find_ascii_ci` is now a
-`windows().position()` instead of a hand-rolled index loop, and the job registry's
-"no such job" answer is one function shared by the read and kill paths — two
-copies of that string is how "someone else's job" leaks by wording alone. One
-finding was rejected by its own test: the permission-mention flag in the
-subagent report scanner looked like unused plumbing, but a test covers it and it
-is deliberate, so it stayed. Net: -6 lines.
+Python SDK follows the same version line.
