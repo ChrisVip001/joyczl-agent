@@ -52,13 +52,17 @@ async fn a_job_runs_reads_and_lands_in_the_outbox() {
         .expect("读得到");
     assert!(again.text.is_empty(), "接着读不该重复给：{again:?}");
 
-    // 收尾落盘（进程退出后仍可回查）。
+    // 收尾落盘（进程退出后仍可回查）。文件名带 **pid**：job id 是进程内自增的，
+    // 两个 Joy 进程会生成同名 `j1.txt` 互相覆盖。
     let outbox = dir
         .path()
         .join("outbox")
         .join("jobs")
-        .join(format!("{id}.txt"));
+        .join(format!("{}-{id}.txt", std::process::id()));
     assert!(outbox.exists(), "该落到 {}：{:?}", outbox.display(), again);
+    let text = std::fs::read_to_string(&outbox).expect("读得回来");
+    assert!(text.contains("退出码 0"), "{text}");
+    assert!(text.contains("第一行"), "环里剩下的内容该在里面：{text}");
 }
 
 /// 别的会话拿到 id 也读不到、停不了。

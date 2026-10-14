@@ -4,6 +4,33 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### Concurrency: three guards where two turns meet
+
+Two concurrent turns on the same session used to meet three read-then-act races:
+consolidation read a batch, distilled it, then marked it, so both sides saw "due"
+and distilled the same log twice, burning a model call; the rolling summary's
+`ON CONFLICT … DO UPDATE` ignored which `covered_turns` was newer, so concurrent
+compaction could hand the user an **older** summary; and `busy_timeout` read 3
+seconds in the comment while the real value was sqlx's default 5 (`PRAGMA` is
+per-connection and `execute(&pool)` only configures whichever connection served
+that query).
+
+Each is now closed at its own door: consolidation became a single
+`UPDATE … RETURNING` **atomic claim**, so the loser gets an empty list and
+**never calls the model** (failure paths release the claim — `consolidated` back
+to 0 plus exponential backoff); the rolling summary gained a **monotonic guard**
+that only accepts a summary covering more turns, and says so on stderr when it
+refuses; and the lock wait moved onto the connect options at **10 seconds**,
+SQLite's recommended value. Background job outbox filenames also carry the pid —
+job ids are per-process, so two Joy processes used to write the same `j1.txt`.
+
+No per-session lock: the cost (a visibly slower second turn) outweighs the gain
+now that the three guards reduce the concurrency consequences to "waits a bit
+longer". Tests: two concurrent consolidations assert the small model is called
+once, a failed consolidation releases its claim, a rollup only moves forward, and
+the PRAGMAs really are in effect — that last test caught "3 seconds in the
+comment, 5 seconds in reality" on the spot.
+
 ### Goals: keep going until the thing is actually done
 
 `goal/set` (and `/goal` in the REPL) attaches a condition to a session. When the main

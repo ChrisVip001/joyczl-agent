@@ -207,8 +207,14 @@ pub async fn refresh(
     }
     let (covered_now, summary) = roll_forward(client, model, previous, &fresh).await;
     // 存失败只影响下次重算（多花一次调用）—— 不能连累这轮对话。
-    if let Err(e) = chat.save_rollup(session_id, covered_now, &summary).await {
-        eprintln!("(joy) 滚动摘要落库失败（这轮照常用）：{e}");
+    match chat.save_rollup(session_id, covered_now, &summary).await {
+        Err(e) => eprintln!("(joy) 滚动摘要落库失败（这轮照常用）：{e}"),
+        // 被单调守卫挡下：库里已经有一份更新的摘要（并发压缩，见 chat.rs 的说明）。
+        // 不静默 —— 否则没人知道这一轮算出来的摘要没进去。
+        Ok(false) => {
+            eprintln!("(joy) 滚动摘要没写进去：库里已有一份覆盖更多轮次的（并发压缩，按新的算）")
+        }
+        Ok(true) => {}
     }
     Ok(Some(summary))
 }

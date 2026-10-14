@@ -468,3 +468,79 @@ async fn memory_mirror_lands_as_markdown() {
     assert!(text.contains("**2026-09-01** — planned the demo"), "{text}");
     assert!(text.contains("state.db"), "要说清事实来源在哪儿：{text}");
 }
+
+// ---- 并发：认领（claim）---------------------------------------------------
+
+/// 两个并发 turn 同时判定「到期」：**只有一个赢家**，小模型只被调用一次。
+///
+/// 认领之前这里是 read-then-act（读一批 → 慢慢提炼 → 再标记）：两边都看到
+/// 「够了」，于是同一批日志被提炼两遍 —— 白烧一次模型调用。现在输的那个拿到
+/// 空列表，**连模型都不调**。
+///
+/// 这条测试同时钉住两件事：事实只写一份（`written` 加起来是 1），以及模型
+/// 只被叫了一次（`received` 的长度）—— 后者才是这次改动的目的。
+#[tokio::test]
+async fn two_concurrent_consolidations_only_run_the_model_once() {
+    let (facts, episodes, chat) = stores().await;
+    // 攒够一轮（`every_n = 1` → 需要 2 行 = 一轮 user/assistant）。
+    chat.append_exchange("alex 喜欢早上的会议", "记下了", "default", "cli", None)
+        .await
+        .unwrap();
+
+    let mock = Mock::new(vec![Mock::text(
+        r#"{"facts":[{"subject":"alex","content":"喜欢早上的会议"}],"episode":"聊了 alex"}"#,
+    )]);
+
+    let (first, second) = tokio::join!(
+        consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1),
+        consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1),
+    );
+    assert_eq!(first.unwrap() + second.unwrap(), 1, "只有赢家写进了事实");
+    assert_eq!(
+        mock.received.lock().unwrap().len(),
+        1,
+        "小模型只该被调用一次 —— 输的那个不该看到脚本"
+    );
+    assert!(
+        chat.unconsolidated().await.unwrap().is_empty(),
+        "认领的那批已经被标记"
+    );
+}
+
+/// 认领之后提炼失败：认领要**还回去**（`consolidated` 回到 0），日志不能停在
+/// 「已提炼」却什么都没写进去 —— 那是真的丢数据。
+#[tokio::test]
+async fn a_failed_consolidation_releases_its_claim() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let pool = joyczl_state::open(&dir.path().join("state.db"))
+        .await
+        .expect("打开库");
+    let _ = dir.keep(); // sqlite 还要写 -wal/-shm
+    let facts = Facts::new(pool.clone());
+    let episodes = Episodes::new(pool.clone());
+    let chat = Chat::new(pool.clone());
+    chat.append_exchange("alex 喜欢早上的会议", "记下了", "default", "cli", None)
+        .await
+        .unwrap();
+
+    // 模型直接挂掉 —— 三条失败路径之一（另两个是没 JSON、JSON 不合法）。
+    let mock = Mock::with_outcomes(vec![Err(ProviderError::Api("模型挂了".to_string()))]);
+    let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1)
+        .await
+        .unwrap();
+    assert_eq!(written, 0, "没写进任何事实");
+
+    // 认领被还回去了：两行的标志位回到 0。`consolidation_next_at` 同时被推到
+    // 1 分钟后，所以 `unconsolidated()` 此刻是空的 —— 标志位才是判据。
+    let still_pending: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(still_pending, 2, "两行都该被还回来");
+    assert_eq!(
+        chat.unconsolidated().await.unwrap().len(),
+        0,
+        "但按退避排到了未来，不该立刻又捞出来"
+    );
+}

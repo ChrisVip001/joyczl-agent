@@ -169,6 +169,30 @@ means "we would like this, nobody has built it".
   impossible / round-limit / judge failure) the loop stops by itself and waits for a
   human.
 
+## Concurrency
+
+* **Deliberate** — Two concurrent turns on the **same session are not serialised**
+  (`turn/start` is handled concurrently so `turn/interrupt` can get in). The
+  consequences are contained by three guards, none of which can corrupt data:
+  consolidation is an **atomic claim** (the loser never calls the model), the
+  rolling summary has a **monotonic guard** (only a summary covering more turns
+  is accepted), and memory writes have a **de-duplication gate**. What is left is
+  "waits a bit longer".
+  → `joy-rs/joyczl-memory/src/consolidation.rs`, `joyczl-state/src/chat.rs`
+* **Deliberate** — SQLite waits **10 seconds** for a lock, set on the connect
+  options so every connection carries it. Multiple processes writing at once
+  (REPL, dashboard, `joy mcp serve`, `joy schedule`) queue instead of failing;
+  if 10s is not enough the answer is fewer concurrent writers, not a longer
+  timeout.
+  → `joy-rs/joyczl-state/src/db.rs`
+* **Not done** — No per-session lock. Adding one means holding it during the
+  turn's *write* section (append / consolidate / compact) but not during model
+  calls; the gain is strict per-session ordering, the cost is a visibly slower
+  second turn. Not needed today: the three guards above already make the
+  concurrency consequences acceptable.
+* **Not done** — `prune_spill` at startup has a theoretical race with another
+  process writing (it only deletes files older than seven days).
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

@@ -1102,6 +1102,7 @@ dependencies = [
  "joyczl-provider",
  "joyczl-state",
  "serde_json",
+ "sqlx",
  "tempfile",
  "tokio",
 ]

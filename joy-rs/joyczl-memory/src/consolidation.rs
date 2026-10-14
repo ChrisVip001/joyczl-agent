@@ -46,13 +46,21 @@ pub async fn consolidate_if_due(
     small_model: &str,
     every_n: i32,
 ) -> Result<usize> {
-    let rows = chat.unconsolidated().await?;
+    let pending = chat.unconsolidated().await?;
     // 一轮对话 = 2 行（user + assistant）。
-    if rows.len() < every_n.max(1) as usize * 2 {
+    if pending.len() < every_n.max(1) as usize * 2 {
         return Ok(0);
     }
 
-    let log = rows
+    // **认领**：一条 SQL 完成「选中 + 标记」，并发调用里只有一个赢家。
+    // 输的那个拿到空列表，于是连模型都不调（见 chat.rs 的说明）。
+    let claimed = chat.claim_unconsolidated().await?;
+    let ids: Vec<i64> = claimed.iter().map(|(id, _, _)| *id).collect();
+    if ids.is_empty() {
+        // 别人已经认领了：并发 turn、或 schedule 与 REPL 同时触发。
+        return Ok(0);
+    }
+    let log = claimed
         .iter()
         .map(|(_, role, content)| format!("{role}: {content}"))
         .collect::<Vec<_>>()
@@ -68,7 +76,7 @@ pub async fn consolidate_if_due(
         max_tokens: 4096,
     };
 
-    let ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+    let ids: Vec<i64> = claimed.iter().map(|(id, _, _)| *id).collect();
     // 失败的三条路径（模型挂了、JSON 读不出来、JSON 不合法）都走**退避**：
     // 把这批行排到未来某个时刻再来。从前是「下次再来」，于是同一批坏行每轮
     // 都被重试一次 —— 白烧模型调用，而且看起来像卡住了。
@@ -89,6 +97,21 @@ pub async fn consolidate_if_due(
         return Ok(0);
     };
 
+    // 写事实与情景。**任何一步失败都要把认领还回去** —— 认领是先标记后处理的，
+    // 半路出错却不归零，这批日志就永远停在「已提炼」却什么都没写进去。
+    let written = match persist(&distilled, facts, episodes).await {
+        Ok(written) => written,
+        Err(error) => {
+            chat.mark_consolidation_failed(&ids).await?;
+            return Err(error);
+        }
+    };
+
+    Ok(written)
+}
+
+/// 把提炼结果写进事实与情景。返回**新写入**的事实条数。
+async fn persist(distilled: &Value, facts: &Facts, episodes: &Episodes) -> Result<usize> {
     let mut written = 0usize;
     if let Some(list) = distilled.get("facts").and_then(|f| f.as_array()) {
         for fact in list {
@@ -128,9 +151,6 @@ pub async fn consolidate_if_due(
             episodes.add(&today, episode).await?;
         }
     }
-
-    // 只在全部写成功之后才标记（`ids` 在上面算过 —— 失败路径也要用它）。
-    chat.mark_consolidated(&ids).await?;
 
     Ok(written)
 }

@@ -73,7 +73,7 @@ impl Chat {
         Ok(())
     }
 
-    /// 待提炼的行（按时间顺序）。consolidation 的原料。
+    /// 待提炼的行（按时间顺序）。consolidation 的原料与阈值判断用。
     pub async fn unconsolidated(&self) -> Result<Vec<(i64, String, String)>> {
         let rows = sqlx::query_as::<_, (i64, String, String)>(
             // 只取**到点了**的行：提炼失败的那批会带着 `consolidation_next_at`
@@ -88,10 +88,39 @@ impl Chat {
         Ok(rows)
     }
 
-    /// 提炼失败：记一笔，并按指数退避排到未来。
+    /// **认领**一批待提炼的行：一条 SQL 完成「选中 + 标记」，返回自己认到的那批。
     ///
-    /// 与「成功才 mark_consolidated」并行不冲突：成功走 `consolidated = 1`，
-    /// 失败走这里。1 分钟起、每次翻倍、上限 1 小时 —— 一条永远提炼不出来的
+    /// 为什么不是「读一批 → 提炼 → 再标记」：那个顺序里，两个并发 turn（REPL
+    /// 一轮 + dashboard 一轮、或 schedule 与用户同时触发）会**同时**看到「到期」，
+    /// 于是同一批日志被提炼两遍 —— 白烧一次模型调用、`consolidation_tries`
+    /// 多加一次。事实倒是不会重复（写入口有去重闸，那是另一道、更慢的防线）。
+    ///
+    /// 认领是原子的：输的那个拿到空列表，于是它**连模型都不调**。代价是
+    /// 「先标记后处理」，所以每条失败路径都必须 `mark_consolidation_failed`
+    /// 把认领还回去。
+    pub async fn claim_unconsolidated(&self) -> Result<Vec<(i64, String, String)>> {
+        // 与 `unconsolidated` 同一个 WHERE（到点才捞），只是把 SELECT 换成
+        // UPDATE … RETURNING：标记与取回之间没有空档。
+        let rows = sqlx::query_as::<_, (i64, String, String)>(
+            "UPDATE chat_log SET consolidated = 1
+             WHERE id IN (
+                 SELECT id FROM chat_log
+                 WHERE consolidated = 0
+                   AND (consolidation_next_at IS NULL OR consolidation_next_at <= datetime('now'))
+                 ORDER BY id
+             )
+             RETURNING id, role, content",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// 提炼失败：**把认领还回去**，并按指数退避排到未来。
+    ///
+    /// 认领（`claim_unconsolidated`）是先标记后处理的，所以失败时必须归零
+    /// `consolidated` —— 否则这批日志被标成「已提炼」却什么都没写进去，那是
+    /// 真的丢数据。1 分钟起、每次翻倍、上限 1 小时：一条永远提炼不出来的
     /// 记录不该让每一轮都重试它，但也不该被彻底放弃（模型可能只是这会儿抖动）。
     pub async fn mark_consolidation_failed(&self, ids: &[i64]) -> Result<()> {
         for id in ids {
@@ -105,7 +134,8 @@ impl Chat {
             sqlx::query(
                 "UPDATE chat_log
                  SET consolidation_tries = consolidation_tries + 1,
-                     consolidation_next_at = datetime('now', ?)
+                     consolidation_next_at = datetime('now', ?),
+                     consolidated = 0
                  WHERE id = ?",
             )
             .bind(format!("+{backoff} seconds"))
@@ -116,23 +146,9 @@ impl Chat {
         Ok(())
     }
 
-    /// 把一批行标记为已提炼。**只在提炼成功后调用** ——
-    /// 提炼失败就让它们留着，下次再来，日志绝不丢。
-    pub async fn mark_consolidated(&self, ids: &[i64]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let placeholders = std::iter::repeat_n("?", ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("UPDATE chat_log SET consolidated = 1 WHERE id IN ({placeholders})");
-        let mut q = sqlx::query(&sql);
-        for id in ids {
-            q = q.bind(id);
-        }
-        q.execute(&self.pool).await?;
-        Ok(())
-    }
+    // （「标记为已提炼」不再是单独一步：`claim_unconsolidated` 在认领的那一刻
+    //  就已经标记了。从前那个 `mark_consolidated` 随之删除 —— 留着它就是给
+    //  「已经标过了再标一遍」留一扇门。）
 
     /// 一个旧会话的 (用户, 助手) 轮次，按顺序 —— 切回旧会话时用来重建工作记忆。
     pub async fn session_history(&self, session_id: &str) -> Result<Vec<(String, String)>> {
@@ -222,27 +238,38 @@ impl Chat {
         Ok(row.map(|(covered, summary)| (covered as i32, summary)))
     }
 
-    /// 覆盖滚动摘要。同一会话一行，后来的盖掉先前的 —— 摘要只往前滚。
+    /// 覆盖滚动摘要。同一会话一行，**只往前滚**。
+    ///
+    /// 返回「这次写进去了吗」。`false` = 被单调守卫挡下：库里已经有一份
+    /// `covered_turns` 更大（也就是更新）的摘要，于是这一份被丢弃。
+    ///
+    /// 为什么需要守卫：压缩在两个并发 turn 里可能同时发生（同一会话没有串行
+    /// 保护，见 docs/limitations.md），后写的那个不一定更新 —— 没有守卫时，
+    /// 用户会拿到一份**更旧**的摘要，而且界面毫无异常。
     pub async fn save_rollup(
         &self,
         session_id: &str,
         covered_turns: i32,
         summary: &str,
-    ) -> Result<()> {
-        sqlx::query(
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            // `WHERE excluded.covered_turns > context_rollups.covered_turns`：
+            // 只接受更新的。冲突行上这个条件不成立时，DO UPDATE 什么都不做
+            // （SQLite 的既定语义），于是 rows_affected() = 0。
             "INSERT INTO context_rollups (session_id, covered_turns, summary, updated_at)
              VALUES (?, ?, ?, datetime('now'))
              ON CONFLICT(session_id) DO UPDATE SET
                 covered_turns = excluded.covered_turns,
                 summary = excluded.summary,
-                updated_at = excluded.updated_at",
+                updated_at = excluded.updated_at
+             WHERE excluded.covered_turns > context_rollups.covered_turns",
         )
         .bind(session_id)
         .bind(covered_turns as i64)
         .bind(summary)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// 一个会话的消息，**最新的在最前**。

@@ -5,6 +5,21 @@
 
 目录：`joy-rs/joyczl-state/`（`src/` + `migrations/`）。
 
+## 并发的三个闸门
+
+`state.db` 是多进程共享的（REPL / dashboard / `joy mcp serve` / `joy schedule`
+可以同时开着它），进程内又有并发的 turn。三处 read-then-act 各有各的闸门：
+
+| 位置 | 闸门 | 挡住什么 |
+|---|---|---|
+| `consolidate_if_due` | `claim_unconsolidated`：一条 `UPDATE … RETURNING` | 两个并发 turn 同时看到「到期」→ 双份提炼（白烧一次模型调用） |
+| `save_rollup` | `WHERE excluded.covered_turns > context_rollups.covered_turns` | 并发压缩时旧摘要盖掉新摘要 |
+| `Facts::add` | 先查后写 + 唯一索引 | 重复提炼 / 重复 `save_note` 堆出重复事实 |
+
+连接参数（`busy_timeout` 10s、WAL）必须挂在 `SqliteConnectOptions` 上：
+`PRAGMA busy_timeout` 是 per-connection 的，`execute(&pool)` 只设中当时那个
+连接 —— 这条坑有测试钉着（`the_pool_waits_for_locks_and_uses_wal`）。
+
 ## 2.1 `open()`：七步，每一步都有理由
 
 `src/db.rs（open）`：

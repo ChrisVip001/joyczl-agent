@@ -9,7 +9,7 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 
 | 层 | 位置 | 形态 | 数量（最近一次全量） |
 |---|---|---|---|
-| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 317 通过 / 0 失败 |
+| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 321 通过 / 0 失败 |
 | 覆盖率 | `cargo llvm-cov` / `coverage` | **趋势门**，不是目标 | Rust 行 65.9%（门 60）/ Python 63%（门 60） |
 | 协议生成 | scripts/write_schema.py --check | 生成物漂移检查 | 0 漂移 |
 | 前端 | joy-ts（node --test + tsc） | 99 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |
@@ -22,13 +22,13 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 
 | crate | 用例 | 覆盖要点 |
 |---|---|---|
-| joyczl-state | 21 | SQL 契约、FTS5 检索（含 CJK 与乱码输入）、日历幂等、记忆后端 conformance、事实类别的归一化、提炼失败的退避 |
+| joyczl-state | 23 | SQL 契约、FTS5 检索（含 CJK 与乱码输入）、日历幂等、记忆后端 conformance、事实类别的归一化、提炼失败的退避、并发认领（两个 turn 同时到期只蒸馏一次） |
 | joyczl-tools | 73 | 工具行为与输出文案（落点如实）、create_event 幂等、SKILL.md 校验、参数 schema 校验、执行的三道闸门与批准（含沙箱**真的**拦住了允许目录之外的写入）、超长输出落盘、子代理工具表里没有它自己；本轮新增：12 个 hook 事件的阻断/改写/超时两分法与信任哈希、待办清单三条硬边界、后台作业的环溢出与 owner 围栏 |
 | joyczl-provider | 24 | 两种 wire format 转换、SSE 解析、429 退避重试（真 HTTP）、token 估算、本地推理（不需要 key 的 provider） |
 | joyczl-loop | 25 | 护栏双出口、工具往返、流式增量顺序、打断收兵 |
 | joyczl-graph | 24 | 波次执行、路由、碰撞检测、on_error 排空、triage/gather 全路径 |
 | joyczl-mcp | 33 | 传输帧、握手、工具注册、OAuth 全流程（本地假授权服务器）、token 存储 0600，以及它对外暴露的记忆服务器（`joy mcp serve`） |
-| joyczl-memory | 38 | 检索门失败开放、consolidation（临时陈述过滤、类别、失败退避）、Skills 触发/重扫、显式 `$技能` 与依赖缺失、MEMORY.md 镜像、压缩水位线与兜底、RRF 融合、技能安装/更新 |
+| joyczl-memory | 40 | 检索门失败开放、consolidation（临时陈述过滤、类别、失败退避）、Skills 触发/重扫、显式 `$技能` 与依赖缺失、MEMORY.md 镜像、压缩水位线与兜底、RRF 融合、技能安装/更新 |
 | joyczl-app-server | 39 | 协议派发、打断、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「先问再跑」的因果）、子代理；本轮新增：工具结果预算与实测 prefill 校准、子代理报告扫描与 `result_schema` 两阶段接受、生命周期钩子、待办注入、后台作业真进程（无沙箱则跳过）、目标循环的续轮/上限/判断器失败三态 | 协议分发、interrupt、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「问了才跑」这条因果）与子代理 |
 | joyczl-config | 18 | 环境变量语义、启动期校验（越界即退出）、补丁合并/落盘/清空 |
 | joyczl-cli | 7 | cron 语义、同一分钟只触发一次、两种来源装载任务、一次真触发落进 outbox |

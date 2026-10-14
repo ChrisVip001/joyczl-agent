@@ -227,7 +227,11 @@ impl JobRegistry for Jobs {
                         "# {watched_id}: {watched_command}\n退出码 {code}\n\n{}",
                         String::from_utf8_lossy(&bytes)
                     );
-                    if let Err(e) = std::fs::write(dir.join(format!("{watched_id}.txt")), body) {
+                    // 文件名带 **pid**：job id 是进程内自增的（j1、j2…），两个
+                    // Joy 进程会生成同名文件互相覆盖。加 pid 之后撞名只剩
+                    // 「同进程同 id」—— 而那不可能（id 唯一）。
+                    let file = dir.join(format!("{}-{watched_id}.txt", std::process::id()));
+                    if let Err(e) = std::fs::write(&file, body) {
                         eprintln!("(joy) 后台作业 {watched_id} 的输出没写成文件：{e}");
                     }
                 }

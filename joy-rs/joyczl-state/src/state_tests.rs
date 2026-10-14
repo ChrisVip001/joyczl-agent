@@ -236,8 +236,9 @@ async fn chat_log_round_trip_and_consolidation_marking() {
     let pending = chat.unconsolidated().await.unwrap();
     assert_eq!(pending.len(), 4, "4 行（2 轮 × user/assistant）");
 
-    let ids: Vec<i64> = pending.iter().map(|(id, _, _)| *id).collect();
-    chat.mark_consolidated(&ids).await.unwrap();
+    // 认领即标记：认完就不该再有待提炼的行。
+    let claimed = chat.claim_unconsolidated().await.unwrap();
+    assert_eq!(claimed.len(), 4, "认领拿回自己认到的那 4 行");
     assert!(chat.unconsolidated().await.unwrap().is_empty());
 
     let history = chat.session_history("default").await.unwrap();
@@ -331,4 +332,56 @@ async fn chinese_search_works_character_wise() {
 
     let hit = facts.search("早上", 4).await.unwrap();
     assert_eq!(hit.len(), 1, "中文检索没命中：{hit:?}");
+}
+
+// ---- 滚动摘要的单调守卫 ----------------------------------------------------
+
+/// 摘要**只往前滚**：新的不被旧的盖，旧的也盖不掉新的。
+///
+/// 没有守卫时（`ON CONFLICT … DO UPDATE` 不带 WHERE），并发压缩会按**写入顺序**
+/// 决定谁留下 —— 于是用户可能拿到一份更旧的摘要，而界面毫无异常。
+#[tokio::test]
+async fn a_rollup_only_moves_forward() {
+    let chat = Chat::new(temp_db("rollup.db").await);
+
+    // 第一次：覆盖 5 轮。
+    assert!(chat.save_rollup("s", 5, "前五轮的摘要").await.unwrap());
+    // 更新的（10 轮）写进去。
+    assert!(chat.save_rollup("s", 10, "前十轮的摘要").await.unwrap());
+    let (covered, summary) = chat.load_rollup("s").await.unwrap().expect("有摘要");
+    assert_eq!(covered, 10);
+    assert_eq!(summary, "前十轮的摘要");
+
+    // 更旧的（7 轮）被挡下：库里那份仍然更新。
+    assert!(
+        !chat.save_rollup("s", 7, "第七轮的摘要").await.unwrap(),
+        "回退该被挡下"
+    );
+    let (covered, summary) = chat.load_rollup("s").await.unwrap().expect("有摘要");
+    assert_eq!(covered, 10, "没被旧的盖掉");
+    assert_eq!(summary, "前十轮的摘要");
+
+    // 同一 covered_turns 不算更新（不是严格大于）—— 重复写同一版没有意义。
+    assert!(!chat.save_rollup("s", 10, "又一版").await.unwrap());
+}
+
+/// 并发参数是真的配上了：**10 秒**等锁 + WAL。
+///
+/// 这两个 PRAGMA 决定「多进程同时写时是排队还是直接报 database is locked」——
+/// 它们默默失效过一次（改代码时被跳过），所以钉住数值，而不是只钉「设过了」。
+#[tokio::test]
+async fn the_pool_waits_for_locks_and_uses_wal() {
+    let pool = temp_db("pragmas.db").await;
+
+    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(busy_timeout, 10_000, "等锁该是 10 秒（SQLite 官方建议值）");
+
+    let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(journal.to_lowercase(), "wal", "读不该被写堵住");
 }

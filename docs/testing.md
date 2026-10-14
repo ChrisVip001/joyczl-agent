@@ -22,13 +22,13 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Crate | Cases | Covers |
 |---|---|---|
-| joyczl-state | 21 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff |
+| joyczl-state | 23 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff, and the concurrent claim (two turns both due distill once) |
 | joyczl-tools | 73 | tool behavior and output wording (honest destinations), create_event idempotence, SKILL.md validation, argument schema validation, the three execution gates and approval (including that the sandbox really blocks a write outside the allowed roots), output spilling, and a subagent's tool table lacking delegate_task; and this round's additions: the twelve hook events' blocking/rewriting/timeout split plus trust hashes, the todo list's three hard limits, and the background job ring overflow and owner fence |
 | joyczl-provider | 24 | both wire formats, SSE parsing, 429 backoff retry against real HTTP, token estimation, local inference (a provider that needs no key) |
 | joyczl-loop | 25 | both guard exits, tool round-trip, streaming delta order, interrupt shutdown |
 | joyczl-graph | 24 | wave execution, routing, collision detection, on_error draining, full triage/gather paths |
 | joyczl-mcp | 33 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
-| joyczl-memory | 38 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
+| joyczl-memory | 40 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
 | joyczl-app-server | 39 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; plus this round: the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths |
 | joyczl-config | 18 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear |
 | joyczl-cli | 7 | cron semantics, once-per-minute firing, job loading from both sources, and one firing that lands in the outbox |

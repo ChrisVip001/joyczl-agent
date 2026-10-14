@@ -1,13 +1,36 @@
-Bump the workspace version to 0.7.0, the version the changelog already claims
+Close the three races where two turns on one session meet
 
-Running `joy --version` printed 0.5.0 while CHANGELOG's top section was 0.7.0:
-two rounds of work went out under their own changelog headings without the
-version ever moving, so the binary, the MCP `clientInfo` and `joy mcp serve`'s
-`serverInfo` all still announced the previous release.
+Consolidation was read-then-act: read a batch, distill it, then mark it. Two
+concurrent turns both saw "due" and distilled the same log twice, burning a model
+call and bumping consolidation_tries twice. It is now one `UPDATE … RETURNING`
+that selects and marks together, so the loser gets an empty list and never calls
+the model. Because claiming happens before processing, every failure path
+releases the claim (consolidated back to 0 plus the existing exponential
+backoff) — a claim that is never returned would strand those rows as "distilled"
+with nothing written, which is real data loss, not a race.
 
-0.7.0 is what the code in the tree is; v0.5.0 stays the last tagged release, and
-the Homebrew formula keeps pointing at that tag's archive (a formula pins a
-release, it does not float). The changelog heading now says both of those things
-so the next person does not have to work it out from `git tag`.
+The rolling summary's upsert took whichever write landed last, so concurrent
+compaction could hand the user an older summary with nothing on screen to say so.
+It now only accepts a summary covering more turns, and says so on stderr when it
+refuses.
 
-Python SDK follows the same version line.
+The busy_timeout story was worse than a race: the comment said 3 seconds and the
+real value was sqlx's default 5, because `PRAGMA busy_timeout` is per-connection
+and `execute(&pool)` only configures whichever connection served that query. The
+parameters now live on SqliteConnectOptions, so every connection carries them,
+and a test reads the PRAGMAs back — it caught the 5-vs-3 lie on the first run.
+
+Background job outbox filenames carry the pid: job ids are per-process, so two
+Joy processes wrote the same j1.txt.
+
+No per-session lock, deliberately. Holding one during a turn's write section
+would make the second turn visibly slower, and the three guards already reduce
+what concurrency can do to "waits a bit longer"; limitations now says so in both
+languages instead of leaving it as folklore.
+
+Tests: two concurrent consolidations assert the small model is called once (and
+that the loser sees no script), a failed consolidation releases its claim, a
+rollup only moves forward (new not overwritten by old, old not overwriting new,
+equal not an update), the PRAGMAs are really in effect, and the outbox file is
+named with the pid and holds the ring's tail. 321 Rust tests, docs: limitations
+(new Concurrency section), internals 2, testing, CHANGELOG — EN + zh.
