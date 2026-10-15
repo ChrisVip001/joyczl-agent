@@ -1,36 +1,18 @@
-Close the three races where two turns on one session meet
+feat(tools): read_file / list_dir — 模型默认能读文件了
 
-Consolidation was read-then-act: read a batch, distill it, then mark it. Two
-concurrent turns both saw "due" and distilled the same log twice, burning a model
-call and bumping consolidation_tries twice. It is now one `UPDATE … RETURNING`
-that selects and marks together, so the loser gets an empty list and never calls
-the model. Because claiming happens before processing, every failure path
-releases the claim (consolidated back to 0 plus the existing exponential
-backoff) — a claim that is never returned would strand those rows as "distilled"
-with nothing written, which is real data loss, not a race.
+此前读文件的唯一路径是开 JOY_EXEC 再 run_command cat —— 把无副作用的
+「看一眼」绑在执行的闸门上。照 dsh/nanobot/pi 的共识（只读零摩擦、批准
+留给写和执行），两个只读工具默认注册：
 
-The rolling summary's upsert took whichever write landed last, so concurrent
-compaction could hand the user an older summary with nothing on screen to say so.
-It now only accepts a summary covering more turns, and says so on stderr when it
-refuses.
+- read_file：分页（2000 行 / 50KB 双限，行边界截断、绝不切半行）、行号、
+  [Use offset=N to continue.] 续读协议、同会话重读同一段返回「没变」
+  占位符（nanobot 的内容哈希短路）、~ 展开、二进制/非 UTF-8 明确拒绝；
+- list_dir：目录在前、文件带大小、500 项上限。
 
-The busy_timeout story was worse than a race: the comment said 3 seconds and the
-real value was sqlx's default 5, because `PRAGMA busy_timeout` is per-connection
-and `execute(&pool)` only configures whichever connection served that query. The
-parameters now live on SqliteConnectOptions, so every connection carries them,
-and a test reads the PRAGMAs back — it caught the 5-vs-3 lie on the first run.
+错误全走 Error: 文本契约；读取不走执行闸门，run_command 原样不动。
+信任边界（进程用户的 OS 权限）写进 limitations 中英。
 
-Background job outbox filenames carry the pid: job ids are per-process, so two
-Joy processes wrote the same j1.txt.
-
-No per-session lock, deliberately. Holding one during a turn's write section
-would make the second turn visibly slower, and the three guards already reduce
-what concurrency can do to "waits a bit longer"; limitations now says so in both
-languages instead of leaving it as folklore.
-
-Tests: two concurrent consolidations assert the small model is called once (and
-that the loser sees no script), a failed consolidation releases its claim, a
-rollup only moves forward (new not overwritten by old, old not overwriting new,
-equal not an update), the PRAGMAs are really in effect, and the outbox file is
-named with the pid and holds the ring's tail. 321 Rust tests, docs: limitations
-(new Concurrency section), internals 2, testing, CHANGELOG — EN + zh.
+配套：
+- eval runner 的 {{home}} 替换扩展到消息与工具参数（文件装置可被引用）；
+- 13 条单测 + 3 条确定性 eval（40/40）；
+- README 工具表、internals 06、CHANGELOG、limitations 中英同步。

@@ -217,7 +217,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
 
     let server = open_server(&settings).await?;
     let recording = Arc::new(RecordingProvider {
-        inner: Arc::new(scenario.build_mock()),
+        inner: Arc::new(scenario.build_mock(home)),
         prompts: Mutex::new(Vec::new()),
     });
     server.install_provider(Resolved {
@@ -231,9 +231,13 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
     for turn in scenario.effective_turns() {
         let session_id = turn.session_id.unwrap_or_else(|| "eval".to_string());
         let (sink, mut rx) = EventSink::channel();
+        // 消息里的 {{home}}：让用例能指着自己在 home 里的文件说话。
+        let message = turn
+            .message
+            .replace("{{home}}", &home.display().to_string());
         let params = TurnStartParams {
             session_id: Some(session_id),
-            message: turn.message.clone(),
+            message,
             stream: Some(true),
         };
         let task_server = server.clone();

@@ -172,5 +172,8 @@ pub fn build_default() -> crate::ToolRegistry {
     registry.register(crate::calendar::list_events());
     registry.register(crate::messages::send_message());
     registry.register(crate::web::search_web());
+    // 只读文件工具：无副作用，默认就有（读取不走执行闸门 —— 见 fs.rs 的模块注释）。
+    registry.register(crate::fs::read_file());
+    registry.register(crate::fs::list_dir());
     registry
 }

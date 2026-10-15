@@ -65,6 +65,8 @@ persisted with the conversation.
 | `create_event` / `list_events` | calendar (idempotent, ICS + optional Apple Calendar sync) |
 | `send_message` | message drafts into the outbox — never actually sends |
 | `search_web` | DuckDuckGo HTML, or Tavily with `TAVILY_API_KEY` |
+| `read_file` | read a text file: paginated (2000 lines / 50KB, never mid-line), line numbers, a continuation protocol, and a re-read short-circuit; **on by default** |
+| `list_dir` | list a directory: directories first, files with sizes, 500-entry cap; **on by default** |
 | `create_skill` | persist an agreed workflow as procedural memory |
 | `job_output` / `job_list` / `job_kill` | read, list and stop background jobs (started with `run_command`'s `background=true`) |
 | `todo_write` | keep a per-session todo list, re-injected every turn (whole-table replace; one `in_progress` at a time) |

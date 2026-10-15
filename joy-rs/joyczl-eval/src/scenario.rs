@@ -121,7 +121,7 @@ impl Scenario {
     /// 依赖增量，其余用例不受影响（断言看的是拼起来的完整文本）。
     /// gate 缺省时自动补一句非 JSON 的应答 —— 门失败开放，且不吞
     /// loop 的应答（这正是缺省语义："懒得写 gate 就测失败开放"）。
-    pub fn build_mock(&self) -> Mock {
+    pub fn build_mock(&self, home: &std::path::Path) -> Mock {
         let mut responses: Vec<CreateResponse> = Vec::new();
         for turn in self.effective_turns() {
             let gate = match &turn.gate {
@@ -130,7 +130,7 @@ impl Scenario {
             };
             responses.push(Mock::text(&gate));
             for (index, response) in turn.responses.iter().enumerate() {
-                responses.push(response.to_create_response(index));
+                responses.push(response.to_create_response(index, home));
             }
         }
         Mock::streaming(responses)
@@ -146,11 +146,21 @@ pub enum ScriptedResponse {
 }
 
 impl ScriptedResponse {
-    pub(crate) fn to_create_response(&self, index: usize) -> CreateResponse {
+    pub(crate) fn to_create_response(
+        &self,
+        index: usize,
+        home: &std::path::Path,
+    ) -> CreateResponse {
         match self {
             ScriptedResponse::Text(text) => Mock::text(text),
             ScriptedResponse::ToolUse { name, args } => {
-                Mock::tool_use(&format!("tu_{index}"), name, args.clone())
+                // 工具参数里的 {{home}} 替换成用例自己的 home —— 文件装置
+                // （scenario.files）写在 home 里，脚本要能指到它。
+                let replaced = args
+                    .to_string()
+                    .replace("{{home}}", &home.display().to_string());
+                let args: Value = serde_json::from_str(&replaced).unwrap_or_else(|_| args.clone());
+                Mock::tool_use(&format!("tu_{index}"), name, args)
             }
         }
     }

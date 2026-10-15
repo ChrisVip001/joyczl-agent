@@ -13,6 +13,11 @@ means "we would like this, nobody has built it".
 
 ## Execution (`run_command`, `JOY_EXEC`)
 
+`read_file` / `list_dir` are on by default and bypass the execution gate — their
+trust boundary is the **process user's OS permissions**: the model can read any
+file that user can read (same as codex / pi read tools). Put files you do not
+want the model to see where that user cannot read them.
+
 * **Deliberate** — Sandboxed commands run **offline** by default
   (`JOY_EXEC_NETWORK=1` to allow network); writes are confined to the working
   directory, the Joy home and temp, plus anything listed in

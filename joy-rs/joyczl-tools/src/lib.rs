@@ -20,6 +20,7 @@ use serde_json::Value;
 pub mod approval;
 pub mod calendar;
 pub mod exec;
+pub mod fs;
 pub mod handlers;
 pub mod hooks;
 pub mod jobs;
@@ -62,6 +63,10 @@ mod hooks_tests;
 #[cfg(test)]
 #[path = "todo_tests.rs"]
 mod todo_tests;
+
+#[cfg(test)]
+#[path = "fs_tests.rs"]
+mod fs_tests;
 
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。

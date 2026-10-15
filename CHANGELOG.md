@@ -4,6 +4,16 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### The model can see files now: read-only file tools
+
+`read_file` / `list_dir` are **registered by default**. The only path to file
+content used to be enabling `JOY_EXEC` and running `cat` — binding a
+side-effect-free "have a look" to the execution gate. Now: pagination (2000
+lines / 50KB, cut at line boundaries, never mid-line), line numbers, a
+`[Use offset=N to continue.]` protocol, a "file unchanged" placeholder when the
+same range is re-read in the same session, and explicit refusal of binary
+files. Reads bypass the execution gate; `run_command` is unchanged.
+
 ### Concurrency: three guards where two turns meet
 
 Two concurrent turns on the same session used to meet three read-then-act races:
