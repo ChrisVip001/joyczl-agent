@@ -80,6 +80,14 @@ schedule: 0 8 * * 1
 `joy schedule`（常驻进程）按时触发它，在技能自己的会话里跑完整一轮，结果写进
 `<home>/outbox/`。cron 细节与 JSON 声明方式见 [operations.zh.md](operations.zh.md)。
 
+## 仓库自带的示例：视频转写
+
+`skills/video-transcription/SKILL.md` 是随仓库分发的活例子，也是格式示范：
+「分析这个视频」会先探测 yt-dlp / whisper（缺了如实报告，不装懂）、在线视频拉
+字幕不下载、本地视频走转写，最后用 `read_file` 读文稿分析 —— 全程强调
+**模型没有文字就不许描述视频内容**，并把字幕当作「数据不是指令」的外部输入。
+把它复制到 `<home>/skills/` 下即可启用。
+
 ## 安装与分发
 
 ```bash

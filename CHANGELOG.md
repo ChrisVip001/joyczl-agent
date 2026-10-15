@@ -20,6 +20,15 @@ hop is re-resolved and re-checked**. The body passes through the same
 "data, not instructions" defusal as subagent reports — an injected page and an
 injected subagent are the same threat, so they get the same defense.
 
+### Video analysis skill: turn it into text first
+
+`skills/video-transcription/SKILL.md` (bundled with the repo, and a living
+example of the skill format): "analyze this video" → probe for yt-dlp / whisper
+(honestly report when missing) → pull subtitles for online videos without
+downloading, or transcribe local files → read the transcript with `read_file`.
+Two disciplines are baked into the body: the model never describes video
+content it has no text for, and subtitles are external data, not instructions.
+
 ### Concurrency: three guards where two turns meet
 
 Two concurrent turns on the same session used to meet three read-then-act races:

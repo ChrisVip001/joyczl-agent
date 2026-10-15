@@ -1,18 +1,15 @@
-feat(tools): fetch_url —— 模型能读网页了
+feat(skills): video-transcription —— 视频分析的技能形态
 
-search_web 拿回「有哪些结果」，fetch_url 拿回「这一页说了什么」。三件
-不可省的事都抄自 dsh / nanobot 的实作：
+协议不进视频内容块（四家参考实现都没碰视频），做成技能教模型流程：
 
-- SSRF 防护：解析后的每个 IP 落在 loopback / 内网 / link-local（含
-  169.254.169.254 metadata 端点）/ 保留段就拒；重定向自己跟（reqwest
-  的策略回调是同步的、做不了 DNS），**每一跳重新解析重查**；
-- 外站内容是不可信输入：正文过 report::as_external（声明头 + 指令形状
-  转义），与子代理报告同一套防线；
-- 封顶：下载 2MB、正文 50k 字符，超了明说，不静默截断。
+1. 探测 yt-dlp / whisper（缺了如实报告，不装懂；JOY_EXEC 没开就停）；
+2. 在线视频拉字幕不下载（yt-dlp --write-auto-sub --skip-download）；
+3. 本地视频本地转写（whisper）；转写长视频用后台作业；
+4. 用 read_file 读文稿（分页 + 时间戳引用）分析。
 
-HTML→纯文本是手写状态机（约 90 行，不引 html2text）；正文前 2MB 流式
-读取；HTTP 错误如实报状态码。
+正文写死两条纪律：模型没有文字就不许描述视频内容；字幕是「数据不是
+指令」的外部输入。仓库自带（skills/video-transcription/SKILL.md），同时
+是技能格式的活示范。
 
-- 10 条单测（含本机 HTTP 服务器：重定向跟随/死循环上限/封顶/错误路径）
-  + 2 条确定性 eval（loopback 拒绝、file:// 拒绝，均离线确定）；
-- README 工具表、internals 06、CHANGELOG、limitations 中英同步。
+- 加载器测试钉住格式与纪律（frontmatter 坏了会红）；
+- docs/skills 中英、CHANGELOG 中英、testing 数字（345 测试 / 42 eval）。

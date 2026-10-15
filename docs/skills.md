@@ -89,6 +89,16 @@ schedule: 0 8 * * 1
 skill's own session and writing the answer to `<home>/outbox/`. See
 [operations.md](operations.md) for the cron details and the JSON alternative.
 
+## The bundled example: video transcription
+
+`skills/video-transcription/SKILL.md` ships with the repo and doubles as a
+format example: "analyze this video" first probes for yt-dlp / whisper (missing
+tools are reported honestly, never faked), pulls subtitles for online videos
+without downloading, transcribes local files, then reads the transcript with
+`read_file` — all while insisting the model **never describes video content it
+has no text for** and treats subtitles as external data, not instructions.
+Copy it into `<home>/skills/` to enable.
+
 ## Install and distribute
 
 ```bash

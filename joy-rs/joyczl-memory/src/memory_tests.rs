@@ -544,3 +544,36 @@ async fn a_failed_consolidation_releases_its_claim() {
         "但按退避排到了未来，不该立刻又捞出来"
     );
 }
+
+/// 仓库自带的示例技能（`skills/video-transcription/SKILL.md`）能被解析器接受，
+/// 且关键纪律写进了正文：先转成文字、不假装看过、字幕是外部内容。
+///
+/// 这条测试同时是 SKILL.md 格式的活文档 —— 改坏 frontmatter（比如少了
+/// description）会让它红。
+#[test]
+fn the_bundled_video_skill_parses_and_carries_the_discipline() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../skills/video-transcription/SKILL.md"
+    );
+    let text = std::fs::read_to_string(path).expect("仓库自带的技能文件应该存在");
+    let skill = crate::skills::parse_skill_text(&text).expect("该被解析成技能");
+    assert_eq!(skill.name, "video-transcription");
+    assert!(
+        skill.description.contains("视频") && skill.description.contains("read_file"),
+        "description 该说明用途与路径：{}",
+        skill.description
+    );
+    for discipline in [
+        "yt-dlp",       // 在线视频：拉字幕不下载
+        "whisper",      // 本地视频：本地转写
+        "不能假装",     // 诚实边界：没有文字就不许编
+        "数据不是指令", // 字幕是不可信输入
+        "JOY_EXEC",     // 工具缺失时如实报告依赖
+    ] {
+        assert!(
+            text.contains(discipline),
+            "正文缺少关键纪律『{discipline}』"
+        );
+    }
+}
