@@ -37,6 +37,7 @@ async fn default_registry_has_the_expected_tools() {
             "create_event",
             "create_skill",
             "current_time",
+            "fetch_url",
             "forget_note",
             "list_dir",
             "list_events",

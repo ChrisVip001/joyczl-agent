@@ -67,6 +67,7 @@ persisted with the conversation.
 | `search_web` | DuckDuckGo HTML, or Tavily with `TAVILY_API_KEY` |
 | `read_file` | read a text file: paginated (2000 lines / 50KB, never mid-line), line numbers, a continuation protocol, and a re-read short-circuit; **on by default** |
 | `list_dir` | list a directory: directories first, files with sizes, 500-entry cap; **on by default** |
+| `fetch_url` | fetch a page's text (HTML→plain, 50k cap); SSRF guard (blocks private/metadata targets, re-checks every redirect) + an external-content-is-data declaration |
 | `create_skill` | persist an agreed workflow as procedural memory |
 | `job_output` / `job_list` / `job_kill` | read, list and stop background jobs (started with `run_command`'s `background=true`) |
 | `todo_write` | keep a per-session todo list, re-injected every turn (whole-table replace; one `in_progress` at a time) |

@@ -1,18 +1,18 @@
-feat(tools): read_file / list_dir — 模型默认能读文件了
+feat(tools): fetch_url —— 模型能读网页了
 
-此前读文件的唯一路径是开 JOY_EXEC 再 run_command cat —— 把无副作用的
-「看一眼」绑在执行的闸门上。照 dsh/nanobot/pi 的共识（只读零摩擦、批准
-留给写和执行），两个只读工具默认注册：
+search_web 拿回「有哪些结果」，fetch_url 拿回「这一页说了什么」。三件
+不可省的事都抄自 dsh / nanobot 的实作：
 
-- read_file：分页（2000 行 / 50KB 双限，行边界截断、绝不切半行）、行号、
-  [Use offset=N to continue.] 续读协议、同会话重读同一段返回「没变」
-  占位符（nanobot 的内容哈希短路）、~ 展开、二进制/非 UTF-8 明确拒绝；
-- list_dir：目录在前、文件带大小、500 项上限。
+- SSRF 防护：解析后的每个 IP 落在 loopback / 内网 / link-local（含
+  169.254.169.254 metadata 端点）/ 保留段就拒；重定向自己跟（reqwest
+  的策略回调是同步的、做不了 DNS），**每一跳重新解析重查**；
+- 外站内容是不可信输入：正文过 report::as_external（声明头 + 指令形状
+  转义），与子代理报告同一套防线；
+- 封顶：下载 2MB、正文 50k 字符，超了明说，不静默截断。
 
-错误全走 Error: 文本契约；读取不走执行闸门，run_command 原样不动。
-信任边界（进程用户的 OS 权限）写进 limitations 中英。
+HTML→纯文本是手写状态机（约 90 行，不引 html2text）；正文前 2MB 流式
+读取；HTTP 错误如实报状态码。
 
-配套：
-- eval runner 的 {{home}} 替换扩展到消息与工具参数（文件装置可被引用）；
-- 13 条单测 + 3 条确定性 eval（40/40）；
+- 10 条单测（含本机 HTTP 服务器：重定向跟随/死循环上限/封顶/错误路径）
+  + 2 条确定性 eval（loopback 拒绝、file:// 拒绝，均离线确定）；
 - README 工具表、internals 06、CHANGELOG、limitations 中英同步。

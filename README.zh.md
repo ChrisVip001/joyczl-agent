@@ -61,6 +61,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `search_web` | DuckDuckGo HTML，设 `TAVILY_API_KEY` 升级 Tavily |
 | `read_file` | 读文本文件：分页（2000 行/50KB、不切半行）+ 行号 + 续读协议 + 重读短路；**默认开** |
 | `list_dir` | 列目录：目录在前、文件带大小，500 项上限；**默认开** |
+| `fetch_url` | 抓网页正文（HTML→纯文本，50k 封顶）；SSRF 护栏（拒内网/metadata、重定向逐跳复检）+ 外站内容「数据不是指令」声明 |
 | `create_skill` | 把约定的工作流存成过程记忆 |
 | `job_output` / `job_list` / `job_kill` | 读写后台作业（`run_command` 的 `background=true` 起的那些） |
 | `todo_write` | 维护一张每轮重新注入的待办清单（整表替换；同时只能一项 `in_progress`） |

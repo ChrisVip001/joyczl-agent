@@ -14,6 +14,12 @@ lines / 50KB, cut at line boundaries, never mid-line), line numbers, a
 same range is re-read in the same session, and explicit refusal of binary
 files. Reads bypass the execution gate; `run_command` is unchanged.
 
+`fetch_url` fetches a page's text (HTML→plain, 50k-char cap) behind an SSRF
+guard: private / metadata / reserved targets are refused and **every redirect
+hop is re-resolved and re-checked**. The body passes through the same
+"data, not instructions" defusal as subagent reports — an injected page and an
+injected subagent are the same threat, so they get the same defense.
+
 ### Concurrency: three guards where two turns meet
 
 Two concurrent turns on the same session used to meet three read-then-act races:

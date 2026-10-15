@@ -68,6 +68,10 @@ mod todo_tests;
 #[path = "fs_tests.rs"]
 mod fs_tests;
 
+#[cfg(test)]
+#[path = "web_tests.rs"]
+mod web_tests;
+
 /// 工具执行时能拿到的东西。加字段要想清楚：每个工具都能看见全部。
 /// 故意 Clone —— handler 的 Future 要拥有它，这样才能是 'static。
 #[derive(Clone)]

@@ -16,7 +16,12 @@ means "we would like this, nobody has built it".
 `read_file` / `list_dir` are on by default and bypass the execution gate — their
 trust boundary is the **process user's OS permissions**: the model can read any
 file that user can read (same as codex / pi read tools). Put files you do not
-want the model to see where that user cannot read them.
+want the model to see where that user cannot read them. `fetch_url` mirrors
+this: its network access does **not** go through the `run_command` sandbox (it is
+a direct in-process request) — the guard is the SSRF address check plus
+external-content defusal, not a sandbox. The hand-rolled HTML converter is
+weaker than readability-class libraries on heavy layouts; for high-quality
+extraction use `run_command` + curl or an MCP fetching service.
 
 * **Deliberate** — Sandboxed commands run **offline** by default
   (`JOY_EXEC_NETWORK=1` to allow network); writes are confined to the working
