@@ -36,7 +36,7 @@ pub struct Scenario {
     /// 开跑前写进 home 的文件（相对路径）—— mcp.json 与假服务器用。
     #[serde(default)]
     pub files: Option<std::collections::BTreeMap<String, String>>,
-    /// 前置依赖缺失时跳过本用例（"python3" / "sandbox"）。跳过不算失败。
+    /// 前置依赖缺失时跳过本用例（"python3" / "sh" / "sandbox"）。跳过不算失败。
     #[serde(default)]
     pub prereq: Option<String>,
 }
@@ -156,10 +156,14 @@ impl ScriptedResponse {
             ScriptedResponse::ToolUse { name, args } => {
                 // 工具参数里的 {{home}} 替换成用例自己的 home —— 文件装置
                 // （scenario.files）写在 home 里，脚本要能指到它。
-                let replaced = args
-                    .to_string()
-                    .replace("{{home}}", &home.display().to_string());
-                let args: Value = serde_json::from_str(&replaced).unwrap_or_else(|_| args.clone());
+                // 展开规则见 `expand_home`：正斜杠，所以参数仍是合法 JSON。
+                let replaced = crate::expand_home(&args.to_string(), home);
+                let args: Value = serde_json::from_str(&replaced).unwrap_or_else(|error| {
+                    eprintln!(
+                        "(joy) 用例的工具参数解析失败（{error}），按原文送给模型：{replaced}"
+                    );
+                    args.clone()
+                });
                 Mock::tool_use(&format!("tu_{index}"), name, args)
             }
         }
@@ -282,4 +286,41 @@ pub fn load_all(paths: &[PathBuf]) -> anyhow::Result<Vec<Scenario>> {
         }
     }
     Ok(scenarios)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn home_in_tool_args_stays_valid_json_for_windows_paths() {
+        // Windows 的 home 带反斜杠。裸替换会把工具参数变成非法 JSON，
+        // 于是装置路径静默退化成字面量 {{home}} —— read_file / list_dir
+        // 在自己的装置文件上反而报「找不到文件」。
+        let home = std::path::Path::new(r"C:\Users\joy\AppData\Local\Temp\.tmp42");
+        let scripted = ScriptedResponse::ToolUse {
+            name: "read_file".to_string(),
+            args: serde_json::json!({"path": "{{home}}/notes/article.md"}),
+        };
+
+        let response = scripted.to_create_response(0, home);
+        let uses = response.tool_uses();
+        let (_, name, input) = uses[0];
+        let path = input["path"].as_str().unwrap_or_default();
+
+        assert_eq!(name, "read_file");
+        assert!(
+            !path.contains("{{home}}"),
+            "占位符没被展开 —— 多半是展开结果让 JSON 解析失败、退回原文了：{path}"
+        );
+        assert!(
+            !path.contains('\\'),
+            "装置路径里不该有反斜杠：它在 JSON 字符串里是非法转义：{path}"
+        );
+        assert!(
+            path.starts_with("C:/Users/joy/AppData/Local/Temp/.tmp42/"),
+            "展开的应是同一个 home 下的文件：{path}"
+        );
+        assert!(path.ends_with("/notes/article.md"), "{path}");
+    }
 }

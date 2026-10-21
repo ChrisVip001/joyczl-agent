@@ -38,12 +38,16 @@
 | `message` / `gate` / `responses` | 单轮便捷写法 |
 | `turns[]` | 多轮：每轮有自己的 `message` / `session_id` / `gate` / `responses` / `apply_patch` / `interrupt_after_deltas` |
 | `settings` | 用例级旋钮覆盖：`history_turns`、`consolidate_every`、`retrieval_top_k`、`max_iterations`、`graph_workflows`、`exec_enabled`、`exec_allow` |
-| `files` | 开跑前写进 home 的文件（内容里可用 `{{home}}` 占位） |
-| `prereq` | `"python3"` / `"sandbox"`：前置不满足就**跳过**（计为跳过，绝不计为通过） |
+| `files` | 开跑前写进 home 的文件（内容里可用 `{{home}}` 占位，展开成正斜杠路径） |
+| `prereq` | `"python3"` / `"sh"` / `"sandbox"`：前置不满足就**跳过**（计为跳过，绝不计为通过） |
 | `expect` | 断言集合，见下 |
 
 `responses` 里两种元素：`{"text":"…"}` 与
 `{"tool_use":{"name":"…","args":{…}}}`。
+
+`args` 里也能写 `{{home}}`，展开规则与 `files` 相同：**正斜杠**。这个细节不是
+洁癖——Windows 的 home 带反斜杠，裸插进 JSON 会让整段参数变成非法转义，于是
+装置路径静默退回字面量 `{{home}}`，用例在自己的夹具上报「找不到文件」。
 
 **脚本队列的顺序 = 真实调用顺序**：每轮先放一条 gate 应答，再放这一轮的模型应答。
 所以「第二轮在门之后、loop 之前还夹了一次压缩摘要调用」这种细节，在用例里就是
@@ -72,7 +76,7 @@
 
 ```
 逐场景：
-  1. prereq 检查（python3 / sandbox）→ 不满足就 skipped
+  1. prereq 检查（python3 / sh / sandbox）→ 不满足就 skipped
   2. tempdir 当 home → 写 scenario.files → open_server(&settings)
   3. 装 RecordingProvider：内层是 Mock（按脚本弹），外层记录每个 CreateRequest
   4. 逐 turn：EventSink::channel() → spawn run_turn → 边收帧边做两件事：

@@ -251,9 +251,9 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **刻意** —— 确定性 eval 跑在脚本化的 provider 上：不要 key、不要网络、每次都
   同一答案。judge 类 eval 需要真模型与真 key，所以是另一条命令（`joy judge`）。
   → `joy-rs/joyczl-eval/src/`、`evals/`
-* **刻意** —— 需要这台机器上未必有的东西（python3、可用的沙箱）的场景声明
+* **刻意** —— 需要这台机器上未必有的东西（python3、shell、可用的沙箱）的场景声明
   `prereq` 并跳过 —— 计为跳过，绝不计为通过。
-  → `evals/deterministic/exec.jsonl`
+  → `evals/deterministic/exec.jsonl`、`evals/deterministic/hooks.jsonl`
 * **未做** —— embedding 那条路没有对着真 embedding 服务的端到端测试：融合与降级
   有单测，HTTP 调用本身没有。
   → `joy-rs/joyczl-memory/src/retrieval_tests.rs`

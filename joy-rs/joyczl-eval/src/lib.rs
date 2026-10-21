@@ -18,6 +18,16 @@ pub mod report;
 pub mod scenario;
 
 use std::path::{Path, PathBuf};
+
+/// 用例里的 `{{home}}` 一律展开成**正斜杠**路径。
+///
+/// 装置文件常常把它嵌进 JSON（`mcp.json` 的 args、工具参数），而 Windows 的
+/// home 形如 `C:\Users\…\Temp\.tmp42`：反斜杠在 JSON 字符串里是非法转义，
+/// 整份装置会被判成「不是合法 JSON」，用例就在自己的夹具上失败。
+/// 正斜杠在 Windows 的文件 API 里是合法分隔符，两种平台都读得懂。
+fn expand_home(text: &str, home: &Path) -> String {
+    text.replace("{{home}}", &home.display().to_string().replace('\\', "/"))
+}
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -209,10 +219,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(
-            &path,
-            content.replace("{{home}}", &home.display().to_string()),
-        )?;
+        std::fs::write(&path, expand_home(content, home))?;
     }
 
     let server = open_server(&settings).await?;
@@ -232,9 +239,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         let session_id = turn.session_id.unwrap_or_else(|| "eval".to_string());
         let (sink, mut rx) = EventSink::channel();
         // 消息里的 {{home}}：让用例能指着自己在 home 里的文件说话。
-        let message = turn
-            .message
-            .replace("{{home}}", &home.display().to_string());
+        let message = expand_home(&turn.message, home);
         let params = TurnStartParams {
             session_id: Some(session_id),
             message,
@@ -346,7 +351,12 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
 
     for scenario in &scenarios {
         let missing = match scenario.prereq.as_deref() {
-            Some("python3") if which_python3().is_none() => Some("这台机器上没有 python3"),
+            Some("python3") if !runnable("python3", &["--version"]) => {
+                Some("这台机器上没有能跑的 python3")
+            }
+            Some("sh") if !runnable("sh", &["-c", "exit 0"]) => {
+                Some("这台机器上没有 sh（钩子用例跑的是 shell 命令）")
+            }
             Some("sandbox") if !joyczl_tools::exec::sandbox_available() => {
                 Some("这台机器上没有可用的沙箱（sandbox-exec / bubblewrap）")
             }
@@ -408,12 +418,19 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
     Ok(if any_failed { failed as i32 } else { 0 })
 }
 
-fn which_python3() -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|dir| dir.join("python3"))
-            .find(|candidate| candidate.is_file())
-    })
+/// 前置依赖要**真的跑得起来**，不只是 PATH 里有个同名文件。
+///
+/// Windows 的 `python3.exe` 常常只是应用商店的占位符：文件在、一跑就退出，
+/// 于是「有 python3」的用例会被放行，然后在起 MCP 服务器时莫名其妙地失败。
+/// 探测一次比赌一把诚实。
+fn runnable(program: &str, args: &[&str]) -> bool {
+    std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// 真模型路径：provider 从环境解析（key 缺失返回 None，调用方决定跳过）。

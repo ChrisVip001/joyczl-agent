@@ -314,9 +314,9 @@ extraction use `run_command` + curl or an MCP fetching service.
   a real key, so they are a separate command (`joy judge`).
   → `joy-rs/joyczl-eval/src/`, `evals/`
 * **Deliberate** — Scenarios that need something the machine may not have
-  (python3, a working sandbox) declare `prereq` and are skipped — counted as
-  skipped, never as passed.
-  → `evals/deterministic/exec.jsonl`
+  (python3, a shell, a working sandbox) declare `prereq` and are skipped —
+  counted as skipped, never as passed.
+  → `evals/deterministic/exec.jsonl`, `evals/deterministic/hooks.jsonl`
 * **Gap** — The embedding path has no end-to-end test against a real embedding
   server: fusion and degradation are unit-tested, the HTTP call itself is not.
   → `joy-rs/joyczl-memory/src/retrieval_tests.rs`
