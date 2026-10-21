@@ -413,12 +413,18 @@ fn first_line(text: &str) -> String {
 
 /// 一条已经连上的传输。
 pub enum Transport {
-    Stdio {
-        session: StdioSession<ChildStdout, ChildStdin>,
-        /// 子进程的把手，只为了活着（kill_on_drop 让它在被丢掉时一起走）。
-        _child: Child,
-    },
+    Stdio(Box<StdioTransport>),
     Http(HttpSession),
+}
+
+/// stdio 那一路的两个把手：管道会话 + 子进程本身。
+///
+/// 装进 `Box` 里 —— 它比 `HttpSession` 大一个数量级，留在枚举变体里会让
+/// 每个 `Transport` 都按最大变体的尺寸占地方。
+pub struct StdioTransport {
+    session: StdioSession<ChildStdout, ChildStdin>,
+    /// 子进程的把手，只为了活着（kill_on_drop 让它在被丢掉时一起走）。
+    _child: Child,
 }
 
 impl Transport {
@@ -444,10 +450,10 @@ impl Transport {
                     .map_err(|e| format!("起不来 '{command}'：{e}"))?;
                 let stdin = child.stdin.take().ok_or("拿不到子进程的 stdin")?;
                 let stdout = child.stdout.take().ok_or("拿不到子进程的 stdout")?;
-                Ok(Transport::Stdio {
+                Ok(Transport::Stdio(Box::new(StdioTransport {
                     session: StdioSession::new(stdout, stdin),
                     _child: child,
-                })
+                })))
             }
             crate::config::Transport::Http { url, token } => {
                 Ok(Transport::Http(HttpSession::new(url, token.clone())))
@@ -457,28 +463,28 @@ impl Transport {
 
     pub async fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         match self {
-            Transport::Stdio { session, .. } => session.request(method, params).await,
+            Transport::Stdio(stdio) => stdio.session.request(method, params).await,
             Transport::Http(session) => session.request(method, params).await,
         }
     }
 
     pub async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
         match self {
-            Transport::Stdio { session, .. } => session.notify(method, params).await,
+            Transport::Stdio(stdio) => stdio.session.notify(method, params).await,
             Transport::Http(session) => session.notify(method, params).await,
         }
     }
 
     pub async fn initialize(&mut self) -> Result<Value, String> {
         match self {
-            Transport::Stdio { session, .. } => session.initialize().await,
+            Transport::Stdio(stdio) => stdio.session.initialize().await,
             Transport::Http(session) => session.initialize().await,
         }
     }
 
     pub async fn list_tools(&mut self) -> Result<Vec<ToolMeta>, String> {
         match self {
-            Transport::Stdio { session, .. } => session.list_tools().await,
+            Transport::Stdio(stdio) => stdio.session.list_tools().await,
             Transport::Http(session) => session.list_tools().await,
         }
     }
@@ -486,7 +492,7 @@ impl Transport {
     /// 调一次工具，返回给模型读的文本。
     pub async fn call_tool(&mut self, tool: &str, args: Value) -> Result<String, String> {
         match self {
-            Transport::Stdio { session, .. } => session.call_tool(tool, args).await,
+            Transport::Stdio(stdio) => stdio.session.call_tool(tool, args).await,
             Transport::Http(session) => session.call_tool(tool, args).await,
         }
     }

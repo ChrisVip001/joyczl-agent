@@ -3,7 +3,11 @@
 //! 需要真起子进程的用例标了 `#[cfg(unix)]`：钩子跑的是 shell 命令，Windows 上
 //! 那是另一套东西（见 `docs/limitations.md`），不该假装它在两种平台上一样。
 
-use super::hooks::{HookEvent, Hooks};
+use super::hooks::Hooks;
+// 需要真起子进程的用例是 unix-only 的（见上面的模块注释），它们才用得上这两个。
+#[cfg(unix)]
+use super::hooks::HookEvent;
+#[cfg(unix)]
 use serde_json::json;
 
 fn write_hooks(dir: &std::path::Path, body: &str) {
