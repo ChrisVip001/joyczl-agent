@@ -6,6 +6,8 @@
 //! 不搞设置框架：启动时读一次，之后就是不可变的普通结构体。
 //! 读得懂这个文件，就读得懂 Joy 能被配置成什么样。
 
+pub mod models;
+
 use std::path::PathBuf;
 
 use joyczl_protocol::SettingsView;

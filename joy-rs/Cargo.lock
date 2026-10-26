@@ -1030,6 +1030,7 @@ name = "joyczl-config"
 version = "0.7.0"
 dependencies = [
  "joyczl-protocol",
+ "serde",
  "serde_json",
  "tempfile",
 ]
