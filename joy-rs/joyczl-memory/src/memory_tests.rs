@@ -577,3 +577,20 @@ fn the_bundled_video_skill_parses_and_carries_the_discipline() {
         );
     }
 }
+
+/// Windows 上编辑的技能文件是 CRLF —— 解析器必须容忍。CI 的 Windows job
+/// 实测抓到过：git 在 Windows checkout 出 CRLF，硬匹配 LF 前缀让技能整个
+/// 解析失败。
+#[test]
+fn a_crlf_skill_file_still_parses() {
+    let text = "---
+name: crlf-skill
+description: Windows 上编辑的技能
+---
+
+正文
+";
+    let skill = crate::skills::parse_skill_text(text).expect("CRLF 该被规范化");
+    assert_eq!(skill.name, "crlf-skill");
+    assert_eq!(skill.description, "Windows 上编辑的技能");
+}

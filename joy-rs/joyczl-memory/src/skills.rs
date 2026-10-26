@@ -46,6 +46,10 @@ pub struct Skill {
 /// ```
 /// frontmatter 里没有 `name` 或 `description` 就不算技能。
 pub fn parse_skill_text(text: &str) -> Option<Skill> {
+    // 行尾规范化：Windows 用户编辑过的技能文件是 CRLF，git 在 Windows 上
+    // checkout 出来的也是 —— 硬匹配 \"---\n\" 会让它们全部解析失败
+    // （CI 的 Windows job 实测抓到过）。CRLF → LF 一行解决，正文不受影响。
+    let text = text.replace("\r\n", "\n");
     let rest = text.strip_prefix("---\n")?;
     let (front, body) = rest.split_once("\n---\n")?;
     let mut name = None;
