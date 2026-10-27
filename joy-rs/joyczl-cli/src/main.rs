@@ -90,6 +90,11 @@ async fn main() -> Result<()> {
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
             settings.ensure_home()?;
+            // 守护锁：常驻进程的内存态（审批/目标/作业）只有一份才有意义，
+            // 两个 app-server 写同一个 state.db 是事故。REPL/驾驶舱不拿锁 ——
+            // 它们是另一条路（REPL 进程内自持，见模块头注释）。
+            let _daemon =
+                joyczl_app_server::lock::acquire(&settings.home).map_err(|e| anyhow::anyhow!(e))?;
             let server = joyczl_app_server::open(&settings).await?;
             joyczl_app_server::run_stdio(server).await
         }

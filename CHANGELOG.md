@@ -4,6 +4,28 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### The groundwork for 7x24: job ledger, daemon lock, schedule catch-up
+
+Studied how the five reference harnesses (codex / deepseek-harness / pi / hermes /
+nanobot) keep long tasks alive across crashes and ported back three pieces — their
+answers agree so closely that the previously open decisions are now settled:
+
+- **Job ledger in the database** (migration 0009): background-job start/finish
+  go into state.db and output streams to `<home>/jobs/<pid>-<id>.log` (1 MiB cap).
+  After a crash, boot reconciliation marks still-running jobs `interrupted` and
+  keeps output readable — **never auto-rerun** (unanimous across references:
+  auto-rerun is an incident amplifier). `job_list` shows history, `job_output`
+  reads dead jobs' output, and the owner fence covers history too;
+- **Daemon lock**: one app-server per `<home>` (`app-server.lock` + PID, after
+  codex's daemon; locks left by dead processes are reaped on next start). Two
+  resident processes each holding in-memory state while writing one database is
+  an incident, not a feature;
+- **Schedule catch-up**: `joy schedule` persists its last-fired table (atomic
+  write) and, at boot, looks back over the minutes since each job's last firing
+  (capped at seven days), firing the latest missed slot **once**, marked as
+  catch-up — same semantics as dsh's schedule-resume; missed firings are no
+  longer silently swallowed.
+
 ### The model can see files now: read-only file tools
 
 `read_file` / `list_dir` are **registered by default**. The only path to file

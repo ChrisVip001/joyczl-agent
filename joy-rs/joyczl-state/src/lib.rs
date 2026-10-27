@@ -19,6 +19,7 @@ pub mod db;
 pub mod episodes;
 pub mod facts;
 pub mod fts;
+pub mod jobs;
 pub mod store;
 
 pub use calendar::{Calendar, CalendarRow};
@@ -26,6 +27,7 @@ pub use chat::{Chat, MessageRow, SessionRow};
 pub use db::open;
 pub use episodes::{EpisodeRow, Episodes};
 pub use facts::{FactRow, Facts};
+pub use jobs::{JobRow, Jobs};
 pub use store::{EpisodicStore, SemanticStore};
 
 #[cfg(test)]

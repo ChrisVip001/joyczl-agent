@@ -11,7 +11,7 @@ use joyczl_tools::jobs::JobRegistry;
 
 use crate::jobs::{Jobs, Ring};
 
-fn jobs(allow: &[&str]) -> (Arc<Jobs>, tempfile::TempDir) {
+async fn jobs(allow: &[&str]) -> (Arc<Jobs>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("临时目录");
     let policy = ExecPolicy {
         allow: allow.iter().map(|rule| rule.to_string()).collect(),
@@ -22,7 +22,17 @@ fn jobs(allow: &[&str]) -> (Arc<Jobs>, tempfile::TempDir) {
         spill_dir: None,
         extra_roots: Vec::new(),
     };
-    (Arc::new(Jobs::new(policy, dir.path().to_path_buf())), dir)
+    let pool = joyczl_state::open(&dir.path().join("state.db"))
+        .await
+        .expect("打开库");
+    (
+        Arc::new(Jobs::new(
+            policy,
+            dir.path().to_path_buf(),
+            joyczl_state::Jobs::new(pool),
+        )),
+        dir,
+    )
 }
 
 /// 起一个作业、读一截、等它结束、结果落到 outbox。
@@ -31,7 +41,7 @@ async fn a_job_runs_reads_and_lands_in_the_outbox() {
     if !joyczl_tools::exec::sandbox_available() {
         return;
     }
-    let (jobs, dir) = jobs(&["echo*"]);
+    let (jobs, dir) = jobs(&["echo*"]).await;
 
     let id = jobs
         .spawn("s1", "echo 第一行 && echo 第二行", None)
@@ -71,7 +81,7 @@ async fn another_session_cannot_touch_the_job() {
     if !joyczl_tools::exec::sandbox_available() {
         return;
     }
-    let (jobs, _dir) = jobs(&["echo*"]);
+    let (jobs, _dir) = jobs(&["echo*"]).await;
     let id = jobs.spawn("mine", "echo 私有", None).await.expect("起得来");
 
     let stolen = jobs.output("someone-else", &id, 0, false).await;
@@ -88,7 +98,7 @@ async fn a_running_job_can_be_killed() {
     if !joyczl_tools::exec::sandbox_available() {
         return;
     }
-    let (jobs, _dir) = jobs(&["echo*"]);
+    let (jobs, _dir) = jobs(&["echo*"]).await;
     let id = jobs
         .spawn("s1", "echo 起来 && sleep 30", None)
         .await
@@ -132,4 +142,115 @@ fn a_single_huge_write_keeps_only_the_tail() {
     assert_eq!(text, "ghij");
     assert!(lossy);
     assert_eq!(cursor, 10);
+}
+
+// ---- 7x24：台账、崩溃对账、历史回查 ---------------------------------------
+
+/// 起一个真 job，结束后台账里是 completed；被 kill 的是 killed。
+#[tokio::test]
+async fn the_ledger_records_how_jobs_end() {
+    if !joyczl_tools::exec::sandbox_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("临时目录");
+    let pool = joyczl_state::open(&dir.path().join("state.db"))
+        .await
+        .expect("打开库");
+    let rows = joyczl_state::Jobs::new(pool);
+    let mut policy = ExecPolicy {
+        allow: vec!["echo*".to_string(), "sleep*".to_string()],
+        timeout_secs: 10,
+        network: false,
+        approval: false,
+        approval_timeout_secs: 5,
+        spill_dir: None,
+        extra_roots: Vec::new(),
+    };
+    policy.timeout_secs = 10;
+    let jobs: Arc<Jobs> = Arc::new(Jobs::new(policy, dir.path().to_path_buf(), rows.clone()));
+
+    // 跑完的：completed。
+    let id = jobs.spawn("s1", "echo 好", None).await.expect("起得来");
+    let _ = jobs.output("s1", &id, 0, true).await.expect("读得到");
+    let row = rows.get(&id).await.expect("查台账").expect("该有这一行");
+    assert_eq!(row.status, "completed", "{row:?}");
+    assert_eq!(row.exit_code, Some(0));
+    let log = std::fs::read_to_string(row.log_path.expect("该有日志路径")).expect("日志读得回");
+    assert!(log.contains("好"), "输出该随写随落：{log}");
+
+    // 被停的：killed，不是 failed —— 「失败」和「被人叫停」是两回事。
+    let id2 = jobs.spawn("s1", "sleep 30", None).await.expect("起得来");
+    assert!(jobs.kill("s1", &id2).await.expect("停得掉"));
+    // 等收尾 task 把台账写上。
+    for _ in 0..50 {
+        if let Ok(Some(row)) = rows.get(&id2).await {
+            if row.status == "killed" {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let row2 = rows.get(&id2).await.expect("查台账").expect("该有这一行");
+    assert_eq!(row2.status, "killed", "{row2:?}");
+}
+
+/// 崩溃对账：上次进程死时还挂着的 running 行 → interrupted；历史能列出、
+/// 输出能回读；**不自动重跑**。
+#[tokio::test]
+async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let pool = joyczl_state::open(&dir.path().join("state.db"))
+        .await
+        .expect("打开库");
+    let rows = joyczl_state::Jobs::new(pool);
+
+    // 模拟上一次进程：起了一行 running，输出写了一半，然后死了。
+    let log_path = dir.path().join("jobs").join("999-j1.log");
+    std::fs::create_dir_all(log_path.parent().unwrap()).expect("建日志目录");
+    std::fs::write(&log_path, "跑到一半的输出").expect("写半截输出");
+    rows.record_started(
+        "j1",
+        "s1",
+        "long-task --keep-going",
+        &log_path.display().to_string(),
+    )
+    .await
+    .expect("记台账");
+
+    // 新进程启动：对账。
+    let jobs = Jobs::new(
+        ExecPolicy {
+            allow: vec![],
+            timeout_secs: 10,
+            network: false,
+            approval: false,
+            approval_timeout_secs: 5,
+            spill_dir: None,
+            extra_roots: Vec::new(),
+        },
+        dir.path().to_path_buf(),
+        rows.clone(),
+    );
+    jobs.reconcile().await;
+
+    let row = rows.get("j1").await.expect("查台账").expect("还在");
+    assert_eq!(row.status, "interrupted", "挂着的就是中断了：{row:?}");
+    assert!(row.finished_at.is_some(), "补上收尾时间：{row:?}");
+
+    // 历史列表看得见（owner 围栏照旧）。
+    assert_eq!(jobs.list("s1").len(), 1, "owner 该看得见");
+    assert!(jobs.list("someone-else").is_empty(), "别人的历史不该看得见");
+
+    // 输出回读：半截输出还在，跑不回去但读得回来。
+    let read = jobs
+        .output("s1", &"j1".to_string(), 0, false)
+        .await
+        .expect("历史作业该读得到");
+    assert!(!read.running);
+    assert!(read.text.contains("跑到一半"), "{read:?}");
+    // 别人读不到 —— 消息与活作业同一个口径。
+    assert!(jobs
+        .output("someone-else", &"j1".to_string(), 0, false)
+        .await
+        .is_err());
 }

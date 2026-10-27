@@ -33,6 +33,20 @@ means "we would like this, nobody has built it".
 - **The model cannot switch models**: `model/*` is human-only — the model has no
   such tool and never sees a key.
 
+## Long-running and the daemon lock
+
+- **The app-server takes a daemon lock**: only one app-server per `<home>` at a
+  time (`<home>/app-server.lock`, holding the PID; a lock left by a dead process is
+  reaped by the next start). Two resident processes each holding their own
+  in-memory state (approvals, goals, jobs) while writing one database is an
+  incident, not a feature — so it is a hard error, not a warning. The REPL and
+  `joy schedule` take no lock: they are separate, one-shot processes.
+- **Missed schedule firings are caught up**: `joy schedule` persists its
+  last-fired table to `<home>/schedules-state.json`; at boot each job looks back
+  over the minutes since its last firing (capped at seven days) and fires the
+  latest missed slot **once**, marked as a catch-up in the prompt. Three days of
+  downtime does not produce three days of catch-ups.
+
 ## Execution (`run_command`, `JOY_EXEC`)
 
 `read_file` / `list_dir` are on by default and bypass the execution gate — their
@@ -179,13 +193,16 @@ extraction use `run_command` + curl or an MCP fetching service.
   not have it: the list belongs to the **parent** task line.
   → `joy-rs/joyczl-tools/src/todo.rs`
 
-* **Deliberate** — Background jobs are **in-process**: they live and die with
-  Joy (children are `kill_on_drop`), the output ring is a fixed 64 KiB and drops the
-  oldest bytes while saying how many were dropped. This is not a supervisor — "keep
-  running across a restart" does not exist, and the tail of the output lands in
-  `<home>/outbox/jobs/` for later reading. If something must outlive a restart, make
-  it a `joy schedule` entry (or a supervisor of its own) rather than persisting this
-  table.
+* **Partly deliberate** — The background job output ring is still in-process
+  64 KiB (overflow drops the oldest bytes and says how many), but "they die with the
+  process" is half-fixed: start/finish are written to the jobs ledger in state.db
+  (migration 0009) and output streams to `<home>/jobs/<pid>-<id>.log` (1 MiB cap,
+  stated when hit). After a crash, boot reconciliation marks still-running jobs
+  `interrupted` and keeps their output readable — **never auto-rerun** (the
+  consistent choice across the reference harnesses: auto-rerun is an incident
+  amplifier; the rerun decision belongs to the human or model reading the ledger).
+  Finished results still land in `<home>/outbox/jobs/`. For "keep running across a
+  restart", make it a `joy schedule` entry — that path catches up missed firings.
 * **Deliberate** — Background commands go through the **same gate** as foreground
   ones (sandbox, network, allowlist, approval): the background is not a side door
   around approval. There is no PTY either — interactive programs (`vi`, `top`) do

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
-use super::{cron_matches, due_now, load_jobs, Job};
+use super::{cron_matches, due_now, last_missed, load_jobs, load_state, save_state, Job};
 
 fn at(y: i32, m: u32, d: u32, hh: u32, mm: u32) -> chrono::NaiveDateTime {
     NaiveDate::from_ymd_opt(y, m, d)
@@ -164,4 +164,57 @@ fn jobs_load_from_both_skills_and_the_json_file() {
         "技能任务的请求要带上它自己的描述：{}",
         weekly.prompt
     );
+}
+
+// ---- 7x24：状态落盘与补跑窗口 ---------------------------------------------
+
+/// fired 表落盘后读得回来；坏文件当没有。
+#[test]
+fn the_fired_table_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let mut fired = HashMap::new();
+    fired.insert("晨报".to_string(), "2026-10-27T08:00".to_string());
+    save_state(dir.path(), &fired);
+
+    let loaded = load_state(dir.path());
+    assert_eq!(
+        loaded.get("晨报").map(String::as_str),
+        Some("2026-10-27T08:00")
+    );
+
+    // 坏文件当没有 —— 去重丢了顶多同分钟重复一次，不该让调度器起不来。
+    std::fs::write(dir.path().join("schedules-state.json"), "{半截").expect("写坏文件");
+    assert!(load_state(dir.path()).is_empty());
+}
+
+/// 停机窗口里错过了一次 → 补最新那次；没错过 → 不补；三天前错过只补最新的。
+#[test]
+fn a_missed_fire_is_caught_up_once() {
+    let daily = job("晨报", "0 8 * * *");
+
+    // 停机窗口 7:00-9:00 覆盖了 8:00 → 补 8:00。
+    let missed = last_missed(&daily, at(2026, 10, 27, 7, 0), at(2026, 10, 27, 9, 0));
+    assert_eq!(missed, Some(at(2026, 10, 27, 8, 0)));
+
+    // 窗口里没有触发点 → 不补。
+    assert_eq!(
+        last_missed(&daily, at(2026, 10, 27, 9, 0), at(2026, 10, 27, 9, 30)),
+        None
+    );
+
+    // 起点本身算错过（上次触发 7:59，8:00 的点属于「错过」而非「已触发」）。
+    let missed = last_missed(&daily, at(2026, 10, 26, 7, 59), at(2026, 10, 27, 8, 30));
+    assert_eq!(
+        missed,
+        Some(at(2026, 10, 27, 8, 0)),
+        "三天停机也只补最新一次"
+    );
+}
+
+/// 每分钟任务在长停机窗口里也只交出最后一个错过的分钟。
+#[test]
+fn an_every_minute_job_yields_only_the_latest_missed_minute() {
+    let frequent = job("心跳", "* * * * *");
+    let missed = last_missed(&frequent, at(2026, 10, 20, 0, 0), at(2026, 10, 27, 0, 0));
+    assert_eq!(missed, Some(at(2026, 10, 27, 0, 0)));
 }

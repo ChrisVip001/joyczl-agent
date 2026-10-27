@@ -19,6 +19,8 @@ mod approval;
 mod dispatch;
 mod goal;
 mod jobs;
+/// 守护锁：同一个 home 只允许一个 app-server（`joyczl_app_server::lock`）。
+pub mod lock;
 pub mod models;
 mod stdio;
 mod subagent;
@@ -39,6 +41,10 @@ mod todo_tests;
 #[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod jobs_tests;
+
+#[cfg(test)]
+#[path = "lock_tests.rs"]
+mod lock_tests;
 
 #[cfg(test)]
 #[path = "goal_tests.rs"]
@@ -228,7 +234,7 @@ impl Server {
             None
         };
 
-        let (mut tools, jobs_handle) = builtin_tools(&snapshot).await;
+        let (mut tools, jobs_handle) = builtin_tools(&snapshot, pool.clone()).await;
         tools.set_hooks(hooks.clone());
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
@@ -534,6 +540,7 @@ pub async fn open(settings: &Settings) -> Result<Server> {
 /// 执行策略，所以从同一个地方返回）。
 async fn builtin_tools(
     settings: &Settings,
+    pool: sqlx::SqlitePool,
 ) -> (
     ToolRegistry,
     Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
@@ -597,8 +604,10 @@ async fn builtin_tools(
 
         // 后台作业：与 run_command 共用同一份策略（沙箱、断网、放行表、批准全一致）
         // —— 后台不是绕过它们的侧门。
-        let jobs: Arc<dyn joyczl_tools::jobs::JobRegistry> =
-            Arc::new(jobs::Jobs::new(policy, settings.home.clone()));
+        let ledger = joyczl_state::Jobs::new(pool.clone());
+        let jobs_impl = jobs::Jobs::new(policy, settings.home.clone(), ledger);
+        jobs_impl.reconcile().await;
+        let jobs: Arc<dyn joyczl_tools::jobs::JobRegistry> = Arc::new(jobs_impl);
         tools.register(joyczl_tools::jobs::job_output(Some(jobs.clone())));
         tools.register(joyczl_tools::jobs::job_list(Some(jobs.clone())));
         tools.register(joyczl_tools::jobs::job_kill(Some(jobs.clone())));

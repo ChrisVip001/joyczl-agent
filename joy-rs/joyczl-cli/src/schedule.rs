@@ -17,6 +17,12 @@
 //!
 //! cron 是**手写的五字段匹配**（分 时 日 月 周），支持 `*`、`*/步长`、
 //! `a-b` 区间、`a,b` 列表 —— 覆盖个人任务的全部需要，不为一个字段引依赖。
+//!
+//! 崩溃与补跑：`fired` 表落盘在 `<home>/schedules-state.json`（先写临时文件
+//! 再 `os.replace`，半截文件读不出来就当没有）。启动时对每个任务回看自上次
+//! 触发以来的分钟 —— 有错过的点就**补跑一次**（提示里注明是补跑；停了三天
+//! 也只补最新一次，不补一串）。这条行为与 deepseek-harness 的
+//! schedule-resume 同口径：错过的不静默吞掉。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -149,11 +155,53 @@ pub fn due_now<'a>(
         .collect()
 }
 
+/// `fired` 表的落盘位置。
+fn state_path(home: &Path) -> std::path::PathBuf {
+    home.join("schedules-state.json")
+}
+
+/// 读上次触发表。文件缺了/坏了就当没有 —— 状态文件只加速去重，不承载
+/// 任何「丢了会坏」的信息（最多同分钟重复触发一次）。
+fn load_state(home: &Path) -> HashMap<String, String> {
+    std::fs::read_to_string(state_path(home))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// 写上次触发表。先写临时文件再换名：死在半路也不会留下半截 JSON。
+fn save_state(home: &Path, fired: &HashMap<String, String>) {
+    let path = state_path(home);
+    let tmp = path.with_extension("json.tmp");
+    if serde_json::to_string_pretty(fired)
+        .ok()
+        .and_then(|text| std::fs::write(&tmp, text).ok())
+        .is_some()
+    {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// 自 `from` 到 `to`（含两端，按分钟扫）有没有错过的触发点。返回**最后**
+/// 那个错过点 —— 停机三天只补一次，不补一串。
+pub fn last_missed(job: &Job, from: NaiveDateTime, to: NaiveDateTime) -> Option<NaiveDateTime> {
+    let mut latest = None;
+    let mut t = from;
+    let step = chrono::TimeDelta::try_minutes(1).expect("一分钟总是合法");
+    while t <= to {
+        if cron_matches(&job.cron, t) {
+            latest = Some(t);
+        }
+        t += step;
+    }
+    latest
+}
+
 /// 常驻循环：每 20 秒看一眼现在该不该触发。技能改动每次 tick 重新扫，
 /// 等于热加载。
 pub async fn run(server: Server) -> Result<()> {
     let home = server.settings().home.clone();
-    let mut fired: HashMap<String, String> = HashMap::new();
+    let mut fired: HashMap<String, String> = load_state(&home);
 
     let initial = load_jobs(&home);
     if initial.is_empty() {
@@ -168,11 +216,46 @@ pub async fn run(server: Server) -> Result<()> {
         }
     }
 
+    // 补跑：上次退出期间错过的触发点，每个任务补最新一次。
+    let now0 = Local::now().naive_local();
+    for job in load_jobs(&home) {
+        let Some(last) = fired
+            .get(&job.name)
+            .and_then(|text| NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M").ok())
+        else {
+            continue;
+        };
+        // 回看窗口封顶七天：再早的错过没有补的价值，也无谓地扫上百万分钟。
+        let from = (last + chrono::TimeDelta::try_minutes(1).expect("一分钟总是合法"))
+            .max(now0 - chrono::TimeDelta::try_days(7).expect("七天总是合法"));
+        if let Some(missed) = last_missed(&job, from, now0) {
+            eprintln!(
+                "(joy) 任务 '{}' 在 {} 错过了触发，现在补跑",
+                job.name,
+                missed.format("%Y-%m-%d %H:%M")
+            );
+            let catch_up = Job {
+                prompt: format!(
+                    "{}\n\n（补跑：{} 那次的定时触发没赶上 —— 进程当时没在跑。）",
+                    job.prompt,
+                    missed.format("%Y-%m-%d %H:%M")
+                ),
+                ..job.clone()
+            };
+            if let Err(e) = fire(&server, &catch_up, now0).await {
+                eprintln!("(joy) 任务 '{}' 补跑失败：{e}", job.name);
+            }
+            fired.insert(job.name.clone(), now0.format("%Y-%m-%dT%H:%M").to_string());
+            save_state(&home, &fired);
+        }
+    }
+
     loop {
         let at = Local::now().naive_local();
         let jobs = load_jobs(&home);
         for job in due_now(&jobs, at, &fired) {
             fired.insert(job.name.clone(), at.format("%Y-%m-%dT%H:%M").to_string());
+            save_state(&home, &fired);
             // 串行执行：同一分钟的其它任务等它跑完。定时任务打爆模型
             // 不是「快」，是没人读得过来。
             if let Err(e) = fire(&server, job, at).await {
