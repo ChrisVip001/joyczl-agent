@@ -37,6 +37,12 @@ pub mod methods {
     pub const CONFIG_READ: &str = "config/read";
     pub const CONFIG_WRITE: &str = "config/write";
     pub const MODEL_LIST: &str = "model/list";
+    /// 列出已配置的多套模型 + 当前那套。**只有人能改** —— 模型没有这些能力。
+    pub const MODEL_PROFILES: &str = "model/profiles";
+    /// 新增/改一套配置（`make_active` 时顺带切过去）。只带 `id` + `make_active`
+    /// 就是「切换」—— 不该逼用户为了切换重发一次密钥。
+    pub const MODEL_SAVE: &str = "model/save";
+    pub const MODEL_REMOVE: &str = "model/remove";
 }
 
 // ===========================================================================
@@ -370,12 +376,6 @@ pub struct SettingsView {
 #[ts(export_to = "v2/")]
 pub struct SettingsPatch {
     #[ts(optional = nullable)]
-    pub provider: Option<String>,
-    #[ts(optional = nullable)]
-    pub model: Option<String>,
-    #[ts(optional = nullable)]
-    pub small_model: Option<String>,
-    #[ts(optional = nullable)]
     pub max_iterations: Option<i32>,
     #[ts(optional = nullable)]
     pub max_tokens: Option<i32>,
@@ -402,10 +402,7 @@ impl SettingsPatch {
     /// 一个要改的字段都没有。
     pub fn is_empty(&self) -> bool {
         let p = self;
-        p.provider.is_none()
-            && p.model.is_none()
-            && p.small_model.is_none()
-            && p.max_iterations.is_none()
+        p.max_iterations.is_none()
             && p.max_tokens.is_none()
             && p.history_turns.is_none()
             && p.consolidate_every.is_none()
@@ -420,15 +417,6 @@ impl SettingsPatch {
     /// 已保存的补丁是新补丁的地基，而不是反过来。
     pub fn merge_newer(&mut self, newer: &Self) {
         let p = newer;
-        if p.provider.is_some() {
-            self.provider = p.provider.clone();
-        }
-        if p.model.is_some() {
-            self.model = p.model.clone();
-        }
-        if p.small_model.is_some() {
-            self.small_model = p.small_model.clone();
-        }
         if p.max_iterations.is_some() {
             self.max_iterations = p.max_iterations;
         }
@@ -720,6 +708,102 @@ pub struct ModelListParams {
 pub struct ModelListResponse {
     pub data: Vec<ModelInfo>,
     pub next_cursor: Option<String>,
+}
+
+/// `model/profiles` 的应答：已配置的多套模型 + 当前那套。
+// 单元结构体：没有任何字段，也就没有 rename_all 可言（ts-rs 会拒绝
+// 空结构体上的 rename_all —— 它没有字段可重命名）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export_to = "v2/")]
+pub struct ModelProfilesParams;
+
+/// 一套配置的**视图**：与存储里那份的区别是它不含密钥，只说密钥在哪。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelProfileView {
+    pub id: String,
+    /// `joyczl-provider` 的 provider id。
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub small_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// 凭据的位置：`keychain` / `file` / `env:VAR` / `memory` / 无（本地模型）。
+    /// **只是指针，不是密钥本身** —— 界面拿它如实显示「你的 key 存在哪」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_source: Option<String>,
+    /// 这套现在是当前生效的吗。
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelProfilesResponse {
+    /// 当前生效的 id（没配就是 null）。
+    pub active_id: Option<String>,
+    pub profiles: Vec<ModelProfileView>,
+}
+
+/// `model/save` 的参数。`provider` 只在**新建**时必填 —— 只带 `id` +
+/// `make_active` 就是切换。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelSaveParams {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub small_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// 密钥本身。不给 = 保持原样（改模型、切换都不用重发）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// 用环境变量里的 key（写 `DEEPSEEK_API_KEY` 这样的变量名）：Joy 只读它，
+    /// 不复制进任何文件。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_env: Option<String>,
+    /// 存完就设为当前（默认 true —— 第一次配置时这是最顺手的）。
+    #[serde(default)]
+    pub make_active: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelSaveResponse {
+    pub id: String,
+    /// 这套现在是当前生效的吗。
+    pub active: bool,
+    pub active_id: Option<String>,
+    /// 凭据**实际**落在哪：`keychain` / `file` / `env:VAR` / `memory` / `none`。
+    /// 兜底成明文文件时也要如实说 —— 不能让用户以为进了钥匙串。
+    pub key_stored_in: String,
+    /// 切换后的当前模型（`provider / model`），没配好就是 null。
+    pub current: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelRemoveParams {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelRemoveResponse {
+    pub removed: bool,
+    /// 删的是当前那套时，active 会跟着清空。
+    pub active_id: Option<String>,
 }
 
 // ===========================================================================

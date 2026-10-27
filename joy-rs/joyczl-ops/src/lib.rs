@@ -85,6 +85,10 @@ pub fn router(app: Arc<AppServer>, assets: PathBuf) -> Router {
         .route("/api/turn", post(api::turn))
         .route("/api/approval", post(api::approval))
         .route("/api/goal", post(api::goal))
+        // 多模型：列出 / 存并切换 / 删除。与终端的 /model 是同一处实现。
+        .route("/api/model/profiles", get(api::model_profiles))
+        .route("/api/model/save", post(api::model_save))
+        .route("/api/model/remove", post(api::model_remove))
         // 静态文件兜底。`ServeDir` 而不是自己读文件：路径穿越（`/../../.env`）
         // 是那种已经被写对过无数次的东西，没有理由再写一次。
         // `append_index_html_on_directories` 让 `/` 落到 index.html。

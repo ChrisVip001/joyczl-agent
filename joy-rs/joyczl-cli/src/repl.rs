@@ -19,7 +19,7 @@ const HELP: &str = "\
   /sessions      列出历史会话
   /new           开一个新会话
   /quit          退出（/exit 也行）
-其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉";
+其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] 加一套";
 
 /// 进入终端对话。拿到的是已装配好的 Server。
 pub async fn run(server: Server) -> Result<()> {
@@ -52,6 +52,7 @@ pub async fn run(server: Server) -> Result<()> {
             "/sessions" => list_sessions(&server).await,
             s if s.starts_with("/memory") => show_memory(&server, s).await,
             s if s.starts_with("/goal") => set_goal(&server, &session_id, s),
+            s if s.starts_with("/model") => models(&server, s),
             s if s.starts_with('/') => {
                 println!("不认识的命令 {s}。/help 看有哪些。");
             }
@@ -60,6 +61,148 @@ pub async fn run(server: Server) -> Result<()> {
     }
     println!("再见。");
     Ok(())
+}
+
+/// `/model` —— 多套模型配置：列、切、加、删。
+///
+/// 与 `/goal` 同一条纪律：**只有人能到这里**。模型没有 `model/*` 工具，也拿不到
+/// 密钥 —— 它若能让 Joy 自己换 provider，就等于能把自己接到别的服务器上。
+fn models(server: &Server, input: &str) {
+    let rest: Vec<&str> = input.split_whitespace().collect();
+    let sub = rest.get(1).copied().unwrap_or("list");
+
+    match sub {
+        // ---- 列出 -------------------------------------------------------
+        "list" | "ls" => {
+            let response = server.model_profiles();
+            if response.profiles.is_empty() {
+                println!(
+                    "还没配任何模型。用 /model add <名字> <厂商> [模型] [--env 变量名] 加一套；\
+                     /model ls 之后再 /model use <名字> 切换。model/list 能看到 12 家厂商的 id。"
+                );
+                return;
+            }
+            for profile in &response.profiles {
+                let mark = if profile.active { "*" } else { " " };
+                let model = profile.model.as_deref().unwrap_or("（厂商默认）");
+                let key = profile.key_source.as_deref().unwrap_or("无需 key");
+                println!(
+                    " {mark} {:<12} {:<12} {:<24} key: {key}",
+                    profile.id, profile.provider, model
+                );
+            }
+            println!("（* = 当前生效）");
+        }
+
+        // ---- 切换（只带名字，不重发密钥） ---------------------------------
+        "use" => {
+            let Some(id) = rest.get(2) else {
+                println!("用法：/model use <名字>");
+                return;
+            };
+            match server.model_save(joyczl_protocol::ModelSaveParams {
+                id: id.to_string(),
+                provider: None,
+                model: None,
+                small_model: None,
+                base_url: None,
+                api_key: None,
+                key_env: None,
+                make_active: Some(true),
+            }) {
+                Ok(response) => println!(
+                    "已切到 {}（{}）。",
+                    response.id,
+                    response.current.unwrap_or_else(|| "还没配好".to_string())
+                ),
+                Err(why) => println!("切不过去：{why}"),
+            }
+        }
+
+        // ---- 新增/改 ------------------------------------------------------
+        // /model add <名字> <厂商> [模型] [--env 变量名] [--key 密钥] [--url 端点]
+        "add" => {
+            let id = rest.get(2).copied().unwrap_or("").to_string();
+            let provider = rest.get(3).map(|s| s.to_string());
+            if id.is_empty() || provider.is_none() {
+                println!(
+                    "用法：/model add <名字> <厂商> [模型] [--env 变量名] [--key 密钥] [--url 端点]\n\
+                     例：/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY"
+                );
+                return;
+            }
+            let mut model = None;
+            let mut key_env = None;
+            let mut api_key = None;
+            let mut base_url = None;
+            let mut positionals = 0;
+            let mut i = 4;
+            while i < rest.len() {
+                match rest[i] {
+                    "--env" => {
+                        key_env = rest.get(i + 1).map(|s| s.to_string());
+                        i += 2;
+                    }
+                    "--key" => {
+                        api_key = rest.get(i + 1).map(|s| s.to_string());
+                        i += 2;
+                    }
+                    "--url" => {
+                        base_url = rest.get(i + 1).map(|s| s.to_string());
+                        i += 2;
+                    }
+                    other => {
+                        // 第一个裸参数是模型名，多余的报出来而不是静默忽略。
+                        positionals += 1;
+                        if positionals == 1 {
+                            model = Some(other.to_string());
+                        } else {
+                            println!("多余的参数 '{other}' —— 记不住的就用 --key / --env。");
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            match server.model_save(joyczl_protocol::ModelSaveParams {
+                id,
+                provider,
+                model,
+                small_model: None,
+                base_url,
+                api_key,
+                key_env,
+                make_active: Some(true),
+            }) {
+                Ok(response) => println!(
+                    "已存下 {}（{}），现在是当前的。密钥存在：{}\n\
+                     （keychain = 系统钥匙串；file = 明文兜底文件，见 limitations）",
+                    response.id,
+                    response.current.unwrap_or_else(|| "还没配好".to_string()),
+                    response.key_stored_in,
+                ),
+                Err(why) => println!("存不进去：{why}"),
+            }
+        }
+
+        // ---- 删除 ---------------------------------------------------------
+        "rm" | "remove" => {
+            let Some(id) = rest.get(2) else {
+                println!("用法：/model rm <名字>");
+                return;
+            };
+            let response =
+                server.model_remove(joyczl_protocol::ModelRemoveParams { id: id.to_string() });
+            if response.removed {
+                println!("已删掉 {id}（连它的凭据一起）。");
+            } else {
+                println!("没有叫 {id} 的配置。");
+            }
+        }
+
+        other => println!(
+            "不认识 /model {other}。可用：ls / use <名字> / add <名字> <厂商> [模型] / rm <名字>"
+        ),
+    }
 }
 
 /// `/goal <条件>` 设一个目标，`/goal clear`（或 `/goal` 后面什么都不写）清掉。

@@ -17,4 +17,7 @@ export const METHODS = {
   CONFIG_READ: "config/read",
   CONFIG_WRITE: "config/write",
   MODEL_LIST: "model/list",
+  MODEL_PROFILES: "model/profiles",
+  MODEL_SAVE: "model/save",
+  MODEL_REMOVE: "model/remove",
 } as const;

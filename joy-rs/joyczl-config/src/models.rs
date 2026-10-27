@@ -174,6 +174,12 @@ impl SecretStore {
         self.backend
     }
 
+    /// 换后端。**只给测试与「就是不落钥匙串」的场景**：默认 `Auto`，单测要
+    /// 钉成 `File`（临时目录）或 `Memory`，绝不能在 CI 里弹系统授权框。
+    pub fn set_backend(&mut self, backend: SecretBackend) {
+        self.backend = backend;
+    }
+
     /// 存一个 key，返回**实际落在哪**（`keychain` / `file` / `memory`）——
     /// 界面与日志要如实告诉用户，不能让用户以为进了钥匙串其实是明文文件。
     pub fn put(
@@ -266,12 +272,65 @@ fn remove_file_secret(home: &Path, account: &str) -> Result<(), String> {
 
 // ---- 系统钥匙串：macOS `security` / Linux `secret-tool` ----------------------
 
+/// 跑一个钥匙串命令，**带超时**。
+///
+/// `security` / `secret-tool` 在无人值守的环境里可能弹框或干等（CI、远程
+/// 会话、没有 GUI 的 ssh）。一次凭据操作把整个 app-server 冻住是不能接受的 ——
+/// 超时就当失败，走文件兜底。stdout 非空才算真拿到东西。
+fn run_limited(command: &mut std::process::Command, stdin_secret: Option<&str>) -> Option<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let mut child = command
+        .stdin(if stdin_secret.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    if let Some(secret) = stdin_secret {
+        if let Some(mut pipe) = child.stdin.take() {
+            let _ = pipe.write_all(secret.as_bytes());
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(KEYCHAIN_TIMEOUT_SECS);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                let mut out = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    use std::io::Read;
+                    let _ = pipe.read_to_string(&mut out);
+                }
+                return Some(out);
+            }
+            Ok(Some(_)) => return None,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// 钥匙串命令的等待上限。
+const KEYCHAIN_TIMEOUT_SECS: u64 = 5;
+
 /// macOS：`security add-generic-password -U -s joyczl -a <account> -w <key>`。
 /// Linux：`secret-tool store` 从 stdin 读（**不进 argv** —— argv 对所有进程可见）。
 fn keychain_put(account: &str, secret: &str) -> bool {
     if cfg!(target_os = "macos") {
-        return std::process::Command::new("security")
-            .args([
+        return run_limited(
+            std::process::Command::new("security").args([
                 "add-generic-password",
                 "-U",
                 "-s",
@@ -280,16 +339,15 @@ fn keychain_put(account: &str, secret: &str) -> bool {
                 account,
                 "-w",
                 secret,
-            ])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+            ]),
+            None,
+        )
+        .is_some();
     }
     if cfg!(target_os = "linux") {
-        use std::io::Write;
-        use std::process::Stdio;
-        let Ok(mut child) = std::process::Command::new("secret-tool")
-            .args([
+        // stdin 传值：**不进 argv** —— argv 对同机所有进程可见。
+        return run_limited(
+            std::process::Command::new("secret-tool").args([
                 "store",
                 "--label",
                 &format!("{SERVICE} {account}"),
@@ -297,19 +355,10 @@ fn keychain_put(account: &str, secret: &str) -> bool {
                 SERVICE,
                 "account",
                 account,
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .spawn()
-        else {
-            return false;
-        };
-        let written = child
-            .stdin
-            .as_mut()
-            .map(|s| s.write_all(secret.as_bytes()).is_ok())
-            .unwrap_or(false);
-        return written && child.wait().map(|s| s.success()).unwrap_or(false);
+            ]),
+            Some(secret),
+        )
+        .is_some();
     }
     // Windows 的凭据管理器存得进、读不回明文 —— 直接走文件兜底。
     false
@@ -317,36 +366,51 @@ fn keychain_put(account: &str, secret: &str) -> bool {
 
 fn keychain_get(account: &str) -> Option<String> {
     if cfg!(target_os = "macos") {
-        return std::process::Command::new("security")
-            .args(["find-generic-password", "-s", SERVICE, "-a", account, "-w"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty());
+        return run_limited(
+            std::process::Command::new("security").args([
+                "find-generic-password",
+                "-s",
+                SERVICE,
+                "-a",
+                account,
+                "-w",
+            ]),
+            None,
+        )
+        .map(|out| out.trim().to_string())
+        .filter(|s| !s.is_empty());
     }
     if cfg!(target_os = "linux") {
-        return std::process::Command::new("secret-tool")
-            .args(["lookup", "service", SERVICE, "account", account])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty());
+        return run_limited(
+            std::process::Command::new("secret-tool")
+                .args(["lookup", "service", SERVICE, "account", account]),
+            None,
+        )
+        .map(|out| out.trim().to_string())
+        .filter(|s| !s.is_empty());
     }
     None
 }
 
 fn keychain_remove(account: &str) {
     if cfg!(target_os = "macos") {
-        let _ = std::process::Command::new("security")
-            .args(["delete-generic-password", "-s", SERVICE, "-a", account])
-            .output();
+        let _ = run_limited(
+            std::process::Command::new("security").args([
+                "delete-generic-password",
+                "-s",
+                SERVICE,
+                "-a",
+                account,
+            ]),
+            None,
+        );
     }
     if cfg!(target_os = "linux") {
-        let _ = std::process::Command::new("secret-tool")
-            .args(["clear", "service", SERVICE, "account", account])
-            .output();
+        let _ = run_limited(
+            std::process::Command::new("secret-tool")
+                .args(["clear", "service", SERVICE, "account", account]),
+            None,
+        );
     }
 }
 

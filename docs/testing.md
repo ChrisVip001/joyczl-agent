@@ -9,7 +9,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Layer | Location | Shape | Latest full run |
 |---|---|---|---|
-| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 255 passed / 15 suites / 0 failed |
+| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 363 passed / 0 failed |
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
 | Frontend | joy-ts (node --test + tsc) | 99 passed / 0 failed | |
@@ -29,8 +29,8 @@ passing 100% is the release gate** — one failure blocks the release.
 | joyczl-graph | 24 | wave execution, routing, collision detection, on_error draining, full triage/gather paths |
 | joyczl-mcp | 33 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
 | joyczl-memory | 41 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
-| joyczl-app-server | 39 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; plus this round: the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths |
-| joyczl-config | 18 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear |
+| joyczl-app-server | 46 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; plus this round: the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths |
+| joyczl-config | 27 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear (**no model or key fields left**); multi-profile storage, secret backends (memory/file — never the real keychain), switching and removal |
 | joyczl-cli | 7 | cron semantics, once-per-minute firing, job loading from both sources, and one firing that lands in the outbox |
 | joyczl-protocol | 7 | RPC envelope serialization (the export test runs on demand) |
 | joyczl-ops | 8 | the HTTP translation layer |

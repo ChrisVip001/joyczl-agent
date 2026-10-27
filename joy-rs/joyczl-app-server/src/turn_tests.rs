@@ -471,20 +471,21 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
         request(
             1,
             "config/write",
-            json!({"patch": {"maxIterations": 20, "provider": "deepseek"}}),
+            // 运行参数走 config/write；provider 与模型不在这条路上（见下一条测试）。
+            json!({"patch": {"maxIterations": 20, "maxTokens": 4096}}),
         ),
     )
     .await;
     match response {
         JsonRpcMessage::Response(resp) => {
             assert_eq!(resp.result["config"]["maxIterations"], 20);
-            assert_eq!(resp.result["config"]["provider"], "deepseek");
+            assert_eq!(resp.result["config"]["maxTokens"], 4096);
         }
         other => panic!("config/write 不该报错：{other:?}"),
     }
     // 内存里的下一轮也用新值。
     assert_eq!(server.settings().max_iterations, 20);
-    assert_eq!(server.settings().provider, "deepseek");
+    assert_eq!(server.settings().max_tokens, 4096);
     // 磁盘上有档。
     assert!(home.join("settings.json").exists(), "补丁必须落盘");
 
@@ -495,7 +496,52 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
     };
     let server2 = crate::open(&settings2).await.expect("重开");
     assert_eq!(server2.settings().max_iterations, 20);
-    assert_eq!(server2.settings().provider, "deepseek");
+    assert_eq!(server2.settings().max_tokens, 4096);
+}
+
+/// 模型与密钥**不在** config/write 这条路上：补丁里没有 provider / model /
+/// 密钥字段，改它们只能走 `model/*`。这条断言钉住「旧那条路已经拆掉」。
+#[tokio::test]
+async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let home = dir.path().to_path_buf();
+    let pool = joyczl_state::open(&home.join("state.db"))
+        .await
+        .expect("打开库");
+    let _ = dir.keep();
+    let server = Server::boot(
+        pool,
+        Settings {
+            home: home.clone(),
+            ..Settings::default()
+        },
+    )
+    .await;
+
+    let response = call(
+        &server,
+        request(
+            1,
+            "config/write",
+            json!({"patch": {"provider": "deepseek", "model": "deepseek-chat", "apiKey": "sk-漏进来的"}}),
+        ),
+    )
+    .await;
+    match response {
+        JsonRpcMessage::Response(resp) => {
+            // 未知字段被忽略（不是报错）—— 关键是它们**不生效**。
+            assert_eq!(resp.result["config"]["provider"], "anthropic");
+        }
+        other => panic!("不该报错：{other:?}"),
+    }
+    assert_eq!(server.settings().provider, "anthropic");
+    assert_eq!(server.settings().model, None);
+    assert_eq!(server.settings().api_key, None);
+    let saved = std::fs::read_to_string(home.join("settings.json")).unwrap_or_default();
+    assert!(
+        !saved.contains("sk-"),
+        "密钥绝不能落到 settings.json：{saved}"
+    );
 }
 
 /// config/write 的校验：写坏了就整个拒绝，半个补丁比没有更糟。

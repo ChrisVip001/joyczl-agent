@@ -259,6 +259,87 @@ class ModelListResponse(BaseModel):
     nextCursor: str | None = None
 
 
+class ModelProfileView(BaseModel):
+    active: Annotated[bool, Field(description='这套现在是当前生效的吗。')]
+    baseUrl: str | None = None
+    id: str
+    keySource: Annotated[
+        str | None,
+        Field(
+            description='凭据的位置：`keychain` / `file` / `env:VAR` / `memory` / 无（本地模型）。 **只是指针，不是密钥本身** —— 界面拿它如实显示「你的 key 存在哪」。'
+        ),
+    ] = None
+    model: str | None = None
+    provider: Annotated[str, Field(description='`joyczl-provider` 的 provider id。')]
+    smallModel: str | None = None
+
+
+class ModelProfilesParams(RootModel[None]):
+    root: Annotated[
+        None,
+        Field(
+            description='`model/profiles` 的应答：已配置的多套模型 + 当前那套。',
+            title='ModelProfilesParams',
+        ),
+    ]
+
+
+class ModelProfilesResponse(BaseModel):
+    activeId: Annotated[
+        str | None, Field(description='当前生效的 id（没配就是 null）。')
+    ] = None
+    profiles: list[ModelProfileView]
+
+
+class ModelRemoveParams(BaseModel):
+    id: str
+
+
+class ModelRemoveResponse(BaseModel):
+    activeId: Annotated[
+        str | None, Field(description='删的是当前那套时，active 会跟着清空。')
+    ] = None
+    removed: bool
+
+
+class ModelSaveParams(BaseModel):
+    apiKey: Annotated[
+        str | None,
+        Field(description='密钥本身。不给 = 保持原样（改模型、切换都不用重发）。'),
+    ] = None
+    baseUrl: str | None = None
+    id: str
+    keyEnv: Annotated[
+        str | None,
+        Field(
+            description='用环境变量里的 key（写 `DEEPSEEK_API_KEY` 这样的变量名）：Joy 只读它， 不复制进任何文件。'
+        ),
+    ] = None
+    makeActive: Annotated[
+        bool | None,
+        Field(description='存完就设为当前（默认 true —— 第一次配置时这是最顺手的）。'),
+    ] = None
+    model: str | None = None
+    provider: str | None = None
+    smallModel: str | None = None
+
+
+class ModelSaveResponse(BaseModel):
+    active: Annotated[bool, Field(description='这套现在是当前生效的吗。')]
+    activeId: str | None = None
+    current: Annotated[
+        str | None,
+        Field(description='切换后的当前模型（`provider / model`），没配好就是 null。'),
+    ] = None
+    id: str
+    keyStoredIn: Annotated[
+        str,
+        Field(
+            description='凭据**实际**落在哪：`keychain` / `file` / `env:VAR` / `memory` / `none`。 兜底成明文文件时也要如实说 —— 不能让用户以为进了钥匙串。'
+        ),
+    ]
+
+
 class RequestId(RootModel[int | str]):
     root: Annotated[
         int | str,
@@ -444,10 +525,7 @@ class SettingsPatch(BaseModel):
     historyTurns: int | None = None
     maxIterations: int | None = None
     maxTokens: int | None = None
-    model: str | None = None
-    provider: str | None = None
     retrievalTopK: int | None = None
-    smallModel: str | None = None
 
 
 class SettingsView(BaseModel):

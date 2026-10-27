@@ -63,8 +63,13 @@ just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # end-to-end smokes
   settings.json.
 - **No heavy new dependencies**: check the workspace for an equivalent first
   (URL codecs and hashing already exist here).
-- **Credentials live in environment variables only**: never in files,
-  protocol payloads, or logs; OAuth tokens go to `mcp-auth/` (0600).
+- **Credentials have three sources, in fixed priority**: environment variable
+  (highest — Joy reads it, never copies it) → the OS keychain (macOS Keychain /
+  Linux secret-service) → `<home>/secrets.json` (0600, **plaintext fallback**,
+  only when no keychain is usable; Windows has no credential API that reads
+  secrets back, so it lands there directly). **Responses and logs only ever carry
+  a pointer to where the key lives, never the key itself**; OAuth tokens go to
+  `mcp-auth/` (0600).
 - **Propose, never act**: the gather graph stays tool-free; `send_message`
   never actually sends.
 - **Extensions are injected**: the tool layer knows only traits (`SubagentRunner`,

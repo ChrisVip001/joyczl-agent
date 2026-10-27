@@ -10,10 +10,11 @@ use joyczl_protocol::{
     JsonRpcError, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, MemoryForgetParams,
     MemoryForgetResponse, MemoryListEpisodesParams, MemoryListEpisodesResponse, MemoryListParams,
     MemoryListResponse, MemoryRememberParams, MemoryRememberResponse, MemorySearchParams,
-    MemorySearchResponse, MessageRole, ModelInfo, ModelListParams, ModelListResponse, RequestId,
-    SessionListParams, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
-    SessionNewParams, SessionNewResponse, TurnInterruptParams, TurnInterruptResponse,
-    TurnStartParams, JSONRPC_VERSION,
+    MemorySearchResponse, MessageRole, ModelInfo, ModelListParams, ModelListResponse,
+    ModelProfilesParams, ModelRemoveParams, ModelSaveParams, RequestId, SessionListParams,
+    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
+    SessionNewResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -208,6 +209,40 @@ async fn dispatch(
         }
 
         // ---- 模型 ----------------------------------------------------------
+        // ---- 模型配置（只有人能改：模型没有这些能力） -----------------------
+        methods::MODEL_PROFILES => {
+            // 无参方法：客户端常顺手传个 {}，而单元结构体收不了 map ——
+            // 这里自己判一下，非空就明确拒绝（而不是报一句看不懂的 serde 错）。
+            if let Some(value) = params {
+                if value.as_object().is_some_and(|o| !o.is_empty()) {
+                    return Err(ErrorObject {
+                        code: codes::INVALID_PARAMS,
+                        message: format!("{method} 不接受参数"),
+                        data: None,
+                    });
+                }
+            }
+            let _: ModelProfilesParams = ModelProfilesParams;
+            respond(server.model_profiles())
+        }
+
+        methods::MODEL_SAVE => {
+            let p: ModelSaveParams = parse(params, method)?;
+            match server.model_save(p) {
+                Ok(response) => respond(response),
+                Err(message) => Err(ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message,
+                    data: None,
+                }),
+            }
+        }
+
+        methods::MODEL_REMOVE => {
+            let p: ModelRemoveParams = parse(params, method)?;
+            respond(server.model_remove(p))
+        }
+
         methods::MODEL_LIST => {
             let p: ModelListParams = parse(params, method)?;
             // 目录就是 PROVIDERS 这张表：主模型是 id，flagship / fast 是

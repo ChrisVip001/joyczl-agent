@@ -304,15 +304,22 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// 从环境变量读。这是唯一的读取路径 —— 不另有配置文件、不另有优先级规则。
+    /// 从环境变量读。运行参数的唯一读取路径 —— 不另有配置文件、不另有优先级规则。
+    ///
+    /// **例外是模型与密钥**：它们不在环境变量里配，而在
+    /// `<home>/models.json` + 系统钥匙串（见 models.rs）。这里只留
+    /// `provider` 当「一套都没配时的兜底厂商」，让 ollama 这类本地模型能
+    /// 零配置起步；`model` / `base_url` / `api_key` 一律留空，等
+    /// `models::apply_active` 来填。
     pub fn from_env() -> Self {
         let d = Settings::default();
         Self {
             provider: env("JOY_PROVIDER").unwrap_or(d.provider),
-            api_key: env("JOY_API_KEY"),
-            base_url: env("JOY_BASE_URL"),
-            model: env("JOY_MODEL"),
-            small_model: env("JOY_SMALL_MODEL"),
+            // 由 <home>/models.json 的当前那套填入，不从环境变量读。
+            api_key: None,
+            base_url: None,
+            model: None,
+            small_model: None,
             home: env("JOY_HOME").map(PathBuf::from).unwrap_or(d.home),
             goal_max_rounds: env_int("JOY_GOAL_MAX_ROUNDS", d.goal_max_rounds),
             llm_retries: env_int("JOY_LLM_RETRIES", d.llm_retries),
@@ -558,19 +565,13 @@ pub fn save_patch(
     std::fs::write(&path, raw)
 }
 
-/// 把补丁叠到设置上。补丁里 `Some` 的字段才有发言权；
-/// model / small_model 传空串视为「清掉显式覆盖，回到 provider 默认」。
+/// 把补丁叠到设置上。补丁里 `Some` 的字段才有发言权。
+///
+/// **模型与密钥不在这张补丁里**：那两套东西归 `<home>/models.json`
+/// （见 models.rs），改它们走 `model/*` —— 一条路比两条路好懂，也不给
+/// 「密钥被顺手写进 settings.json」留缝。
 pub fn apply_patch(patch: &joyczl_protocol::SettingsPatch, settings: &mut Settings) {
     let p = patch;
-    if let Some(v) = &p.provider {
-        settings.provider = v.trim().to_string();
-    }
-    if let Some(v) = &p.model {
-        settings.model = non_empty(v);
-    }
-    if let Some(v) = &p.small_model {
-        settings.small_model = non_empty(v);
-    }
     if let Some(v) = p.max_iterations {
         settings.max_iterations = v;
     }
@@ -601,11 +602,6 @@ pub fn apply_patch(patch: &joyczl_protocol::SettingsPatch, settings: &mut Settin
     if let Some(v) = &p.exec_allow {
         settings.exec_allow = v.clone();
     }
-}
-
-fn non_empty(v: &str) -> Option<String> {
-    let v = v.trim();
-    (!v.is_empty()).then(|| v.to_string())
 }
 
 #[cfg(test)]
@@ -667,28 +663,39 @@ mod config_tests {
     }
 
     #[test]
-    fn apply_patch_overlays_and_clears_empty_overrides() {
+    fn apply_patch_overlays_only_the_fields_it_carries() {
         let mut s = Settings::default();
         let patch = joyczl_protocol::SettingsPatch {
-            provider: Some("deepseek".to_string()),
-            // 空串 = 清掉显式覆盖，回到 provider 默认。
-            model: Some("   ".to_string()),
             max_tokens: Some(4096),
             graph_workflows: Some(true),
             ..Default::default()
         };
         apply_patch(&patch, &mut s);
-        assert_eq!(s.provider, "deepseek");
-        assert_eq!(s.model, None);
         assert_eq!(s.max_tokens, 4096);
         assert!(s.graph_workflows);
+        // 没带的字段不动。
+        assert_eq!(s.max_iterations, Settings::default().max_iterations);
+    }
+
+    /// 模型与密钥**不在**这张补丁里 —— 改它们走 `model/*`，密钥只进
+    /// models.json / 钥匙串。这条断言钉住「补丁上没有这些缝」。
+    #[test]
+    fn the_patch_has_no_model_or_key_fields_to_leak() {
+        let patch = joyczl_protocol::SettingsPatch::default();
+        let serialized = serde_json::to_string(&patch).expect("序列化");
+        for leaked in ["provider", "model", "smallModel", "apiKey", "baseUrl"] {
+            assert!(
+                !serialized.contains(leaked),
+                "补丁不该有模型/密钥字段：{serialized}"
+            );
+        }
     }
 
     #[test]
     fn merge_newer_keeps_newer_values_and_keeps_older_ones_otherwise() {
         let mut base = joyczl_protocol::SettingsPatch {
             max_iterations: Some(5),
-            provider: Some("anthropic".to_string()),
+            max_tokens: Some(1024),
             ..Default::default()
         };
         let newer = joyczl_protocol::SettingsPatch {
@@ -698,7 +705,7 @@ mod config_tests {
         };
         base.merge_newer(&newer);
         assert_eq!(base.max_iterations, Some(9));
-        assert_eq!(base.provider.as_deref(), Some("anthropic"));
+        assert_eq!(base.max_tokens, Some(1024), "新补丁没带的字段要留着");
         assert_eq!(base.graph_workflows, Some(true));
     }
 

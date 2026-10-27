@@ -9,7 +9,7 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 
 | 层 | 位置 | 形态 | 数量（最近一次全量） |
 |---|---|---|---|
-| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 345 通过 / 0 失败 |
+| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 363 通过 / 0 失败 |
 | 覆盖率 | `cargo llvm-cov` / `coverage` | **趋势门**，不是目标 | Rust 行 65.9%（门 60）/ Python 63%（门 60） |
 | 协议生成 | scripts/write_schema.py --check | 生成物漂移检查 | 0 漂移 |
 | 前端 | joy-ts（node --test + tsc） | 99 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |
@@ -29,8 +29,8 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 | joyczl-graph | 24 | 波次执行、路由、碰撞检测、on_error 排空、triage/gather 全路径 |
 | joyczl-mcp | 33 | 传输帧、握手、工具注册、OAuth 全流程（本地假授权服务器）、token 存储 0600，以及它对外暴露的记忆服务器（`joy mcp serve`） |
 | joyczl-memory | 41 | 检索门失败开放、consolidation（临时陈述过滤、类别、失败退避）、Skills 触发/重扫、显式 `$技能` 与依赖缺失、MEMORY.md 镜像、压缩水位线与兜底、RRF 融合、技能安装/更新 |
-| joyczl-app-server | 39 | 协议派发、打断、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「先问再跑」的因果）、子代理；本轮新增：工具结果预算与实测 prefill 校准、子代理报告扫描与 `result_schema` 两阶段接受、生命周期钩子、待办注入、后台作业真进程（无沙箱则跳过）、目标循环的续轮/上限/判断器失败三态 | 协议分发、interrupt、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「问了才跑」这条因果）与子代理 |
-| joyczl-config | 18 | 环境变量语义、启动期校验（越界即退出）、补丁合并/落盘/清空 |
+| joyczl-app-server | 46 | 协议派发、打断、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「先问再跑」的因果）、子代理；本轮新增：工具结果预算与实测 prefill 校准、子代理报告扫描与 `result_schema` 两阶段接受、生命周期钩子、待办注入、后台作业真进程（无沙箱则跳过）、目标循环的续轮/上限/判断器失败三态 | 协议分发、interrupt、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「问了才跑」这条因果）与子代理 |
+| joyczl-config | 27 | 环境变量语义、启动期校验（越界即退出）、补丁合并/落盘/清空（**不再有模型/密钥字段**）；多套模型配置的读写、凭据后端（内存/文件，不碰真钥匙串）、切换与删除 |
 | joyczl-cli | 7 | cron 语义、同一分钟只触发一次、两种来源装载任务、一次真触发落进 outbox |
 | joyczl-protocol | 7 | RPC 信封序列化（导出测试按需运行） |
 | joyczl-ops | 8 | HTTP 翻译层 |

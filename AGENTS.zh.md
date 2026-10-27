@@ -57,7 +57,11 @@ just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # 端到端冒烟
   整体拒绝。
 - **不新增重型依赖**：先确认工作区里没有等价物（URL 编解码、哈希等
   已有实现）。
-- **凭证只走环境变量**：不进任何文件、协议载荷或日志；OAuth token 落
+- **凭证的三种来源，优先级固定**：环境变量（最优先，Joy 只读不复制）→
+  系统钥匙串（macOS Keychain / Linux secret-service）→ `<home>/secrets.json`
+  （0600，**明文兜底**，只在钥匙串不可用时；Windows 没有能读回明文的凭据
+  API，直接走这一步）。**协议应答与日志里永远只有「key 存在哪」的指针，
+  没有密钥本身**；OAuth token 落
   `mcp-auth/`（0600）。
 - **只提议，绝不行动**：gather 图保持无工具；`send_message` 永不真发。
 - **扩展一律注入**：工具层只认 trait（`SubagentRunner` / `ApprovalBroker` /

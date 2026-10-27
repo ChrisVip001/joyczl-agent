@@ -23,7 +23,7 @@ env_bool(name)-> matches!(env(name).as_deref(), Some("1")|Some("true")|Some("yes
 env_int(name, default) -> env(name).and_then(|v| v.parse().ok()).unwrap_or(default)
 ```
 
-- **空串视为未设置**：`.env` 里写 `JOY_MODEL=` 这种留空行不会把模型名变成空字符串，
+- **空串视为未设置**：`.env` 里写 `JOY_HOME=` 这种留空行不会被当成真值，
   而是让默认值生效。
 - 布尔只认三种拼写（`1`/`true`/`yes`），`0`/空/其它一律 false；不猜 `on`/`enabled`。
 - 整数解析失败回默认，**不 panic** —— 一个手滑的数值不该让 Joy 起不来。
@@ -35,7 +35,7 @@ env_int(name, default) -> env(name).and_then(|v| v.parse().ok()).unwrap_or(defau
 | 字段 | 环境变量 | 默认 |
 |---|---|---|
 | `provider` | `JOY_PROVIDER` | `anthropic` |
-| `api_key` / `base_url` / `model` / `small_model` | `JOY_API_KEY` / `JOY_BASE_URL` / `JOY_MODEL` / `JOY_SMALL_MODEL` | 无（用 provider 默认） |
+| `api_key` / `base_url` / `model` / `small_model` | 无（**只**由 `<home>/models.json` 里当前那套填入，见 `models.rs`） | 无（用 provider 默认） |
 | `home` | `JOY_HOME` | `./.joy` |
 | `llm_timeout_secs` | `JOY_LLM_TIMEOUT` | `120` |
 | `max_iterations` | `JOY_MAX_ITERATIONS` | `10` |

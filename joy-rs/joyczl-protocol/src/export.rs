@@ -71,6 +71,13 @@ macro_rules! protocol_types {
             ApprovalRespondResponse,
             GoalSetParams,
             GoalSetResponse,
+            ModelProfilesParams,
+            ModelProfilesResponse,
+            ModelProfileView,
+            ModelSaveParams,
+            ModelSaveResponse,
+            ModelRemoveParams,
+            ModelRemoveResponse,
             SessionListParams,
             SessionListResponse,
             SessionNewParams,
@@ -211,6 +218,9 @@ fn method_entries() -> Vec<(&'static str, &'static str)> {
         ("CONFIG_READ", m::CONFIG_READ),
         ("CONFIG_WRITE", m::CONFIG_WRITE),
         ("MODEL_LIST", m::MODEL_LIST),
+        ("MODEL_PROFILES", m::MODEL_PROFILES),
+        ("MODEL_SAVE", m::MODEL_SAVE),
+        ("MODEL_REMOVE", m::MODEL_REMOVE),
     ]
 }
 

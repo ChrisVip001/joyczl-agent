@@ -429,19 +429,20 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
         )
     })?;
 
-    // .strip()：复制粘贴带进来的换行/空格会污染请求头。
+    // 密钥**只有一个来源**：`<home>/models.json` 里当前那套的凭据指针
+    // （环境变量 / 钥匙串 / 兜底文件），由 `joyczl-config::models` 解析后填进
+    // `settings.api_key`。
     //
-    // 本地 provider（`key_env` 为空）不需要 key：没有就空着，客户端的
-    // `authed` 会因此不发 Authorization 头。显式配了 `JOY_API_KEY` 的
-    // 情况仍然照用 —— 有些本地网关（带鉴权的 vLLM 部署）自己要 key。
+    // 这里**不**再偷偷读 `info.key_env` 兜底：那条隐式路径会让「我明明从没
+    // 配过模型，它却因为我 shell 里有个变量就跑起来了」，出问题时最难查。
+    // 想用环境变量就明说：`/model add <名字> <厂商> --env 变量名`。
+    //
+    // 本地 provider（`needs_key()` 为 false）不需要 key：空着，客户端的
+    // `authed` 会因此不发 Authorization 头。
     let api_key = settings
         .api_key
         .clone()
-        .or_else(|| {
-            std::env::var(info.key_env)
-                .ok()
-                .map(|v| v.trim().to_string())
-        })
+        .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .or_else(|| (!info.needs_key()).then(String::new))
         .ok_or_else(|| no_key_message(info))?;
@@ -496,11 +497,17 @@ fn no_key_message(info: &ProviderInfo) -> String {
         msg.push_str(&format!("  1. 去领一个 key：{url}\n"));
     }
     msg.push_str(&format!(
-        "  2. 把它设成环境变量（Joy 不读 .env；要用就先 source）：\n       \
-         export {}=你的-key\n",
-        info.key_env
+        "  2. 配进 Joy（`--env {var}` 只读环境变量、不落盘；key 优先交给系统钥匙串）：\
+         \n       /model add <名字> {id} --env {var}\n",
+        var = info.key_env,
+        id = info.id
+    ));
+    msg.push_str(&format!(
+        "  3. 或直接给 key（钥匙串不可用时会退回明文文件，界面会如实说是哪一种）：\
+         \n       /model add <名字> {id} --key 你的-key\n",
+        id = info.id
     ));
     msg.push_str(&format!("其他 provider：{}", ids()));
-    msg.push_str("\n用 JOY_PROVIDER=<name> 切换。");
+    msg.push_str("\n切到另一套：/model use <名字>（驾驶舱的「模型」面板是同一处实现）。");
     msg
 }

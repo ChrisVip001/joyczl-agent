@@ -973,6 +973,205 @@
       "title": "ModelListResponse",
       "type": "object"
     },
+    "ModelProfileView": {
+      "description": "一套配置的**视图**：与存储里那份的区别是它不含密钥，只说密钥在哪。",
+      "properties": {
+        "active": {
+          "description": "这套现在是当前生效的吗。",
+          "type": "boolean"
+        },
+        "baseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "keySource": {
+          "description": "凭据的位置：`keychain` / `file` / `env:VAR` / `memory` / 无（本地模型）。 **只是指针，不是密钥本身** —— 界面拿它如实显示「你的 key 存在哪」。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "description": "`joyczl-provider` 的 provider id。",
+          "type": "string"
+        },
+        "smallModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "active",
+        "id",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "ModelProfilesParams": {
+      "description": "`model/profiles` 的应答：已配置的多套模型 + 当前那套。",
+      "title": "ModelProfilesParams",
+      "type": "null"
+    },
+    "ModelProfilesResponse": {
+      "properties": {
+        "activeId": {
+          "description": "当前生效的 id（没配就是 null）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profiles": {
+          "items": {
+            "$ref": "#/definitions/ModelProfileView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "profiles"
+      ],
+      "title": "ModelProfilesResponse",
+      "type": "object"
+    },
+    "ModelRemoveParams": {
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ModelRemoveParams",
+      "type": "object"
+    },
+    "ModelRemoveResponse": {
+      "properties": {
+        "activeId": {
+          "description": "删的是当前那套时，active 会跟着清空。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "removed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "title": "ModelRemoveResponse",
+      "type": "object"
+    },
+    "ModelSaveParams": {
+      "description": "`model/save` 的参数。`provider` 只在**新建**时必填 —— 只带 `id` + `make_active` 就是切换。",
+      "properties": {
+        "apiKey": {
+          "description": "密钥本身。不给 = 保持原样（改模型、切换都不用重发）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "keyEnv": {
+          "description": "用环境变量里的 key（写 `DEEPSEEK_API_KEY` 这样的变量名）：Joy 只读它， 不复制进任何文件。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "makeActive": {
+          "default": null,
+          "description": "存完就设为当前（默认 true —— 第一次配置时这是最顺手的）。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "smallModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ModelSaveParams",
+      "type": "object"
+    },
+    "ModelSaveResponse": {
+      "properties": {
+        "active": {
+          "description": "这套现在是当前生效的吗。",
+          "type": "boolean"
+        },
+        "activeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current": {
+          "description": "切换后的当前模型（`provider / model`），没配好就是 null。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "keyStoredIn": {
+          "description": "凭据**实际**落在哪：`keychain` / `file` / `env:VAR` / `memory` / `none`。 兜底成明文文件时也要如实说 —— 不能让用户以为进了钥匙串。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "active",
+        "id",
+        "keyStoredIn"
+      ],
+      "title": "ModelSaveResponse",
+      "type": "object"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -1721,28 +1920,10 @@
             "null"
           ]
         },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "retrievalTopK": {
           "format": "int32",
           "type": [
             "integer",
-            "null"
-          ]
-        },
-        "smallModel": {
-          "type": [
-            "string",
             "null"
           ]
         }

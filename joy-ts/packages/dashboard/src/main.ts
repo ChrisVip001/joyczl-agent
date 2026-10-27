@@ -6,7 +6,16 @@
 // 这是这套分层最值钱的地方。
 
 import type { TurnCompletedNotification } from "./protocol";
-import { fetchDashboard, fetchMessages, respondApproval, setGoal, talk } from "./api";
+import {
+  fetchDashboard,
+  fetchMessages,
+  fetchModelProfiles,
+  removeModel,
+  respondApproval,
+  saveModel,
+  setGoal,
+  talk,
+} from "./api";
 import {
   chip,
   el,
@@ -44,6 +53,14 @@ const dom = {
   goalSet: must<HTMLButtonElement>("goal-set"),
   goalClear: must<HTMLButtonElement>("goal-clear"),
   goalState: must<HTMLElement>("goal-state"),
+  mpState: must<HTMLElement>("mp-state"),
+  mpPicker: must<HTMLSelectElement>("mp-picker"),
+  mpId: must<HTMLInputElement>("mp-id"),
+  mpProvider: must<HTMLInputElement>("mp-provider"),
+  mpModel: must<HTMLInputElement>("mp-model"),
+  mpKey: must<HTMLInputElement>("mp-key"),
+  mpSave: must<HTMLButtonElement>("mp-save"),
+  mpRemove: must<HTMLButtonElement>("mp-remove"),
   send: must<HTMLButtonElement>("send"),
   refresh: must<HTMLButtonElement>("refresh"),
   older: must<HTMLButtonElement>("older"),
@@ -56,6 +73,66 @@ const dom = {
 };
 
 let busy = false;
+
+/**
+ * 刷模型面板：**应答里没有密钥**，页面只显示「当前是哪套、key 存在哪」。
+ */
+async function refreshModels(): Promise<void> {
+  try {
+    const response = await fetchModelProfiles();
+    const active = response.profiles.find((profile) => profile.active);
+    dom.mpState.textContent = active
+      ? `当前：${active.id} · ${active.provider}${
+          active.model ? ` / ${active.model}` : ""
+        } · key 在 ${active.keySource ?? "—"}`
+      : "当前：还没配（环境变量里的那套在用）";
+
+    dom.mpPicker.replaceChildren();
+    for (const profile of response.profiles) {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = `${profile.active ? "★ " : ""}${profile.id} · ${profile.provider}`;
+      option.selected = profile.active;
+      dom.mpPicker.append(option);
+    }
+    dom.mpPicker.hidden = response.profiles.length === 0;
+  } catch (error: unknown) {
+    dom.mpState.textContent = `模型面板没刷出来：${String(error)}`;
+  }
+}
+
+/**
+ * 保存（并切换）。密钥那一栏填 `env:变量名` 就只读环境变量、不存下来；
+ * 填真正的 key 则优先交给系统钥匙串。
+ */
+async function applyModel(): Promise<void> {
+  const id = dom.mpId.value.trim();
+  if (id === "") {
+    dom.mpState.textContent = "先给这套起个名字。";
+    return;
+  }
+  const rawKey = dom.mpKey.value.trim();
+  const fromEnv = rawKey.startsWith("env:");
+  try {
+    const response = await saveModel({
+      id,
+      provider: dom.mpProvider.value.trim() || null,
+      model: dom.mpModel.value.trim() || null,
+      smallModel: null,
+      baseUrl: null,
+      apiKey: !fromEnv && rawKey !== "" ? rawKey : null,
+      keyEnv: fromEnv ? rawKey.slice(4) : null,
+      makeActive: true,
+    });
+    dom.mpState.textContent = `已切到 ${response.id}（${
+      response.current ?? "还没配好"
+    }）；密钥存在：${response.keyStoredIn}`;
+    dom.mpKey.value = "";
+    await refreshModels();
+  } catch (error: unknown) {
+    dom.mpState.textContent = `没存上：${String(error)}`;
+  }
+}
 
 async function boot(): Promise<void> {
   dom.refresh.addEventListener("click", () => void refresh());
@@ -106,6 +183,44 @@ async function boot(): Promise<void> {
       if (condition !== "") applyGoal(condition);
     }
   });
+
+  // 模型面板：切换、保存、删除都走 `model/*` —— 与终端里的 /model 是同一处实现。
+  dom.mpSave.addEventListener("click", () => void applyModel());
+  dom.mpPicker.addEventListener("change", () => {
+    const id = dom.mpPicker.value;
+    if (id === "") return;
+    void saveModel({
+      id,
+      // 切换：只带 id，其余留空 = 保留原样（不该为了切换重发一次密钥）。
+      provider: null,
+      model: null,
+      smallModel: null,
+      baseUrl: null,
+      apiKey: null,
+      keyEnv: null,
+      makeActive: true,
+    })
+      .then(async (response) => {
+        dom.mpState.textContent = `已切到 ${response.id}（${response.current ?? "还没配好"}）`;
+        await refreshModels();
+      })
+      .catch((error: unknown) => {
+        dom.mpState.textContent = `切不过去：${String(error)}`;
+      });
+  });
+  dom.mpRemove.addEventListener("click", () => {
+    const id = dom.mpPicker.value || dom.mpId.value.trim();
+    if (id === "") return;
+    void removeModel({ id })
+      .then(async (response) => {
+        dom.mpState.textContent = response.removed ? `已删掉 ${id}` : `没有叫 ${id} 的配置`;
+        await refreshModels();
+      })
+      .catch((error: unknown) => {
+        dom.mpState.textContent = `删不掉：${String(error)}`;
+      });
+  });
+  void refreshModels();
 
   dom.input.focus();
 }

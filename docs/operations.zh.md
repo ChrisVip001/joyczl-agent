@@ -131,7 +131,7 @@ sha256 自己填）。
 | 症状 | 处置 |
 |---|---|
 | `PROVIDER_ERROR (-32000)` 缺 key | 按 .env→环境变量链路补 key 后重启进程 |
-| 401 / 403 | key 失效或地区不可达；换 key 或换 `JOY_BASE_URL` |
+| 401 / 403 | key 失效或地区不可达；`/model add <名字> <厂商> --key 新的` 换掉它 |
 | MCP 工具不见了 | 看 stderr 警告：连不上 / 未登录（`joy mcp login`）/ mcp.json 坏 |
 | 回答里 `[tools used: …]` 重复 | 属预期折叠标记，说明工具活动已入历史 |
 | 想知道"它当时为什么这么答" | 打开 `traces/<日期>.jsonl` 对应 turnId 那一行 |

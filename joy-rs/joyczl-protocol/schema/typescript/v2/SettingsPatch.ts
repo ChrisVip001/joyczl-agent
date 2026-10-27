@@ -4,9 +4,6 @@
  * 配置的**写入补丁**。只传要改的字段，null 表示不改。
  */
 export type SettingsPatch = {
-  provider?: string | null;
-  model?: string | null;
-  smallModel?: string | null;
   maxIterations?: number | null;
   maxTokens?: number | null;
   historyTurns?: number | null;

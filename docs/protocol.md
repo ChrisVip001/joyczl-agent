@@ -43,6 +43,9 @@ metadata.
 | `config/read` | `ConfigReadParams` → `ConfigReadResponse` | full configuration view |
 | `config/write` | `ConfigWriteParams` → `ConfigWriteResponse` | apply a patch, hot-reload (persisted to settings.json) |
 | `model/list` | `ModelListParams` → `ModelListResponse` | model catalog across 12 providers |
+| `model/profiles` | `ModelProfilesParams` → `ModelProfilesResponse` | configured profiles + the active one (**no secrets**, only a "where the key lives" pointer) |
+| `model/save` | `ModelSaveParams` → `ModelSaveResponse` | create/update a profile and make it active; `id` + `makeActive` alone = switch |
+| `model/remove` | `ModelRemoveParams` → `ModelRemoveResponse` | delete a profile and its credential |
 
 Conventions: methods are `<resource>/<method>` (singular resource); payloads
 are named `*Params` / `*Response` / `*Notification`; wire fields are

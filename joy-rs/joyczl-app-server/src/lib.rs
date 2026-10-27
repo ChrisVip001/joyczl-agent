@@ -19,6 +19,7 @@ mod approval;
 mod dispatch;
 mod goal;
 mod jobs;
+pub mod models;
 mod stdio;
 mod subagent;
 mod trace;
@@ -138,6 +139,10 @@ pub struct Server {
     pub(crate) jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
     /// 会话 -> 目标（见 goal.rs）。只有人能设，模型连这条路径都看不见。
     pub(crate) goals: goal::Goals,
+    /// 多套模型配置（`<home>/models.json`）与凭据后端（见 models.rs）。
+    /// 切换模型 = 改这里 + 重解析 provider，不用重启。
+    pub(crate) models: models::Models,
+    pub(crate) secrets: models::Secrets,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -167,7 +172,11 @@ impl Server {
         }
     }
 
-    pub async fn boot(pool: SqlitePool, settings: Settings) -> Self {
+    pub async fn boot(pool: SqlitePool, mut settings: Settings) -> Self {
+        // 界面上选过的那套模型，比启动时手敲的环境变量更晚、说话更响。
+        let secrets = models::new_secrets();
+        models::apply_at_boot(&mut settings, &secrets);
+        let models = models::new_models(joyczl_config::models::load_models(&settings.home));
         let settings = Arc::new(RwLock::new(settings));
         // 读锁只在表达式里拿一下：**绝不跨 await 持有**（clippy 会拦，也确实
         // 该拦 —— 一个被 await 卡住的读锁会把整台服务器堵死）。
@@ -268,6 +277,8 @@ impl Server {
             todo,
             jobs: jobs_handle,
             goals: goal::store(),
+            models,
+            secrets,
             pool,
         }
     }
@@ -479,22 +490,13 @@ impl Server {
 }
 
 /// config/write 的字段校验：数值边界走 `joyczl-config` 的 `BOUNDS`（与启动期
-/// 同一张表），这里只补「provider 必须存在」这一条 —— `joyczl-config` 不认识
-/// `PROVIDERS`，那是 provider 层的事。
+/// 同一张表）。
+///
+/// 以前这里还要补一条「provider 必须存在」—— 现在 provider 与模型归
+/// `<home>/models.json`（改它们走 `model/*`，校验在 models.rs 里），补丁
+/// 只剩运行参数，一张边界表就够。
 fn validate_patch(patch: &SettingsPatch) -> Result<(), String> {
-    joyczl_config::validate_patch_values(patch)?;
-    if let Some(provider) = &patch.provider {
-        let provider = provider.trim();
-        if joyczl_provider::lookup(provider).is_none() {
-            let ids = joyczl_provider::PROVIDERS
-                .iter()
-                .map(|p| p.id)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!("未知的 provider '{provider}'。可选：{ids}"));
-        }
-    }
-    Ok(())
+    joyczl_config::validate_patch_values(patch)
 }
 
 /// 打开 `settings.home` 下的 state.db 并装配。

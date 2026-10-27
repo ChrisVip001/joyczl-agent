@@ -8,6 +8,27 @@ reads them once at process start and never again. Joy **does not read any
 (`set -a; source .env; set +a`). Runtime changes go through `config/write`
 (persisted to `<home>/settings.json`, surviving restarts).
 
+## Model profiles and their keys (`<home>/models.json`)
+
+Twelve providers are **pre-adapted in code** (`PROVIDERS` in `joyczl-provider`);
+all a user does is pick one and supply a key:
+
+```
+/model                       list configured profiles (★ marks the active one)
+/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY
+/model use ds                switch (no need to retype the key)
+```
+
+The dashboard's "Model" panel is the same implementation (`model/*` protocol
+methods). Keys go to the OS keychain first, falling back to
+`<home>/secrets.json` (0600); `--env VAR` reads the environment and stores
+nothing. `model/save` reports **where the key actually landed** (`keychain` /
+`file` / `env:VAR`). Switching takes effect immediately: it rewrites Settings and
+re-resolves the provider — no restart.
+
+**Only a human can change any of this**: the model has no `model/*` tool and
+never sees a key.
+
 ## Invalid values fail at startup
 
 `Settings::validate` runs once, **after** the environment and
@@ -43,9 +64,7 @@ nothing", which is the default.
 |---|---|---|
 | `JOY_HOME` | `./.joy` | state directory: state.db, SOUL.md, skills/, traces/, outbox/, mcp.json, settings.json |
 | `JOY_PROVIDER` | `anthropic` | provider: anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama |
-| `JOY_API_KEY` | — | explicit key, takes precedence over the provider's default variable |
-| `JOY_BASE_URL` | provider default | override the API endpoint (tests can point it at a fake server) |
-| `JOY_MODEL` / `JOY_SMALL_MODEL` | provider default | main model / cheap model (retrieval gate and consolidation) |
+| `JOY_PROVIDER` | `anthropic` | **only** the fallback provider when no profile is configured (local models start zero-config this way). Models and keys live in `<home>/models.json` |
 | `JOY_LLM_TIMEOUT` | `120` | per-call model timeout in seconds |
 | `JOY_LLM_RETRIES` | `2` |
 | `JOY_GOAL_MAX_ROUNDS` | `5` | how many rounds a goal may continue for; on overrun the status is `round-limit` and the miss is reported honestly | retries on 429/5xx/network hiccups — exponential backoff (500ms, capped at 8s per wait, 30s total), **announced every time**, never a different provider; `0` disables |
@@ -220,11 +239,11 @@ JOY_PROVIDER=ollama joy  # no API key anywhere
 
 Ollama exposes an OpenAI-compatible endpoint (`http://127.0.0.1:11434/v1`),
 so it reuses the same wire as the cloud providers. LM Studio and vLLM are
-the same shape — point `JOY_BASE_URL` at them and `JOY_MODEL` at whatever
+the same shape — add a profile pointing at them (`--url` for the endpoint)
 you have loaded. Override the defaults per model:
 
 ```bash
-JOY_PROVIDER=ollama JOY_MODEL=qwen3:14b JOY_SMALL_MODEL=qwen3:4b joy
+JOY_PROVIDER=ollama joy          # or: /model add local ollama qwen3:14b
 ```
 
 This is the privacy path and the zero-cost path, and the one that keeps
@@ -233,8 +252,10 @@ error surfaces as a network error — start it with `ollama serve`.
 
 ## Per-provider key variables
 
-Without `JOY_API_KEY`, the provider's own variable is read for
-`JOY_PROVIDER`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
+Joy does **not** read these implicitly — a key only comes from the profile you
+configured (`--env VAR` declares "read this one"). The names are each vendor's
+conventional one, matching `JOY_PROVIDER`: `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
 `GEMINI_API_KEY`, `MOONSHOT_API_KEY` (kimi), `ZHIPU_API_KEY` (glm),
 `MINIMAX_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`,
 `OPENCODE_ZEN_API_KEY`, `OPENCODE_GO_API_KEY`.

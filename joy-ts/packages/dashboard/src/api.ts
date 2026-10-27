@@ -11,6 +11,11 @@ import type {
   GoalSetParams,
   GoalSetResponse,
   ErrorObject,
+  ModelProfilesResponse,
+  ModelRemoveParams,
+  ModelRemoveResponse,
+  ModelSaveParams,
+  ModelSaveResponse,
   ServerNotification,
   SessionMessagesResponse,
   TurnStartParams,
@@ -166,4 +171,43 @@ async function errorOf(response: Response): Promise<ErrorObject> {
     code: response.status,
     message: text.trim() || `HTTP ${response.status} ${response.statusText}`,
   };
+}
+
+/**
+ * 已配置的多套模型 + 当前那套。
+ *
+ * 应答里**没有密钥**，只有「key 存在哪」的指针 —— 浏览器不该拿到密钥。
+ */
+export async function fetchModelProfiles(): Promise<ModelProfilesResponse> {
+  const response = await fetch("/api/model/profiles", {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ModelProfilesResponse;
+}
+
+/**
+ * 新增/改一套并切成当前；只给 `id` + `makeActive` 就是**切换**（不用重发密钥）。
+ *
+ * `keyStoredIn` 会如实说密钥落在哪（keychain / file / env:VAR），页面照抄给用户看。
+ */
+export async function saveModel(params: ModelSaveParams): Promise<ModelSaveResponse> {
+  const response = await fetch("/api/model/save", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ModelSaveResponse;
+}
+
+/** 删一套，连它的凭据一起。 */
+export async function removeModel(params: ModelRemoveParams): Promise<ModelRemoveResponse> {
+  const response = await fetch("/api/model/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ModelRemoveResponse;
 }

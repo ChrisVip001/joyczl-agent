@@ -11,6 +11,28 @@ Reading convention: **Deliberate** means "this is the intended behaviour; a
 change here is a design change and belongs in a discussion first". **Gap**
 means "we would like this, nobody has built it".
 
+## Multiple models and where keys live
+
+- **One configuration path only**: `JOY_API_KEY` / `JOY_BASE_URL` / `JOY_MODEL`
+  / `JOY_SMALL_MODEL` are no longer read and `config/write` accepts no model
+  fields — models change only through `model/*` (REPL `/model`, dashboard panel).
+  `JOY_PROVIDER` now means just "the fallback provider when nothing is
+  configured". If you relied on environment variables, you are now unconfigured —
+  run `/model add` once as the message says.
+- **No usable keychain on Windows**: its credential manager stores entries but
+  cannot read secrets back, so on Windows (and anywhere `security` /
+  `secret-tool` is missing) keys fall back to `<home>/secrets.json` —
+  **plaintext**, mode 0600 on Unix, which Windows has no notion of. `model/save`
+  reports `file` honestly and the UI repeats it verbatim.
+- **Keychain commands time out after 5s**: `security` can prompt or hang in an
+  unattended session; a timeout counts as failure and falls back to the file —
+  one credential operation must never freeze the server.
+- **Switching affects the live process only**: it rewrites in-process Settings and
+  re-resolves the provider; the configuration itself lives in
+  `<home>/models.json`, so the next start still uses your last pick.
+- **The model cannot switch models**: `model/*` is human-only — the model has no
+  such tool and never sees a key.
+
 ## Execution (`run_command`, `JOY_EXEC`)
 
 `read_file` / `list_dir` are on by default and bypass the execution gate — their

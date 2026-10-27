@@ -20,6 +20,46 @@ hop is re-resolved and re-checked**. The body passes through the same
 "data, not instructions" defusal as subagent reports — an injected page and an
 injected subagent are the same threat, so they get the same defense.
 
+### Breaking change: the old "set a key via environment variable" path is gone
+
+Models used to be configured with `export JOY_API_KEY=…` (or `JOY_BASE_URL` /
+`JOY_MODEL` / `JOY_SMALL_MODEL`, or a settings.json patch), and Joy would
+**silently** fall back to the vendor's conventional variable for `JOY_PROVIDER`.
+The result: "I never configured anything, yet it works because some variable
+happens to be in my shell" — the hardest failure to diagnose.
+
+Now there is **one path only**: the credential pointer declared by the active
+profile in `<home>/models.json` (`--env VAR` is an explicit "read this one", not
+an implicit fallback). Removed along with it:
+
+- `JOY_API_KEY` / `JOY_BASE_URL` / `JOY_MODEL` / `JOY_SMALL_MODEL` are no longer
+  read;
+- the `config/write` patch no longer carries provider / model / small_model
+  fields — models and keys move to `model/*`;
+- `resolve()` no longer reads vendor environment variables implicitly; a missing
+  key now prints the exact `/model add …` command;
+- `JOY_PROVIDER` stays, but **only** as the fallback provider when no profile
+  exists, so local models like ollama still start zero-config.
+
+If you relied on environment variables, **your model is now unconfigured** — run
+`/model add` once as the message says (the key lands in the OS keychain).
+
+### Multiple models: 12 pre-adapted providers, switchable at will
+
+The twelve providers were already pre-adapted in `joyczl-provider`; what was
+missing was "configure it yourself, switch at will":
+
+- **Several profiles at once**: `<home>/models.json` holds any number of
+  "provider + model + endpoint + credential pointer" sets; `/model use <name>` (or
+  the dashboard panel) switches — no need to retype the key, it rewrites in-process
+  Settings and re-resolves the provider, **effective immediately, no restart**;
+- **Keys go to the OS keychain first**: macOS `security` / Linux `secret-tool`,
+  falling back to `<home>/secrets.json` (0600, plaintext); responses and the UI
+  **say where the key actually landed**;
+- **Human-only**: `model/profiles` / `model/save` / `model/remove` share one
+  implementation with the REPL's `/model` and the dashboard panel; the model has
+  no such tool and never sees a key.
+
 ### Video analysis skill: turn it into text first
 
 `skills/video-transcription/SKILL.md` (bundled with the repo, and a living

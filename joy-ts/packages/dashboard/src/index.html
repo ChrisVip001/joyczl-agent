@@ -61,6 +61,46 @@
           <h2>记忆</h2>
           <div class="body" id="memory"></div>
         </section>
+        <section class="panel">
+          <h2>模型</h2>
+          <div class="body">
+            <p class="hint" id="mp-state">当前：—</p>
+            <select id="mp-picker" aria-label="已配置的模型"></select>
+            <input
+              id="mp-id"
+              type="text"
+              placeholder="名字（比如 ds、公司-openai）"
+              aria-label="配置名字"
+            />
+            <input
+              id="mp-provider"
+              type="text"
+              placeholder="厂商（deepseek / openai / ollama…）"
+              aria-label="厂商"
+            />
+            <input
+              id="mp-model"
+              type="text"
+              placeholder="模型（留空用厂商默认）"
+              aria-label="模型"
+            />
+            <input
+              id="mp-key"
+              type="password"
+              autocomplete="off"
+              placeholder="密钥，或 env:DEEPSEEK_API_KEY 这种变量名"
+              aria-label="密钥"
+            />
+            <div class="row">
+              <button class="ghost" id="mp-save" type="button">保存并切换</button>
+              <button class="ghost" id="mp-remove" type="button">删除这套</button>
+            </div>
+            <p class="hint">
+              密钥优先进系统钥匙串；Windows 与没有钥匙串时会退回明文文件
+              （0600）—— 保存后这里会如实说是哪一种。
+            </p>
+          </div>
+        </section>
       </aside>
     </main>
 

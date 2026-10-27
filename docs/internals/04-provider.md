@@ -66,17 +66,22 @@ Anthropic wire，是因为它们都提供 Anthropic 兼容端点，而那个方�
 `lib.rs（resolve）` 的步骤：
 
 1. `lookup(&settings.provider)`，失败 → `"未知的 JOY_PROVIDER '{x}'。可选：{全部 id}"`。
-2. **key 解析**（优先级即链的顺序）：
+2. **key 解析**：
    ```rust
-   settings.api_key.clone()                    // JOY_API_KEY 最优先
-     .or_else(|| env::var(info.key_env).ok().map(trim))
-     .filter(|v| !v.is_empty())                // 空串不算 key
+   settings.api_key.clone()                    // 只来自 models.json 里当前那套
+     .map(trim).filter(|v| !v.is_empty())      // 空串不算 key
      .or_else(|| (!info.needs_key()).then(String::new))   // 本地端点：空 key 合法
-     .ok_or_else(|| no_key_message(info))      // 其余：报「怎么配」
+     .ok_or_else(|| no_key_message(info))      // 其余：报「/model add 怎么打」
    ```
-   注意最后一步：本地 provider 拿到的是**空字符串**而不是 `None`，客户端据此
-   决定不发鉴权头；显式配了 `JOY_API_KEY` 的本地网关照用。
-3. **base_url**：`JOY_BASE_URL` 优先，否则表里的默认。
+   `settings.api_key` 是**运行时快照**，由 `joyczl-config::models` 在启动时
+   （`apply_at_boot`）和每次 `model/save` / `model/remove` 之后填入 —— 来源是
+   那套配置声明的凭据指针：环境变量名、系统钥匙串或兜底文件。**这里不再偷偷
+   读 `info.key_env` 兜底**：那条隐式路径的后果是「我明明没配过模型，它却因为
+   我 shell 里有个变量就跑起来了」，出问题时最难查。想用环境变量就明说
+   `--env 变量名`。
+   注意本地 provider 拿到的是**空字符串**而不是 `None`，客户端据此决定不发
+   鉴权头。
+3. **base_url**：当前那套配置里给了就用，否则表里的默认。
 4. **超时**：`reqwest::Client::builder().timeout(llm_timeout_secs)`，一个客户端
    一个超时，没有 per-request 覆盖。
 5. 按 `wire` 造 `Arc<dyn Provider>`。
@@ -226,7 +231,7 @@ trait 签名是与 loop 的契约，不值得为一个通知动它；而「这�
 ## 4.8 `embed.rs`：混合检索那条腿的来源
 
 `Embedder::from_settings` 只需两个东西：`JOY_EMBED_MODEL` 与一个端点
-（`JOY_BASE_URL` 或当前 provider 的默认端点）。key 的解析规则与 chat 侧一致
+（当前那套配置给的端点，或 provider 的默认端点）。key 的解析规则与 chat 侧一致
 （`needs_key()` 才找环境变量）。
 
 `embed(text)`：`POST {base}/embeddings {model, input}`，取 `data[0].embedding`

@@ -40,6 +40,9 @@ you>  /goal 让测试全绿
 | `config/read` | `ConfigReadParams` → `ConfigReadResponse` | 完整配置视图 |
 | `config/write` | `ConfigWriteParams` → `ConfigWriteResponse` | 应用补丁并热生效（落 settings.json） |
 | `model/list` | `ModelListParams` → `ModelListResponse` | 12 家 provider 的模型目录 |
+| `model/profiles` | `ModelProfilesParams` → `ModelProfilesResponse` | 已配置的多套模型 + 当前那套（**不含密钥**，只有「key 在哪」的指针） |
+| `model/save` | `ModelSaveParams` → `ModelSaveResponse` | 新增/改一套并切成当前；只带 `id` + `makeActive` 就是切换 |
+| `model/remove` | `ModelRemoveParams` → `ModelRemoveResponse` | 删一套，连它的凭据一起 |
 
 约定：方法名 `<resource>/<method>`（resource 单数）；载荷命名
 `*Params` / `*Response` / `*Notification`；wire 字段 camelCase；整数一律

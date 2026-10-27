@@ -17,8 +17,9 @@ use futures_util::stream::{self, Stream};
 use joyczl_protocol::{
     codes, methods, ApprovalRespondParams, ApprovalRespondResponse, ConfigReadResponse,
     DashboardData, ErrorObject, GoalSetParams, GoalSetResponse, MemoryListEpisodesResponse,
-    MemoryListResponse, ServerNotification, SessionListResponse, SessionMessagesParams,
-    SessionMessagesResponse, TurnStartParams, TurnStartResponse,
+    MemoryListResponse, ModelProfilesResponse, ModelRemoveParams, ModelRemoveResponse,
+    ModelSaveParams, ModelSaveResponse, ServerNotification, SessionListResponse,
+    SessionMessagesParams, SessionMessagesResponse, TurnStartParams, TurnStartResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -120,6 +121,50 @@ pub async fn goal(
 /// 载荷是协议里的 `ApprovalRespondParams`。**不是 SSE**：这是一问一答，
 /// 答完就没了。太晚送达时返回 `accepted: false`（那一轮早已不等了），
 /// 前端据此知道自己的点击没人听，而不是以为批准生效了。
+/// 已配置的多套模型 + 当前那套（**不含密钥**，只有「key 存在哪」的指针）。
+///
+/// 与 `/api/goal` 同一条纪律：这些是**只有人能改**的东西 —— 模型没有
+/// `model/*` 工具，也拿不到密钥。
+pub async fn model_profiles(State(app): State<Arc<AppServer>>) -> Response {
+    match app
+        .request::<ModelProfilesResponse>(methods::MODEL_PROFILES, json!({}))
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// 新增/改一套（顺带切成当前），或只带 `id` + `makeActive` 切换。
+pub async fn model_save(
+    State(app): State<Arc<AppServer>>,
+    Json(params): Json<ModelSaveParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("ModelSaveParams 一定能序列化");
+    match app
+        .request::<ModelSaveResponse>(methods::MODEL_SAVE, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// 删一套（连它的凭据一起）。
+pub async fn model_remove(
+    State(app): State<Arc<AppServer>>,
+    Json(params): Json<ModelRemoveParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("ModelRemoveParams 一定能序列化");
+    match app
+        .request::<ModelRemoveResponse>(methods::MODEL_REMOVE, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
 pub async fn approval(
     State(app): State<Arc<AppServer>>,
     Json(params): Json<ApprovalRespondParams>,

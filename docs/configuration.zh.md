@@ -7,6 +7,24 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 （`set -a; source .env; set +a`）。运行中的配置变更走 `config/write`
 （持久化到 `<home>/settings.json`，重启后仍生效）。
 
+## 多套模型与它们的密钥（`<home>/models.json`）
+
+12 家 provider **预适配在代码里**（`joyczl-provider` 的 PROVIDERS），用户要做的
+只是选一家、给 key：
+
+```
+/model                      看已配好的套（★ 是当前）
+/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY
+/model use ds              切换（不用重发密钥）
+```
+
+驾驶舱的「模型」面板与它是同一处实现（`model/*` 三个协议方法）。密钥优先交给
+系统钥匙串，兜底写 `<home>/secrets.json`（0600）；`--env 变量名` 则只读环境变量、
+不存下来。`model/save` 的应答会如实说**实际落在哪**（`keychain` / `file` /
+`env:VAR`）。切换立刻生效：改的是 Settings 并重解析 provider，不用重启。
+
+**只有人能改这些**：模型没有 `model/*` 工具，也拿不到密钥。
+
 ## 非法值在启动期就报错
 
 `Settings::validate` 只跑一次，位置在**环境变量与 `<home>/settings.json` 合并
@@ -39,9 +57,7 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 |---|---|---|
 | `JOY_HOME` | `./.joy` | 状态目录：state.db、SOUL.md、skills/、traces/、outbox/、mcp.json、settings.json |
 | `JOY_PROVIDER` | `anthropic` | 模型厂商：anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama |
-| `JOY_API_KEY` | — | 显式指定 key，优先于厂商默认变量 |
-| `JOY_BASE_URL` | 厂商默认 | 覆盖 API 端点（测试时也可指向假端点） |
-| `JOY_MODEL` / `JOY_SMALL_MODEL` | 厂商默认 | 主模型 / 便宜模型（检索门与 consolidation 用） |
+| `JOY_PROVIDER` | `anthropic` | **只**是一套都没配时的兜底厂商（本地模型靠它零配置起步）。真正的模型与密钥在 `<home>/models.json` |
 | `JOY_LLM_TIMEOUT` | `120` | 单次模型调用超时（秒） |
 | `JOY_LLM_RETRIES` | `2` |
 | `JOY_GOAL_MAX_ROUNDS` | `5` | 一个目标最多自动续几轮。超了就置 `round-limit` 并如实说明没完成 —— 不伪装完成、也不清掉目标 | 429/5xx/网络抖动时重试几次 —— 指数退避（500ms 起、单次上限 8s、总预算 30s），**每次必发通知**，绝不换厂商；`0` 关闭 |
@@ -208,11 +224,11 @@ JOY_PROVIDER=ollama joy  # 不需要任何 API key
 ```
 
 Ollama 暴露的是 OpenAI 兼容端点（`http://127.0.0.1:11434/v1`），所以复用
-云端 provider 同一条 wire。LM Studio 与 vLLM 形状相同——用 `JOY_BASE_URL`
-指过去、`JOY_MODEL` 指到你装着的模型即可。按模型覆盖默认值：
+云端 provider 同一条 wire。LM Studio 与 vLLM 形状相同——配一套指过去即可
+（`--url` 给端点、模型名写进 `--model`）。零配置的本地起步：
 
 ```bash
-JOY_PROVIDER=ollama JOY_MODEL=qwen3:14b JOY_SMALL_MODEL=qwen3:4b joy
+JOY_PROVIDER=ollama joy          # 或：/model add 本地 ollama qwen3:14b
 ```
 
 这是隐私路径、零成本路径，也是断网（或 key 失效）时照样能用的路径。
@@ -220,14 +236,15 @@ Ollama 没起来时报的是网络错误——`ollama serve` 把它启动起来�
 
 ## 各厂商的 key 变量
 
-不设 `JOY_API_KEY` 时按 `JOY_PROVIDER` 读取对应变量：
+Joy **不会**自动去读这些变量——密钥只来自你配置进模型的那套（`--env 变量名`
+是显式声明「读这一个」）。变量名照旧是各家的习惯名：
 `ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、
 `GEMINI_API_KEY`、`MOONSHOT_API_KEY`（kimi）、`ZHIPU_API_KEY`（glm）、
 `MINIMAX_API_KEY`、`XAI_API_KEY`、`OPENROUTER_API_KEY`、
 `OPENCODE_ZEN_API_KEY`、`OPENCODE_GO_API_KEY`。
 
-缺失时报 `PROVIDER_ERROR (-32000)`，错误信息包含领 key 的地址与应写入的
-变量名。
+没配（或配的那套缺 key）时报 `PROVIDER_ERROR (-32000)`，错误信息直接给出
+`/model add ...` 这条命令。
 
 ## 搜索与评测
 

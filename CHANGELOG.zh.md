@@ -16,6 +16,38 @@
 metadata / 保留地址全拒，重定向**每一跳**重新解析重查），正文先过「数据不是
 指令」的转述包装 —— 被注入的网页与被注入的子代理是同一类威胁，同一套防线。
 
+### 行为变更：旧的「环境变量配 key」那条路拆掉了
+
+以前配模型要 `export JOY_API_KEY=…`（或 `JOY_BASE_URL` / `JOY_MODEL` /
+`JOY_SMALL_MODEL`，或写进 settings.json），而且 Joy 会**偷偷**按 `JOY_PROVIDER`
+去读厂商默认变量兜底 —— 后果是「我明明没配过，它却因为我 shell 里有个变量就
+跑起来了」，出问题时最难查。
+
+现在**只有一条路**：`<home>/models.json` 里那套配置声明的凭据指针（`--env
+变量名` 是显式声明「读这一个」，不是隐式兜底）。随之删掉：
+
+- `JOY_API_KEY` / `JOY_BASE_URL` / `JOY_MODEL` / `JOY_SMALL_MODEL` 不再被读取；
+- `config/write` 的补丁里不再有 provider / model / small_model 字段 —— 模型与
+  密钥改走 `model/*`；
+- `resolve()` 不再隐式读厂商环境变量，缺 key 时直接给出 `/model add …` 这条命令；
+- `JOY_PROVIDER` 保留，但**只**是「一套都没配时的兜底厂商」，让 ollama 这类本地
+  模型能零配置起步。
+
+升级后若原来靠环境变量跑着：**模型会变成没配**，照提示 `/model add` 一次即可
+（密钥顺带进了系统钥匙串）。
+
+### 多模型：12 家预适配 + 随手切换
+
+12 家厂商本来就预适配在 `joyczl-provider` 里，缺的是「用户自己配、随手切」：
+
+- **多套配置并存**：`<home>/models.json` 存多套「厂商 + 模型 + 端点 + 凭据
+  指针」，`/model use <名字>` 或驾驶舱面板切过去 —— 切换不用重发密钥，改的是
+  进程内 Settings 并重解析 provider，**立刻生效、不用重启**；
+- **密钥优先交给系统钥匙串**：macOS `security` / Linux `secret-tool`，都不可用
+  才退回 `<home>/secrets.json`（0600 明文）；应答与界面**如实说密钥落在哪**；
+- **只有人能改**：`model/profiles` / `model/save` / `model/remove` 三个协议方法
+  与 REPL 的 `/model`、驾驶舱面板走同一处实现；模型没有这些工具，也拿不到密钥。
+
 ### 视频分析技能：先变成文字，再谈理解
 
 `skills/video-transcription/SKILL.md`（仓库自带，也是技能格式的活示范）：

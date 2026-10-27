@@ -139,7 +139,7 @@ and conversation, the source of truth), `SOUL.md` (persona), `skills/`
 | Symptom | Action |
 |---|---|
 | `PROVIDER_ERROR (-32000)` missing key | fix the env-var chain, restart the process |
-| 401 / 403 | key expired or region unreachable; change the key or `JOY_BASE_URL` |
+| 401 / 403 | key expired or region unreachable; replace it with `/model add <name> <provider> --key new` |
 | MCP tools disappeared | read the stderr warning: unreachable / not signed in (`joy mcp login`) / broken mcp.json |
 | `[tools used: …]` in a reply | expected folding marker; tool activity is in history |
 | "why did it answer that" | open `traces/<date>.jsonl` at that turnId |
