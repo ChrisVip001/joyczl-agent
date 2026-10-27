@@ -4,6 +4,21 @@
 
 ## 0.7.0 — 向当前最优实现对齐（工作区版本；`v0.5.0` 是上一个已打 tag 的发布）
 
+### M2：多用户单机（`joy hub`）—— 团队能用的形态
+
+- **`joy hub adduser <名字> --root <目录>`**：生成一枚 token（getrandom，64
+  hex，只打印这一次），写进 `<root>/users.json`（0600，临时文件 + rename）。
+- **`joy hub`**：一个 ops 进程服务所有用户；Bearer token → 用户 → 该用户的
+  home（`<root>/<用户名>/`），app-server 子进程**懒加载**（用到才起）。每个
+  home 是完整的一套：state.db、models.json（**BYOK 直接复用 M1 的成果**）、
+  jobs 台账、技能；守护锁本来就 per-home。
+- **隔离是结构性的**：用户名装载期校验（只许小写字母数字连字符，`../` 进不
+  来）；两个用户的 home 是不相交目录 —— 「A 的 key 不出现在 B 的路径」靠的
+  是没有共享路径，不靠「记得别泄漏」。两条测试钉死这个结构。
+- 冒烟加了 hub 段：无 token 401 / 错 token 401 / 对 token 200 / home 被建出。
+- **刻意不做**（五家都没有）：账号密码库、OAuth、per-user 配额强制；hermes
+  式配对码准入（未鉴权端点 + 限速）延后到有真实需求时。
+
 ### M2 起步：驾驶舱 HTTP 面的鉴权门槛
 
 - **`JOY_OPS_TOKEN`**：`/api/*` 的 Bearer token，常量时间比对；没有「本地请求

@@ -1116,6 +1116,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "getrandom 0.3.4",
  "joyczl-config",
  "joyczl-protocol",
  "serde",

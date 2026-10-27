@@ -7,7 +7,7 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -44,7 +44,7 @@ const TURN_BUFFER: usize = 1024;
 /// 合成一个端点而不是让前端并发发四个请求：app-server 一次只处理一条
 /// 请求（stdio 上就是一个循环），四个并发请求到了那儿还是排队。合成一个
 /// 还顺带给了前端一个「这些数字是同一时刻的」保证。
-pub async fn data(State(app): State<Arc<AppServer>>) -> Response {
+pub async fn data(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match collect(&app).await {
         Ok(data) => Json(data).into_response(),
         Err(error) => failed(StatusCode::BAD_GATEWAY, error),
@@ -85,7 +85,7 @@ async fn collect(app: &AppServer) -> Result<DashboardData, ErrorObject> {
 /// 所以 URL 上就是 `sessionId` / `cursor` / `limit` 这三个名字；哪个是必填的
 /// 也由那个类型说了算，不在这儿重新写一遍。
 pub async fn session(
-    State(app): State<Arc<AppServer>>,
+    Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<SessionMessagesParams>,
 ) -> Response {
     let payload = serde_json::to_value(&params).expect("SessionMessagesParams 一定能序列化");
@@ -104,7 +104,7 @@ pub async fn session(
 /// 与 turn 走同一条路：app-server 是子进程，`goal/set` 也是它的一个方法。
 /// **驾驶舱不是唯一入口**：终端里的 `/goal` 与它是同一件事。
 pub async fn goal(
-    State(app): State<Arc<AppServer>>,
+    Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<GoalSetParams>,
 ) -> Response {
     let payload = serde_json::to_value(&params).expect("GoalSetParams 一定能序列化");
@@ -125,7 +125,7 @@ pub async fn goal(
 ///
 /// 与 `/api/goal` 同一条纪律：这些是**只有人能改**的东西 —— 模型没有
 /// `model/*` 工具，也拿不到密钥。
-pub async fn model_profiles(State(app): State<Arc<AppServer>>) -> Response {
+pub async fn model_profiles(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<ModelProfilesResponse>(methods::MODEL_PROFILES, json!({}))
         .await
@@ -137,7 +137,7 @@ pub async fn model_profiles(State(app): State<Arc<AppServer>>) -> Response {
 
 /// 新增/改一套（顺带切成当前），或只带 `id` + `makeActive` 切换。
 pub async fn model_save(
-    State(app): State<Arc<AppServer>>,
+    Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ModelSaveParams>,
 ) -> Response {
     let payload = serde_json::to_value(&params).expect("ModelSaveParams 一定能序列化");
@@ -152,7 +152,7 @@ pub async fn model_save(
 
 /// 删一套（连它的凭据一起）。
 pub async fn model_remove(
-    State(app): State<Arc<AppServer>>,
+    Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ModelRemoveParams>,
 ) -> Response {
     let payload = serde_json::to_value(&params).expect("ModelRemoveParams 一定能序列化");
@@ -166,7 +166,7 @@ pub async fn model_remove(
 }
 
 pub async fn approval(
-    State(app): State<Arc<AppServer>>,
+    Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ApprovalRespondParams>,
 ) -> Response {
     let payload = serde_json::to_value(&params).expect("ApprovalRespondParams 一定能序列化");
@@ -190,7 +190,7 @@ pub async fn approval(
 /// 方向，发消息本来就是一次普通的 POST。双向的通道会带来一堆这里用不上的
 /// 状态管理，而且浏览器原生的 EventSource 只能 GET，发不了这个 POST。
 pub async fn turn(
-    State(app): State<Arc<AppServer>>,
+    Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<TurnStartParams>,
 ) -> Response {
     if params.message.trim().is_empty() {

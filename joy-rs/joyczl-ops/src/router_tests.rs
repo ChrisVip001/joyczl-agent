@@ -11,7 +11,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::client::client_tests::fake;
-use crate::{constant_time_eq, router, validate_binding};
+use crate::{constant_time_eq, router, validate_binding, Gate};
 
 /// 起一个自动应答器：按方法给最小合法应答。**必须回** —— fake 一端断开
 /// 后 `app.request` 还是会永远等（连接关了不等于应答到了），oneshot 就挂死。
@@ -56,9 +56,8 @@ async fn a_token_gates_the_api() {
     let (app, fake) = fake();
     auto_respond(fake);
     let router = router(
-        Arc::new(app),
+        Gate::single(Arc::new(app), Some("s3cret".to_string())),
         std::env::temp_dir(),
-        Some("s3cret".to_string()),
     );
 
     assert_eq!(
@@ -95,7 +94,7 @@ async fn a_token_gates_the_api() {
 async fn without_a_token_the_api_is_open() {
     let (app, fake) = fake();
     auto_respond(fake);
-    let router = router(Arc::new(app), std::env::temp_dir(), None);
+    let router = router(Gate::single(Arc::new(app), None), std::env::temp_dir());
     assert_eq!(
         status_of(router, "/api/data", None).await,
         StatusCode::OK,
@@ -110,9 +109,8 @@ async fn static_files_are_not_gated() {
     let (app, _fake) = fake();
     let dir = tempfile::tempdir().expect("临时目录");
     let router = router(
-        Arc::new(app),
+        Gate::single(Arc::new(app), Some("s3cret".to_string())),
         dir.path().to_path_buf(),
-        Some("s3cret".to_string()),
     );
     let response = router
         .oneshot(

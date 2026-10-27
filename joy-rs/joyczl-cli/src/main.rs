@@ -31,6 +31,10 @@ Joy — 本地优先的个人助手
     joy judge [路径]   真模型答一轮 + 裁判打分（需要 key，出分不拦发版）
     joy dashboard      起网页驾驶舱（http://localhost:7777）
     joy app-server     启动 JSON-RPC 服务端（stdin/stdout，换行分隔 JSON）
+    joy hub            多用户模式：--root <目录>，users.json 里每人一枚 token，
+                       各自的 home 完整隔离（state.db/记忆/模型配置全套）
+    joy hub adduser    joy hub adduser <名字> --root <目录>：生成 token 并写进
+                       users.json（0600）—— token 只打印这一次
     joy --version      打印版本
 
 环境变量:
@@ -83,6 +87,19 @@ async fn main() -> Result<()> {
                 joyczl_eval::run_judge(&paths, &report_home).await?
             };
             std::process::exit(code);
+        }
+        Some("hub") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            // joy hub adduser <名字> --root <目录>
+            if args.first().map(String::as_str) == Some("adduser") {
+                return hub_adduser(&args[1..]);
+            }
+            // joy hub --root <目录>
+            let root = hub_root(&args)?;
+            let mut settings = joyczl_config::Settings::from_env();
+            settings.home = home();
+            settings.ensure_home()?;
+            joyczl_ops::serve_hub(std::path::Path::new(&root), &settings.ops_host).await
         }
         Some("app-server") => {
             // JOY_HOME 优先于环境里的 JOY_HOME —— 显式传参赢过环境变量，
@@ -143,4 +160,44 @@ async fn main() -> Result<()> {
             repl::run(server).await
         }
     }
+}
+
+/// `joy hub` 的 `--root` 参数（不给就用 JOY_HUB_ROOT，再不给就报错）。
+fn hub_root(args: &[String]) -> anyhow::Result<String> {
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--root" {
+            return args
+                .get(i + 1)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("--root 后面要跟目录"));
+        }
+    }
+    std::env::var("JOY_HUB_ROOT").map_err(|_| {
+        anyhow::anyhow!("多用户模式要一个根目录：joy hub --root <目录>（或设 JOY_HUB_ROOT）")
+    })
+}
+
+/// `joy hub adduser <名字> --root <目录>`：生成 token，写进 users.json（0600）。
+/// token 只打印这一次 —— 账本里存的就是它，丢了就删掉重加。
+fn hub_adduser(args: &[String]) -> anyhow::Result<()> {
+    let Some(name) = args.first() else {
+        anyhow::bail!("用法：joy hub adduser <名字> --root <目录>");
+    };
+    anyhow::ensure!(
+        joyczl_ops::hub::valid_user(name),
+        "用户名 '{name}' 不合格：只许小写字母、数字与连字符，≤32 字符（名字会变成目录）"
+    );
+    let root = hub_root(&args[1..])?;
+    let path = std::path::Path::new(&root).join("users.json");
+    let mut users = joyczl_ops::hub::Users::load(&path)?;
+    let token = joyczl_ops::hub::generate_token()?;
+    users.add(name, &token);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    users.save(&path)?;
+    println!("已加用户 {name}（根目录 {root}）。token 只显示这一次：");
+    println!("{token}");
+    println!("驾驶舱首次访问时把它填进弹框即可。换一枚：删掉 users.json 里那行再 adduser。");
+    Ok(())
 }

@@ -35,6 +35,13 @@ means "we would like this, nobody has built it".
 
 ## Long-running and the daemon lock
 
+- **Admission to `joy hub` is one token**: there is no pairing flow, invite
+  link, or OAuth — the admin runs `joy hub adduser` and the token is printed
+  once. A hermes-style pairing flow (self-service request + owner approval +
+  rate limits/lockout) needs an unauthenticated request endpoint; it waits
+  until there is a real second user. Per-user quotas likewise record but do
+  not enforce (usage data is accumulating; enforcement waits for billing)
+
 - **The app-server takes a daemon lock**: only one app-server per `<home>` at a
   time (`<home>/app-server.lock`, holding the PID; a lock left by a dead process is
   reaped by the next start). Two resident processes each holding their own

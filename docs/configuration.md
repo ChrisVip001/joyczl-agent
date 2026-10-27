@@ -279,7 +279,30 @@ which variable to set.
 | `JOY_DASHBOARD_DIR` | in-repo dist | location of the built frontend |
 | `JOY_OPS_HOST` | `127.0.0.1` | bind address. **A non-loopback host requires `JOY_OPS_TOKEN` or startup is refused** (same rule as nanobot/dsh: a wrong config should fail to boot) |
 | `JOY_OPS_TOKEN` | — | Bearer token for `/api/*` (constant-time compare). Optional on loopback; when set, local requests need it too. The dashboard asks once on first 401 and stores it in localStorage. **Deliberately not in `config/read`**: deployment parameters must not be visible to the model |
+| `JOY_HUB_ROOT` | — | root directory for multi-user mode (or pass `joy hub --root`) |
 | `JOY_BIN` | — | explicit `joy` binary path for the Python SDK / TS clients |
+
+## Multi-user on one machine (`joy hub`)
+
+The shape for teams: **one ops process + N users + one full home each** (the same
+shape as hermes's profiles and nanobot's session keys across the reference
+implementations; none of them build an account system).
+
+```
+joy hub adduser alice --root ~/joy-hub   # mints a token (printed once), writes users.json (0600)
+JOY_HUB_ROOT=~/joy-hub joy hub           # multi-user dashboard, still binds 127.0.0.1 by default
+```
+
+- **Admission is one token**: users.json maps `user → token`, compared in
+  constant time; to rotate, delete the line and adduser again. No accounts, no
+  password store.
+- **Isolation is structural**: one home per user (state.db, models.json, jobs,
+  skills — the full set), each with its own app-server child, spawned lazily on
+  first use. A's keys cannot appear in B's paths — there is no shared path.
+- User names allow lowercase letters, digits, and hyphens (≤32) — names become
+  directories, so `../` is refused at load time.
+- Auth semantics are **the same Bearer path** as single-user mode: a static
+  `JOY_OPS_TOKEN` and per-user hub tokens run through the same code.
 
 ## Chat gateways (joy-ts)
 

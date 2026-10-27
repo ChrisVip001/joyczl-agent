@@ -16,10 +16,15 @@
 
 mod api;
 mod client;
+pub mod hub;
 
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
+
+#[cfg(test)]
+#[path = "hub_tests.rs"]
+mod hub_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -58,7 +63,10 @@ pub async fn serve(settings: Settings) -> Result<()> {
 
     let app = Arc::new(AppServer::spawn(&settings.home)?);
     let assets = assets_dir();
-    let router = router(Arc::clone(&app), assets.clone(), settings.ops_token.clone());
+    let router = router(
+        Gate::single(Arc::clone(&app), settings.ops_token.clone()),
+        assets.clone(),
+    );
     let first = port();
     let bind_host = bind_addr(&settings.ops_host);
 
@@ -89,6 +97,118 @@ pub async fn serve(settings: Settings) -> Result<()> {
         "{bind_host} 上 {first}–{} 都占着。用 JOY_PORT 指定一个空端口。",
         first + PORT_SCAN - 1
     )
+}
+
+/// 多用户模式：一个 ops 进程服务 `<root>` 下的所有用户。
+/// 鉴权就是 users.json 里那枚 token —— 与单用户模式同一条 Bearer 路径。
+pub async fn serve_hub(root: &Path, host: &str) -> Result<()> {
+    let hub = Arc::new(hub::Hub::open(root)?);
+    eprintln!(
+        "(joy) hub：{} 个用户，根目录 {}",
+        hub.user_count(),
+        root.display()
+    );
+    let assets = assets_dir();
+    let router = router(Gate::hub(Arc::clone(&hub)), assets.clone());
+    let first = port();
+    let bind_host = bind_addr(host);
+
+    for candidate in first..first + PORT_SCAN {
+        match TcpListener::bind((bind_host, candidate)).await {
+            Ok(listener) => {
+                println!(
+                    "Joy hub → http://{bind_host}:{candidate}（{} 个用户，各自的 home 在 {}）",
+                    hub.user_count(),
+                    root.display()
+                );
+                return axum::serve(listener, router)
+                    .await
+                    .context("HTTP 服务异常退出");
+            }
+            Err(error) => println!("端口 {candidate} 用不了（{error}），换一个"),
+        }
+    }
+    anyhow::bail!(
+        "{bind_host} 上 {first}–{} 都占着。用 JOY_PORT 指定一个空端口。",
+        first + PORT_SCAN - 1
+    )
+}
+
+/// 请求闸门：静态 token（单用户配了 `JOY_OPS_TOKEN`）+ 用户解析（hub 模式）。
+/// 两种模式走**同一条 Bearer 路径** —— 语义不因模式分岔。
+#[derive(Clone)]
+pub struct Gate {
+    token: Option<String>,
+    hub: Option<Arc<hub::Hub>>,
+    single: Option<Arc<AppServer>>,
+}
+
+impl Gate {
+    /// 单用户模式：一个 app-server + 可选静态 token。
+    pub fn single(app: Arc<AppServer>, token: Option<String>) -> Self {
+        Self {
+            token,
+            hub: None,
+            single: Some(app),
+        }
+    }
+
+    /// 多用户模式：token 必带（users.json），app-server 按用户懒加载。
+    pub fn hub(hub: Arc<hub::Hub>) -> Self {
+        Self {
+            token: None,
+            hub: Some(hub),
+            single: None,
+        }
+    }
+}
+
+async fn authorize(
+    axum::extract::State(gate): axum::extract::State<Gate>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    // 1) 静态 token：配了就**谁都要带**（没有本地旁路 —— 否则 token 只防得住
+    //    外人防不住自己）。route_layer 保证这段只跑在 /api/* 上。
+    if let Some(expected) = &gate.token {
+        let provided = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "));
+        if !provided.is_some_and(|t| constant_time_eq(t.as_bytes(), expected.as_bytes())) {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+    }
+
+    // 2) 用户解析 + 懒加载该用户的 app-server。hub 模式没有 token 就没有用户。
+    let app = if let Some(hub) = &gate.hub {
+        let auth = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok());
+        let Some(user) = hub.resolve(auth) else {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        };
+        match hub.client(&user).await {
+            Ok(app) => app,
+            Err(error) => {
+                // 不静默：起不来要说清是哪个用户、为什么。
+                eprintln!("(joy) 用户 {user} 的 app-server 起不来：{error:#}");
+                return (
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    format!("该用户的 app-server 起不来：{error:#}"),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        gate.single
+            .clone()
+            .expect("单用户模式的 Gate 必须带一个 app-server")
+    };
+    req.extensions_mut().insert(app);
+    next.run(req).await
 }
 
 /// 绑定校验：非回环地址必须带 token（nanobot 的「0.0.0.0 必须设 api_key」
@@ -133,7 +253,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// 路由表。抽出来是为了测试能直接打它，不必真起监听。
-pub fn router(app: Arc<AppServer>, assets: PathBuf, token: Option<String>) -> Router {
+pub fn router(gate: Gate, assets: PathBuf) -> Router {
     Router::new()
         .route("/api/data", get(api::data))
         .route("/api/session", get(api::session))
@@ -147,8 +267,8 @@ pub fn router(app: Arc<AppServer>, assets: PathBuf, token: Option<String>) -> Ro
         // token 层只盖住上面注册的 /api/*（route_layer 不影响 fallback 的静态
         // 文件）：静态资源没有数据，令牌由驾驶舱页面自己带在请求头里。
         .route_layer(axum::middleware::from_fn_with_state(
-            token.clone(),
-            api_auth,
+            gate.clone(),
+            authorize,
         ))
         // 静态文件兜底。`ServeDir` 而不是自己读文件：路径穿越（`/../../.env`）
         // 是那种已经被写对过无数次的东西，没有理由再写一次。
@@ -160,29 +280,7 @@ pub fn router(app: Arc<AppServer>, assets: PathBuf, token: Option<String>) -> Ro
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ))
-        .with_state(app)
-}
-
-/// `/api/*` 的 Bearer 鉴权。没配 token = 全放行（本机默认）；配了就**必须**
-/// 带对 —— 没有「本地请求免检」的旁路，否则 token 只防得住外人防不住自己。
-async fn api_auth(
-    axum::extract::State(expected): axum::extract::State<Option<String>>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let Some(expected) = expected else {
-        return next.run(req).await;
-    };
-    let provided = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    let ok = provided.is_some_and(|t| constant_time_eq(t.as_bytes(), expected.as_bytes()));
-    if ok {
-        return next.run(req).await;
-    }
-    axum::http::StatusCode::UNAUTHORIZED.into_response()
+        .with_state(gate)
 }
 
 /// 把「应答里的错误」装成「流里的一条通知」。

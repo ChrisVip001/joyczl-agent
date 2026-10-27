@@ -4,6 +4,26 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### M2: multi-user on one machine (`joy hub`) — the shape teams can use
+
+- **`joy hub adduser <name> --root <dir>`**: mints a token (getrandom, 64 hex,
+  printed once), writes it into `<root>/users.json` (0600, tmp + rename).
+- **`joy hub`**: one ops process serving every user; Bearer token → user → that
+  user's home (`<root>/<name>/`), with the app-server child spawned **lazily on
+  first use**. Each home is a complete set: state.db, models.json (**BYOK
+  reuses the M1 work directly**), the jobs ledger, skills; the daemon lock was
+  already per-home.
+- **Isolation is structural**: user names are validated at load (lowercase
+  letters, digits, hyphens; `../` cannot get in); two users' homes are disjoint
+  directories — "A's keys never appear in B's paths" holds because there is no
+  shared path, not because everyone remembered to be careful. Two tests pin
+  this structure.
+- The smoke suite gained a hub section: no token 401 / wrong token 401 / right
+  token 200 / home actually created.
+- **Deliberately not built** (none of the references have it): accounts and
+  password stores, OAuth, per-user quota enforcement; hermes-style pairing-code
+  admission (an unauthenticated endpoint + rate limits) waits for a real need.
+
 ### M2 begins: an auth gate on the dashboard's HTTP surface
 
 - **`JOY_OPS_TOKEN`**: a Bearer token for `/api/*`, compared in constant time;

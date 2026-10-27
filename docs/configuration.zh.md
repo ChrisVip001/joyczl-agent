@@ -262,9 +262,30 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 | `JOY_DASHBOARD_DIR` | 仓库内 dist | 前端构建产物位置 |
 | `JOY_OPS_HOST` | `127.0.0.1` | 绑定地址。**绑非回环必须同时设 `JOY_OPS_TOKEN`，否则启动期拒绝**（nanobot/dsh 同一条规则：配错就该起不来） |
 | `JOY_OPS_TOKEN` | — | `/api/*` 的 Bearer token（常量时间比对）。回环地址可不设；设了本机也要带。驾驶舱页面首次 401 时会问一次并存 localStorage。**刻意不进 `config/read`**：部署面参数不该被模型看到 |
+| `JOY_HUB_ROOT` | — | 多用户模式的根目录（也可用 `joy hub --root` 传） |
 | `JOY_BIN` | — | Python SDK / TS 客户端寻找 `joy` 二进制的显式路径 |
 
-## 聊天网关（joy-ts）
+## 多用户单机（`joy hub`）
+
+给团队用的形态：**一个 ops 进程 + N 个用户 + 每人一个完整 home**（五家参考
+实现里 hermes 的 profile 与 nanobot 的会话键都是这个形状；没有一家做账号系统）。
+
+```
+joy hub adduser alice --root ~/joy-hub   # 生成 token（只打印这一次），写进 users.json（0600）
+JOY_HUB_ROOT=~/joy-hub joy hub           # 起多用户驾驶舱，默认仍绑 127.0.0.1
+```
+
+- **准入就是一枚 token**：users.json 里 `用户名 → token`，常量时间比对；
+  换 token = 删掉那行再 adduser。没有账号、没有密码库。
+- **隔离是结构性的**：每个用户一个 home（state.db、models.json、jobs、
+  技能全套），各自的 app-server 子进程懒加载（用到才起）。A 的密钥不可能
+  出现在 B 的路径里 —— 因为根本没有共享路径。
+- 用户名只许小写字母、数字与连字符（≤32）—— 名字会变成目录，`../` 在
+  装载期就拒收。
+- 鉴权语义与单用户模式**同一条 Bearer 路径**：单用户设 `JOY_OPS_TOKEN` 与
+  hub 模式的 per-user token，走的是同一段代码。
+
+## Chat gateways (joy-ts)
 
 | 平台 | 变量 |
 |---|---|

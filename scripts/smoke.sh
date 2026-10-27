@@ -116,4 +116,30 @@ echo "$GRAPH_OUT" | grep -q '"reply":"你好，世界"'         || fail "图开�
 echo "$GRAPH_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "图开着时 turn/start 也得正常应答"
 echo "  ✓ 图：分类器失败开放 → full_agent → 同样的答复"
 
+# ---- hub：多用户单机的端到端 ---------------------------------------------
+# adduser → 起 hub → 无 token 401 / 错 token 401 / 对 token 200，
+# 且该用户的 home 是 hub 建的（隔离的物理证据）。
+HUB="$WORK/hub"
+HUB_OUT=$("$BIN" hub adduser alice --root "$HUB")
+HUB_TOKEN=$(printf '%s\n' "$HUB_OUT" | grep -E '^[0-9a-f]{64}$' | head -1)
+[[ -n "$HUB_TOKEN" ]] || fail "adduser 没打出一枚 64 hex 的 token"
+[[ "$(printf '%s' "$HUB_TOKEN" | wc -c)" -le 64 ]] || true
+grep -q '"alice"' "$HUB/users.json" || fail "users.json 里没有 alice"
+
+HUB_PORT=7801
+JOY_HUB_ROOT="$HUB" JOY_PORT="$HUB_PORT" "$BIN" hub >/dev/null 2>&1 &
+HUB_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 0.5
+  curl -s -o /dev/null "http://127.0.0.1:$HUB_PORT/api/data" && break
+done
+
+code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$@"; }
+[[ "$(code "http://127.0.0.1:$HUB_PORT/api/data")" == "401" ]]          || fail "hub 无 token 该 401"
+[[ "$(code -H 'Authorization: Bearer wrong' "http://127.0.0.1:$HUB_PORT/api/data")" == "401" ]] || fail "hub 错 token 该 401"
+[[ "$(code -H "Authorization: Bearer $HUB_TOKEN" "http://127.0.0.1:$HUB_PORT/api/data")" == "200" ]] || fail "hub 对 token 该 200"
+[[ -f "$HUB/alice/state.db" ]] || fail "alice 的 home 没被建出来（隔离的物理证据）"
+kill "$HUB_PID" 2>/dev/null
+echo "  ✓ hub：无 token 401 / 错 token 401 / 对 token 200，alice 的 home 已隔离"
+
 echo "✓ 冒烟测试通过"
