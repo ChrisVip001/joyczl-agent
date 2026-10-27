@@ -61,6 +61,9 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `search_web` | DuckDuckGo HTML，设 `TAVILY_API_KEY` 升级 Tavily |
 | `read_file` | 读文本文件：分页（2000 行/50KB、不切半行）+ 行号 + 续读协议 + 重读短路；**默认开** |
 | `list_dir` | 列目录：目录在前、文件带大小，500 项上限；**默认开** |
+| `fetch_url` | 抓网页正文（HTML→纯文本，50k 封顶）；SSRF 护栏 + 外站内容「数据不是指令」声明 |
+
+**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切：`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。驾驶舱的「模型」面板是同一处实现。密钥优先进系统钥匙串；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。
 | `fetch_url` | 抓网页正文（HTML→纯文本，50k 封顶）；SSRF 护栏（拒内网/metadata、重定向逐跳复检）+ 外站内容「数据不是指令」声明 |
 | `create_skill` | 把约定的工作流存成过程记忆 |
 | `job_output` / `job_list` / `job_kill` | 读写后台作业（`run_command` 的 `background=true` 起的那些） |

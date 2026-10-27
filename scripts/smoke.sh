@@ -74,14 +74,16 @@ start_fake() {
 }
 
 # ---- 流式：接到本地假 SSE 端点，验证 SSE → textDelta → 完整应答这条链 -------
-# 不用真 key：JOY_BASE_URL 指到假端点，provider 照常打请求，只是对端是假的。
+# 不用真 key：model/save 配一套指到假端点（keyEnv 指针），provider 照常打请求，对端是假的。
 PORT="$(start_fake "$WORK/fake_port")"
 [[ -n "$PORT" ]] || fail "假 SSE 端点没起来"
 
+# 配模型走协议本身（model/save）：key 用 --env 指针 + 测试环境变量 ——
+# 不碰真钥匙串、不落明文文件；base_url 指到假端点。顺带把这条新路径端到端跑了一遍。
 STREAM_OUT=$(printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"turn/start","params":{"message":"你好"}}' \
-  | JOY_PROVIDER=anthropic JOY_API_KEY=test JOY_BASE_URL="http://127.0.0.1:$PORT" \
-    JOY_HOME="$WORK/.joy-stream" "$BIN" app-server)
+  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/save\",\"params\":{\"id\":\"fake\",\"provider\":\"anthropic\",\"apiKey\":null,\"keyEnv\":\"JOY_FAKE_KEY\",\"baseUrl\":\"http://127.0.0.1:$PORT\"}}" \
+  '{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"message":"你好"}}' \
+  | JOY_FAKE_KEY=test JOY_HOME="$WORK/.joy-stream" "$BIN" app-server)
 
 echo "$STREAM_OUT" | sed 's/^/  [stream] /'
 
@@ -89,7 +91,7 @@ echo "$STREAM_OUT" | grep -q '"method":"turn/notification"' || fail "流式没�
 echo "$STREAM_OUT" | grep -q '"textDelta"'                 || fail "没有 textDelta 通知"
 echo "$STREAM_OUT" | grep -q '"delta":"你好"'              || fail "第一个增量不对"
 echo "$STREAM_OUT" | grep -q '"reply":"你好，世界"'         || fail "最终应答不是拼起来的完整文本"
-echo "$STREAM_OUT" | grep -q '"id":1,"result":{"turnId"'   || fail "turn/start 没有正常应答"
+echo "$STREAM_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "turn/start 没有正常应答"
 echo "  ✓ 流式：SSE → textDelta → 完整应答"
 
 # ---- 图的前门：开着的时候，分类器挂了也必须照常答上来 -----------------------
@@ -100,9 +102,9 @@ PORT2="$(start_fake "$WORK/fake_port2")"
 [[ -n "$PORT2" ]] || fail "假 SSE 端点没起来（图那次）"
 
 GRAPH_OUT=$(printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"turn/start","params":{"message":"你好"}}' \
-  | JOY_PROVIDER=anthropic JOY_API_KEY=test JOY_BASE_URL="http://127.0.0.1:$PORT2" \
-    JOY_GRAPH_WORKFLOWS=1 JOY_HOME="$WORK/.joy-graph" "$BIN" app-server)
+  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/save\",\"params\":{\"id\":\"fake\",\"provider\":\"anthropic\",\"apiKey\":null,\"keyEnv\":\"JOY_FAKE_KEY\",\"baseUrl\":\"http://127.0.0.1:$PORT2\"}}" \
+  '{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"message":"你好"}}' \
+  | JOY_FAKE_KEY=test JOY_GRAPH_WORKFLOWS=1 JOY_HOME="$WORK/.joy-graph" "$BIN" app-server)
 
 echo "$GRAPH_OUT" | sed 's/^/  [graph] /'
 
@@ -111,7 +113,7 @@ echo "$GRAPH_OUT" | grep -q '"node":"full_agent"'         || fail "分类器坏�
 echo "$GRAPH_OUT" | grep -q '"type":"graphEnded"'         || fail "图没正常收尾"
 echo "$GRAPH_OUT" | grep -q '"route":"full"'              || fail "meta 里该记下走的是 full"
 echo "$GRAPH_OUT" | grep -q '"reply":"你好，世界"'         || fail "图开着时也该给出同样的答复"
-echo "$GRAPH_OUT" | grep -q '"id":1,"result":{"turnId"'   || fail "图开着时 turn/start 也得正常应答"
+echo "$GRAPH_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "图开着时 turn/start 也得正常应答"
 echo "  ✓ 图：分类器失败开放 → full_agent → 同样的答复"
 
 echo "✓ 冒烟测试通过"
