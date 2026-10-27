@@ -32,9 +32,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * `/api/*` 的统一入口：自动带上部署面的 Bearer token。
+ *
+ * 服务端设了 `JOY_OPS_TOKEN` 时，每个 API 请求都要带
+ * `Authorization: Bearer …`；token 存 localStorage（这是**部署面**凭据，
+ * 与模型 key 是两回事）。收到 401 就问一次 —— 用 `prompt` 而不是一套
+ * DOM：这条路一个部署只走一次，问完存下来就再也不见了。
+ */
+async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = localStorage.getItem("joy-ops-token");
+  if (token) headers.set("authorization", `Bearer ${token}`);
+
+  const response = await apiFetch(path, { ...init, headers });
+  if (response.status === 401) {
+    const entered = window.prompt("这台 Joy 的 API 需要 token（服务端的 JOY_OPS_TOKEN）");
+    if (entered) {
+      localStorage.setItem("joy-ops-token", entered);
+      const retryHeaders = new Headers(init.headers);
+      retryHeaders.set("authorization", `Bearer ${entered}`);
+      return fetch(path, { ...init, headers: retryHeaders });
+    }
+  }
+  return response;
+}
+
 /** 首屏数据。失败时抛 `ApiError`。 */
 export async function fetchDashboard(): Promise<DashboardData> {
-  const response = await fetch("/api/data", { headers: { accept: "application/json" } });
+  const response = await apiFetch("/api/data", { headers: { accept: "application/json" } });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as DashboardData;
 }
@@ -52,7 +78,7 @@ export async function fetchMessages(
   const query = new URLSearchParams({ sessionId });
   if (cursor !== null) query.set("cursor", cursor);
 
-  const response = await fetch(`/api/session?${query.toString()}`, {
+  const response = await apiFetch(`/api/session?${query.toString()}`, {
     headers: { accept: "application/json" },
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
@@ -70,7 +96,7 @@ export async function fetchMessages(
  * 那里不需要逐字）。
  */
 export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotification> {
-  const response = await fetch("/api/turn", {
+  const response = await apiFetch("/api/turn", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "text/event-stream" },
     body: JSON.stringify(params),
@@ -109,7 +135,7 @@ export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotif
  * 被禁止，而是不存在。
  */
 export async function setGoal(params: GoalSetParams): Promise<GoalSetResponse> {
-  const response = await fetch("/api/goal", {
+  const response = await apiFetch("/api/goal", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(params),
@@ -127,7 +153,7 @@ export async function setGoal(params: GoalSetParams): Promise<GoalSetResponse> {
 export async function respondApproval(
   params: ApprovalRespondParams,
 ): Promise<ApprovalRespondResponse> {
-  const response = await fetch("/api/approval", {
+  const response = await apiFetch("/api/approval", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(params),
@@ -179,7 +205,7 @@ async function errorOf(response: Response): Promise<ErrorObject> {
  * 应答里**没有密钥**，只有「key 存在哪」的指针 —— 浏览器不该拿到密钥。
  */
 export async function fetchModelProfiles(): Promise<ModelProfilesResponse> {
-  const response = await fetch("/api/model/profiles", {
+  const response = await apiFetch("/api/model/profiles", {
     headers: { accept: "application/json" },
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
@@ -192,7 +218,7 @@ export async function fetchModelProfiles(): Promise<ModelProfilesResponse> {
  * `keyStoredIn` 会如实说密钥落在哪（keychain / file / env:VAR），页面照抄给用户看。
  */
 export async function saveModel(params: ModelSaveParams): Promise<ModelSaveResponse> {
-  const response = await fetch("/api/model/save", {
+  const response = await apiFetch("/api/model/save", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(params),
@@ -203,7 +229,7 @@ export async function saveModel(params: ModelSaveParams): Promise<ModelSaveRespo
 
 /** 删一套，连它的凭据一起。 */
 export async function removeModel(params: ModelRemoveParams): Promise<ModelRemoveResponse> {
-  const response = await fetch("/api/model/remove", {
+  const response = await apiFetch("/api/model/remove", {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(params),

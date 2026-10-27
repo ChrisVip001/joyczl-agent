@@ -4,6 +4,15 @@
 
 ## 0.7.0 — 向当前最优实现对齐（工作区版本；`v0.5.0` 是上一个已打 tag 的发布）
 
+### M2 起步：驾驶舱 HTTP 面的鉴权门槛
+
+- **`JOY_OPS_TOKEN`**：`/api/*` 的 Bearer token，常量时间比对；没有「本地请求
+  免检」的旁路 —— 配了 token 就谁都要带，否则 token 只防得住外人。
+- **非回环地址必须带 token**：`JOY_OPS_HOST` 绑到 `0.0.0.0` 或局域网 IP 而没设
+  token，启动期直接拒绝 —— 配错就该起不来，而不是先当十分钟内网公开服务。
+- token 刻意不进 `config/read` 的视图：部署面参数不该出现在模型看得见的载荷里。
+- 驾驶舱页面首次 401 时问一次 token，存 localStorage 重试。
+
 ### 7x24 的地基：作业台账、守护锁、调度补跑
 
 对着 codex / deepseek-harness / pi / hermes / nanobot 五家参考实现挖了一遍「长任务

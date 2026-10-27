@@ -277,6 +277,8 @@ which variable to set.
 |---|---|---|
 | `JOY_PORT` | `7777` | dashboard port; occupied ports scan upward |
 | `JOY_DASHBOARD_DIR` | in-repo dist | location of the built frontend |
+| `JOY_OPS_HOST` | `127.0.0.1` | bind address. **A non-loopback host requires `JOY_OPS_TOKEN` or startup is refused** (same rule as nanobot/dsh: a wrong config should fail to boot) |
+| `JOY_OPS_TOKEN` | — | Bearer token for `/api/*` (constant-time compare). Optional on loopback; when set, local requests need it too. The dashboard asks once on first 401 and stores it in localStorage. **Deliberately not in `config/read`**: deployment parameters must not be visible to the model |
 | `JOY_BIN` | — | explicit `joy` binary path for the Python SDK / TS clients |
 
 ## Chat gateways (joy-ts)

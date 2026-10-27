@@ -268,4 +268,4 @@ fn transport(what: &str) -> ErrorObject {
 
 #[cfg(test)]
 #[path = "client_tests.rs"]
-mod client_tests;
+pub(crate) mod client_tests;

@@ -260,6 +260,8 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 |---|---|---|
 | `JOY_PORT` | `7777` | dashboard 端口；占用时自动向后找 10 个 |
 | `JOY_DASHBOARD_DIR` | 仓库内 dist | 前端构建产物位置 |
+| `JOY_OPS_HOST` | `127.0.0.1` | 绑定地址。**绑非回环必须同时设 `JOY_OPS_TOKEN`，否则启动期拒绝**（nanobot/dsh 同一条规则：配错就该起不来） |
+| `JOY_OPS_TOKEN` | — | `/api/*` 的 Bearer token（常量时间比对）。回环地址可不设；设了本机也要带。驾驶舱页面首次 401 时会问一次并存 localStorage。**刻意不进 `config/read`**：部署面参数不该被模型看到 |
 | `JOY_BIN` | — | Python SDK / TS 客户端寻找 `joy` 二进制的显式路径 |
 
 ## 聊天网关（joy-ts）

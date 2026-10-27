@@ -24,6 +24,8 @@ tower-http = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
 
 [lints]
 workspace = true

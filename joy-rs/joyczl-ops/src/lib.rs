@@ -17,11 +17,16 @@
 mod api;
 mod client;
 
+#[cfg(test)]
+#[path = "router_tests.rs"]
+mod router_tests;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::http::{header, HeaderValue};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
 use joyczl_config::Settings;
@@ -39,6 +44,11 @@ const PORT_SCAN: u16 = 10;
 
 /// 起驾驶舱，直到进程被杀掉。
 pub async fn serve(settings: Settings) -> Result<()> {
+    // 绑定校验在**开任何端口之前**：非回环地址必须带 token。这条检查放启动期
+    // 而不是文档里 —— 学 deepseek-harness 的「加载期拒绝通配监听」：配错就该
+    // 起不来，而不是先当十分钟内网公开服务再被人提醒。
+    validate_binding(&settings.ops_host, settings.ops_token.as_deref())?;
+
     if !settings.home.exists() {
         eprintln!(
             "(joy) 状态目录 {} 还不存在，app-server 会建它",
@@ -48,15 +58,19 @@ pub async fn serve(settings: Settings) -> Result<()> {
 
     let app = Arc::new(AppServer::spawn(&settings.home)?);
     let assets = assets_dir();
-    let router = router(Arc::clone(&app), assets.clone());
+    let router = router(Arc::clone(&app), assets.clone(), settings.ops_token.clone());
     let first = port();
+    let bind_host = bind_addr(&settings.ops_host);
 
     for candidate in first..first + PORT_SCAN {
-        // 只绑 127.0.0.1：这是个人助理的仪表盘，不是内网服务。
-        // 想从别的机器看，那是另一个决定（要带鉴权），不该是默认。
-        match TcpListener::bind(("127.0.0.1", candidate)).await {
+        match TcpListener::bind((bind_host, candidate)).await {
             Ok(listener) => {
-                println!("Joy 驾驶舱 → http://localhost:{candidate}");
+                match settings.ops_token.as_deref() {
+                    Some(_) => println!(
+                        "Joy 驾驶舱 → http://{bind_host}:{candidate}（/api/* 需要 Bearer token）"
+                    ),
+                    None => println!("Joy 驾驶舱 → http://{bind_host}:{candidate}（本机免鉴权）"),
+                }
                 if !assets.join("index.html").exists() {
                     eprintln!(
                         "(joy) 前端还没构建（{}）。先跑：just dashboard-build",
@@ -72,13 +86,54 @@ pub async fn serve(settings: Settings) -> Result<()> {
     }
 
     anyhow::bail!(
-        "127.0.0.1 上 {first}–{} 都占着。用 JOY_PORT 指定一个空端口。",
+        "{bind_host} 上 {first}–{} 都占着。用 JOY_PORT 指定一个空端口。",
         first + PORT_SCAN - 1
     )
 }
 
+/// 绑定校验：非回环地址必须带 token（nanobot 的「0.0.0.0 必须设 api_key」
+/// 同一条规则）。回环 + token = 本机也鉴权，允许（多用户单机的第一步）。
+pub fn validate_binding(host: &str, token: Option<&str>) -> Result<()> {
+    let loopback = match host {
+        "localhost" => true,
+        other => other
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false),
+    };
+    if !loopback && token.is_none() {
+        anyhow::bail!(
+            "驾驶舱要绑在 {host}（非回环地址）却没设 JOY_OPS_TOKEN —— 拒绝启动。\
+             设一个 token，或把 JOY_OPS_HOST 留在 127.0.0.1。"
+        );
+    }
+    Ok(())
+}
+
+/// 绑定用的 IP：`localhost` 解析成 127.0.0.1（TcpListener 不认主机名）。
+fn bind_addr(host: &str) -> std::net::IpAddr {
+    match host {
+        "localhost" => std::net::IpAddr::from([127, 0, 0, 1]),
+        other => other
+            .parse()
+            .unwrap_or(std::net::IpAddr::from([127, 0, 0, 1])),
+    }
+}
+
+/// 常量时间比较：长度不同立刻返回（长度不是秘密），内容逐字节异或累积 ——
+/// 逐位短路会泄漏「错在第几个字节」。
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |diff, (x, y)| diff | (x ^ y))
+        == 0
+}
+
 /// 路由表。抽出来是为了测试能直接打它，不必真起监听。
-pub fn router(app: Arc<AppServer>, assets: PathBuf) -> Router {
+pub fn router(app: Arc<AppServer>, assets: PathBuf, token: Option<String>) -> Router {
     Router::new()
         .route("/api/data", get(api::data))
         .route("/api/session", get(api::session))
@@ -89,6 +144,12 @@ pub fn router(app: Arc<AppServer>, assets: PathBuf) -> Router {
         .route("/api/model/profiles", get(api::model_profiles))
         .route("/api/model/save", post(api::model_save))
         .route("/api/model/remove", post(api::model_remove))
+        // token 层只盖住上面注册的 /api/*（route_layer 不影响 fallback 的静态
+        // 文件）：静态资源没有数据，令牌由驾驶舱页面自己带在请求头里。
+        .route_layer(axum::middleware::from_fn_with_state(
+            token.clone(),
+            api_auth,
+        ))
         // 静态文件兜底。`ServeDir` 而不是自己读文件：路径穿越（`/../../.env`）
         // 是那种已经被写对过无数次的东西，没有理由再写一次。
         // `append_index_html_on_directories` 让 `/` 落到 index.html。
@@ -100,6 +161,28 @@ pub fn router(app: Arc<AppServer>, assets: PathBuf) -> Router {
             HeaderValue::from_static("no-store"),
         ))
         .with_state(app)
+}
+
+/// `/api/*` 的 Bearer 鉴权。没配 token = 全放行（本机默认）；配了就**必须**
+/// 带对 —— 没有「本地请求免检」的旁路，否则 token 只防得住外人防不住自己。
+async fn api_auth(
+    axum::extract::State(expected): axum::extract::State<Option<String>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let Some(expected) = expected else {
+        return next.run(req).await;
+    };
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    let ok = provided.is_some_and(|t| constant_time_eq(t.as_bytes(), expected.as_bytes()));
+    if ok {
+        return next.run(req).await;
+    }
+    axum::http::StatusCode::UNAUTHORIZED.into_response()
 }
 
 /// 把「应答里的错误」装成「流里的一条通知」。

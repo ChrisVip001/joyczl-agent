@@ -200,6 +200,15 @@ pub struct Settings {
     pub consolidate_every: i32,
     pub retrieval_top_k: i32,
 
+    // ---- 驾驶舱 HTTP 面（见 joyczl-ops）
+    /// `JOY_OPS_HOST`：驾驶舱绑的地址。默认 127.0.0.1 —— 个人助理不默认对外，
+    /// 想从别的机器看是**另一个决定**：得同时设 `JOY_OPS_TOKEN`。
+    pub ops_host: String,
+    /// `JOY_OPS_TOKEN`：驾驶舱 `/api/*` 的 Bearer token（常量时间比对）。
+    /// 绑非回环地址而不设它 = 启动期拒绝，不是警告。**刻意不进 `view()`**：
+    /// 这是部署面参数，不该出现在协议载荷里被模型看到。
+    pub ops_token: Option<String>,
+
     // ---- 开关
     pub apple_calendar: bool,
     pub google_calendar: bool,
@@ -281,6 +290,8 @@ impl Default for Settings {
             compact_threshold: 0.8,
             consolidate_every: 6,
             retrieval_top_k: 4,
+            ops_host: "127.0.0.1".to_string(),
+            ops_token: None,
             apple_calendar: false,
             google_calendar: false,
             experimental: false,
@@ -331,6 +342,8 @@ impl Settings {
             compact_threshold: env_float("JOY_COMPACT_THRESHOLD", d.compact_threshold),
             consolidate_every: env_int("JOY_CONSOLIDATE_EVERY", d.consolidate_every),
             retrieval_top_k: env_int("JOY_RETRIEVAL_TOP_K", d.retrieval_top_k),
+            ops_host: env("JOY_OPS_HOST").unwrap_or(d.ops_host),
+            ops_token: env("JOY_OPS_TOKEN"),
             apple_calendar: env_bool("JOY_APPLE_CALENDAR"),
             google_calendar: env_bool("JOY_GOOGLE_CALENDAR"),
             experimental: env_bool("JOY_EXPERIMENTAL"),

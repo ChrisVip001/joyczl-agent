@@ -10,13 +10,13 @@ use tokio::io::{BufReader, DuplexStream, ReadHalf, WriteHalf};
 use super::*;
 
 /// 假服务端的另一头：读请求、写应答和通知。
-struct Fake {
+pub(crate) struct Fake {
     requests: BufReader<ReadHalf<DuplexStream>>,
     to_client: WriteHalf<DuplexStream>,
 }
 
 /// 一条内存连接。左边是我们的客户端，右边是假的 app-server。
-fn fake() -> (AppServer, Fake) {
+pub(crate) fn fake() -> (AppServer, Fake) {
     let (ours, theirs) = tokio::io::duplex(8192);
     let (reader, writer) = tokio::io::split(ours);
     let (theirs_read, theirs_write) = tokio::io::split(theirs);
@@ -30,7 +30,7 @@ fn fake() -> (AppServer, Fake) {
 
 impl Fake {
     /// 收一条请求（客户端发来的那一行）。
-    async fn next_request(&mut self) -> Value {
+    pub(crate) async fn next_request(&mut self) -> Value {
         let mut line = String::new();
         self.requests
             .read_line(&mut line)
@@ -47,7 +47,7 @@ impl Fake {
             .expect("写给客户端");
     }
 
-    async fn respond(&mut self, id: &Value, result: Value) {
+    pub(crate) async fn respond(&mut self, id: &Value, result: Value) {
         self.send(json!({"jsonrpc": "2.0", "id": id, "result": result}))
             .await;
     }

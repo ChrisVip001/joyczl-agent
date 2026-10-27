@@ -4,6 +4,19 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### M2 begins: an auth gate on the dashboard's HTTP surface
+
+- **`JOY_OPS_TOKEN`**: a Bearer token for `/api/*`, compared in constant time;
+  there is no "local requests bypass" — once a token is set, everyone carries it,
+  otherwise the token only stops outsiders.
+- **A non-loopback host requires a token**: binding `JOY_OPS_HOST` to `0.0.0.0`
+  or a LAN IP without a token is refused at startup — a wrong config should fail
+  to boot, not serve the LAN for ten minutes first.
+- The token is deliberately absent from the `config/read` view: deployment
+  parameters must not appear in payloads the model can see.
+- The dashboard asks once for the token on first 401 and retries with it stored
+  in localStorage.
+
 ### The groundwork for 7x24: job ledger, daemon lock, schedule catch-up
 
 Studied how the five reference harnesses (codex / deepseek-harness / pi / hermes /
