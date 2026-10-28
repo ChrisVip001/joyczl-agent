@@ -9,8 +9,9 @@
 
 use joyczl_config::models as cfg;
 use joyczl_protocol::{
-    ModelProfileView, ModelProfilesResponse, ModelRemoveParams, ModelRemoveResponse,
-    ModelSaveParams, ModelSaveResponse, UsageByModel, UsageSummaryResponse,
+    ApprovalLogEntry, ApprovalLogResponse, ModelProfileView, ModelProfilesResponse,
+    ModelRemoveParams, ModelRemoveResponse, ModelSaveParams, ModelSaveResponse, UsageByModel,
+    UsageSummaryResponse,
 };
 use std::sync::{Mutex, RwLock};
 
@@ -95,6 +96,33 @@ fn validate_provider(provider: &str, base_url: Option<&str>) -> Result<(), Strin
 }
 
 impl Server {
+    /// 审批审计（迁移 0011）：最近 100 条「问了才跑」的记录，新的在前。
+    /// 读失败返回空列表并说明 —— 同 usage_summary 的口径。
+    pub async fn approval_log(&self) -> ApprovalLogResponse {
+        match self.approval_log.recent(100).await {
+            Ok(rows) => ApprovalLogResponse {
+                entries: rows
+                    .into_iter()
+                    .map(|row| ApprovalLogEntry {
+                        turn_id: row.turn_id,
+                        request_id: row.request_id,
+                        tool: row.tool,
+                        args_preview: row.args_preview,
+                        reason: row.reason,
+                        outcome: row.outcome,
+                        decided_at: row.decided_at,
+                    })
+                    .collect(),
+            },
+            Err(e) => {
+                eprintln!("(joy) 审批审计读不了：{e}");
+                ApprovalLogResponse {
+                    entries: Vec::new(),
+                }
+            }
+        }
+    }
+
     /// 用量汇总（迁移 0010）：per-model 聚合 + 总数。只记账不强制 —— 没有配额、
     /// 没有限速；BYOK 模式下钱记在用户自己的厂商账单上。hub 模式下这就是
     /// per-user 记账（每个用户一个 home 一个台账）。读失败返回空汇总并说明

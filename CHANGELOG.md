@@ -4,6 +4,20 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### M3b: an approval audit — "who approved that rm -rf" has an answer now
+
+- Migration 0011 `approval_log`: one row per "ask-before-run", with four
+  outcomes — `approved` / `denied` / `timeout` (nobody answered) / `voided`
+  (the turn ended; known the instant the oneshot sender is dropped).
+- **A single write point**: the tail of the approval-waiting future — all four
+  exits pass through it, so no path can forget to log. A write failure never
+  blocks the main path (the ledger is a shadow; the causality lives in the
+  oneshot channel).
+- New protocol method `approval/log`: the last 100 records, newest first; a
+  read failure returns an empty list with a stderr note.
+- This information previously lived only in memory and stderr, gone when the
+  turn ended — now a hub admin can audit it afterwards.
+
 ### M3a: a notifier — know when you're not at the screen
 
 Three kinds of "a human should look at this" leave the process: **approval

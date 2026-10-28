@@ -36,6 +36,8 @@ pub(crate) struct Bridge {
     pub(crate) timeout_secs: i64,
     /// 屏幕外的人也该知道「在等批准」——旁路，没有就不发。
     pub(crate) notify: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
+    /// 审计台账（M3b）：四态结果都落一行。
+    pub(crate) logbook: joyczl_state::Approvals,
 }
 
 impl ApprovalBroker for Bridge {
@@ -52,6 +54,11 @@ impl ApprovalBroker for Bridge {
                 },
             );
         }
+
+        // 台账要在这三个值被 move 进通知之后还能用 —— 先留副本。
+        let tool = request.tool.clone();
+        let args_preview = request.args_preview.clone();
+        let reason = request.reason.clone();
 
         if let Some(notifier) = &self.notify {
             notifier.notify(joyczl_tools::notify::NotifyEvent::ApprovalRequested {
@@ -76,12 +83,34 @@ impl ApprovalBroker for Bridge {
 
         let pending = self.pending.clone();
         let turn_id = self.turn_id.clone();
+        let logbook = self.logbook.clone();
         let timeout = Duration::from_secs(self.timeout_secs.max(1) as u64);
 
         Box::pin(async move {
             // 超时按拒绝算。这里**必须**有超时：一个永远等下去的批准请求会把
             // 一轮对话永久挂住，而工具层的超时兜不住「服务端在等」这件事。
-            let approved = matches!(tokio::time::timeout(timeout, rx).await, Ok(Ok(true)));
+            // 四态结果顺手落审计台账（M3b）：写失败不拦主路 —— 台账是影子，
+            // 因果由 oneshot 通道保证。
+            let outcome = match tokio::time::timeout(timeout, rx).await {
+                Ok(Ok(true)) => "approved",
+                Ok(Ok(false)) => "denied",
+                Ok(Err(_)) => "voided", // 发送端被丢 = turn 结束作废
+                Err(_) => "timeout",
+            };
+            if let Err(e) = logbook
+                .log(
+                    &turn_id,
+                    &request_id,
+                    &tool,
+                    &args_preview,
+                    &reason,
+                    outcome,
+                )
+                .await
+            {
+                eprintln!("(joy) 审批审计没记上（{outcome}）：{e}");
+            }
+            let approved = outcome == "approved";
             // 无论结果如何都撤掉登记 —— 不然表会一直长。
             if let Ok(mut table) = pending.lock() {
                 if let Some(per_turn) = table.get_mut(&turn_id) {

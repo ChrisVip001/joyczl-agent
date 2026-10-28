@@ -43,6 +43,7 @@ you>  /goal 让测试全绿
 | `model/profiles` | `ModelProfilesParams` → `ModelProfilesResponse` | 已配置的多套模型 + 当前那套（**不含密钥**，只有「key 在哪」的指针） |
 | `model/save` | `ModelSaveParams` → `ModelSaveResponse` | 新增/改一套并切成当前；只带 `id` + `makeActive` 就是切换 |
 | `model/remove` | `ModelRemoveParams` → `ModelRemoveResponse` | 删一套，连它的凭据一起 |
+| `approval/log` | `ApprovalLogParams` → `ApprovalLogResponse` | 审批审计（迁移 0011）：最近 100 条「问了才跑」的记录，新的在前。outcome 四态：`approved` / `denied` / `timeout`（没人答）/ `voided`（turn 结束作废）。hub 管理员事后回答「谁批准了 rm -rf」用 |
 | `usage/summary` | `UsageSummaryParams` → `UsageSummaryResponse` | 用量台账（迁移 0010）：per-model 聚合 + 总数。**只记账不强制** —— 没有配额、没有限速；BYOK 模式下钱记在用户自己的厂商账单上。hub 模式下这就是 per-user 记账（每个用户一个 home 一个台账） |
 
 约定：方法名 `<resource>/<method>`（resource 单数）；载荷命名

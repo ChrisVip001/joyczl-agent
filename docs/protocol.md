@@ -46,6 +46,7 @@ metadata.
 | `model/profiles` | `ModelProfilesParams` → `ModelProfilesResponse` | configured profiles + the active one (**no secrets**, only a "where the key lives" pointer) |
 | `model/save` | `ModelSaveParams` → `ModelSaveResponse` | create/update a profile and make it active; `id` + `makeActive` alone = switch |
 | `model/remove` | `ModelRemoveParams` → `ModelRemoveResponse` | delete a profile and its credential |
+| `approval/log` | `ApprovalLogParams` → `ApprovalLogResponse` | the approval audit (migration 0011): the last 100 "ask-before-run" records, newest first. Four outcomes: `approved` / `denied` / `timeout` (nobody answered) / `voided` (turn ended). This is how a hub admin answers "who approved that rm -rf" afterwards |
 | `usage/summary` | `UsageSummaryParams` → `UsageSummaryResponse` | the usage ledger (migration 0010): per-model aggregates + totals. **Accounting only, no enforcement** — no quotas, no rate limits; under BYOK the money shows up on each user's own provider bill. In hub mode this is per-user accounting (one home, one ledger per user) |
 
 Conventions: methods are `<resource>/<method>` (singular resource); payloads

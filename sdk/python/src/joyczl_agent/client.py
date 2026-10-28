@@ -51,7 +51,8 @@ from .protocol import (
     ModelProfilesResponse,
     ModelProfileView,
     ModelRemoveParams,
-    ModelRemoveResponse, UsageByModel, UsageSummaryParams, UsageSummaryResponse,
+    ApprovalLogEntry, ApprovalLogParams, ApprovalLogResponse, ModelRemoveResponse,
+    UsageByModel, UsageSummaryParams, UsageSummaryResponse,
     ModelSaveParams,
     ModelSaveResponse,
     NOTIFICATION_METHOD,
@@ -104,6 +105,7 @@ _RESPONSES: dict[Methods, type[BaseModel]] = {
     Methods.MODEL_SAVE: ModelSaveResponse,
     Methods.MODEL_REMOVE: ModelRemoveResponse,
     Methods.USAGE_SUMMARY: UsageSummaryResponse,
+    Methods.APPROVAL_LOG: ApprovalLogResponse,
 }
 
 
@@ -300,6 +302,11 @@ class JoyClient:
     async def request(
         self, method: Literal[Methods.USAGE_SUMMARY], params: UsageSummaryParams
     ) -> UsageSummaryResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.APPROVAL_LOG], params: ApprovalLogParams
+    ) -> ApprovalLogResponse: ...
 
     async def request(self, method: Methods, params: BaseModel) -> Any:
         """调一个方法，等它的应答。

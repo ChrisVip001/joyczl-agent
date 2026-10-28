@@ -46,6 +46,9 @@ pub mod methods {
     /// 用量汇总（迁移 0010）：per-model 聚合 + 总数。**只记账不强制** ——
     /// 没有配额、没有限速；BYOK 模式下钱记在用户自己的厂商账单上。
     pub const USAGE_SUMMARY: &str = "usage/summary";
+    /// 审批审计（迁移 0011）：模型问过什么、结果如何（approved/denied/
+    /// timeout/voided 四态）。hub 管理员事后回答「谁批准了 rm -rf」用。
+    pub const APPROVAL_LOG: &str = "approval/log";
 }
 
 // ===========================================================================
@@ -724,6 +727,10 @@ pub struct ModelProfilesParams;
 #[ts(export_to = "v2/")]
 pub struct UsageSummaryParams;
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export_to = "v2/")]
+pub struct ApprovalLogParams;
+
 /// 一套配置的**视图**：与存储里那份的区别是它不含密钥，只说密钥在哪。
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -834,6 +841,29 @@ pub struct UsageSummaryResponse {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub by_model: Vec<UsageByModel>,
+}
+
+/// `approval/log` 的一行：一次「问了才跑」的完整记录。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ApprovalLogEntry {
+    pub turn_id: String,
+    pub request_id: String,
+    pub tool: String,
+    pub args_preview: String,
+    pub reason: String,
+    /// approved / denied / timeout / voided 四态之一。
+    pub outcome: String,
+    pub decided_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ApprovalLogResponse {
+    /// 新的在前，服务端封顶 100 条。
+    pub entries: Vec<ApprovalLogEntry>,
 }
 
 // ===========================================================================

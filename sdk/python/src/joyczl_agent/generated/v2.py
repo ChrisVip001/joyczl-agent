@@ -13,6 +13,28 @@ class JoyProtocolV2(RootModel[Any]):
     root: Annotated[Any, Field(title='JoyProtocolV2')]
 
 
+class ApprovalLogEntry(BaseModel):
+    argsPreview: str
+    decidedAt: str
+    outcome: Annotated[
+        str, Field(description='approved / denied / timeout / voided 四态之一。')
+    ]
+    reason: str
+    requestId: str
+    tool: str
+    turnId: str
+
+
+class ApprovalLogParams(RootModel[None]):
+    root: Annotated[None, Field(title='ApprovalLogParams')]
+
+
+class ApprovalLogResponse(BaseModel):
+    entries: Annotated[
+        list[ApprovalLogEntry], Field(description='新的在前，服务端封顶 100 条。')
+    ]
+
+
 class ApprovalRequestedNotification(BaseModel):
     argsPreview: Annotated[
         str, Field(description='给人看的动作预览：命令原文，或参数摘要。')

@@ -132,6 +132,8 @@ pub struct Server {
     pub(crate) usage: joyczl_state::Usage,
     /// 通知器（M3a）：旁路，没配就是 None。
     pub(crate) notifier: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
+    /// 审批审计台账（M3b）：谁问过、结果如何。
+    pub(crate) approval_log: joyczl_state::Approvals,
     pub(crate) calendar: Calendar,
     pub(crate) settings: Arc<RwLock<Settings>>,
     pub(crate) resolved: Arc<RwLock<Option<Resolved>>>,
@@ -239,6 +241,7 @@ impl Server {
         };
 
         let notifier = joyczl_tools::notify::load(&snapshot.home, snapshot.notify_enabled);
+        let approval_log = joyczl_state::Approvals::new(pool.clone());
         let (mut tools, jobs_handle) =
             builtin_tools(&snapshot, pool.clone(), notifier.clone()).await;
         tools.set_hooks(hooks.clone());
@@ -282,6 +285,7 @@ impl Server {
             chat,
             usage,
             notifier,
+            approval_log,
             calendar,
             settings,
             resolved,
@@ -352,6 +356,7 @@ impl Server {
             turn_id: turn_id.to_string(),
             timeout_secs: settings.approval_timeout_secs,
             notify: self.notifier.clone(),
+            logbook: self.approval_log.clone(),
         }))
     }
 

@@ -1,6 +1,64 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ApprovalLogEntry": {
+      "description": "`approval/log` 的一行：一次「问了才跑」的完整记录。",
+      "properties": {
+        "argsPreview": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": "string"
+        },
+        "outcome": {
+          "description": "approved / denied / timeout / voided 四态之一。",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "argsPreview",
+        "decidedAt",
+        "outcome",
+        "reason",
+        "requestId",
+        "tool",
+        "turnId"
+      ],
+      "title": "ApprovalLogEntry",
+      "type": "object"
+    },
+    "ApprovalLogParams": {
+      "title": "ApprovalLogParams",
+      "type": "null"
+    },
+    "ApprovalLogResponse": {
+      "properties": {
+        "entries": {
+          "description": "新的在前，服务端封顶 100 条。",
+          "items": {
+            "$ref": "#/definitions/ApprovalLogEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "title": "ApprovalLogResponse",
+      "type": "object"
+    },
     "ApprovalRequestedNotification": {
       "description": "一次「要不要执行」的询问。\n\n服务端把问题抛给客户端后**等待**（默认 120 秒），回答由 `approval/respond` 送来。没人回答、超时、或者根本没有批准通道 —— 一律**按拒绝处理**：默认 拒绝是这个功能的地基，不是它的边界情况。",
       "properties": {

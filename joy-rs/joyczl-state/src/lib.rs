@@ -12,6 +12,7 @@
 //!   * `chat`      原始对话日志 + 会话（会话只是 chat_log 上的一个标签）
 //!   * `fts`       把人类输入变成安全的 FTS5 查询串
 
+pub mod approvals;
 pub mod calendar;
 pub mod chat;
 pub mod conformance;
@@ -23,6 +24,7 @@ pub mod jobs;
 pub mod store;
 pub mod usage;
 
+pub use approvals::{ApprovalLogRow, Approvals};
 pub use calendar::{Calendar, CalendarRow};
 pub use chat::{Chat, MessageRow, SessionRow};
 pub use db::open;

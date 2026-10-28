@@ -81,6 +81,9 @@ macro_rules! protocol_types {
             UsageSummaryParams,
             UsageByModel,
             UsageSummaryResponse,
+            ApprovalLogParams,
+            ApprovalLogEntry,
+            ApprovalLogResponse,
             SessionListParams,
             SessionListResponse,
             SessionNewParams,
@@ -225,6 +228,7 @@ fn method_entries() -> Vec<(&'static str, &'static str)> {
         ("MODEL_SAVE", m::MODEL_SAVE),
         ("MODEL_REMOVE", m::MODEL_REMOVE),
         ("USAGE_SUMMARY", m::USAGE_SUMMARY),
+        ("APPROVAL_LOG", m::APPROVAL_LOG),
     ]
 }
 
