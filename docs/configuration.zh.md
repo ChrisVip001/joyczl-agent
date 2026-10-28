@@ -260,6 +260,7 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 |---|---|---|
 | `JOY_PORT` | `7777` | dashboard 端口；占用时自动向后找 10 个 |
 | `JOY_DASHBOARD_DIR` | 仓库内 dist | 前端构建产物位置 |
+| `JOY_NOTIFY` | 关 | 开了才读 `<home>/notify.json`（`{"slack": "webhook URL"}`）并往外推通知：**审批请求 / 后台作业收尾 / 目标终局**。fire-and-forget —— 发送失败只往 stderr 说一声，绝不拦 turn。URL 是管理员配的，指向内网自建端点（ntfy/Gotify 这类收 `{"text": …}` 的）是合法用法，不做 SSRF 护栏
 | `JOY_OPS_HOST` | `127.0.0.1` | 绑定地址。**绑非回环必须同时设 `JOY_OPS_TOKEN`，否则启动期拒绝**（nanobot/dsh 同一条规则：配错就该起不来） |
 | `JOY_OPS_TOKEN` | — | `/api/*` 的 Bearer token（常量时间比对）。回环地址可不设；设了本机也要带。驾驶舱页面首次 401 时会问一次并存 localStorage。**刻意不进 `config/read`**：部署面参数不该被模型看到 |
 | `JOY_HUB_ROOT` | — | 多用户模式的根目录（也可用 `joy hub --root` 传） |

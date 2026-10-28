@@ -35,6 +35,15 @@ means "we would like this, nobody has built it".
 
 ## Long-running and the daemon lock
 
+## Notifications and audit
+
+- **Notifications are best-effort**: a failed send (network down, endpoint 5xx)
+  is one stderr line — **no retries, no delivery ledger**. hermes's five-state
+  delivery ledger (pending/attempting/delivered/…) waits for tier B (when job
+  results can wake a session); today a notification is a shout that may not
+  carry. The Slack `{"text": …}` format also works with self-hosted ntfy/Gotify
+  endpoints; DingTalk/WeCom signed formats are not implemented.
+
 - **Admission to `joy hub` is one token**: there is no pairing flow, invite
   link, or OAuth — the admin runs `joy hub adduser` and the token is printed
   once. A hermes-style pairing flow (self-service request + owner approval +

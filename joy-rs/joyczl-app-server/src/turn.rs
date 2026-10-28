@@ -284,6 +284,7 @@ pub async fn run_turn(
                     eprintln!("(joy) 目标循环停了：{why}");
                     goal_status = Some("blocked".to_string());
                     crate::goal::finish(&server.goals, &session_id, "blocked");
+                    server.notify_goal_finished(&session_id, "blocked", &why);
                     break;
                 }
             };
@@ -299,6 +300,7 @@ pub async fn run_turn(
                 );
                 goal_status = Some("satisfied".to_string());
                 crate::goal::finish(&server.goals, &session_id, "satisfied");
+                server.notify_goal_finished(&session_id, "satisfied", &judgement.reason);
                 break;
             }
             if judgement.impossible {
@@ -312,6 +314,7 @@ pub async fn run_turn(
                 );
                 goal_status = Some("impossible".to_string());
                 crate::goal::finish(&server.goals, &session_id, "impossible");
+                server.notify_goal_finished(&session_id, "impossible", &judgement.reason);
                 break;
             }
             if goal_rounds >= max_rounds {
@@ -326,6 +329,7 @@ pub async fn run_turn(
                 );
                 goal_status = Some("round-limit".to_string());
                 crate::goal::finish(&server.goals, &session_id, "round-limit");
+                server.notify_goal_finished(&session_id, "round-limit", &judgement.reason);
                 break;
             }
 

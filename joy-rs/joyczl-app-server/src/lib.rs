@@ -130,6 +130,8 @@ pub struct Server {
     pub(crate) chat: Chat,
     /// 用量台账（迁移 0010）：只记账不强制。
     pub(crate) usage: joyczl_state::Usage,
+    /// 通知器（M3a）：旁路，没配就是 None。
+    pub(crate) notifier: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
     pub(crate) calendar: Calendar,
     pub(crate) settings: Arc<RwLock<Settings>>,
     pub(crate) resolved: Arc<RwLock<Option<Resolved>>>,
@@ -236,7 +238,9 @@ impl Server {
             None
         };
 
-        let (mut tools, jobs_handle) = builtin_tools(&snapshot, pool.clone()).await;
+        let notifier = joyczl_tools::notify::load(&snapshot.home, snapshot.notify_enabled);
+        let (mut tools, jobs_handle) =
+            builtin_tools(&snapshot, pool.clone(), notifier.clone()).await;
         tools.set_hooks(hooks.clone());
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
@@ -277,6 +281,7 @@ impl Server {
             episodes,
             chat,
             usage,
+            notifier,
             calendar,
             settings,
             resolved,
@@ -320,6 +325,18 @@ impl Server {
 
     /// 这一轮的批准通道。`never` 模式（默认）返回 `None` —— 没人问，也就没人答，
     /// 需要批准的动作直接拒绝。
+    /// 目标终局往外推（M3a）：satisfied/impossible/round-limit/blocked 都算
+    /// —— 自主循环停了就该让人知道，不管停得体不体面。
+    pub(crate) fn notify_goal_finished(&self, session_id: &str, status: &str, reason: &str) {
+        if let Some(notifier) = &self.notifier {
+            notifier.notify(joyczl_tools::notify::NotifyEvent::GoalFinished {
+                session_id: session_id.to_string(),
+                status: status.to_string(),
+                reason: reason.to_string(),
+            });
+        }
+    }
+
     pub(crate) fn approval_bridge(
         &self,
         turn_id: &str,
@@ -334,6 +351,7 @@ impl Server {
             sink: sink.clone(),
             turn_id: turn_id.to_string(),
             timeout_secs: settings.approval_timeout_secs,
+            notify: self.notifier.clone(),
         }))
     }
 
@@ -545,6 +563,7 @@ pub async fn open(settings: &Settings) -> Result<Server> {
 async fn builtin_tools(
     settings: &Settings,
     pool: sqlx::SqlitePool,
+    notifier: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
 ) -> (
     ToolRegistry,
     Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
@@ -609,7 +628,8 @@ async fn builtin_tools(
         // 后台作业：与 run_command 共用同一份策略（沙箱、断网、放行表、批准全一致）
         // —— 后台不是绕过它们的侧门。
         let ledger = joyczl_state::Jobs::new(pool.clone());
-        let jobs_impl = jobs::Jobs::new(policy, settings.home.clone(), ledger);
+        let jobs_impl =
+            jobs::Jobs::new(policy, settings.home.clone(), ledger).with_notifier(notifier.clone());
         jobs_impl.reconcile().await;
         let jobs: Arc<dyn joyczl_tools::jobs::JobRegistry> = Arc::new(jobs_impl);
         tools.register(joyczl_tools::jobs::job_output(Some(jobs.clone())));

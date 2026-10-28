@@ -277,6 +277,7 @@ which variable to set.
 |---|---|---|
 | `JOY_PORT` | `7777` | dashboard port; occupied ports scan upward |
 | `JOY_DASHBOARD_DIR` | in-repo dist | location of the built frontend |
+| `JOY_NOTIFY` | off | when on, reads `<home>/notify.json` (`{"slack": "webhook URL"}`) and pushes notifications: **approval requests / background-job finish / goal outcomes**. Fire-and-forget — a failed send is one stderr line and the turn carries on. The URL is admin-configured, so pointing it at a self-hosted intranet endpoint (ntfy/Gotify — anything accepting `{"text": …}`) is legitimate; no SSRF guard applies
 | `JOY_OPS_HOST` | `127.0.0.1` | bind address. **A non-loopback host requires `JOY_OPS_TOKEN` or startup is refused** (same rule as nanobot/dsh: a wrong config should fail to boot) |
 | `JOY_OPS_TOKEN` | — | Bearer token for `/api/*` (constant-time compare). Optional on loopback; when set, local requests need it too. The dashboard asks once on first 401 and stores it in localStorage. **Deliberately not in `config/read`**: deployment parameters must not be visible to the model |
 | `JOY_HUB_ROOT` | — | root directory for multi-user mode (or pass `joy hub --root`) |

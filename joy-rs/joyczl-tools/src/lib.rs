@@ -26,6 +26,7 @@ pub mod hooks;
 pub mod jobs;
 pub mod memory_admin;
 pub mod messages;
+pub mod notify;
 pub mod report;
 pub mod spill;
 pub mod subagent;
@@ -59,6 +60,10 @@ mod report_tests;
 #[cfg(test)]
 #[path = "hooks_tests.rs"]
 mod hooks_tests;
+
+#[cfg(test)]
+#[path = "notify_tests.rs"]
+mod notify_tests;
 
 #[cfg(test)]
 #[path = "todo_tests.rs"]

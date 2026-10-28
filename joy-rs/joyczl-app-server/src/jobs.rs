@@ -150,6 +150,8 @@ pub struct Jobs {
     jobs: Arc<Mutex<HashMap<JobId, Job>>>,
     next: AtomicU64,
     rows: Arc<joyczl_state::Jobs>,
+    /// 通知器（M3a）：作业收尾往外推——旁路，没有就不发。
+    notify: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
     /// 历史作业的内存快照（reconcile时装入）。台账查询是异步的，而
     /// `JobRegistry::list` 是同步的 —— 与其搭同步桥，不如在启动时把历史
     /// 一次装进来：历史不会在本进程里新增（新收尾的作业本来就在内存表里）。
@@ -165,7 +167,17 @@ impl Jobs {
             next: AtomicU64::new(1),
             rows: Arc::new(rows),
             history: Arc::new(Mutex::new(Vec::new())),
+            notify: None,
         }
+    }
+
+    /// 装上通知器（boot 时调；测试里不装）。
+    pub fn with_notifier(
+        mut self,
+        notify: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
+    ) -> Self {
+        self.notify = notify;
+        self
     }
 
     /// 启动对账：上次崩溃时还在跑的作业标成 interrupted。**不自动重跑** ——
@@ -258,6 +270,8 @@ impl JobRegistry for Jobs {
         let home = self.home.clone();
         let table = self.jobs.clone();
         let rows = self.rows.clone();
+        // self 的引用不进 async 块（生命周期不活那么久）—— 在块外 clone。
+        let notifier = self.notify.clone();
         let id = format!("j{}", self.next.fetch_add(1, Ordering::SeqCst));
 
         // 可写的根：显式给的工作目录（或进程当前目录）+ home —— 与前台
@@ -364,6 +378,14 @@ impl JobRegistry for Jobs {
                     .await
                 {
                     eprintln!("(joy) 作业 {watched_id} 的收尾没写进台账：{e}");
+                }
+                if let Some(notifier) = &notifier {
+                    notifier.notify(joyczl_tools::notify::NotifyEvent::JobFinished {
+                        id: watched_id.clone(),
+                        command: watched_command.clone(),
+                        status: db_status.to_string(),
+                        exit_code: Some(code),
+                    });
                 }
                 // 收尾落盘：进程退出后仍然回查得到（不是「重启后继续跑」）。
                 let bytes = watched_ring.lock().expect("ring 锁不该中毒").snapshot();

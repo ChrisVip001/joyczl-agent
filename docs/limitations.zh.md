@@ -28,7 +28,15 @@
 
 ## 常驻与守护
 
-- **多用户单机的准入是一枚 token**：`joy hub` 没有 配对码/邀请链接/OAuth ——
+## 通知与审计
+
+- **通知是尽力而为**：发不出（网络断、端点 5xx）只往 stderr 说一声，**没有
+  重试、没有投递账本** —— hermes 的五态 delivery ledger（pending/attempting/
+  delivered/…）留给档位 B（作业结果能唤醒会话时）再引入，现在通知只是
+  「顺便喊一声」，丢了就丢了。Slack 的 `{"text": …}` 格式也兼容 ntfy/Gotify
+  这类自建端点；钉钉/企业微信的加签格式没做。
+
+- **多用户单机的准入是一枚 token：`joy hub` 没有 配对码/邀请链接/OAuth ——
   管理员跑 `joy hub adduser`，token 只打印一次。hermes 式的配对码流程（用户
   自助申请 + 主人批准 + 限速锁定）需要一个未鉴权的申请端点，等真有第二个
   用户时再做。per-user 配额同样记账未设限（usage 数据在攒，强制留给计费）

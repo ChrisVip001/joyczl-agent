@@ -4,6 +4,24 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### M3a: a notifier — know when you're not at the screen
+
+Three kinds of "a human should look at this" leave the process: **approval
+requests** (come approve in the dashboard), **background-job finishes**
+(completed/failed/killed/interrupted all reported), and **goal outcomes**
+(satisfied included — a stopped autonomy loop deserves a heads-up either way).
+
+- Config: `JOY_NOTIFY=1` + `<home>/notify.json` (`{"slack": webhook URL}`).
+  The URL is admin-configured — **deliberately no SSRF guard**: the `fetch_url`
+  guard exists because the model picks those URLs; an admin pointing
+  notifications at a self-hosted intranet endpoint (ntfy/Gotify) is legitimate.
+- **Sidecar discipline** (same as the usage ledger): fire-and-forget, 10s
+  timeout, failures are one stderr line — the notification system breaking
+  never blocks the turn.
+- Implemented as an injected `Notifier` trait (same discipline as
+  ApprovalBroker/JobRegistry); tests cover it with a capturing mock and a real
+  loopback POST.
+
 ### M2d: a usage ledger (accounting only, no enforcement)
 
 - Migration 0010 `usage_ledger`: one row per turn (session/provider/model/

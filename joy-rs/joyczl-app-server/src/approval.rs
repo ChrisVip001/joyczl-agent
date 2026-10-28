@@ -34,6 +34,8 @@ pub(crate) struct Bridge {
     pub(crate) sink: EventSink,
     pub(crate) turn_id: String,
     pub(crate) timeout_secs: i64,
+    /// 屏幕外的人也该知道「在等批准」——旁路，没有就不发。
+    pub(crate) notify: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
 }
 
 impl ApprovalBroker for Bridge {
@@ -49,6 +51,15 @@ impl ApprovalBroker for Bridge {
                     command: request.args_preview.clone(),
                 },
             );
+        }
+
+        if let Some(notifier) = &self.notify {
+            notifier.notify(joyczl_tools::notify::NotifyEvent::ApprovalRequested {
+                turn_id: self.turn_id.clone(),
+                tool: request.tool.clone(),
+                args_preview: request.args_preview.clone(),
+                reason: request.reason.clone(),
+            });
         }
 
         self.sink

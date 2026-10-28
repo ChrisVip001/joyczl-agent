@@ -4,6 +4,20 @@
 
 ## 0.7.0 — 向当前最优实现对齐（工作区版本；`v0.5.0` 是上一个已打 tag 的发布）
 
+### M3a：通知器 —— 人不在屏幕前也该知道
+
+三类「需要人看的事」推出进程：**审批请求**（去驾驶舱批准）、**后台作业收尾**
+（completed/failed/killed/interrupted 都报）、**目标终局**（satisfied 也报 ——
+自主循环停了就该让人知道）。
+
+- 配置：`JOY_NOTIFY=1` + `<home>/notify.json`（`{"slack": webhook URL}`）。
+  URL 是管理员亲手配的 —— **刻意不做 SSRF 护栏**：`fetch_url` 那套护栏防的是
+  「模型指哪打哪」，管理员把通知指到内网自建端点（ntfy/Gotify）是合法用法。
+- **旁路纪律**（与用量台账同一条）：fire-and-forget、10 秒超时、失败只往
+  stderr 说一声，绝不拦 turn —— 通知系统坏了，主路照常。
+- 实现是注入式 `Notifier` trait（与 ApprovalBroker/JobRegistry 同一条纪律），
+  测试用捕获型 mock + 回环真发各覆盖一层。
+
 ### M2d：用量台账（只记账，不强制）
 
 - 迁移 0010 `usage_ledger`：每 turn 一行（session/provider/model/输入/输出），

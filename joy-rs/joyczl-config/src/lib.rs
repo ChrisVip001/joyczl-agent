@@ -238,6 +238,11 @@ pub struct Settings {
     /// `JOY_HOOKS_TIMEOUT`：hook 的默认超时（秒）。条目里写了 `timeout` 就以它为准。
     pub hooks_timeout_secs: i64,
 
+    /// `JOY_NOTIFY`：开了才会读 `<home>/notify.json` 并往里配的 webhook 推
+    /// 通知（审批请求/作业收尾/目标 blocked）。默认关 —— 往外部服务发数据
+    /// 是用户亲手按下的决定。
+    pub notify_enabled: bool,
+
     // ---- 执行（`run_command`，见 joyczl-tools 的 exec.rs）
     /// `JOY_DELEGATE`：开了才会把 `delegate_task` 注册进工具表。默认关 ——
     /// 「把活交出去自己跑」是能力也是风险（多一份上下文、多一段没人看的
@@ -292,6 +297,7 @@ impl Default for Settings {
             retrieval_top_k: 4,
             ops_host: "127.0.0.1".to_string(),
             ops_token: None,
+            notify_enabled: false,
             apple_calendar: false,
             google_calendar: false,
             experimental: false,
@@ -344,6 +350,7 @@ impl Settings {
             retrieval_top_k: env_int("JOY_RETRIEVAL_TOP_K", d.retrieval_top_k),
             ops_host: env("JOY_OPS_HOST").unwrap_or(d.ops_host),
             ops_token: env("JOY_OPS_TOKEN"),
+            notify_enabled: env_bool("JOY_NOTIFY"),
             apple_calendar: env_bool("JOY_APPLE_CALENDAR"),
             google_calendar: env_bool("JOY_GOOGLE_CALENDAR"),
             experimental: env_bool("JOY_EXPERIMENTAL"),
