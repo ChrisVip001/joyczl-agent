@@ -4,6 +4,17 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### A stale dashboard frontend now refuses to start
+
+The dist is a build artifact and gitignored — nothing ever forced a rebuild,
+so a source tree a month ahead of the served UI could pass as perfectly
+healthy (server 200, user looking at last month's page). `joy dashboard` and
+`joy hub` now check freshness at startup: **if the sources are newer than the
+dist, it's a hard error** with the rebuild command in the message. Same
+philosophy as the daemon lock: misconfigured should fail to boot, not silently
+serve something stale. Release scenarios (no joy-ts sources present) skip the
+check.
+
 ### M3b: an approval audit — "who approved that rm -rf" has an answer now
 
 - Migration 0011 `approval_log`: one row per "ask-before-run", with four

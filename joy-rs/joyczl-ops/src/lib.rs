@@ -16,6 +16,7 @@
 
 mod api;
 mod client;
+mod freshness;
 pub mod hub;
 
 #[cfg(test)]
@@ -63,6 +64,9 @@ pub async fn serve(settings: Settings) -> Result<()> {
 
     let app = Arc::new(AppServer::spawn(&settings.home)?);
     let assets = assets_dir();
+    if let Err(why) = freshness::check_dashboard_freshness(&assets) {
+        anyhow::bail!("{why}");
+    }
     let router = router(
         Gate::single(Arc::clone(&app), settings.ops_token.clone()),
         assets.clone(),
@@ -109,6 +113,9 @@ pub async fn serve_hub(root: &Path, host: &str) -> Result<()> {
         root.display()
     );
     let assets = assets_dir();
+    if let Err(why) = freshness::check_dashboard_freshness(&assets) {
+        anyhow::bail!("{why}");
+    }
     let router = router(Gate::hub(Arc::clone(&hub)), assets.clone());
     let first = port();
     let bind_host = bind_addr(host);
