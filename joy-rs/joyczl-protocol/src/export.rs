@@ -78,6 +78,9 @@ macro_rules! protocol_types {
             ModelSaveResponse,
             ModelRemoveParams,
             ModelRemoveResponse,
+            UsageSummaryParams,
+            UsageByModel,
+            UsageSummaryResponse,
             SessionListParams,
             SessionListResponse,
             SessionNewParams,
@@ -221,6 +224,7 @@ fn method_entries() -> Vec<(&'static str, &'static str)> {
         ("MODEL_PROFILES", m::MODEL_PROFILES),
         ("MODEL_SAVE", m::MODEL_SAVE),
         ("MODEL_REMOVE", m::MODEL_REMOVE),
+        ("USAGE_SUMMARY", m::USAGE_SUMMARY),
     ]
 }
 

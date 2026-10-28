@@ -43,6 +43,9 @@ pub mod methods {
     /// 就是「切换」—— 不该逼用户为了切换重发一次密钥。
     pub const MODEL_SAVE: &str = "model/save";
     pub const MODEL_REMOVE: &str = "model/remove";
+    /// 用量汇总（迁移 0010）：per-model 聚合 + 总数。**只记账不强制** ——
+    /// 没有配额、没有限速；BYOK 模式下钱记在用户自己的厂商账单上。
+    pub const USAGE_SUMMARY: &str = "usage/summary";
 }
 
 // ===========================================================================
@@ -717,6 +720,10 @@ pub struct ModelListResponse {
 #[ts(export_to = "v2/")]
 pub struct ModelProfilesParams;
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export_to = "v2/")]
+pub struct UsageSummaryParams;
+
 /// 一套配置的**视图**：与存储里那份的区别是它不含密钥，只说密钥在哪。
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -804,6 +811,29 @@ pub struct ModelRemoveResponse {
     pub removed: bool,
     /// 删的是当前那套时，active 会跟着清空。
     pub active_id: Option<String>,
+}
+
+/// `usage/summary` 的应答：per-model 聚合 + 总数。hub 模式下这就是 per-user
+/// 记账（每个用户一个 home、一个 state.db，台账天然按人隔离）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct UsageByModel {
+    pub provider: String,
+    pub model: String,
+    pub turns: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct UsageSummaryResponse {
+    pub turns: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub by_model: Vec<UsageByModel>,
 }
 
 // ===========================================================================

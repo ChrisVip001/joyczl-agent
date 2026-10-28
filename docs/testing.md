@@ -9,7 +9,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Layer | Location | Shape | Latest full run |
 |---|---|---|---|
-| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 363 passed / 0 failed |
+| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 388 passed / 0 failed |
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
 | Frontend | joy-ts (node --test + tsc) | 99 passed / 0 failed | |
@@ -22,7 +22,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Crate | Cases | Covers |
 |---|---|---|
-| joyczl-state | 23 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff, and the concurrent claim (two turns both due distill once) |
+| joyczl-state | 24 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff, and the concurrent claim (two turns both due distill once) |
 | joyczl-tools | 96 | tool behavior and output wording (honest destinations), create_event idempotence, SKILL.md validation, argument schema validation, the three execution gates and approval (including that the sandbox really blocks a write outside the allowed roots), output spilling, and a subagent's tool table lacking delegate_task; and this round's additions: the twelve hook events' blocking/rewriting/timeout split plus trust hashes, the todo list's three hard limits, the background job ring overflow and owner fence, read_file/list_dir pagination and re-read short-circuit, and fetch_url's SSRF refusals plus HTML-to-text |
 | joyczl-provider | 24 | both wire formats, SSE parsing, 429 backoff retry against real HTTP, token estimation, local inference (a provider that needs no key) |
 | joyczl-loop | 25 | both guard exits, tool round-trip, streaming delta order, interrupt shutdown |
@@ -39,7 +39,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Suite | Result |
 |---|---|
-| cargo test --workspace (15 binary suites) | **255 passed / 0 failed** |
+| cargo test --workspace (15 binary suites) | **388 passed / 0 failed** |
 | clippy --workspace --all-targets -D warnings | 0 warnings |
 | cargo fmt --check | pass |
 | generated-artifact drift check | consistent with the Rust protocol definition |

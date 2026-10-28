@@ -50,3 +50,4 @@ class Methods(str, Enum):
     SESSION_NEW = "session/new"
     TURN_INTERRUPT = "turn/interrupt"
     TURN_START = "turn/start"
+    USAGE_SUMMARY = "usage/summary"

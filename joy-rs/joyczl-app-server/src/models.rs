@@ -10,7 +10,7 @@
 use joyczl_config::models as cfg;
 use joyczl_protocol::{
     ModelProfileView, ModelProfilesResponse, ModelRemoveParams, ModelRemoveResponse,
-    ModelSaveParams, ModelSaveResponse,
+    ModelSaveParams, ModelSaveResponse, UsageByModel, UsageSummaryResponse,
 };
 use std::sync::{Mutex, RwLock};
 
@@ -95,6 +95,40 @@ fn validate_provider(provider: &str, base_url: Option<&str>) -> Result<(), Strin
 }
 
 impl Server {
+    /// 用量汇总（迁移 0010）：per-model 聚合 + 总数。只记账不强制 —— 没有配额、
+    /// 没有限速；BYOK 模式下钱记在用户自己的厂商账单上。hub 模式下这就是
+    /// per-user 记账（每个用户一个 home 一个台账）。读失败返回空汇总并说明
+    /// —— 报错会把一个「看数字」的方法变成「坏一整轮」的方法。
+    pub async fn usage_summary(&self) -> UsageSummaryResponse {
+        match self.usage.summary().await {
+            Ok(summary) => UsageSummaryResponse {
+                turns: summary.turns,
+                input_tokens: summary.input_tokens,
+                output_tokens: summary.output_tokens,
+                by_model: summary
+                    .by_model
+                    .into_iter()
+                    .map(|row| UsageByModel {
+                        provider: row.provider,
+                        model: row.model,
+                        turns: row.turns,
+                        input_tokens: row.input_tokens,
+                        output_tokens: row.output_tokens,
+                    })
+                    .collect(),
+            },
+            Err(e) => {
+                eprintln!("(joy) 用量汇总读不了：{e}");
+                UsageSummaryResponse {
+                    turns: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    by_model: Vec::new(),
+                }
+            }
+        }
+    }
+
     pub fn model_profiles(&self) -> ModelProfilesResponse {
         let file = self.models.read().expect("models 锁不该中毒");
         ModelProfilesResponse {

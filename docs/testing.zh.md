@@ -9,7 +9,7 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 
 | 层 | 位置 | 形态 | 数量（最近一次全量） |
 |---|---|---|---|
-| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 363 通过 / 0 失败 |
+| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 388 通过 / 0 失败 |
 | 覆盖率 | `cargo llvm-cov` / `coverage` | **趋势门**，不是目标 | Rust 行 65.9%（门 60）/ Python 63%（门 60） |
 | 协议生成 | scripts/write_schema.py --check | 生成物漂移检查 | 0 漂移 |
 | 前端 | joy-ts（node --test + tsc） | 99 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |
@@ -22,7 +22,7 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 
 | crate | 用例 | 覆盖要点 |
 |---|---|---|
-| joyczl-state | 23 | SQL 契约、FTS5 检索（含 CJK 与乱码输入）、日历幂等、记忆后端 conformance、事实类别的归一化、提炼失败的退避、并发认领（两个 turn 同时到期只蒸馏一次） |
+| joyczl-state | 24 | SQL 契约、FTS5 检索（含 CJK 与乱码输入）、日历幂等、记忆后端 conformance、事实类别的归一化、提炼失败的退避、并发认领（两个 turn 同时到期只蒸馏一次） |
 | joyczl-tools | 96 | 工具行为与输出文案（落点如实）、create_event 幂等、SKILL.md 校验、参数 schema 校验、执行的三道闸门与批准（含沙箱**真的**拦住了允许目录之外的写入）、超长输出落盘、子代理工具表里没有它自己；本轮新增：12 个 hook 事件的阻断/改写/超时两分法与信任哈希、待办清单三条硬边界、后台作业的环溢出与 owner 围栏、read_file/list_dir 的分页与重读短路、fetch_url 的 SSRF 拒绝与 HTML 转文本 |
 | joyczl-provider | 24 | 两种 wire format 转换、SSE 解析、429 退避重试（真 HTTP）、token 估算、本地推理（不需要 key 的 provider） |
 | joyczl-loop | 25 | 护栏双出口、工具往返、流式增量顺序、打断收兵 |

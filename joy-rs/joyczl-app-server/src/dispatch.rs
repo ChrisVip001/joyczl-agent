@@ -14,7 +14,7 @@ use joyczl_protocol::{
     ModelProfilesParams, ModelRemoveParams, ModelSaveParams, RequestId, SessionListParams,
     SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
     SessionNewResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
-    JSONRPC_VERSION,
+    UsageSummaryParams, JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -241,6 +241,21 @@ async fn dispatch(
         methods::MODEL_REMOVE => {
             let p: ModelRemoveParams = parse(params, method)?;
             respond(server.model_remove(p))
+        }
+
+        methods::USAGE_SUMMARY => {
+            // 无参方法：客户端常顺手传个 {}（见 model/profiles 的同一段注释）。
+            if let Some(value) = params {
+                if value.as_object().is_some_and(|o| !o.is_empty()) {
+                    return Err(ErrorObject {
+                        code: codes::INVALID_PARAMS,
+                        message: format!("{method} 不接受参数"),
+                        data: None,
+                    });
+                }
+            }
+            let _: UsageSummaryParams = UsageSummaryParams;
+            respond(server.usage_summary().await)
         }
 
         methods::MODEL_LIST => {

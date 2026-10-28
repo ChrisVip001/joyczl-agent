@@ -20,4 +20,5 @@ export const METHODS = {
   MODEL_PROFILES: "model/profiles",
   MODEL_SAVE: "model/save",
   MODEL_REMOVE: "model/remove",
+  USAGE_SUMMARY: "usage/summary",
 } as const;

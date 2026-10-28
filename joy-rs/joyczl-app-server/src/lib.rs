@@ -128,6 +128,8 @@ pub struct Server {
     pub(crate) facts: Facts,
     pub(crate) episodes: Episodes,
     pub(crate) chat: Chat,
+    /// 用量台账（迁移 0010）：只记账不强制。
+    pub(crate) usage: joyczl_state::Usage,
     pub(crate) calendar: Calendar,
     pub(crate) settings: Arc<RwLock<Settings>>,
     pub(crate) resolved: Arc<RwLock<Option<Resolved>>>,
@@ -239,6 +241,7 @@ impl Server {
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
         let chat = Chat::new(pool.clone());
+        let usage = joyczl_state::Usage::new(pool.clone());
         let calendar = Calendar::new(pool.clone());
 
         // 子代理：**默认关着**，开了才注册。runner 拿到的是「这一份工具表的
@@ -273,6 +276,7 @@ impl Server {
             facts,
             episodes,
             chat,
+            usage,
             calendar,
             settings,
             resolved,

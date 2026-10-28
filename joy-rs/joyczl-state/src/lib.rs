@@ -21,6 +21,7 @@ pub mod facts;
 pub mod fts;
 pub mod jobs;
 pub mod store;
+pub mod usage;
 
 pub use calendar::{Calendar, CalendarRow};
 pub use chat::{Chat, MessageRow, SessionRow};
@@ -29,6 +30,7 @@ pub use episodes::{EpisodeRow, Episodes};
 pub use facts::{FactRow, Facts};
 pub use jobs::{JobRow, Jobs};
 pub use store::{EpisodicStore, SemanticStore};
+pub use usage::{Usage, UsageByModel, UsageSummary};
 
 #[cfg(test)]
 #[path = "state_tests.rs"]

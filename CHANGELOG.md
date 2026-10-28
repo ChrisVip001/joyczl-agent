@@ -4,6 +4,19 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### M2d: a usage ledger (accounting only, no enforcement)
+
+- Migration 0010 `usage_ledger`: one row per turn (session/provider/model/
+  input/output); the `usage/summary` protocol method returns per-model
+  aggregates and totals; a write failure **never blocks the turn** (the ledger
+  is a sidecar) — one stderr line and on it goes.
+- **Deliberately no cost column**: under BYOK the money shows up on each user's
+  own provider bill; rates are the deployment's business (tokens are recorded,
+  multiply whenever needed). hermes carries `estimated_cost_usd` — that waits
+  for platform-provided keys (M4); today it would be made-up numbers.
+- In hub mode this is per-user accounting: one home, one ledger per user;
+  cross-user aggregation belongs to an admin surface (M4).
+
 ### M2: multi-user on one machine (`joy hub`) — the shape teams can use
 
 - **`joy hub adduser <name> --root <dir>`**: mints a token (getrandom, 64 hex,

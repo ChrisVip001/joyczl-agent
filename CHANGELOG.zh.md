@@ -4,6 +4,17 @@
 
 ## 0.7.0 — 向当前最优实现对齐（工作区版本；`v0.5.0` 是上一个已打 tag 的发布）
 
+### M2d：用量台账（只记账，不强制）
+
+- 迁移 0010 `usage_ledger`：每 turn 一行（session/provider/model/输入/输出），
+  `usage/summary` 协议方法给出 per-model 聚合 + 总数；写失败**不拦 turn**（记账
+  是旁路）—— stderr 说一声就继续。
+- **刻意没有成本列**：BYOK 模式下钱记在用户自己的厂商账单上，费率是部署方的事
+  （token 在，费率随时能乘）。hermes 记了 `estimated_cost_usd` —— 等平台供 key
+  （M4）再补，现在填的是拍脑袋数字。
+- hub 模式下这就是 per-user 记账：每个用户一个 home 一个台账；跨用户汇总是
+  管理面的活（M4）。
+
 ### M2：多用户单机（`joy hub`）—— 团队能用的形态
 
 - **`joy hub adduser <名字> --root <目录>`**：生成一枚 token（getrandom，64

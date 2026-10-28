@@ -604,6 +604,25 @@ class TurnStartedNotification(BaseModel):
     userMessage: str
 
 
+class UsageByModel(BaseModel):
+    inputTokens: int
+    model: str
+    outputTokens: int
+    provider: str
+    turns: int
+
+
+class UsageSummaryParams(RootModel[None]):
+    root: Annotated[None, Field(title='UsageSummaryParams')]
+
+
+class UsageSummaryResponse(BaseModel):
+    byModel: list[UsageByModel]
+    inputTokens: int
+    outputTokens: int
+    turns: int
+
+
 class ConfigReadResponse(BaseModel):
     config: SettingsView
 

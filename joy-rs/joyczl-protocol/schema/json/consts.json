@@ -27,6 +27,7 @@
     "SESSION_MESSAGES": "session/messages",
     "SESSION_NEW": "session/new",
     "TURN_INTERRUPT": "turn/interrupt",
-    "TURN_START": "turn/start"
+    "TURN_START": "turn/start",
+    "USAGE_SUMMARY": "usage/summary"
   }
 }

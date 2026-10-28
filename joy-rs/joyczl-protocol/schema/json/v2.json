@@ -2344,6 +2344,72 @@
       ],
       "title": "TurnStartedNotification",
       "type": "object"
+    },
+    "UsageByModel": {
+      "description": "`usage/summary` 的应答：per-model 聚合 + 总数。hub 模式下这就是 per-user 记账（每个用户一个 home、一个 state.db，台账天然按人隔离）。",
+      "properties": {
+        "inputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "outputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "turns": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "inputTokens",
+        "model",
+        "outputTokens",
+        "provider",
+        "turns"
+      ],
+      "title": "UsageByModel",
+      "type": "object"
+    },
+    "UsageSummaryParams": {
+      "title": "UsageSummaryParams",
+      "type": "null"
+    },
+    "UsageSummaryResponse": {
+      "properties": {
+        "byModel": {
+          "items": {
+            "$ref": "#/definitions/UsageByModel"
+          },
+          "type": "array"
+        },
+        "inputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "outputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "turns": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "byModel",
+        "inputTokens",
+        "outputTokens",
+        "turns"
+      ],
+      "title": "UsageSummaryResponse",
+      "type": "object"
     }
   },
   "title": "JoyProtocolV2"

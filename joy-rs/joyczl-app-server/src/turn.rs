@@ -448,6 +448,22 @@ pub async fn run_turn(
         }),
     );
 
+    // 用量台账（迁移 0010）：只记账不强制。写失败不拦 turn —— 记账是旁路，
+    // 不是主路；stderr 说一声就够。
+    if let Err(e) = server
+        .usage
+        .record(
+            &session_id,
+            &meta.provider,
+            &meta.model,
+            result.usage.input_tokens,
+            result.usage.output_tokens,
+        )
+        .await
+    {
+        eprintln!("(joy) 用量没记进台账：{e}");
+    }
+
     server
         .chat
         .append_exchange(
