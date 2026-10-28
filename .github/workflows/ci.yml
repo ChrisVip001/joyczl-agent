@@ -118,6 +118,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p joyczl-cli
+      # 冒烟里的 dashboard/hub 段需要一个真的 dist —— 而且新鲜度守卫会让
+      # 「源码比 dist 新/没有 dist」的 hub 拒绝启动（fail-closed），所以这里
+      # 必须先构建。justfile 的 smoke-dashboard: build dashboard-build 早写明
+      # 了这个依赖，CI 漏了，守卫上线第一天就把它抓了出来。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install && npm run build --workspace @joy/dashboard
+        working-directory: joy-ts
       - run: ./target/debug/joy eval ../evals/deterministic
       # 冒烟是在真进程上跑协议：eval 用的是进程内的 scripted 模型，唯有这一条
       # 走真的 app-server + 真的 stdio JSON-RPC。它守的是 Rust 与前端之间那条缝
