@@ -7,6 +7,7 @@
 //! 读得懂这个文件，就读得懂 Joy 能被配置成什么样。
 
 pub mod models;
+pub mod routes;
 
 use std::path::PathBuf;
 

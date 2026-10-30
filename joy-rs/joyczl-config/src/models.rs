@@ -117,6 +117,17 @@ pub fn apply_active(
     let Some(profile) = active_profile(models) else {
         return;
     };
+    apply_profile(profile, home, store, settings);
+}
+
+/// 把**任意一套** profile 套进 Settings（路由按档位选模型时用 —— 与 apply_active
+/// 共用同一条取 key 的路径）。
+pub fn apply_profile(
+    profile: &ModelProfile,
+    home: &Path,
+    store: &mut SecretStore,
+    settings: &mut crate::Settings,
+) {
     settings.provider = profile.provider.clone();
     settings.model = profile.model.clone();
     settings.small_model = profile.small_model.clone();

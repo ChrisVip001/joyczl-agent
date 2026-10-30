@@ -318,6 +318,8 @@ impl Server {
         let label = current_label(&settings);
         self.set_settings(settings);
         self.set_resolved(resolved);
+        // profile 刚被改过/删过：按档位缓存的解析结果全部作废，下一轮重解析。
+        self.route_cache.lock().expect("route 缓存锁不该中毒").clear();
         label
     }
 }

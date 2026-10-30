@@ -54,4 +54,10 @@ export type TurnMeta = {
    * 这个目标到这一轮为止续了几轮。没设目标就是 0。
    */
   goalRounds: number;
+  /**
+   * 这轮的模型是怎么选的（路由，见 route.rs）：`auto:reasoning → ds-r1`
+   * / `fallback: …`。fixed 模式与「选中的就是 active」时是 `None` ——
+   * 页脚保持干净，只有真的发生了选择/回落才说话。
+   */
+  routeReason: string | null;
 };

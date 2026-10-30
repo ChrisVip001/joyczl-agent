@@ -2369,6 +2369,14 @@
           "format": "int32",
           "type": "integer"
         },
+        "routeReason": {
+          "default": null,
+          "description": "这轮的模型是怎么选的（路由，见 route.rs）：`auto:reasoning → ds-r1` / `fallback: …`。fixed 模式与「选中的就是 active」时是 `None` —— 页脚保持干净，只有真的发生了选择/回落才说话。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tools": {
           "items": {
             "$ref": "#/definitions/ToolCallRecord"

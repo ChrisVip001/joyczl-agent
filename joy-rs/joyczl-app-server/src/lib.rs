@@ -23,6 +23,7 @@ mod jobs;
 pub mod lock;
 pub mod models;
 mod stdio;
+mod route;
 mod subagent;
 mod trace;
 mod turn;
@@ -155,6 +156,9 @@ pub struct Server {
     /// 切换模型 = 改这里 + 重解析 provider，不用重启。
     pub(crate) models: models::Models,
     pub(crate) secrets: models::Secrets,
+    /// 按档位解析出的模型（route.rs）：每个 profile 只解析一次 —— provider
+    /// client 连着连接池。profile 被改/删时由 `reapply` 整表作废。
+    pub(crate) route_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, Resolved>>>,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -189,6 +193,16 @@ impl Server {
         let secrets = models::new_secrets();
         models::apply_at_boot(&mut settings, &secrets);
         let models = models::new_models(joyczl_config::models::load_models(&settings.home));
+        // 路由开了就显形：哪份文件、哪个模式 —— 「这轮为什么用它」可解释的第一步。
+        let routes_boot = joyczl_config::routes::load_routes(&settings.home);
+        if routes_boot.mode == joyczl_config::routes::RouteMode::Auto {
+            eprintln!(
+                "(joy) 模型路由：auto（{}，{} 个档位映射）",
+                joyczl_config::routes::routes_path(&settings.home).display(),
+                routes_boot.routes.len()
+            );
+        }
+        let route_cache = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         let settings = Arc::new(RwLock::new(settings));
         // 读锁只在表达式里拿一下：**绝不跨 await 持有**（clippy 会拦，也确实
         // 该拦 —— 一个被 await 卡住的读锁会把整台服务器堵死）。
@@ -297,6 +311,7 @@ impl Server {
             jobs: jobs_handle,
             goals: goal::store(),
             models,
+            route_cache,
             secrets,
             pool,
         }

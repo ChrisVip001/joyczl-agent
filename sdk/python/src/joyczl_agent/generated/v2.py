@@ -842,6 +842,12 @@ class TurnMeta(BaseModel):
         int | None,
         Field(description='这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。'),
     ] = 0
+    routeReason: Annotated[
+        str | None,
+        Field(
+            description='这轮的模型是怎么选的（路由，见 route.rs）：`auto:reasoning → ds-r1` / `fallback: …`。fixed 模式与「选中的就是 active」时是 `None` —— 页脚保持干净，只有真的发生了选择/回落才说话。'
+        ),
+    ] = None
     tools: list[ToolCallRecord]
     usage: Annotated[
         TokenUsage | None,

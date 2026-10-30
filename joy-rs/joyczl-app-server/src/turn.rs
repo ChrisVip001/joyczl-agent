@@ -82,6 +82,10 @@ pub async fn run_turn(
         data: None,
     })?;
 
+    // 按任务档位自动选模型（route.rs）。fixed 模式或选中的就是 active 时
+    // 原样返回、零开销；回落与选择的原因进 route_reason，不静默。
+    let (resolved, turn_route) = server.resolved_for_turn(resolved, &params.message);
+
     let session_id = params
         .session_id
         .clone()
@@ -182,6 +186,7 @@ pub async fn run_turn(
                     sink,
                     interrupt: Some(interrupt.clone()),
                     turn_cwd: turn_cwd.clone(),
+                route_reason: turn_route.clone(),
                 },
             )
             .await?
@@ -199,6 +204,7 @@ pub async fn run_turn(
                             sink,
                             interrupt: Some(interrupt.clone()),
                             turn_cwd: turn_cwd.clone(),
+                        route_reason: turn_route.clone(),
                         },
                         None,
                     )
@@ -262,6 +268,7 @@ pub async fn run_turn(
                 sink,
                 interrupt: Some(interrupt.clone()),
                 turn_cwd: turn_cwd.clone(),
+            route_reason: turn_route.clone(),
             },
             None,
         )
@@ -369,6 +376,7 @@ pub async fn run_turn(
                     sink,
                     interrupt: Some(interrupt.clone()),
                     turn_cwd: turn_cwd.clone(),
+                route_reason: turn_route.clone(),
                 },
                 None,
             )
@@ -436,6 +444,7 @@ pub async fn run_turn(
         retries: retries.load(Ordering::Relaxed),
         goal_status: goal_status.clone(),
         goal_rounds,
+        route_reason: turn_route.clone(),
     };
 
     let meta_json = serde_json::to_string(&meta).ok();
@@ -648,6 +657,8 @@ struct TurnFrame<'a> {
     sink: &'a EventSink,
     interrupt: Option<Arc<joyczl_loop::Interrupt>>,
     turn_cwd: Option<std::path::PathBuf>,
+    /// 这轮的路由决策原因（route.rs）；None = 没发生选择。
+    route_reason: Option<String>,
 }
 
 /// 本轮工作目录的准入校验（hermes 的 fail-closed）：给了就必须是已存在的
@@ -690,6 +701,8 @@ async fn full_turn(
         sink,
         interrupt,
         turn_cwd,
+        // route_reason 不在这里用：TurnMeta 由 run_turn 组装（它持有 turn_route）。
+        ..
     } = frame;
     let settings = server.settings();
 
@@ -925,6 +938,7 @@ async fn graph_route(
         sink,
         interrupt,
         turn_cwd,
+        route_reason,
     } = frame;
     if !server.settings().graph_workflows {
         return Ok(None);
@@ -979,10 +993,12 @@ async fn graph_route(
         let sink = sink.clone();
         let (turn_id, session_id) = (turn_id.to_string(), session_id.to_string());
         let turn_cwd = turn_cwd.clone();
+        let route_reason = route_reason.clone();
         let slot = slot.clone();
         Arc::new(move |ctx: NodeCtx| {
             // FullFn 是 Fn（引擎可能多次调）：这里只能克隆，不能把捕获的值移走。
             let turn_cwd = turn_cwd.clone();
+            let route_reason = route_reason.clone();
             let (server, resolved, sink) = (server.clone(), resolved.clone(), sink.clone());
             let (turn_id, session_id, slot) = (turn_id.clone(), session_id.clone(), slot.clone());
             let interrupt = interrupt.clone();
@@ -1001,6 +1017,7 @@ async fn graph_route(
                         sink: &sink,
                         interrupt,
                         turn_cwd,
+                        route_reason,
                     },
                     inner,
                 )
