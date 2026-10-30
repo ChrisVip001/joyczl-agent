@@ -73,6 +73,7 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
   itself, why, deadline). Answer it with `approval/respond` or the turn stays
   blocked; **no answer is a refusal**.
 * `textDelta`: streamed text increment; only with `stream:true`.
+* `cwd` (optional): the turn's working directory. Must be an absolute path that exists (fail-closed, hermes-style); `run_command` resolves its fallback chain as `args.cwd > cwd > process cwd`, and relative paths in `read_file`/`list_dir` resolve against it (dsh's session working-directory). Subagents inherit the parent turn's cwd.
 * `toolStarted` / `toolCompleted`: tool begin and end (duration, status).
 * `turnCompleted`: `reply`, `iterations`, `usage`, `meta` (gate / graph /
   tools / model / provider / latency / interrupted / guardHits / retries).

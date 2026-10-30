@@ -12,6 +12,7 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm
     ToolCtx {
+        cwd: None,
         approval: None,
         jobs: None,
         hooks: None,
@@ -305,4 +306,36 @@ async fn list_dir_edge_cases_are_honest() {
     let out = run(&registry, &ctx, "list_dir", json!({"path": file})).await;
     assert!(out.starts_with("Error:"), "{out}");
     assert!(out.contains("read_file"), "{out}");
+}
+
+/// 相对路径按本轮工作目录解析（dsh 语义）：ctx.cwd 设了，"note.txt" 就在它
+/// 下面找 —— 不再按进程 cwd，也不会静默回退。
+#[tokio::test]
+async fn relative_paths_resolve_against_the_turn_cwd() {
+    let registry = registry();
+    let mut ctx = ctx().await;
+    let work = tempfile::tempdir().expect("工作目录");
+    std::fs::write(work.path().join("note.txt"), "来自工作目录").unwrap();
+
+    ctx.cwd = Some(work.path().to_path_buf());
+    let out = run(&registry, &ctx, "read_file", json!({"path": "note.txt"})).await;
+    assert!(out.contains("来自工作目录"), "{out}");
+}
+
+/// 没设 ctx.cwd 时行为不变：相对路径仍按进程 cwd（旧行为，向后兼容）。
+#[tokio::test]
+async fn without_a_turn_cwd_relative_paths_still_use_process_cwd() {
+    let registry = registry();
+    let ctx = ctx().await;
+    std::fs::write(ctx.home.join("legacy.txt"), "旧行为").unwrap();
+
+    // 进程 cwd 不是 home，所以用绝对路径能读、裸相对路径找不到 —— 证明没被偷偷改语义。
+    let out = run(
+        &registry,
+        &ctx,
+        "read_file",
+        json!({"path": ctx.home.join("legacy.txt")}),
+    )
+    .await;
+    assert!(out.contains("旧行为"), "{out}");
 }

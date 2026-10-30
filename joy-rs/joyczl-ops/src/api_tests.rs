@@ -59,3 +59,26 @@ fn 没有轮次id的通知_认下之后照常转发() {
     // 但没认下之前，它们同样无处可去。
     assert_eq!(belongs(&consolidation, "s1", None), None);
 }
+
+/// 扩展名白名单：只放行 1-8 位字母数字；双扩展只看最后一段；路径形状、
+/// 汉字、超长一律不放 —— 白名单之外的都落 `bin`（不报错，文件照样能传）。
+#[test]
+fn upload_extension_whitelist_is_strict() {
+    use super::safe_extension;
+
+    assert_eq!(safe_extension("a.txt").as_deref(), Some("txt"));
+    assert_eq!(safe_extension("报告.PDF").as_deref(), Some("pdf"));
+    assert_eq!(safe_extension("no_ext").as_deref(), None, "无扩展名");
+    assert_eq!(
+        safe_extension("x.tar.gz").as_deref(),
+        Some("gz"),
+        "只看最后一段"
+    );
+    assert_eq!(
+        safe_extension("../../etc/passwd").as_deref(),
+        None,
+        "路径形状进不来"
+    );
+    assert_eq!(safe_extension("a.带汉字").as_deref(), None);
+    assert_eq!(safe_extension("a.0123456789").as_deref(), None, "超过 8 位");
+}

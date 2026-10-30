@@ -309,6 +309,7 @@ impl Server {
     pub(crate) fn tool_ctx(
         &self,
         session_id: &str,
+        cwd: Option<std::path::PathBuf>,
         approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
     ) -> ToolCtx {
         let settings = self.settings();
@@ -320,6 +321,7 @@ impl Server {
             &settings.home,
             Injections {
                 session_id: session_id.to_string(),
+                cwd,
                 approval,
                 hooks: self.hooks.clone(),
                 jobs: self.jobs.clone(),
@@ -699,6 +701,8 @@ pub(crate) fn tool_result_budget(settings: &Settings) -> joyczl_loop::budget::To
 #[derive(Clone, Default)]
 pub(crate) struct Injections {
     pub session_id: String,
+    /// 本轮工作目录；None = 进程 cwd。
+    pub cwd: Option<std::path::PathBuf>,
     pub approval: Option<Arc<dyn joyczl_tools::approval::ApprovalBroker>>,
     pub hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
     pub jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
@@ -719,6 +723,7 @@ pub(crate) fn tool_ctx(
         calendar: calendar.clone(),
         home: home.to_path_buf(),
         session_id: injected.session_id,
+        cwd: injected.cwd,
         approval: injected.approval,
         hooks: injected.hooks,
         jobs: injected.jobs,

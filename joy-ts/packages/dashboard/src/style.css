@@ -131,6 +131,18 @@ header {
   border-radius: 999px;
   padding: 2px 10px;
 }
+/* 头部的模型下拉长得跟 pill 一样（pi 的 /model 形态）：能点，但不抢眼。 */
+select.pill {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  max-width: 240px;
+}
+select.pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 .right {
   display: flex;
   align-items: center;
@@ -199,6 +211,13 @@ main {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 顶栏的工作目录输入：会话名旁边，占剩余宽度。 */
+.bar .cwd {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  padding: 2px var(--sp-2);
 }
 .bar.goal input {
   flex: 1;
@@ -367,11 +386,31 @@ main {
 /* -- 输入区 ---------------------------------------------------------------- */
 .composer {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--line);
   background: var(--bg-raised);
+  flex: none;
+}
+/* 暂存区占满一整行；附件按钮是方块小钮。 */
+.staged {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.staged .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.staged .ghost {
+  padding: 0 6px;
+  line-height: 1.2;
+}
+.attach {
   flex: none;
 }
 .composer textarea {

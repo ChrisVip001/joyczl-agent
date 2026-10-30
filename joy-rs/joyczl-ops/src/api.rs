@@ -159,6 +159,95 @@ pub async fn schedules(Extension(app): Extension<Arc<AppServer>>) -> Response {
     }
 }
 
+/// 单个上传文件的上限（openhuman 的预算表）：20MB。
+const UPLOAD_MAX_BYTES: usize = 20 * 1024 * 1024;
+
+/// 扩展名白名单：1-8 位字母数字。双扩展、路径段、奇怪字符都不进路径。
+fn safe_extension(name: &str) -> Option<String> {
+    let ext = std::path::Path::new(name).extension()?.to_str()?;
+    let ok = !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric());
+    ok.then(|| ext.to_ascii_lowercase())
+}
+
+/// `POST /api/upload?name=<原始文件名>` —— body 是文件原始字节。
+///
+/// 通道选 octet-stream 而不是 multipart：单文件用不着 multipart 的信封，
+/// 还避开了解析器这个安全雷区（零 feature、零传递依赖）。
+/// 落盘名**完全由服务端生成**（spill 同款纪律：用户输入进不了路径），
+/// 原始名只取扩展名过白名单。返回相对 home 的路径 —— 前端把它注进消息，
+/// 模型用 read_file 自己读（pi/codex 的「引用优先」：引用与读取解耦）。
+pub async fn upload(
+    Extension(app): Extension<Arc<AppServer>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> Response {
+    if body.len() > UPLOAD_MAX_BYTES {
+        return failed(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: format!("文件超过 20MB 上限（{} 字节）", body.len()),
+                data: None,
+            },
+        );
+    }
+    if body.is_empty() {
+        return failed(
+            StatusCode::BAD_REQUEST,
+            ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: "空文件不收。".into(),
+                data: None,
+            },
+        );
+    }
+    let ext = params
+        .get("name")
+        .and_then(|n| safe_extension(n))
+        .unwrap_or_else(|| "bin".to_string());
+    // home 走协议取（AppServer 是子进程句柄，没有本地字段）——上传是低频操作，
+    // 多一次往返无所谓，换来的是 ops 层继续保持「只通过协议说话」的纪律。
+    let config: ConfigReadResponse = match app.request(methods::CONFIG_READ, json!({})).await {
+        Ok(config) => config,
+        Err(error) => return failed(StatusCode::BAD_GATEWAY, error),
+    };
+    let home = std::path::PathBuf::from(config.config.home);
+    let now = Local::now();
+    let dir = home.join("uploads").join(now.format("%Y%m%d").to_string());
+    if let Err(why) = tokio::fs::create_dir_all(&dir).await {
+        return failed(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorObject {
+                code: codes::INTERNAL_ERROR,
+                message: format!("建目录失败：{why}"),
+                data: None,
+            },
+        );
+    }
+    // 名字里只有服务端生成的成分：时间戳 + 纳秒后缀 —— 撞名不可能，覆盖不了旧文件。
+    let name = format!(
+        "file-{}-{:x}.{ext}",
+        now.format("%H%M%S"),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    );
+    let full = dir.join(&name);
+    if let Err(why) = tokio::fs::write(&full, &body).await {
+        return failed(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorObject {
+                code: codes::INTERNAL_ERROR,
+                message: format!("写文件失败：{why}"),
+                data: None,
+            },
+        );
+    }
+    let date = now.format("%Y%m%d");
+    Json(json!({ "path": format!("uploads/{date}/{name}") })).into_response()
+}
+
 pub async fn model_profiles(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<ModelProfilesResponse>(methods::MODEL_PROFILES, json!({}))

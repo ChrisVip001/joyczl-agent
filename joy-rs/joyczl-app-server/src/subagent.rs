@@ -102,6 +102,7 @@ impl SubagentRunner for Delegated {
         task: String,
         max_iterations: Option<i32>,
         result_schema: Option<serde_json::Value>,
+        parent_cwd: Option<std::path::PathBuf>,
     ) -> BoxFut {
         let tools = self.tools.clone();
         let settings = self.settings.clone();
@@ -110,6 +111,7 @@ impl SubagentRunner for Delegated {
         let facts = self.facts.clone();
         let episodes = self.episodes.clone();
         let chat = self.chat.clone();
+        let cwd = parent_cwd;
         let calendar = self.calendar.clone();
 
         Box::pin(async move {
@@ -167,6 +169,9 @@ impl SubagentRunner for Delegated {
                 &home,
                 crate::Injections {
                     session_id: child_session.clone(),
+                    // 子代理跟父任务在同一个目录里干活（dsh 语义）—— 父轮 cwd 由
+                    // run() 的 parent_cwd 带进来。
+                    cwd,
                     // 子代理不碰后台作业：那是父轮的活，它也没有批准通道。
                     jobs: None,
                     // 子代理没有批准通道（它不该阻塞在人类身上），但有钩子：工具级

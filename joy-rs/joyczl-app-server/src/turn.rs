@@ -97,6 +97,10 @@ pub async fn run_turn(
         turn_id: turn_id.clone(),
     };
 
+    // 本轮工作目录：协议给了就校验（hermes 的 fail-closed）。起轮之前就拒绝，
+    // 不留下半个 turn。
+    let turn_cwd = resolve_turn_cwd(&params.cwd)?;
+
     sink.notification(ServerNotification::TurnStarted(TurnStartedNotification {
         turn_id: turn_id.clone(),
         session_id: session_id.clone(),
@@ -172,10 +176,13 @@ pub async fn run_turn(
                 server,
                 &resolved,
                 &message,
-                &session_id,
-                &turn_id,
-                sink,
-                Some(interrupt.clone()),
+                TurnFrame {
+                    session_id: &session_id,
+                    turn_id: &turn_id,
+                    sink,
+                    interrupt: Some(interrupt.clone()),
+                    turn_cwd: turn_cwd.clone(),
+                },
             )
             .await?
             {
@@ -186,11 +193,14 @@ pub async fn run_turn(
                         server,
                         &resolved,
                         &message,
-                        &session_id,
-                        &turn_id,
-                        sink,
+                        TurnFrame {
+                            session_id: &session_id,
+                            turn_id: &turn_id,
+                            sink,
+                            interrupt: Some(interrupt.clone()),
+                            turn_cwd: turn_cwd.clone(),
+                        },
                         None,
-                        Some(interrupt.clone()),
                     )
                     .await?,
                 )),
@@ -246,11 +256,14 @@ pub async fn run_turn(
             server,
             &resolved,
             &reason,
-            &session_id,
-            &turn_id,
-            sink,
+            TurnFrame {
+                session_id: &session_id,
+                turn_id: &turn_id,
+                sink,
+                interrupt: Some(interrupt.clone()),
+                turn_cwd: turn_cwd.clone(),
+            },
             None,
-            Some(interrupt.clone()),
         )
         .await?;
     }
@@ -350,11 +363,14 @@ pub async fn run_turn(
                 server,
                 &resolved,
                 &judgement.reason,
-                &session_id,
-                &turn_id,
-                sink,
+                TurnFrame {
+                    session_id: &session_id,
+                    turn_id: &turn_id,
+                    sink,
+                    interrupt: Some(interrupt.clone()),
+                    turn_cwd: turn_cwd.clone(),
+                },
                 None,
-                Some(interrupt.clone()),
             )
             .await?;
         }
@@ -623,18 +639,58 @@ fn is_context_overflow(error: &anyhow::Error) -> bool {
         .is_some_and(joyczl_provider::ProviderError::is_context_overflow)
 }
 
-/// `interrupt` 一路传给 loop：模型调用与工具执行都跟「取消」竞速。
-#[allow(clippy::too_many_arguments)]
+/// 一轮的定位信息：会话、轮次、事件出口、取消令牌、工作目录。
+/// 收成结构体与 Injections 同一条理由：它们**总是一起变**，
+/// 而 clippy 会在第 8 个参数上拦下来。
+struct TurnFrame<'a> {
+    session_id: &'a str,
+    turn_id: &'a str,
+    sink: &'a EventSink,
+    interrupt: Option<Arc<joyczl_loop::Interrupt>>,
+    turn_cwd: Option<std::path::PathBuf>,
+}
+
+/// 本轮工作目录的准入校验（hermes 的 fail-closed）：给了就必须是已存在的
+/// 绝对路径 —— 静默回退会让「我以为在 A 目录干活」变成最难查的坏。
+/// 空串视同没给。
+pub(crate) fn resolve_turn_cwd(
+    cwd: &Option<String>,
+) -> Result<Option<std::path::PathBuf>, ErrorObject> {
+    let Some(text) = cwd.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let path = std::path::PathBuf::from(text);
+    if !path.is_absolute() {
+        return Err(ErrorObject {
+            code: codes::INVALID_PARAMS,
+            message: format!("cwd '{text}' 必须是绝对路径"),
+            data: None,
+        });
+    }
+    if !path.is_dir() {
+        return Err(ErrorObject {
+            code: codes::INVALID_PARAMS,
+            message: format!("cwd '{text}' 不存在或不是目录"),
+            data: None,
+        });
+    }
+    Ok(Some(path))
+}
+
 async fn full_turn(
     server: &Server,
     resolved: &Resolved,
     message: &str,
-    session_id: &str,
-    turn_id: &str,
-    sink: &EventSink,
+    frame: TurnFrame<'_>,
     inner: Option<joyczl_loop::Observer>,
-    interrupt: Option<Arc<joyczl_loop::Interrupt>>,
 ) -> Result<FullTurn, ErrorObject> {
+    let TurnFrame {
+        session_id,
+        turn_id,
+        sink,
+        interrupt,
+        turn_cwd,
+    } = frame;
     let settings = server.settings();
 
     // ---- 检索门：这轮要不要翻记忆？
@@ -754,7 +810,7 @@ async fn full_turn(
     // ---- THE LOOP
     // 工具环境只有一处构造（见 lib.rs 的 tool_ctx）—— 子代理走同一个（它传 None）。
     // 批准通道按这一轮建：`never` 模式下是 None，需要批准的动作直接拒绝。
-    let ctx = server.tool_ctx(session_id, server.approval_bridge(turn_id, sink));
+    let ctx = server.tool_ctx(session_id, turn_cwd, server.approval_bridge(turn_id, sink));
 
     // 工具**开始**的通知得在执行前发出去：客户端才能画出"正在调用 X"。
     // 图里的节点事件出口（inner）若也在，就两个都叫 —— 互不挡道。
@@ -861,11 +917,15 @@ async fn graph_route(
     server: &Server,
     resolved: &Resolved,
     message: &str,
-    session_id: &str,
-    turn_id: &str,
-    sink: &EventSink,
-    interrupt: Option<Arc<joyczl_loop::Interrupt>>,
+    frame: TurnFrame<'_>,
 ) -> Result<Option<Routed>, ErrorObject> {
+    let TurnFrame {
+        session_id,
+        turn_id,
+        sink,
+        interrupt,
+        turn_cwd,
+    } = frame;
     if !server.settings().graph_workflows {
         return Ok(None);
     }
@@ -918,8 +978,11 @@ async fn graph_route(
         let resolved = resolved.clone();
         let sink = sink.clone();
         let (turn_id, session_id) = (turn_id.to_string(), session_id.to_string());
+        let turn_cwd = turn_cwd.clone();
         let slot = slot.clone();
         Arc::new(move |ctx: NodeCtx| {
+            // FullFn 是 Fn（引擎可能多次调）：这里只能克隆，不能把捕获的值移走。
+            let turn_cwd = turn_cwd.clone();
             let (server, resolved, sink) = (server.clone(), resolved.clone(), sink.clone());
             let (turn_id, session_id, slot) = (turn_id.clone(), session_id.clone(), slot.clone());
             let interrupt = interrupt.clone();
@@ -932,11 +995,14 @@ async fn graph_route(
                     &server,
                     &resolved,
                     &message,
-                    &session_id,
-                    &turn_id,
-                    &sink,
+                    TurnFrame {
+                        session_id: &session_id,
+                        turn_id: &turn_id,
+                        sink: &sink,
+                        interrupt,
+                        turn_cwd,
+                    },
                     inner,
-                    interrupt,
                 )
                 .await;
                 // 先记下来，再决定怎么回引擎：错只在引擎那边留个记录，

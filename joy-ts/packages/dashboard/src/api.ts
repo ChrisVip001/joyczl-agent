@@ -255,6 +255,25 @@ export async function fetchApprovals(): Promise<ApprovalLogResponse> {
   return (await response.json()) as ApprovalLogResponse;
 }
 
+/**
+ * 上传一个文件，返回相对 home 的路径。
+ *
+ * 通道是原始字节而不是 multipart：单文件用不着信封，服务端也少一个解析器。
+ * 落盘名由服务端生成（用户输入进不了路径）；返回的路径前端会拼上 home
+ * 变成绝对路径注进消息 —— 模型用 read_file 自己读（引用与读取解耦）。
+ */
+export async function uploadFile(file: File): Promise<string> {
+  const query = new URLSearchParams({ name: file.name });
+  const response = await apiFetch(`/api/upload?${query.toString()}`, {
+    method: "POST",
+    headers: { "content-type": "application/octet-stream" },
+    body: file,
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  const parsed = (await response.json()) as { path: string };
+  return parsed.path;
+}
+
 /** 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。 */
 export async function fetchSchedules(): Promise<ScheduleListResponse> {
   const response = await apiFetch("/api/schedules", { headers: { accept: "application/json" } });

@@ -204,6 +204,7 @@ async fn bind_web(home: &std::path::Path) -> WebScanFn {
         episodes: joyczl_state::Episodes::new(pool.clone()),
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
+        cwd: None, // gather 是离线汇总：进程 cwd 语义。
         home: home.to_path_buf(),
     };
     let topics = std::env::var("JOY_GH_REPO").unwrap_or_else(|_| DEFAULT_TOPICS.to_string());

@@ -555,13 +555,14 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     .get("background")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                // 可写的根：显式给的工作目录（或进程当前目录）+ home。
-                // home 在列表里是因为 Joy 自己的状态（outbox 等）就住那儿。
+                // 可写的根：解析链 args.cwd > ctx.cwd（本轮工作目录）> 进程当前目录，
+                // 再加 home（Joy 自己的状态如 outbox 就住那儿）。
                 let cwd = args
                     .get("cwd")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
                     .filter(|p| p.is_dir())
+                    .or_else(|| ctx.cwd.clone())
                     .or_else(|| std::env::current_dir().ok());
                 let mut writable: Vec<PathBuf> = Vec::new();
                 if let Some(cwd) = &cwd {

@@ -80,6 +80,7 @@ fn params_are_camel_case_on_the_wire() {
         session_id: None,
         message: "hi".into(),
         stream: Some(true),
+        cwd: None,
     };
     let v: serde_json::Value = serde_json::to_value(&p).expect("序列化");
     // Option 在 *Params 上也会出现（值为 null），这样前端能区分「没传」和「空」。

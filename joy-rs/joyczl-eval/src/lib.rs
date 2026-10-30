@@ -244,6 +244,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
             session_id: Some(session_id),
             message,
             stream: Some(true),
+            cwd: None,
         };
         let task_server = server.clone();
         let task = tokio::spawn(async move {
@@ -447,6 +448,7 @@ async fn collect_turn(server: &Server, message: &str) -> Result<TurnOutput> {
         session_id: Some("eval".to_string()),
         message: message.to_string(),
         stream: Some(true),
+        cwd: None,
     };
     let task_server = server.clone();
     let task =

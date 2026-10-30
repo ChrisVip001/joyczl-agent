@@ -42,6 +42,18 @@ pub const LIST_MAX_ENTRIES: usize = 500;
 
 /// `~` 展开：模型经常写 `~/docs/x.md`，不展开就是一条误导性的「找不到」。
 /// 只认 `HOME` / `USERPROFILE`，不引依赖。
+/// 相对路径的解析基（dsh 的 session working-directory 语义）：
+/// 本轮工作目录优先，没设就保持现状（进程 cwd）。绝对路径原样返回。
+fn resolve_against_cwd(ctx: &crate::ToolCtx, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    match &ctx.cwd {
+        Some(base) => base.join(path),
+        None => path,
+    }
+}
+
 pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     let home = || {
         std::env::var_os("HOME")
@@ -157,7 +169,7 @@ async fn execute_read(
     cache: &Mutex<HashMap<String, u64>>,
 ) -> Result<String> {
     let raw = crate::require_str(args, "path")?;
-    let path = expand_tilde(&raw);
+    let path = resolve_against_cwd(ctx, expand_tilde(&raw));
     let offset = crate::opt_u32(args, "offset", 1)?.max(1);
     let limit = crate::opt_u32(args, "limit", READ_MAX_LINES)?.clamp(1, READ_MAX_LINES);
 
@@ -166,9 +178,7 @@ async fn execute_read(
         if path.is_dir() {
             return Err(anyhow!("{raw} 是目录，不是文件 —— 列目录用 list_dir。"));
         }
-        return Err(anyhow!(
-            "找不到文件：{raw}（相对路径相对 Joy 启动时所在目录）"
-        ));
+        return Err(anyhow!("找不到文件：{raw}（相对路径相对本轮工作目录）"));
     }
 
     let scan_path = path.clone();
@@ -233,18 +243,20 @@ pub fn list_dir() -> Tool {
                 }
             }
         }),
-        handler: Arc::new(|_ctx, args| Box::pin(async move { execute_list(&args).await })),
+        handler: Arc::new(move |ctx, args| {
+            Box::pin(async move { execute_list(&ctx, &args).await })
+        }),
     }
 }
 
-async fn execute_list(args: &Value) -> Result<String> {
+async fn execute_list(ctx: &crate::ToolCtx, args: &Value) -> Result<String> {
     let raw = args
         .get("path")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(".");
-    let path = expand_tilde(raw);
+    let path = resolve_against_cwd(ctx, expand_tilde(raw));
     if !path.is_dir() {
         return Err(anyhow!(
             "{raw} 不是目录（不存在，或者是个文件 —— 文件用 read_file 读）。"

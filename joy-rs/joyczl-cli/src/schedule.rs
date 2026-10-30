@@ -424,6 +424,8 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         session_id: Some(format!("schedule:{}", job.name)),
         message: job.prompt.clone(),
         stream: Some(true),
+        // 定时任务不设工作目录：跑在 home 语义下最稳（脚本自己用绝对路径）。
+        cwd: None,
     };
     let server_for_turn = server.clone();
     let task = tokio::spawn(async move {

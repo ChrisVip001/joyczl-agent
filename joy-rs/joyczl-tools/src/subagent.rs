@@ -35,6 +35,8 @@ pub trait SubagentRunner: Send + Sync {
         task: String,
         max_iterations: Option<i32>,
         result_schema: Option<Value>,
+        // 父轮的工作目录（dsh 语义：子代理跟父任务在同一个目录里干活）。
+        parent_cwd: Option<std::path::PathBuf>,
     ) -> BoxFut;
 }
 
@@ -79,7 +81,10 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                     .and_then(Value::as_i64)
                     .map(|value| value as i32);
                 let result_schema = args.get("result_schema").cloned().filter(|v| !v.is_null());
-                match runner.run(task, max_iterations, result_schema).await {
+                match runner
+                    .run(task, max_iterations, result_schema, _ctx.cwd.clone())
+                    .await
+                {
                     // 子代理的话是**转述**：过一遍转义与声明头，别让它看起来像系统消息。
                     Ok(summary) => Ok(crate::report::as_report(&summary)),
                     Err(why) => Ok(format!("Error: 子代理没跑成：{why}")),

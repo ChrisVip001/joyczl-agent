@@ -15,6 +15,30 @@ philosophy as the daemon lock: misconfigured should fail to boot, not silently
 serve something stale. Release scenarios (no joy-ts sources present) skip the
 check.
 
+### Three interactions: working directory, file upload, model quick-switch
+
+Taking each best-in-class interaction from codex / deepseek-harness / pi /
+hermes / openhuman and assembling joy's minimal version:
+
+- **Session working directory**: `TurnStartParams.cwd` (codex's per-turn
+  override semantics) → `ToolCtx.cwd`. Admission is fail-closed (hermes: must
+  be an absolute path that exists); exec's fallback chain is
+  `args.cwd > cwd > process cwd`, and `read_file`/`list_dir` resolve relative
+  paths against it (dsh's session working-directory); the cwd joins exec's
+  writable roots (codex's sandbox linkage); subagents inherit the parent
+  turn's cwd. Entries: REPL `/cwd` and the dashboard header.
+- **File upload**: `POST /api/upload` (octet-stream, single file — no multipart
+  parser; 20MB cap). The on-disk name is fully server-generated (only the
+  extension is taken from the user, whitelist-checked — user input never
+  enters the path, same discipline as spill); the frontend stages files, then
+  uploads on send and injects absolute paths into the message — the model
+  reads them with `read_file` (pi's reference-first). Images are not embedded;
+  see limitations.
+- **Model quick-switch**: the header model pill becomes a dropdown (pi's
+  /model form), sharing the same `saveModel({id, makeActive})` path as the
+  model panel — persistent config, without codex's session-vs-global split
+  (joy's profiles are persistent by design).
+
 ### Dashboard redesign: run status, tool cards, data-as-navigation
 
 Referencing openhuman's AgentRunningStatus / ToolBodies / navConfig and

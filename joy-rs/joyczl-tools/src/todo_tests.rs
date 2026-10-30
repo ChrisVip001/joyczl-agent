@@ -20,6 +20,7 @@ async fn ctx(session: &str) -> super::ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home,
+        cwd: None,
         session_id: session.to_string(),
         approval: None,
         jobs: None,

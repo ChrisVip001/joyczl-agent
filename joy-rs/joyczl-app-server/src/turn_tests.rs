@@ -100,6 +100,7 @@ async fn run(mock: Mock, message: &str, graph_workflows: bool) -> Ran {
             session_id: Some("test".to_string()),
             message: message.to_string(),
             stream: Some(true),
+            cwd: None,
         },
         RequestId::Number(1),
         &sink,
@@ -626,6 +627,7 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
             session_id: Some("test".to_string()),
             message: "2+2 等于几？".to_string(),
             stream: Some(true),
+            cwd: None,
         },
         RequestId::Number(1),
         &EventSink::new(tx),
@@ -695,6 +697,7 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
             session_id: Some("test".to_string()),
             message: "2+2 等于几？".to_string(),
             stream: Some(true),
+            cwd: None,
         },
         RequestId::Number(1),
         &EventSink::new(tx),
@@ -743,6 +746,7 @@ async fn a_plain_provider_error_is_not_retried() {
             session_id: Some("test".to_string()),
             message: "你好".to_string(),
             stream: Some(true),
+            cwd: None,
         },
         RequestId::Number(1),
         &EventSink::new(tx),
@@ -890,6 +894,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
             session_id: Some("test".to_string()),
             message: "2+2 等于几？".to_string(),
             stream: Some(true),
+            cwd: None,
         },
         RequestId::Number(1),
         &EventSink::new(tx),
@@ -916,4 +921,27 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
     }
     assert_eq!(retries, 1, "每次重试都要有一条通知");
     assert_eq!(meta_retries, 1, "meta 里的次数是实测的");
+}
+
+/// 工作目录准入（hermes 的 fail-closed）：合法的过；相对路径、不存在的路径都挡下；
+/// 空串视同没给 —— 与协议侧「缺省 = 进程 cwd」同一个语义。
+#[test]
+fn turn_cwd_validation_is_fail_closed() {
+    use crate::turn::resolve_turn_cwd;
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    let ok = resolve_turn_cwd(&Some(dir.path().display().to_string()));
+    assert!(ok.unwrap().is_some(), "存在的绝对路径应该通过");
+
+    assert!(resolve_turn_cwd(&None).unwrap().is_none());
+    assert!(resolve_turn_cwd(&Some(String::new())).unwrap().is_none());
+    assert!(resolve_turn_cwd(&Some("   ".into())).unwrap().is_none());
+
+    // 相对路径：拒绝，且报错说人话。
+    let err = resolve_turn_cwd(&Some("相对/路径".into())).unwrap_err();
+    assert!(err.message.contains("绝对路径"), "{}", err.message);
+
+    // 不存在的绝对路径：拒绝。
+    let err = resolve_turn_cwd(&Some("/不存在/的/目录/joy".into())).unwrap_err();
+    assert!(err.message.contains("不存在"), "{}", err.message);
 }

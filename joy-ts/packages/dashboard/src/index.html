@@ -12,7 +12,7 @@
       <div class="brand">
         <span class="dot" aria-hidden="true"></span>
         <h1>Joy</h1>
-        <span class="pill" id="model">…</span>
+        <select class="pill" id="model" aria-label="切换模型"></select>
       </div>
       <div class="right">
         <span class="path" id="home"></span>
@@ -27,6 +27,14 @@
           <p class="hint">
             会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
           </p>
+          <input
+            id="cwd"
+            class="cwd"
+            type="text"
+            placeholder="工作目录（可选）—— 命令与相对路径都按它解析"
+            aria-label="本轮工作目录"
+            spellcheck="false"
+          />
           <button class="ghost" id="older" type="button" hidden>更早的 ↑</button>
         </div>
         <div class="bar goal">
@@ -45,6 +53,16 @@
              等你 = 静止一行；思考 = shimmer；干活 = 工具名。hidden 由 main 管。 -->
         <div class="statusline" id="status" hidden aria-live="polite"></div>
         <form class="composer" id="composer" autocomplete="off">
+          <div class="staged" id="staged" hidden></div>
+          <input id="file" type="file" multiple hidden />
+          <button
+            class="ghost attach"
+            id="attach"
+            type="button"
+            title="附上文件（20MB 以内；模型会自己去读）"
+          >
+            ＋
+          </button>
           <textarea
             id="input"
             rows="1"

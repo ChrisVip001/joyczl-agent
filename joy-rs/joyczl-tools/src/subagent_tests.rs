@@ -43,6 +43,7 @@ impl SubagentRunner for Fake {
         task: String,
         max_iterations: Option<i32>,
         result_schema: Option<serde_json::Value>,
+        _parent_cwd: Option<std::path::PathBuf>,
     ) -> BoxFut {
         self.seen.lock().expect("锁").push(Seen {
             task,
@@ -62,6 +63,7 @@ async fn ctx() -> super::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
     super::ToolCtx {
+        cwd: None,
         approval: None,
         jobs: None,
         hooks: None,

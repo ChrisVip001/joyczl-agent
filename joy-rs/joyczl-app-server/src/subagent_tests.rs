@@ -43,6 +43,7 @@ async fn collect(server: &crate::Server, message: &str) -> (String, String) {
             session_id: Some("test".to_string()),
             message: message.to_string(),
             stream: Some(true),
+            cwd: None,
         },
         RequestId::Number(1),
         &sink,

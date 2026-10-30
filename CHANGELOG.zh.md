@@ -13,6 +13,25 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 条哲学：配错就该起不来，而不是默默端出旧页面。发布场景（没有 joy-ts 源码
 目录）不检查。
 
+### 交互三件：工作目录、文件上传、模型快切
+
+对照 codex / deepseek-harness / pi / hermes / openhuman 五家的交互，挑各自最优
+拼成 joy 的最小实现：
+
+- **会话工作目录**：`TurnStartParams.cwd`（codex 的逐轮覆盖语义）→
+  `ToolCtx.cwd`。准入校验 fail-closed（hermes：必须是已存在的绝对路径）；
+  exec 回退链 `args.cwd > cwd > 进程 cwd`、read_file/list_dir 相对路径按它
+  解析（dsh 语义）；cwd 并入 exec 可写根（codex 的沙箱联动）；子代理继承
+  父轮 cwd。REPL `/cwd` 与驾驶舱顶栏各一个入口。
+- **文件上传**：`POST /api/upload`（octet-stream 单文件，避开 multipart
+  解析器；20MB 上限）。落盘名完全由服务端生成（只取扩展名过白名单，用户
+  输进不了路径——spill 同款纪律）；前端暂存区 → 发送时上传 → 消息注入绝对
+  路径，模型用 read_file 自己读（pi 的「引用优先」）。图片不内嵌，见
+  limitations。
+- **模型快切**：头部模型 pill 变下拉（pi 的 /model 形态），与右侧模型面板
+  共用同一条 `saveModel({id, makeActive})` 切换路径——持久配置，没有
+  codex 那种「会话临时 vs 全局」之分（joy 的 profile 本来就是持久的）。
+
 ### 驾驶舱重设计：状态三态、工具卡片、数据即导航
 
 参考 openhuman 的 AgentRunningStatus / ToolBodies / navConfig 与 dsh 的

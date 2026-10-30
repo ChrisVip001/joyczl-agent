@@ -258,6 +258,15 @@ extraction use `run_command` + curl or an MCP fetching service.
 * **Not done** — `prune_spill` at startup has a theoretical race with another
   process writing (it only deletes files older than seven days).
 
+## Files & uploads
+
+Dashboard uploads are **references, not content**: a file lands in
+`<home>/uploads/<date>/` under a server-generated name (only the extension is
+taken from the user, whitelist-checked), and its absolute path is injected into
+the message — the model reads it with `read_file` if it decides to. Images are
+NOT embedded into messages (the provider layer has no image content block yet);
+a "picture" upload is just a file the model can read as bytes.
+
 ## Memory
 
 * **Gap** — No dedup or merge on write. `facts` has no unique constraint and

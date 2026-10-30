@@ -18,6 +18,7 @@ import {
   saveModel,
   setGoal,
   talk,
+  uploadFile,
 } from "./api";
 import {
   chip,
@@ -78,13 +79,42 @@ const dom = {
   approvals: must("approvals"),
   schedules: must("schedules"),
   status: must("status"),
-  model: must("model"),
+  model: must<HTMLSelectElement>("model"),
+  cwd: must<HTMLInputElement>("cwd"),
+  attach: must<HTMLButtonElement>("attach"),
+  file: must<HTMLInputElement>("file"),
+  staged: must<HTMLElement>("staged"),
   home: must("home"),
   session: must("session"),
   stamp: must("stamp"),
 };
 
 let busy = false;
+
+/**
+ * 暂存区（抄 pi 的「引用优先」）：选中的文件先摆在这儿，发送时才上传、
+ * 把绝对路径注进消息 —— 引用文件和读文件是两件事，模型自己决定读不读。
+ */
+const staged: File[] = [];
+
+function renderStaged(): void {
+  dom.staged.hidden = staged.length === 0;
+  const nodes = staged.map((file, index) => {
+    const item = el("span", { class: "chip", text: file.name });
+    const drop = el("button", {
+      class: "ghost",
+      text: "×",
+      title: "拿掉这个文件",
+    });
+    drop.addEventListener("click", () => {
+      staged.splice(index, 1);
+      renderStaged();
+    });
+    item.append(drop);
+    return item;
+  });
+  dom.staged.replaceChildren(...nodes);
+}
 
 /**
  * 右侧面板的导航（抄 openhuman 的 navConfig：数据即导航）。
@@ -191,6 +221,24 @@ async function refreshModels(): Promise<void> {
       dom.mpPicker.append(option);
     }
     dom.mpPicker.hidden = response.profiles.length === 0;
+
+    // 头部的快速切换（pi 的 /model 形态）：眼前一点就能切，不用进面板。
+    dom.model.replaceChildren();
+    if (response.profiles.length === 0) {
+      const option = document.createElement("option");
+      option.textContent = "没配模型";
+      dom.model.append(option);
+      dom.model.disabled = true;
+    } else {
+      dom.model.disabled = false;
+      for (const profile of response.profiles) {
+        const option = document.createElement("option");
+        option.value = profile.id;
+        option.textContent = `${profile.id} · ${profile.provider}`;
+        option.selected = profile.active;
+        dom.model.append(option);
+      }
+    }
   } catch (error: unknown) {
     dom.mpState.textContent = `模型面板没刷出来：${String(error)}`;
   }
@@ -200,6 +248,30 @@ async function refreshModels(): Promise<void> {
  * 保存（并切换）。密钥那一栏填 `env:变量名` 就只读环境变量、不存下来；
  * 填真正的 key 则优先交给系统钥匙串。
  */
+/**
+ * 切到某套已配置的模型：只带 id，其余留空 = 保留原样
+ * （不该为了切换重发一次密钥）。头部下拉与面板共用。
+ */
+async function switchModel(id: string): Promise<void> {
+  if (id === "") return;
+  try {
+    const response = await saveModel({
+      id,
+      provider: null,
+      model: null,
+      smallModel: null,
+      baseUrl: null,
+      apiKey: null,
+      keyEnv: null,
+      makeActive: true,
+    });
+    dom.mpState.textContent = `已切到 ${response.id}（${response.current ?? "还没配好"}）`;
+  } catch (error: unknown) {
+    dom.mpState.textContent = `切不过去：${String(error)}`;
+  }
+  await refreshModels();
+}
+
 async function applyModel(): Promise<void> {
   const id = dom.mpId.value.trim();
   if (id === "") {
@@ -289,29 +361,23 @@ async function boot(): Promise<void> {
     }
   });
 
+  // 附件：选了先摆暂存区，发送时才上传 —— 中途反悔不用付任何代价。
+  dom.attach.addEventListener("click", () => dom.file.click());
+  dom.file.addEventListener("change", () => {
+    for (const file of dom.file.files ?? []) staged.push(file);
+    dom.file.value = "";
+    renderStaged();
+  });
+
+  // 头部快速切换：与面板下拉同一处实现（saveModel 只带 id = 保留原配置）。
+  dom.model.addEventListener("change", () => {
+    void switchModel(dom.model.value).then(() => refreshModels());
+  });
+
   // 模型面板：切换、保存、删除都走 `model/*` —— 与终端里的 /model 是同一处实现。
   dom.mpSave.addEventListener("click", () => void applyModel());
   dom.mpPicker.addEventListener("change", () => {
-    const id = dom.mpPicker.value;
-    if (id === "") return;
-    void saveModel({
-      id,
-      // 切换：只带 id，其余留空 = 保留原样（不该为了切换重发一次密钥）。
-      provider: null,
-      model: null,
-      smallModel: null,
-      baseUrl: null,
-      apiKey: null,
-      keyEnv: null,
-      makeActive: true,
-    })
-      .then(async (response) => {
-        dom.mpState.textContent = `已切到 ${response.id}（${response.current ?? "还没配好"}）`;
-        await refreshModels();
-      })
-      .catch((error: unknown) => {
-        dom.mpState.textContent = `切不过去：${String(error)}`;
-      });
+    void switchModel(dom.mpPicker.value);
   });
   dom.mpRemove.addEventListener("click", () => {
     const id = dom.mpPicker.value || dom.mpId.value.trim();
@@ -336,7 +402,6 @@ async function refresh(): Promise<void> {
     const data = await fetchDashboard();
     dom.overview.replaceChildren(renderOverview(data, current, (id) => void open(id)));
     dom.memory.replaceChildren(renderMemory(data));
-    dom.model.textContent = `${data.config.provider} · ${data.config.model}`;
     dom.home.textContent = data.config.home;
     dom.home.title = data.config.home;
     dom.stamp.textContent = formatStamp(data.generatedAt);
@@ -349,9 +414,31 @@ async function refresh(): Promise<void> {
 
 async function submit(): Promise<void> {
   const text = dom.input.value.trim();
-  if (text === "" || busy) return;
+  if ((text === "" && staged.length === 0) || busy) return;
+
+  // 附件先上传（顺序传，好让消息里的路径与文件一一对应）；
+  // 注的是绝对路径 —— turn 可能带自己的工作目录，相对路径会指错地方。
+  let full = text;
+  if (staged.length > 0) {
+    const home = dom.home.textContent ?? "";
+    const lines: string[] = [];
+    try {
+      for (const file of staged) {
+        const path = await uploadFile(file);
+        lines.push(`（附件：${home}/${path}）`);
+      }
+    } catch (error: unknown) {
+      // 上传失败不算世界末日：暂存区留着，让人能重试或拿掉。
+      dom.staged.replaceChildren(failureOf(error));
+      return;
+    }
+    full = `${lines.join("\n")}${text === "" ? "" : `\n${text}`}`;
+  }
+
   dom.input.value = "";
-  await send(text);
+  staged.length = 0;
+  renderStaged();
+  await send(full);
 }
 
 /** 说一句，把这一轮的过程画出来。 */
@@ -376,7 +463,14 @@ async function send(text: string): Promise<void> {
   showStatus("thinking", "思考中");
 
   try {
-    for await (const notification of talk({ sessionId: current, message: text, stream: true })) {
+    // 本轮工作目录（dsh 的 session working-directory）：空串当没设。
+    const turnCwd = dom.cwd.value.trim();
+    for await (const notification of talk({
+      sessionId: current,
+      message: text,
+      stream: true,
+      cwd: turnCwd === "" ? null : turnCwd,
+    })) {
       switch (notification.type) {
         case "turnStarted":
           break;

@@ -14,6 +14,7 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite 还要写 -wal/-shm
     ToolCtx {
+        cwd: None,
         approval: None,
         jobs: None,
         hooks: None,

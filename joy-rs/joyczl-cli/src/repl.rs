@@ -19,7 +19,7 @@ const HELP: &str = "\
   /sessions      列出历史会话
   /new           开一个新会话
   /quit          退出（/exit 也行）
-其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] 加一套";
+其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] 加一套\n/cwd [路径]    看或设本会话的工作目录（/cwd clear 清除）；相对路径都按它解析";
 
 /// 进入终端对话。拿到的是已装配好的 Server。
 pub async fn run(server: Server) -> Result<()> {
@@ -27,6 +27,9 @@ pub async fn run(server: Server) -> Result<()> {
     println!();
 
     let mut session_id = new_session_id();
+    // 本会话的工作目录（dsh 的 session working-directory）：客户端状态，
+    // 每轮 turn 都带给服务端。/cwd 命令负责校验。
+    let mut cwd: Option<std::path::PathBuf> = None;
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
     let mut line = String::new();
 
@@ -52,15 +55,47 @@ pub async fn run(server: Server) -> Result<()> {
             "/sessions" => list_sessions(&server).await,
             s if s.starts_with("/memory") => show_memory(&server, s).await,
             s if s.starts_with("/goal") => set_goal(&server, &session_id, s),
+            s if s.starts_with("/cwd") => cwd = set_cwd(cwd, s),
             s if s.starts_with("/model") => models(&server, s),
             s if s.starts_with('/') => {
                 println!("不认识的命令 {s}。/help 看有哪些。");
             }
-            message => chat_turn(&server, &session_id, message).await,
+            message => chat_turn(&server, &session_id, cwd.as_ref(), message).await,
         }
     }
     println!("再见。");
     Ok(())
+}
+
+/// `/cwd` —— 本会话的工作目录（dsh 的 session working-directory）。
+/// 校验在命令里做（进 turn 之前就把坏路径告诉用户），之后每轮 turn 都带上它。
+fn set_cwd(cwd: Option<std::path::PathBuf>, input: &str) -> Option<std::path::PathBuf> {
+    let rest = input.trim_start_matches("/cwd").trim();
+    if rest.is_empty() {
+        return match &cwd {
+            Some(path) => {
+                println!("本轮工作目录：{}", path.display());
+                cwd
+            }
+            None => {
+                println!(
+                    "本轮工作目录：未设置（按 Joy 启动时所在目录）。用 /cwd <绝对路径> 设置。"
+                );
+                cwd
+            }
+        };
+    }
+    if rest == "clear" || rest == "reset" {
+        println!("已清除本轮工作目录。");
+        return None;
+    }
+    let path = std::path::PathBuf::from(rest);
+    if !path.is_absolute() || !path.is_dir() {
+        println!("'{rest}' 必须是已存在的绝对路径 —— 没有设置。");
+        return cwd;
+    }
+    println!("本轮工作目录已设为 {}", path.display());
+    Some(path)
 }
 
 /// `/model` —— 多套模型配置：列、切、加、删。
@@ -269,12 +304,18 @@ fn new_session_id() -> String {
 }
 
 /// 一轮对话：流式渲染文本，门与工具的动静各占一行小字。
-async fn chat_turn(server: &Server, session_id: &str, message: &str) {
+async fn chat_turn(
+    server: &Server,
+    session_id: &str,
+    cwd: Option<&std::path::PathBuf>,
+    message: &str,
+) {
     let (sink, mut rx) = EventSink::channel();
     let params = TurnStartParams {
         session_id: Some(session_id.to_string()),
         message: message.to_string(),
         stream: Some(true),
+        cwd: cwd.map(|p| p.display().to_string()),
     };
     let task_server = server.clone();
     let task =
