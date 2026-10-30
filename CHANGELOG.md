@@ -15,6 +15,18 @@ philosophy as the daemon lock: misconfigured should fail to boot, not silently
 serve something stale. Release scenarios (no joy-ts sources present) skip the
 check.
 
+### M4c: a scheduler run ledger — "what ran, and how it ended" has an answer
+
+- `<home>/schedule-runs.jsonl`: one JSON line per run with three
+  first-class outcomes — `ok` / `empty` / `error`. Errors previously lived
+  only in stderr, outbox was only written on success (quiet wrote nothing),
+  so there was no single place to inspect runs.
+- **Deliberately no per-job iteration cap**: scheduled turns inherit the
+  global `JOY_MAX_ITERATIONS`, subagents have their own — a per-job
+  override would touch the protocol types (TurnStartParams → generated
+  artifacts in three languages) with no real consumer today. YAGNI until a
+  job actually hits the ceiling.
+
 ### M4b: scheduler upgrade — state into SQLite, replay protection, per-job delivery
 
 - Migration 0012 `schedule_state`: dedup (last_fired), crash recovery

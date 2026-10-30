@@ -113,6 +113,14 @@ while let Some(frame) = rx.recv().await { … }
 
 1. **技能**：`loaded_skills(home)` 里带 `schedule:` 的，变成一条 job，
    prompt 是「按技能 '{name}' 的做法执行一次：{description}」。
+run 账本：`<home>/schedule-runs.jsonl` 每次 run 追加一行 JSON
+（ts/name/minute/status/detail/reply_chars/delivered）——status 三值
+`ok`/`empty`/`error`，error 也是一等公民（巡检时正是要找的那行）；
+`delivered` 只指写了 outbox 文件（quiet 是有产出不落盘，与 empty 的
+没产出是两回事）。写失败只往 stderr 说一声 —— 账本是旁路。这是
+openhuman run_log 三件套里 joy 缺的那件：outbox 是产出，账本回答
+「跑过哪些、各自结局」。
+
 2. **`<home>/schedules.json`**：`{"jobs":[{"name","cron","prompt","catch_up","delivery"}]}`；
    `catch_up`（默认 true）决定错过/中断后补跑（至少一次）还是放弃（至多一次）；
    `delivery`（默认 outbox）决定产出往哪送 —— `outbox` 写文件 / `notify` 文件 +

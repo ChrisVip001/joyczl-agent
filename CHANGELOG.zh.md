@@ -13,6 +13,16 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 条哲学：配错就该起不来，而不是默默端出旧页面。发布场景（没有 joy-ts 源码
 目录）不检查。
 
+### M4c：调度 run 账本 —— 「跑过哪些、各自结局」有处可查
+
+- `<home>/schedule-runs.jsonl` 每次 run 一行 JSON：`ok`/`empty`/`error`
+  三种结局都是一等公民 —— 之前 error 只活在 stderr，outbox 只在成功时
+  写（quiet 连产出都没有），巡检没有统一入口。
+- **刻意没做每作业迭代上限**：定时 turn 继承全局 `JOY_MAX_ITERATIONS`，
+  子代理另有独立上限 —— 每作业覆盖需要动协议类型（TurnStartParams →
+  生成物三端），而这个旋钮目前没有真实消费者。YAGNI，等有作业真的
+  撞上限再说。
+
 ### M4b：调度升级 —— 状态进 SQLite，防重放与每作业投递
 
 - 迁移 0012 `schedule_state`：去重（last_fired）、崩溃恢复（claimed）、

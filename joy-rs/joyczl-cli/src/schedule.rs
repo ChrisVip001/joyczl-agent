@@ -214,6 +214,48 @@ fn load_legacy_state(home: &Path) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// 一次 run 的账本行（JSONL）。openhuman 的 run_log 同款三件套里 joy 缺的
+/// 就是这本账：outbox 是产出（quiet 时连产出都没有），这本账回答
+/// 「跑过哪些、各自结局」—— 巡检、排障、算频率都从这一处来。
+fn run_log_line(
+    name: &str,
+    minute: &str,
+    status: &str,
+    detail: &str,
+    reply_chars: usize,
+    delivered: bool,
+) -> String {
+    let record = serde_json::json!({
+        "ts": Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+        "name": name,
+        "minute": minute,
+        "status": status,
+        "detail": detail,
+        "reply_chars": reply_chars,
+        "delivered": delivered,
+    });
+    record.to_string()
+}
+
+/// 往 `<home>/schedule-runs.jsonl` 追加一行。旁路：写失败只往 stderr 说
+/// 一声 —— 账本坏了不该把一次成功执行变成错误。
+fn append_run_log(home: &Path, line: &str) {
+    use std::io::Write as _;
+    let path = home.join("schedule-runs.jsonl");
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            if let Err(e) = writeln!(file, "{line}") {
+                eprintln!("(joy) run 账本写不进 {}：{e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("(joy) run 账本打不开 {}：{e}", path.display()),
+    }
+}
+
 /// 自 `from` 到 `to`（含两端，按分钟扫）有没有错过的触发点。返回**最后**
 /// 那个错过点 —— 停机三天只补一次，不补一串。
 pub fn last_missed(job: &Job, from: NaiveDateTime, to: NaiveDateTime) -> Option<NaiveDateTime> {
@@ -395,19 +437,35 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
             break;
         }
     }
-    task.await
-        .map_err(|e| anyhow::anyhow!("任务 '{}' 的 turn 崩了：{e}", job.name))?
-        .map_err(|e| anyhow::anyhow!("任务 '{}' 没跑通：{}", job.name, e.message))?;
+    // turn 的三种结局（完成/turn 报错/任务崩）都过这本账 —— error 也是
+    // 账本的一等公民，巡检时它正是要找的那行。
+    let home = server.settings().home;
+    let minute_text = at.format("%Y-%m-%dT%H:%M").to_string();
+    let turn_result = match task.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(format!("turn 报错：{}", e.message)),
+        Err(e) => Err(format!("turn 任务崩了：{e}")),
+    };
+    if let Err(why) = turn_result {
+        append_run_log(
+            &home,
+            &run_log_line(&job.name, &minute_text, "error", &why, 0, false),
+        );
+        anyhow::bail!("任务 '{}' 没跑通：{why}", job.name);
+    }
 
     // 空回答（或模型按约定答 NO_REPLY）不值得投递 —— 写一个空文件、推一条
-    // 空通知都是打扰。落一行日志就够。
+    // 空通知都是打扰。账本记一行就够。
     let trimmed = reply.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("no_reply") {
         eprintln!("(joy) 任务 '{}' 完成，但没有产出内容，跳过投递", job.name);
+        append_run_log(
+            &home,
+            &run_log_line(&job.name, &minute_text, "empty", "", 0, false),
+        );
         return Ok(());
     }
 
-    let home = server.settings().home;
     let stamp = at.format("%Y%m%d-%H%M");
     if job.delivery != Delivery::Quiet {
         let path = home
@@ -449,6 +507,20 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
             });
         }
     }
+
+    // 产出落账：delivered 只指「写了 outbox 文件」（quiet 是有产出不落盘，
+    // 与 empty 的没产出是两回事）。
+    append_run_log(
+        &home,
+        &run_log_line(
+            &job.name,
+            &minute_text,
+            "ok",
+            "",
+            trimmed.chars().count(),
+            job.delivery != Delivery::Quiet,
+        ),
+    );
     Ok(())
 }
 

@@ -251,3 +251,62 @@ fn an_every_minute_job_yields_only_the_latest_missed_minute() {
     let missed = last_missed(&frequent, at(2026, 10, 20, 0, 0), at(2026, 10, 27, 0, 0));
     assert_eq!(missed, Some(at(2026, 10, 27, 0, 0)));
 }
+
+/// 账本行的形状：七个字段一个不缺；status 是 ok/empty/error 之一。
+#[test]
+fn the_run_log_line_has_all_the_fields() {
+    let line = super::run_log_line("晨报", "2026-10-30T08:00", "ok", "", 42, true);
+    let parsed: serde_json::Value = serde_json::from_str(&line).expect("合法 JSON");
+    for key in [
+        "ts",
+        "name",
+        "minute",
+        "status",
+        "detail",
+        "reply_chars",
+        "delivered",
+    ] {
+        assert!(parsed.get(key).is_some(), "缺字段 {key}");
+    }
+    assert_eq!(parsed["name"], "晨报");
+    assert_eq!(parsed["minute"], "2026-10-30T08:00");
+    assert_eq!(parsed["status"], "ok");
+    assert_eq!(parsed["reply_chars"], 42);
+    assert_eq!(parsed["delivered"], true);
+
+    let err = super::run_log_line(
+        "盯CI",
+        "2026-10-30T09:00",
+        "error",
+        "turn 报错：超时",
+        0,
+        false,
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&err).expect("合法 JSON");
+    assert_eq!(parsed["status"], "error");
+    assert_eq!(parsed["detail"], "turn 报错：超时");
+    assert_eq!(parsed["delivered"], false);
+}
+
+/// 账本追加：新行跟旧行、写失败不炸（打不开的目录只该留 stderr 话音）。
+#[test]
+fn the_run_log_appends_and_never_panics() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    super::append_run_log(
+        dir.path(),
+        &super::run_log_line("a", "m1", "ok", "", 1, true),
+    );
+    super::append_run_log(
+        dir.path(),
+        &super::run_log_line("b", "m2", "empty", "", 0, false),
+    );
+
+    let text = std::fs::read_to_string(dir.path().join("schedule-runs.jsonl")).expect("账本存在");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "两次追加两行");
+    assert!(lines[0].contains("\"name\":\"a\""), "旧行还在");
+    assert!(lines[1].contains("\"status\":\"empty\""), "新行在后");
+
+    // 打不开的路径：只 stderr，不 panic、不返回错误 —— 账本是旁路。
+    super::append_run_log(dir.path().join("不存在目录").as_path(), "x");
+}
