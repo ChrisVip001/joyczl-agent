@@ -84,7 +84,7 @@ pub async fn run_turn(
 
     // 按任务档位自动选模型（route.rs）。fixed 模式或选中的就是 active 时
     // 原样返回、零开销；回落与选择的原因进 route_reason，不静默。
-    let (resolved, turn_route) = server.resolved_for_turn(resolved, &params.message);
+    let (resolved, turn_route) = server.resolved_for_turn(resolved, &params.message).await;
 
     let session_id = params
         .session_id
