@@ -13,6 +13,22 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 条哲学：配错就该起不来，而不是默默端出旧页面。发布场景（没有 joy-ts 源码
 目录）不检查。
 
+### 按任务自动选模型（model routing）
+
+抄 openhuman 的 tier 抽象层（"You don't pick the model, the task does."），
+加上 grok bot 式的「auto」体感：
+
+- `<home>/model-routes.json`：三档 `fast`/`chat`/`reasoning` 各指向一个
+  现成 profile id；`fixed` 是默认（零行为变化）。每轮重读，改完即生效。
+- L0 规则零开销：token 估算超过 chat 档窗口一半 → reasoning。阈值跟随
+  provider 窗口自适配，无新旋钮。
+- L1 分类器（模糊带 ≥2k 未过半才跑）：问一次便宜小模型「这是要动脑的
+  活吗？」，fail-open 回 L0。
+- 解析失败回落 active 并在 `TurnMeta.routeReason` 说明 —— 路由绝不炸轮次。
+- `JOY_MODEL_ROUTE=auto|fixed` 环境强制；REPL `/route` 三件事；驾驶舱
+  页脚显示「路由 auto:reasoning → ds-r1」。
+- 纪律：路由是服务端策略，模型没有换模型的工具；人类 active 永远优先。
+
 ### 交互三件：工作目录、文件上传、模型快切
 
 对照 codex / deepseek-harness / pi / hermes / openhuman 五家的交互，挑各自最优

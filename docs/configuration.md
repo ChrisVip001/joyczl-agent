@@ -29,6 +29,74 @@ re-resolves the provider — no restart.
 **Only a human can change any of this**: the model has no `model/*` tool and
 never sees a key.
 
+## Model routing (`<home>/model-routes.json`)
+
+Instead of picking the model yourself, let the server pick it per turn —
+openhuman's tier abstraction ("You don't pick the model, the task does"):
+
+```json
+{
+  "mode": "auto",
+  "routes": { "reasoning": "ds-r1" }
+}
+```
+
+- `mode: "fixed"` (the default — a missing or broken file also means fixed)
+  keeps the active profile for every turn; routing never intervenes.
+- `mode: "auto"` picks a **tier** per turn, then maps tier → profile id:
+  token estimate over half the chat profile's context window → `reasoning`;
+  otherwise `chat`. Messages in the ambiguous band (≥2k tokens, under half
+  the window) additionally ask the cheap small-model once ("is this deep
+  reasoning?"); any failure or vague answer falls back to the L0 answer
+  (fail-open).
+- Missing tier entries fall through a default chain: `reasoning`/`fast` →
+  `chat` → the active profile. A route pointing at a deleted profile falls
+  back to the active profile and says so in `TurnMeta.routeReason`.
+- `JOY_MODEL_ROUTE=auto|fixed` forces the mode from the environment
+  (for CI / unattended hosts where the home file is out of reach).
+- Editing: REPL `/route`, `/route auto|fixed`, `/route set <tier> <id>`
+  (the file is re-read every turn — changes take effect immediately).
+- Routing is a **server-side policy**: the model has no tool to switch its
+  own model, and the human's active profile always wins.
+
+Routing is transparent about itself: `TurnMeta.routeReason` records
+`auto:reasoning → ds-r1` or `fallback: …` whenever a choice or a fallback
+actually happened; the dashboard footer prints it.
+
+## Model routing (`<home>/model-routes.json`)
+
+Instead of picking the model yourself, let the server pick it per turn —
+openhuman's tier abstraction ("You don't pick the model, the task does"):
+
+```json
+{
+  "mode": "auto",
+  "routes": { "reasoning": "ds-r1" }
+}
+```
+
+- `mode: "fixed"` (the default — a missing or broken file also means fixed)
+  keeps the active profile for every turn; routing never intervenes.
+- `mode: "auto"` picks a **tier** per turn, then maps tier → profile id:
+  token estimate over half the chat profile's context window → `reasoning`;
+  otherwise `chat`. Messages in the ambiguous band (≥2k tokens, under half
+  the window) additionally ask the cheap small-model once ("is this deep
+  reasoning?"); any failure or vague answer falls back to the L0 answer
+  (fail-open).
+- Missing tier entries fall through a default chain: `reasoning`/`fast` →
+  `chat` → the active profile. A route pointing at a deleted profile falls
+  back to the active profile and says so in `TurnMeta.routeReason`.
+- `JOY_MODEL_ROUTE=auto|fixed` forces the mode from the environment
+  (for CI / unattended hosts where the home file is out of reach).
+- Editing: REPL `/route`, `/route auto|fixed`, `/route set <tier> <id>`
+  (the file is re-read every turn — changes take effect immediately).
+- Routing is a **server-side policy**: the model has no tool to switch its
+  own model, and the human's active profile always wins.
+
+Routing is transparent about itself: `TurnMeta.routeReason` records
+`auto:reasoning → ds-r1` or `fallback: …` whenever a choice or a fallback
+actually happened; the dashboard footer prints it.
+
 ## Invalid values fail at startup
 
 `Settings::validate` runs once, **after** the environment and

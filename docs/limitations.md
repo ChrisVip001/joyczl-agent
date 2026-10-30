@@ -258,6 +258,15 @@ extraction use `run_command` + curl or an MCP fetching service.
 * **Not done** — `prune_spill` at startup has a theoretical race with another
   process writing (it only deletes files older than seven days).
 
+## Model routing
+
+Three tiers only (`fast`/`chat`/`reasoning`) — no cost or speed labels on
+profiles (the usage ledger already bills per model), no vision tier (the
+provider layer has no image content block yet), no sibling-tier failover
+chain: if a routed profile fails to resolve, the turn falls back to the
+active profile rather than trying a sibling tier. The L1 classifier sees
+only the message text (first 4k chars) — not tools, not history.
+
 ## Files & uploads
 
 Dashboard uploads are **references, not content**: a file lands in

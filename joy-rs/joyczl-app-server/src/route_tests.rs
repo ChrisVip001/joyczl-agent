@@ -26,7 +26,11 @@ fn tier_is_reasoning_past_half_the_window() {
     assert_eq!(pick_tier(1_000, 32_768), "chat");
     assert_eq!(pick_tier(16_383, 32_768), "chat");
     assert_eq!(pick_tier(16_384, 32_768), "reasoning");
-    assert_eq!(pick_tier(499_999, 1_000_000), "chat", "大窗口要消息真的很大才换");
+    assert_eq!(
+        pick_tier(499_999, 1_000_000),
+        "chat",
+        "大窗口要消息真的很大才换"
+    );
     assert_eq!(pick_tier(600_000, 1_000_000), "reasoning");
 }
 
@@ -47,9 +51,19 @@ fn tier_lookup_falls_back_through_the_chain() {
     assert_eq!(profile_for_tier(&empty, "chat", None), None, "全缺 = None");
 
     let full = routes_with(&[("reasoning", "ds-r1"), ("chat", "ds")]);
-    assert_eq!(profile_for_tier(&full, "reasoning", Some("oa")).as_deref(), Some("ds-r1"));
-    assert_eq!(profile_for_tier(&full, "fast", Some("oa")).as_deref(), Some("ds"), "fast 缺项 → chat 那套");
-    assert_eq!(profile_for_tier(&full, "chat", Some("oa")).as_deref(), Some("ds"));
+    assert_eq!(
+        profile_for_tier(&full, "reasoning", Some("oa")).as_deref(),
+        Some("ds-r1")
+    );
+    assert_eq!(
+        profile_for_tier(&full, "fast", Some("oa")).as_deref(),
+        Some("ds"),
+        "fast 缺项 → chat 那套"
+    );
+    assert_eq!(
+        profile_for_tier(&full, "chat", Some("oa")).as_deref(),
+        Some("ds")
+    );
 
     // 只配了 reasoning 一条：fast 经 chat 缺项直达 active —— 不会误用 reasoning。
     let only_reasoning = routes_with(&[("reasoning", "ds-r1")]);
@@ -68,7 +82,10 @@ fn classification_only_runs_in_the_ambiguous_band() {
     assert!(!needs_classify(1_999, 32_768), "短消息不分类");
     assert!(needs_classify(2_000, 32_768));
     assert!(needs_classify(16_383, 32_768));
-    assert!(!needs_classify(16_384, 32_768), "过半已被 L0 判成 reasoning");
+    assert!(
+        !needs_classify(16_384, 32_768),
+        "过半已被 L0 判成 reasoning"
+    );
 }
 
 /// 分类器回答的解析：fail-open —— 首词是 reasoning 才算，含糊/空白/

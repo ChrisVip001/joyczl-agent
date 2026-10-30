@@ -25,7 +25,38 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 
 **只有人能改这些**：模型没有 `model/*` 工具，也拿不到密钥。
 
-## 非法值在启动期就报错
+## 模型路由（`<home>/model-routes.json`）
+
+不自己选模型，让服务端按轮选 —— openhuman 的 tier 抽象层
+（"You don't pick the model, the task does."）：
+
+```json
+{
+  "mode": "auto",
+  "routes": { "reasoning": "ds-r1" }
+}
+```
+
+- `mode: "fixed"`（默认 —— 文件不存在或损坏同样是 fixed）：每轮都用
+  active profile，路由完全不介入。
+- `mode: "auto"`：每轮选一个**档位**，再查表映射到 profile id ——
+  token 估算超过 chat 档上下文窗口的一半 → `reasoning`；否则 `chat`。
+  落在模糊带（≥2k token、未过半窗口）的消息会额外问一次便宜小模型
+  （「这是要动脑的活吗？」），失败或含糊一律落回 L0 结论（fail-open）。
+- 档位缺项按缺省链回落：`reasoning`/`fast` → `chat` → active profile。
+  指向已删除 profile 的映射回落 active，并在 `TurnMeta.routeReason`
+  里如实说明。
+- `JOY_MODEL_ROUTE=auto|fixed` 从环境强制指定模式（CI / 无人值守改不了
+  home 文件时用）。
+- 编辑入口：REPL 的 `/route`、`/route auto|fixed`、`/route set <档位> <配置名>`
+  （文件每轮重读 —— 改完即生效）。
+- 路由是**服务端策略**：模型没有换自己模型的工具，人类的 active profile
+  永远优先。
+
+路由对自己是透明的：真的发生了选择或回落时，`TurnMeta.routeReason`
+记下 `auto:reasoning → ds-r1` 或 `fallback: …`，驾驶舱页脚照实打印。
+
+## 非法值启动即失败
 
 `Settings::validate` 只跑一次，位置在**环境变量与 `<home>/settings.json` 合并
 之后**；非法值直接终止进程，并在消息里点名是哪个变量 —— 配错不该静默变成默认值、

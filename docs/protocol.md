@@ -28,8 +28,9 @@ you>  /goal make the tests green
        ← GoalRound {turnId, round: 2, maxRounds: 5, status: "satisfied", reason: "all green"}
 ```
 
-`TurnMeta.goalStatus` / `goalRounds` carry the outcome and the count into the turn's
-metadata.
+`TurnMeta.goalStatus` / `goalRounds` carry the outcome and the count into the turn's metadata.
+
+- `routeReason` (optional): how this turn's model was chosen — `auto:reasoning → ds-r1` or `fallback: …` (see `model-routes.json` in configuration). Empty when nothing was chosen (fixed mode, or the routing picked the active profile).
 
 `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | answer one approval request; `accepted: false` when it arrived too late | cancel a running turn; `interrupted:false` = already finished |
 | `session/new` | `SessionNewParams` → `SessionNewResponse` | new session label (creates nothing) |

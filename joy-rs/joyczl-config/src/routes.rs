@@ -74,7 +74,11 @@ mod routes_tests {
         assert!(routes.routes.is_empty());
 
         std::fs::write(routes_path(dir.path()), "{ 不是 json").unwrap();
-        assert_eq!(load_routes(dir.path()).mode, RouteMode::Fixed, "坏文件也 = fixed");
+        assert_eq!(
+            load_routes(dir.path()).mode,
+            RouteMode::Fixed,
+            "坏文件也 = fixed"
+        );
     }
 
     #[test]
@@ -91,6 +95,9 @@ mod routes_tests {
 
         let back = load_routes(dir.path());
         assert_eq!(back.mode, RouteMode::Auto);
-        assert_eq!(back.routes.get("reasoning").map(String::as_str), Some("ds-r1"));
+        assert_eq!(
+            back.routes.get("reasoning").map(String::as_str),
+            Some("ds-r1")
+        );
     }
 }

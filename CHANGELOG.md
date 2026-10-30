@@ -15,6 +15,25 @@ philosophy as the daemon lock: misconfigured should fail to boot, not silently
 serve something stale. Release scenarios (no joy-ts sources present) skip the
 check.
 
+### Automatic per-task model routing
+
+openhuman's tier abstraction ("You don't pick the model, the task does.")
+plus a grok-bot-style "auto" feel:
+
+- `<home>/model-routes.json`: three tiers `fast`/`chat`/`reasoning`, each
+  pointing at an existing profile id; `fixed` is the default (zero behavior
+  change). The file is re-read every turn — edits take effect immediately.
+- L0 rules at zero cost: token estimate over half the chat profile's window
+  → reasoning. The threshold follows the provider's window — no new knob.
+- L1 classifier (only in the ambiguous band ≥2k and under half): asks the
+  cheap small-model once "is this deep reasoning?", fail-open to L0.
+- Resolution failures fall back to the active profile and say so in
+  `TurnMeta.routeReason` — routing never breaks a turn.
+- `JOY_MODEL_ROUTE=auto|fixed` forces the mode; REPL `/route`; the
+  dashboard footer prints "路由 auto:reasoning → ds-r1".
+- Discipline: routing is a server-side policy — the model has no tool to
+  switch its own model; the human's active profile always wins.
+
 ### Three interactions: working directory, file upload, model quick-switch
 
 Taking each best-in-class interaction from codex / deepseek-harness / pi /

@@ -22,8 +22,8 @@ mod jobs;
 /// 守护锁：同一个 home 只允许一个 app-server（`joyczl_app_server::lock`）。
 pub mod lock;
 pub mod models;
-mod stdio;
 mod route;
+mod stdio;
 mod subagent;
 mod trace;
 mod turn;

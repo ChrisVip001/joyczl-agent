@@ -27,6 +27,7 @@ you>  /goal 让测试全绿
 ```
 
 `TurnMeta.goalStatus` / `goalRounds` 把出口与轮次也带进这一轮的元数据。
+- `routeReason`（可选）：这一轮的模型是怎么选的 —— `auto:reasoning → ds-r1` 或 `fallback: …`（见 configuration 的 `model-routes.json`）。没发生选择时为空（fixed 模式，或路由选中的就是 active）。
 
 `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | 回答一次「要不要执行」；太晚送达时 `accepted: false` | 打断在跑的 turn；`interrupted:false` = 已跑完 |
 | `session/new` | `SessionNewParams` → `SessionNewResponse` | 新会话标签（不建任何实体） |

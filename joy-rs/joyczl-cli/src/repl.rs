@@ -122,7 +122,10 @@ fn route_cmd(server: &Server, input: &str) {
             );
             for tier in TIERS {
                 let mapped = table.routes.get(tier);
-                println!("  {tier:<10} → {}", mapped.map(String::as_str).unwrap_or("（缺省链）"));
+                println!(
+                    "  {tier:<10} → {}",
+                    mapped.map(String::as_str).unwrap_or("（缺省链）")
+                );
             }
             println!("缺省链：reasoning/fast → chat → active；改用 /route set <档位> <配置名>。");
         }
@@ -135,7 +138,11 @@ fn route_cmd(server: &Server, input: &str) {
             match routes::save_routes(&home, &table) {
                 Ok(()) => println!(
                     "已切到 {} —— 每轮重读，立即生效。",
-                    if table.mode == RouteMode::Auto { "auto" } else { "fixed" }
+                    if table.mode == RouteMode::Auto {
+                        "auto"
+                    } else {
+                        "fixed"
+                    }
                 ),
                 Err(why) => println!("没写进 {}：{why}", routes::routes_path(&home).display()),
             }
@@ -155,7 +162,9 @@ fn route_cmd(server: &Server, input: &str) {
                 println!("没有叫 '{profile_id}' 的模型配置 —— /model 看有哪些。");
                 return;
             }
-            table.routes.insert(tier.to_string(), profile_id.to_string());
+            table
+                .routes
+                .insert(tier.to_string(), profile_id.to_string());
             match routes::save_routes(&home, &table) {
                 Ok(()) => println!("{tier} → {profile_id}（每轮重读，立即生效）"),
                 Err(why) => println!("没写进 {}：{why}", routes::routes_path(&home).display()),

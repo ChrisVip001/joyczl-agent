@@ -201,6 +201,14 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **未做** —— `prune_spill` 的启动清理与另一进程的写入有理论竞争（只删 7 天前
   的文件，实际概率极低）。
 
+## 模型路由
+
+只有三个档位（`fast`/`chat`/`reasoning`）—— profile 上没有成本/速度标签
+（用量台账本来就按模型记账）、没有 vision 档（provider 层还没有 image
+content block）、没有同级降级链：被路由到的 profile 解析失败时直接回落
+active profile，不试同族其它档。L1 分类器只看消息文本（前 4k 字符）——
+不看工具、不看历史。
+
 ## 文件与上传
 
 驾驶舱的上传是**引用，不是内容**：文件落在 `<home>/uploads/<日期>/` 下，名字

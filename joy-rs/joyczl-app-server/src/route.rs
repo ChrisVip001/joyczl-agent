@@ -111,7 +111,14 @@ impl Server {
         message: &str,
     ) -> (Resolved, Option<String>) {
         let routes = load_routes(&self.settings().home);
-        if routes.mode != RouteMode::Auto {
+        // JOY_MODEL_ROUTE 环境变量可**强制**指定模式（auto/fixed）—— 无人值守
+        // 与 CI 里改不了 home 文件；文件里的值是它的缺省。
+        let mode = match std::env::var("JOY_MODEL_ROUTE").as_deref() {
+            Ok("auto") => RouteMode::Auto,
+            Ok("fixed") => RouteMode::Fixed,
+            _ => routes.mode,
+        };
+        if mode != RouteMode::Auto {
             return (base, None);
         }
         let active_id = {

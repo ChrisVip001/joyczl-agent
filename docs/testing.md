@@ -9,7 +9,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Layer | Location | Shape | Latest full run |
 |---|---|---|---|
-| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 409 passed / 0 failed |
+| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 415 passed / 0 failed |
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
 | Frontend | joy-ts (node --test + tsc) | 99 passed / 0 failed | |
@@ -39,7 +39,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Suite | Result |
 |---|---|
-| cargo test --workspace (15 binary suites) | **409 passed / 0 failed** |
+| cargo test --workspace (15 binary suites) | **415 passed / 0 failed** |
 | clippy --workspace --all-targets -D warnings | 0 warnings |
 | cargo fmt --check | pass |
 | generated-artifact drift check | consistent with the Rust protocol definition |
