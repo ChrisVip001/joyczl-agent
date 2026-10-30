@@ -47,6 +47,7 @@ metadata.
 | `model/save` | `ModelSaveParams` → `ModelSaveResponse` | create/update a profile and make it active; `id` + `makeActive` alone = switch |
 | `model/remove` | `ModelRemoveParams` → `ModelRemoveResponse` | delete a profile and its credential |
 | `approval/log` | `ApprovalLogParams` → `ApprovalLogResponse` | the approval audit (migration 0011): the last 100 "ask-before-run" records, newest first. Four outcomes: `approved` / `denied` / `timeout` (nobody answered) / `voided` (turn ended). This is how a hub admin answers "who approved that rm -rf" afterwards |
+| `schedule/list` | `ScheduleListParams` → `ScheduleListResponse` | the schedule state snapshot (migration 0012): per-job `last_fired` / `claimed` / `catch_up` / `delivery`. Read-only — the scheduler owns writes. `claimed` non-empty means the last run was interrupted and the next scheduler boot will resolve it by `catch_up` |
 | `usage/summary` | `UsageSummaryParams` → `UsageSummaryResponse` | the usage ledger (migration 0010): per-model aggregates + totals. **Accounting only, no enforcement** — no quotas, no rate limits; under BYOK the money shows up on each user's own provider bill. In hub mode this is per-user accounting (one home, one ledger per user) |
 
 Conventions: methods are `<resource>/<method>` (singular resource); payloads
