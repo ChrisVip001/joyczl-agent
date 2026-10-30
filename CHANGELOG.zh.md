@@ -13,6 +13,19 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 条哲学：配错就该起不来，而不是默默端出旧页面。发布场景（没有 joy-ts 源码
 目录）不检查。
 
+### M4a：hub 资源池 —— 高密度的最小正确解
+
+- 两个旋钮：`JOY_HUB_MAX_OPEN`（默认 32，同时最多开几个用户的
+  app-server）与 `JOY_HUB_IDLE_SECS`（默认 900，闲置多久关；0 = 关闭此
+  策略）。
+- 三条策略抄自 openhuman 的 ProfileHost：**上限**、**LRU/idle 驱逐**、
+  **in-use 永不驱逐**。驱逐判定不用时间戳猜并发 —— 用 `Arc::strong_count`：
+  只有池自己持有的实例才可能被关，正在服务请求的天然 pin 住。
+- 上限是**软的**：全都 pin 住时宁可超开也不把请求变成错误 —— 超开的是
+  真实并发，不是闲置堆积。
+- 附带收获：侦察还反向验证了 joy 的「每用户一个 home + 子进程」——
+  openhuman 的 fleet 同样是 process-per-user，且自认不是生产级隔离边界。
+
 ### M3b：审批审计台账 —— 「谁批准了 rm -rf」有处可查
 
 - 迁移 0011 `approval_log`：每次「问了才跑」落一行，outcome 四态 ——

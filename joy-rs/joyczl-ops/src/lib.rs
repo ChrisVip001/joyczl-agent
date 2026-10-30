@@ -105,12 +105,14 @@ pub async fn serve(settings: Settings) -> Result<()> {
 
 /// 多用户模式：一个 ops 进程服务 `<root>` 下的所有用户。
 /// 鉴权就是 users.json 里那枚 token —— 与单用户模式同一条 Bearer 路径。
-pub async fn serve_hub(root: &Path, host: &str) -> Result<()> {
-    let hub = Arc::new(hub::Hub::open(root)?);
+pub async fn serve_hub(root: &Path, host: &str, max_open: usize, idle_secs: u64) -> Result<()> {
+    let hub = Arc::new(hub::Hub::open_with(root, max_open, idle_secs)?);
     eprintln!(
-        "(joy) hub：{} 个用户，根目录 {}",
+        "(joy) hub：{} 个用户，根目录 {}，池上限 {} 个实例，闲置 {} 秒关",
         hub.user_count(),
-        root.display()
+        root.display(),
+        max_open,
+        idle_secs
     );
     let assets = assets_dir();
     if let Err(why) = freshness::check_dashboard_freshness(&assets) {

@@ -281,6 +281,8 @@ which variable to set.
 | `JOY_OPS_HOST` | `127.0.0.1` | bind address. **A non-loopback host requires `JOY_OPS_TOKEN` or startup is refused** (same rule as nanobot/dsh: a wrong config should fail to boot) |
 | `JOY_OPS_TOKEN` | — | Bearer token for `/api/*` (constant-time compare). Optional on loopback; when set, local requests need it too. The dashboard asks once on first 401 and stores it in localStorage. **Deliberately not in `config/read`**: deployment parameters must not be visible to the model |
 | `JOY_HUB_ROOT` | — | root directory for multi-user mode (or pass `joy hub --root`) |
+| `JOY_HUB_MAX_OPEN` | 32 | how many per-user app-servers hub keeps open at once (each is a child process). When full, the least-recently-used idle instance is evicted; if everything is in use it over-commits rather than failing requests |
+| `JOY_HUB_IDLE_SECS` | 900 | close a user's app-server after this many idle seconds. 0 = no idle eviction, only the cap applies |
 | `JOY_BIN` | — | explicit `joy` binary path for the Python SDK / TS clients |
 
 ## Multi-user on one machine (`joy hub`)

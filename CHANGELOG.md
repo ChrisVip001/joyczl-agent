@@ -15,6 +15,23 @@ philosophy as the daemon lock: misconfigured should fail to boot, not silently
 serve something stale. Release scenarios (no joy-ts sources present) skip the
 check.
 
+### M4a: a hub resource pool — the minimal correct answer to density
+
+- Two knobs: `JOY_HUB_MAX_OPEN` (default 32, how many per-user app-servers
+  hub keeps open) and `JOY_HUB_IDLE_SECS` (default 900, close after idle;
+  0 disables the policy).
+- Three strategies borrowed from openhuman's ProfileHost: a **cap**,
+  **LRU/idle eviction**, and **never evict in-use instances**. Eviction
+  doesn't guess concurrency from timestamps — it uses `Arc::strong_count`:
+  only instances held solely by the pool can be closed; anything serving a
+  request is naturally pinned.
+- The cap is **soft**: when everything is pinned, the pool over-commits
+  rather than turning requests into errors — the overshoot is real
+  concurrency, not idle accumulation.
+- A bonus from the recon: openhuman's fleet also validates joy's "one home,
+  one process per user" — their fleet is process-per-user too, and admits
+  it is not a production multi-tenant boundary.
+
 ### M3b: an approval audit — "who approved that rm -rf" has an answer now
 
 - Migration 0011 `approval_log`: one row per "ask-before-run", with four

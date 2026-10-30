@@ -264,6 +264,8 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 | `JOY_OPS_HOST` | `127.0.0.1` | 绑定地址。**绑非回环必须同时设 `JOY_OPS_TOKEN`，否则启动期拒绝**（nanobot/dsh 同一条规则：配错就该起不来） |
 | `JOY_OPS_TOKEN` | — | `/api/*` 的 Bearer token（常量时间比对）。回环地址可不设；设了本机也要带。驾驶舱页面首次 401 时会问一次并存 localStorage。**刻意不进 `config/read`**：部署面参数不该被模型看到 |
 | `JOY_HUB_ROOT` | — | 多用户模式的根目录（也可用 `joy hub --root` 传） |
+| `JOY_HUB_MAX_OPEN` | 32 | hub 同时最多开几个用户的 app-server（每个是一个子进程）。满了按「最久未用且没在用」驱逐；全都在用时宁可超开也不把请求变成错误 |
+| `JOY_HUB_IDLE_SECS` | 900 | 用户的 app-server 闲置多久后关掉。0 = 不按闲置驱逐，只受上限约束 |
 | `JOY_BIN` | — | Python SDK / TS 客户端寻找 `joy` 二进制的显式路径 |
 
 ## 多用户单机（`joy hub`）

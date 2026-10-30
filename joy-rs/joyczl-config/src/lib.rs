@@ -118,6 +118,18 @@ pub const BOUNDS: &[Bound] = &[
     },
     Bound {
         patch_name: None,
+        env_name: "JOY_HUB_MAX_OPEN",
+        min: 1,
+        max: 4_096,
+    },
+    Bound {
+        env_name: "JOY_HUB_IDLE_SECS",
+        patch_name: None,
+        min: 0,
+        max: 86_400,
+    },
+    Bound {
+        patch_name: None,
         env_name: "JOY_HOOKS_TIMEOUT",
         min: 1,
         max: 300,
@@ -238,6 +250,16 @@ pub struct Settings {
     /// `JOY_HOOKS_TIMEOUT`：hook 的默认超时（秒）。条目里写了 `timeout` 就以它为准。
     pub hooks_timeout_secs: i64,
 
+    /// `JOY_HUB_MAX_OPEN`：hub 同时最多开几个用户的 app-server（每个是一个
+    /// 子进程）。满了按「最久未用且没在用」驱逐 —— 抄 openhuman ProfileHost
+    /// 的三条策略：上限、LRU、in-use 永不驱逐。
+    pub hub_max_open: i64,
+
+    /// `JOY_HUB_IDLE_SECS`：用户的 app-server 闲置多久后关掉（秒）。0 =
+    /// 不按闲置驱逐，只受上限约束。每个实例是一个子进程，闲置就关是
+    /// 资源密度的底线。
+    pub hub_idle_secs: i64,
+
     /// `JOY_NOTIFY`：开了才会读 `<home>/notify.json` 并往里配的 webhook 推
     /// 通知（审批请求/作业收尾/目标 blocked）。默认关 —— 往外部服务发数据
     /// 是用户亲手按下的决定。
@@ -308,6 +330,8 @@ impl Default for Settings {
             tool_result_total_chars: 200_000,
             tool_result_max_chars: 30_000,
             hooks_enabled: false,
+            hub_max_open: 32,
+            hub_idle_secs: 900,
             hooks_timeout_secs: 30,
             exec_enabled: false,
             exec_allow: Vec::new(),
@@ -367,6 +391,8 @@ impl Settings {
                 d.tool_result_max_chars as i32,
             ) as i64,
             hooks_enabled: env_bool("JOY_HOOKS"),
+            hub_max_open: env_int("JOY_HUB_MAX_OPEN", d.hub_max_open as i32) as i64,
+            hub_idle_secs: env_int("JOY_HUB_IDLE_SECS", d.hub_idle_secs as i32) as i64,
             hooks_timeout_secs: env_int("JOY_HOOKS_TIMEOUT", d.hooks_timeout_secs as i32) as i64,
             exec_enabled: env_bool("JOY_EXEC"),
             exec_allow: env("JOY_EXEC_ALLOW")
@@ -416,6 +442,8 @@ impl Settings {
         check_bound("JOY_GOAL_MAX_ROUNDS", self.goal_max_rounds as i64)?;
         check_bound("JOY_LLM_RETRIES", self.llm_retries as i64)?;
         check_bound("JOY_LLM_TIMEOUT", self.llm_timeout_secs)?;
+        check_bound("JOY_HUB_MAX_OPEN", self.hub_max_open)?;
+        check_bound("JOY_HUB_IDLE_SECS", self.hub_idle_secs)?;
         check_bound("JOY_HOOKS_TIMEOUT", self.hooks_timeout_secs)?;
         check_bound("JOY_EXEC_TIMEOUT", self.exec_timeout_secs)?;
         check_bound("JOY_APPROVAL_TIMEOUT", self.approval_timeout_secs)?;

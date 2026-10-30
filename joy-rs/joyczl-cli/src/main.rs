@@ -99,7 +99,13 @@ async fn main() -> Result<()> {
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
             settings.ensure_home()?;
-            joyczl_ops::serve_hub(std::path::Path::new(&root), &settings.ops_host).await
+            joyczl_ops::serve_hub(
+                std::path::Path::new(&root),
+                &settings.ops_host,
+                settings.hub_max_open as usize,
+                settings.hub_idle_secs as u64,
+            )
+            .await
         }
         Some("app-server") => {
             // JOY_HOME 优先于环境里的 JOY_HOME —— 显式传参赢过环境变量，

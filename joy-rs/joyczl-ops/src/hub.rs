@@ -15,6 +15,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 
@@ -103,17 +104,69 @@ impl Users {
     }
 }
 
+/// 池里的一个条目：实例 + 最后使用时刻。**驱逐判定不用时间戳对并发做
+/// 猜测** —— 用 `Arc::strong_count`：只有池自己持有（== 1）才是闲的，
+/// 正被某个请求用着的实例天然 pin 住，不可能被关掉。
+struct PoolEntry {
+    app: Arc<AppServer>,
+    last_used: Instant,
+}
+
+/// 池的判定之一：该关谁 —— 闲（`idle`，即只有池自己持有）之中最久未用的。
+/// 全都 pin 住 → None（软上限：超开好过把请求变成错误）。
+pub(crate) fn lru_victim(entries: &[(String, Instant, bool)]) -> Option<String> {
+    entries
+        .iter()
+        .filter(|(_, _, idle)| *idle)
+        .min_by_key(|(_, last_used, _)| *last_used)
+        .map(|(user, _, _)| user.clone())
+}
+
+/// 池的判定之二：闲置超期的名单。`idle_secs` 为 0 视为策略关闭（空名单）；
+/// `now` 早于 epoch+idle（刚开机）时 `checked_sub` 落空 → 不关（宁可多留，
+/// 不可误关）。
+pub(crate) fn stale_entries(
+    entries: &[(String, Instant, bool)],
+    idle_secs: u64,
+    now: Instant,
+) -> Vec<String> {
+    if idle_secs == 0 {
+        return Vec::new();
+    }
+    let Some(deadline) = now.checked_sub(std::time::Duration::from_secs(idle_secs)) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|(_, last_used, idle)| *idle && *last_used < deadline)
+        .map(|(user, _, _)| user.clone())
+        .collect()
+}
+
 /// 多用户宿主：解析 token → 懒加载该用户的 app-server。
+///
+/// 池的三条策略抄自 openhuman 的 ProfileHost：**slot 上限**
+/// （`JOY_HUB_MAX_OPEN`，每个实例是一个子进程）、**LRU/idle 驱逐**
+/// （`JOY_HUB_IDLE_SECS`，0 = 不按闲置关）、**in-use 永不驱逐**。
+/// 上限是软的：全都 pin 住时宁可超开也不把请求变成错误 —— 那是真实
+/// 并发，不是闲置堆积。
 pub struct Hub {
     root: PathBuf,
     users: Mutex<Users>,
-    clients: Mutex<HashMap<String, Arc<AppServer>>>,
+    clients: Mutex<HashMap<String, PoolEntry>>,
+    max_open: usize,
+    idle_secs: u64,
 }
 
 impl Hub {
     /// 打开一个 hub。users.json 不存在或为空 → 报错并指路（空 hub 是配置
     /// 错误，不是「等第一个用户」）。
     pub fn open(root: &Path) -> Result<Hub> {
+        Self::open_with(root, 32, 900)
+    }
+
+    /// 旋钮显式传入（serve_hub 从配置来；测试用小值压出驱逐行为）。
+    pub fn open_with(root: &Path, max_open: usize, idle_secs: u64) -> Result<Hub> {
         let path = root.join("users.json");
         let users = Users::load(&path)?;
         anyhow::ensure!(
@@ -126,6 +179,8 @@ impl Hub {
             root: root.to_path_buf(),
             users: Mutex::new(users),
             clients: Mutex::new(HashMap::new()),
+            max_open: max_open.max(1),
+            idle_secs,
         })
     }
 
@@ -155,14 +210,62 @@ impl Hub {
     /// 守护锁是 per-home 的：两个 hub 不会打架，hub 与手工 `joy app-server`
     /// 同一 home 也会被挡住。
     pub async fn client(&self, user: &str) -> Result<Arc<AppServer>> {
-        if let Some(existing) = self.clients.lock().expect("clients 锁不该中毒").get(user) {
-            return Ok(Arc::clone(existing));
+        let mut clients = self.clients.lock().expect("clients 锁不该中毒");
+        if let Some(entry) = clients.get_mut(user) {
+            entry.last_used = Instant::now();
+            return Ok(Arc::clone(&entry.app));
         }
+
+        // 池满：先关「闲得最久」的。闲 = 只有池自己持有 —— 正在服务请求的
+        // 实例 strong_count > 1，天然 pin 住。全都 pin 住就不关（软上限）：
+        // 超开的是真实并发，不是闲置堆积，关了会把请求变成错误。
+        while clients.len() >= self.max_open {
+            let snapshot: Vec<_> = clients
+                .iter()
+                .map(|(u, e)| (u.clone(), e.last_used, Arc::strong_count(&e.app) == 1))
+                .collect();
+            let Some(victim) = lru_victim(&snapshot) else {
+                break;
+            };
+            let evicted = clients.remove(&victim).expect("刚选出来的受害者");
+            eprintln!(
+                "(joy) hub：用户 {victim} 的 app-server 闲置已关（池满 {}）",
+                self.max_open
+            );
+            drop(evicted); // kill_on_drop —— 子进程在这里退出。
+        }
+
+        // 闲置清扫：上限没满也顺手关掉闲置太久的（0 = 关闭此策略）。
+        if self.idle_secs > 0 {
+            let now = Instant::now();
+            let snapshot: Vec<_> = clients
+                .iter()
+                .map(|(u, e)| (u.clone(), e.last_used, Arc::strong_count(&e.app) == 1))
+                .collect();
+            for victim in stale_entries(&snapshot, self.idle_secs, now) {
+                let evicted = clients.remove(&victim).expect("刚选出来的受害者");
+                eprintln!(
+                    "(joy) hub：用户 {victim} 的 app-server 闲置已关（超 {} 秒）",
+                    self.idle_secs
+                );
+                drop(evicted);
+            }
+        }
+
         // 不跨锁 spawn：构造放锁外，插回时可能已被别人抢先 —— 那就用他的。
         let spawned = AppServer::spawn(&self.home(user))?;
         let app = Arc::new(spawned);
-        let mut clients = self.clients.lock().expect("clients 锁不该中毒");
-        Ok(Arc::clone(clients.entry(user.to_string()).or_insert(app)))
+        let entry = clients.entry(user.to_string()).or_insert(PoolEntry {
+            app,
+            last_used: Instant::now(),
+        });
+        entry.last_used = Instant::now();
+        Ok(Arc::clone(&entry.app))
+    }
+
+    /// 池里现在的实例数（测试与观测用）。
+    pub fn open_count(&self) -> usize {
+        self.clients.lock().expect("clients 锁不该中毒").len()
     }
 }
 
