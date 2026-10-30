@@ -24,6 +24,13 @@ import type {
   TurnStartParams,
 } from "./protocol";
 
+/** `/api/fs` 的一页目录列表（ops 本地视图，不进协议）。 */
+export interface FsListing {
+  path: string;
+  parent: string | null;
+  entries: { name: string; path: string }[];
+}
+
 /** app-server 说的话，原样带出来：`code` 是协议里的错误码，`message` 是给人看的。 */
 export class ApiError extends Error {
   readonly code: number;
@@ -272,6 +279,22 @@ export async function uploadFile(file: File): Promise<string> {
   if (!response.ok) throw new ApiError(await errorOf(response));
   const parsed = (await response.json()) as { path: string };
   return parsed.path;
+}
+
+/**
+ * 服务端目录浏览（选工作目录用）。
+ *
+ * 浏览器的文件夹选择器拿不到绝对路径，所以「像桌面应用那样选文件夹」
+ * 由知道文件系统的服务端代劳 —— 只读、只列子目录。
+ */
+export async function fetchFs(path: string | null): Promise<FsListing> {
+  const query = new URLSearchParams();
+  if (path) query.set("path", path);
+  const response = await apiFetch(`/api/fs?${query.toString()}`, {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as FsListing;
 }
 
 /** 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。 */

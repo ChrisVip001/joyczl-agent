@@ -248,6 +248,97 @@ pub async fn upload(
     Json(json!({ "path": format!("uploads/{date}/{name}") })).into_response()
 }
 
+/// 目录浏览的应答。ops 本地的 UI 视图（与 /api/upload 的应答同一待遇）：
+/// 不进协议 —— SDK 与终端都用不到「浏览服务端目录」这件事。
+#[derive(serde::Serialize)]
+pub struct FsListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<FsEntry>,
+}
+
+#[derive(serde::Serialize)]
+pub struct FsEntry {
+    pub name: String,
+    pub path: String,
+}
+
+/// 列一个目录下的**子目录**（只读、只列目录 —— 选工作目录用不到文件）。
+/// 独立成纯函数是为了能直接单测，不必起一个 app-server。
+pub fn list_dirs(raw: &str) -> Result<FsListing, String> {
+    let path = std::path::PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(format!("'{raw}' 必须是绝对路径"));
+    }
+    if !path.is_dir() {
+        return Err(format!("'{raw}' 不存在或不是目录"));
+    }
+    let mut entries: Vec<FsEntry> = std::fs::read_dir(&path)
+        .map_err(|why| format!("读不动 {raw}：{why}"))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let is_dir = entry.file_type().ok()?.is_dir();
+            if !is_dir {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            // 系统噪音目录藏掉：选择器里点进 /dev /proc 没有意义。
+            if name.starts_with('.') || name == "node_modules" || name == "target" {
+                return None;
+            }
+            Some(FsEntry {
+                path: entry.path().to_string_lossy().to_string(),
+                name,
+            })
+        })
+        .collect();
+    entries.sort_by_key(|e| e.name.to_lowercase());
+    Ok(FsListing {
+        path: path.to_string_lossy().to_string(),
+        parent: path
+            .parent()
+            .filter(|p| p.as_os_str() != path.as_os_str())
+            .map(|p| p.to_string_lossy().to_string()),
+        entries,
+    })
+}
+
+/// 浏览的起点：用户主目录，退化到进程 cwd。
+fn default_browse_root() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .or_else(|_| std::env::current_dir().map(|p| p.to_string_lossy().to_string()))
+        .unwrap_or_else(|_| "/".to_string())
+}
+
+/// `GET /api/fs?path=<目录>` —— 服务端目录浏览（驾驶舱选工作目录用）。
+///
+/// 为什么在服务端：浏览器的文件夹选择器**拿不到绝对路径**（File System
+/// Access API 只给句柄不给路径），而工作目录恰恰需要绝对路径 —— 所以
+/// 「像桌面应用那样选文件夹」必须由知道文件系统的这一侧来做
+/// （Jupyter、VS Code server 都是同款做法）。只读、只列目录。
+pub async fn fs_browse(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let raw: String = params
+        .get("path")
+        .map(String::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(default_browse_root);
+    match list_dirs(&raw) {
+        Ok(listing) => Json(listing).into_response(),
+        Err(why) => failed(
+            StatusCode::BAD_REQUEST,
+            ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: why,
+                data: None,
+            },
+        ),
+    }
+}
+
 pub async fn model_profiles(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<ModelProfilesResponse>(methods::MODEL_PROFILES, json!({}))

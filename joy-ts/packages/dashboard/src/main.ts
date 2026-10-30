@@ -17,6 +17,7 @@ import {
   respondApproval,
   saveModel,
   setGoal,
+  fetchFs,
   talk,
   uploadFile,
 } from "./api";
@@ -361,6 +362,16 @@ async function boot(): Promise<void> {
     }
   });
 
+  // 工作目录的「浏览」按钮：像桌面应用那样选文件夹（服务端代劳列目录）。
+  const cwdBrowse = el("button", {
+    class: "ghost",
+    text: "浏览…",
+    title: "选一个文件夹作为工作目录（也可以直接在左边手输）",
+    type: "button",
+  });
+  cwdBrowse.addEventListener("click", () => void cwdPicker());
+  dom.cwd.before(cwdBrowse);
+
   // 附件：选了先摆暂存区，发送时才上传 —— 中途反悔不用付任何代价。
   dom.attach.addEventListener("click", () => dom.file.click());
   dom.file.addEventListener("change", () => {
@@ -410,6 +421,89 @@ async function refresh(): Promise<void> {
     // 所以显示成一件事，而不是抛到控制台里没人看见。
     dom.overview.replaceChildren(failureOf(error));
   }
+}
+
+/**
+ * 文件夹选择器（openhuman 的形态）：服务端列目录，弹层里下钻，
+ * 「选这里」把绝对路径填进顶栏的输入框。Esc 或取消即走，不强制。
+ */
+async function cwdPicker(): Promise<void> {
+  const overlay = el("div", { class: "fsoverlay" });
+  const panel = el("div", { class: "fspanel", role: "dialog", "aria-label": "选择工作目录" });
+  overlay.append(panel);
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  const esc = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      close();
+      document.removeEventListener("keydown", esc);
+    }
+  };
+  document.addEventListener("keydown", esc);
+
+  let current = dom.cwd.value.trim();
+
+  async function show(path: string | null): Promise<void> {
+    panel.replaceChildren(el("p", { class: "hint", text: "读目录中…" }));
+    let listing: Awaited<ReturnType<typeof fetchFs>>;
+    try {
+      listing = await fetchFs(path);
+    } catch (error: unknown) {
+      panel.replaceChildren(
+        el("p", { class: "hint", text: `读不动：${String(error)}` }),
+        closeButton(),
+      );
+      return;
+    }
+    current = listing.path;
+
+    const title = el("div", { class: "fsbar" },
+      el("code", { class: "fscur", text: listing.path }),
+    );
+    if (listing.parent !== null) {
+      const up = el("button", { class: "ghost", text: "↑ 上一级", type: "button" });
+      up.addEventListener("click", () => void show(listing.parent));
+      title.append(up);
+    }
+
+    const rows = listing.entries.map((entry) => {
+      const row = el("button", {
+        class: "fsrow",
+        text: `📁 ${entry.name}`,
+        type: "button",
+      });
+      row.addEventListener("click", () => void show(entry.path));
+      return row;
+    });
+    const list = el("div", { class: "fslist" });
+    if (rows.length === 0) {
+      list.append(muted("这层没有子目录了。要选的就是当前显示的目录。"));
+    } else {
+      list.append(...rows);
+    }
+
+    const pick = el("button", { class: "approve", text: "选这个目录", type: "button" });
+    pick.addEventListener("click", () => {
+      dom.cwd.value = listing.path;
+      close();
+      document.removeEventListener("keydown", esc);
+    });
+    panel.replaceChildren(title, list, el("div", { class: "row" }, pick, closeButton()));
+  }
+
+  function closeButton(): HTMLButtonElement {
+    const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+    cancel.addEventListener("click", () => {
+      close();
+      document.removeEventListener("keydown", esc);
+    });
+    return cancel;
+  }
+
+  document.body.append(overlay);
+  await show(current === "" ? null : current);
 }
 
 async function submit(): Promise<void> {

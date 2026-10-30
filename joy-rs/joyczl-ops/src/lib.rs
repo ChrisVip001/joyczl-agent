@@ -274,6 +274,8 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/schedules", get(api::schedules))
         // 文件上传：octet-stream 单文件，20MB 上限（axum 默认 2MB，必须显式放开）。
         .route("/api/upload", post(api::upload))
+        // 目录浏览：驾驶舱选工作目录用（只读、只列目录）。
+        .route("/api/fs", get(api::fs_browse))
         // 多模型：列出 / 存并切换 / 删除。与终端的 /model 是同一处实现。
         .route("/api/model/profiles", get(api::model_profiles))
         .route("/api/model/save", post(api::model_save))

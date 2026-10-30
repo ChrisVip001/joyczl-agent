@@ -82,3 +82,33 @@ fn upload_extension_whitelist_is_strict() {
     assert_eq!(safe_extension("a.带汉字").as_deref(), None);
     assert_eq!(safe_extension("a.0123456789").as_deref(), None, "超过 8 位");
 }
+
+/// 目录浏览：只列子目录、按名排序、藏掉点开头与构建噪音；相对路径与
+/// 不存在的路径给出能照着做的话。
+#[test]
+fn fs_browsing_lists_only_directories_and_hides_noise() {
+    use super::list_dirs;
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    let root = dir.path();
+    std::fs::create_dir(root.join("项目甲")).unwrap();
+    std::fs::create_dir(root.join("beta")).unwrap();
+    std::fs::write(root.join("file.txt"), "不是目录").unwrap();
+    std::fs::create_dir(root.join(".hidden")).unwrap();
+    std::fs::create_dir(root.join("target")).unwrap();
+
+    let listing = list_dirs(&root.to_string_lossy()).expect("列得动");
+    let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["beta", "项目甲"],
+        "只有子目录、排序、没有点开头与 target"
+    );
+    assert_eq!(
+        listing.parent.as_deref(),
+        Some(root.parent().unwrap().to_string_lossy().as_ref())
+    );
+
+    assert!(list_dirs("相对/路径").is_err(), "相对路径拒绝");
+    assert!(list_dirs("/不存在/的/目录/joy").is_err());
+}

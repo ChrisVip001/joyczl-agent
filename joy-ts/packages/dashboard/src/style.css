@@ -219,6 +219,67 @@ main {
   font-size: var(--fs-xs);
   padding: 2px var(--sp-2);
 }
+
+/* 目录选择器弹层（openhuman 的选文件夹形态）。 */
+.fsoverlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 35%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.fspanel {
+  width: min(520px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: var(--sp-4);
+}
+.fsbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.fscur {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+.fslist {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: var(--sp-1);
+}
+.fsrow {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.fsrow:hover {
+  background: var(--bg-inset);
+}
 .bar.goal input {
   flex: 1;
   min-width: 0;
