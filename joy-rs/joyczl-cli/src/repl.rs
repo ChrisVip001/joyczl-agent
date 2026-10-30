@@ -19,7 +19,7 @@ const HELP: &str = "\
   /sessions      列出历史会话
   /new           开一个新会话
   /quit          退出（/exit 也行）
-其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] 加一套\n/cwd [路径]    看或设本会话的工作目录（/cwd clear 清除）；相对路径都按它解析";
+其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] 加一套\n/cwd [路径]    看或设本会话的工作目录（/cwd clear 清除）；相对路径都按它解析\n/route          看模型路由表；/route auto|fixed 切模式；/route set <档位> <配置名> 改映射";
 
 /// 进入终端对话。拿到的是已装配好的 Server。
 pub async fn run(server: Server) -> Result<()> {
@@ -57,6 +57,7 @@ pub async fn run(server: Server) -> Result<()> {
             s if s.starts_with("/goal") => set_goal(&server, &session_id, s),
             s if s.starts_with("/cwd") => cwd = set_cwd(cwd, s),
             s if s.starts_with("/model") => models(&server, s),
+            s if s.starts_with("/route") => route_cmd(&server, s),
             s if s.starts_with('/') => {
                 println!("不认识的命令 {s}。/help 看有哪些。");
             }
@@ -96,6 +97,74 @@ fn set_cwd(cwd: Option<std::path::PathBuf>, input: &str) -> Option<std::path::Pa
     }
     println!("本轮工作目录已设为 {}", path.display());
     Some(path)
+}
+
+/// `/route` —— 按任务档位自动选模型（openhuman 的 tier 抽象）。
+///
+/// 与 `/model` 同一条纪律：**只有人能到这里**。路由是服务端策略，模型没有
+/// 换模型的工具；人类 pin（active profile）优先于任何档位映射。
+fn route_cmd(server: &Server, input: &str) {
+    use joyczl_config::routes::{self, RouteFile, RouteMode, TIERS};
+
+    let home = server.settings().home;
+    let mut table: RouteFile = routes::load_routes(&home);
+    let rest: Vec<&str> = input.split_whitespace().collect();
+
+    match rest.get(1).copied() {
+        None => {
+            println!(
+                "模式：{}（{}）",
+                match table.mode {
+                    RouteMode::Auto => "auto",
+                    RouteMode::Fixed => "fixed",
+                },
+                routes::routes_path(&home).display()
+            );
+            for tier in TIERS {
+                let mapped = table.routes.get(tier);
+                println!("  {tier:<10} → {}", mapped.map(String::as_str).unwrap_or("（缺省链）"));
+            }
+            println!("缺省链：reasoning/fast → chat → active；改用 /route set <档位> <配置名>。");
+        }
+        Some("auto") | Some("fixed") => {
+            table.mode = if rest[1] == "auto" {
+                RouteMode::Auto
+            } else {
+                RouteMode::Fixed
+            };
+            match routes::save_routes(&home, &table) {
+                Ok(()) => println!(
+                    "已切到 {} —— 每轮重读，立即生效。",
+                    if table.mode == RouteMode::Auto { "auto" } else { "fixed" }
+                ),
+                Err(why) => println!("没写进 {}：{why}", routes::routes_path(&home).display()),
+            }
+        }
+        Some("set") => {
+            let (Some(tier), Some(profile_id)) = (rest.get(2).copied(), rest.get(3).copied())
+            else {
+                println!("用法：/route set <fast|chat|reasoning> <配置名>（/model 看有哪些）");
+                return;
+            };
+            if !TIERS.contains(&tier) {
+                println!("档位只有三个：fast / chat / reasoning。");
+                return;
+            }
+            let models = joyczl_config::models::load_models(&home);
+            if joyczl_config::models::find(&models, profile_id).is_none() {
+                println!("没有叫 '{profile_id}' 的模型配置 —— /model 看有哪些。");
+                return;
+            }
+            table.routes.insert(tier.to_string(), profile_id.to_string());
+            match routes::save_routes(&home, &table) {
+                Ok(()) => println!("{tier} → {profile_id}（每轮重读，立即生效）"),
+                Err(why) => println!("没写进 {}：{why}", routes::routes_path(&home).display()),
+            }
+        }
+        Some(other) => {
+            println!("不认识的子命令 '{other}'。/route 看表，/route auto|fixed 切模式，/route set <档位> <配置名> 改映射。");
+        }
+    }
 }
 
 /// `/model` —— 多套模型配置：列、切、加、删。

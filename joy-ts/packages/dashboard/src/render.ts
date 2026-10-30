@@ -169,6 +169,8 @@ export function turnFooter(turn: TurnCompletedNotification): string {
   ];
   if (turn.usage !== null && turn.usage !== undefined) parts.push(formatUsage(turn.usage));
   if (turn.meta.tools.length > 0) parts.push(`${turn.meta.tools.length} 次工具`);
+  // 路由原因只在真的发生了选择/回落时才说话（fixed 模式与选中 active 时是空）。
+  if (turn.meta.routeReason) parts.push(`路由 ${turn.meta.routeReason}`);
   return parts.join(" · ");
 }
 
