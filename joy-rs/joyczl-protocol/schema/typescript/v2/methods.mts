@@ -22,4 +22,5 @@ export const METHODS = {
   MODEL_REMOVE: "model/remove",
   USAGE_SUMMARY: "usage/summary",
   APPROVAL_LOG: "approval/log",
+  SCHEDULE_LIST: "schedule/list",
 } as const;

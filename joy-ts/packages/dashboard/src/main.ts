@@ -7,9 +7,12 @@
 
 import type { TurnCompletedNotification } from "./protocol";
 import {
+  fetchApprovals,
   fetchDashboard,
   fetchMessages,
   fetchModelProfiles,
+  fetchSchedules,
+  fetchUsage,
   removeModel,
   respondApproval,
   saveModel,
@@ -19,14 +22,19 @@ import {
 import {
   chip,
   el,
+  elapsedSince,
   failure,
   failureOf,
   formatMs,
   formatStamp,
   messageRow,
   muted,
+  renderApprovals,
   renderMemory,
   renderOverview,
+  renderSchedules,
+  renderUsage,
+  toolCard,
   turnFooter,
 } from "./render";
 
@@ -66,6 +74,10 @@ const dom = {
   older: must<HTMLButtonElement>("older"),
   overview: must("overview"),
   memory: must("memory"),
+  usage: must("usage"),
+  approvals: must("approvals"),
+  schedules: must("schedules"),
+  status: must("status"),
   model: must("model"),
   home: must("home"),
   session: must("session"),
@@ -73,6 +85,89 @@ const dom = {
 };
 
 let busy = false;
+
+/**
+ * 右侧面板的导航（抄 openhuman 的 navConfig：数据即导航）。
+ * 概览/记忆随整屏轮询走；用量/审批/定时按需取 —— 只刷**当前开着**的 tab，
+ * 不为看不见的面板付请求。
+ */
+type TabId = "overview" | "memory" | "usage" | "approvals" | "schedules" | "model";
+let activeTab: TabId = "overview";
+
+function switchTab(tab: TabId): void {
+  activeTab = tab;
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
+    button.classList.toggle("active", button.dataset.tab === tab);
+  }
+  for (const section of document.querySelectorAll<HTMLElement>(".panels .panel")) {
+    section.hidden = section.id !== `panel-${tab}`;
+  }
+  void refreshPanels();
+}
+
+/** 按需面板：只有当前 tab 是那三个新面板之一时才发请求。 */
+async function refreshPanels(): Promise<void> {
+  try {
+    if (activeTab === "usage") {
+      dom.usage.replaceChildren(renderUsage(await fetchUsage()));
+    } else if (activeTab === "approvals") {
+      dom.approvals.replaceChildren(renderApprovals((await fetchApprovals()).entries));
+    } else if (activeTab === "schedules") {
+      dom.schedules.replaceChildren(renderSchedules((await fetchSchedules()).jobs));
+    }
+  } catch (error) {
+    const target =
+      activeTab === "usage"
+        ? dom.usage
+        : activeTab === "approvals"
+          ? dom.approvals
+          : activeTab === "schedules"
+            ? dom.schedules
+            : null;
+    if (target !== null) target.replaceChildren(failureOf(error));
+  }
+}
+
+// --- 运行状态三态（抄 openhuman 的 AgentRunningStatus） -----------------------
+//
+// 「等你说」是静止行；「思考中/回复中」shimmer + 秒表；「干活中」带工具名。
+// 区分的是「卡住了」和「在跑」—— 秒表在动就是后者。
+
+let statusTimer: number | null = null;
+let statusStart = 0;
+
+function showStatus(kind: "thinking" | "working", label: string): void {
+  dom.status.hidden = false;
+  dom.status.className = `statusline ${kind}`;
+  if (dom.status.querySelector(".status-label") === null) {
+    statusStart = Date.now();
+    dom.status.replaceChildren(
+      el("span", { class: "status-label", text: label }),
+      el("span", { class: "status-time" }),
+    );
+    statusTimer = window.setInterval(() => {
+      const time = dom.status.querySelector(".status-time");
+      if (time !== null) time.textContent = elapsedSince(statusStart);
+    }, 500);
+  } else {
+    const labelNode = dom.status.querySelector(".status-label");
+    if (labelNode !== null) labelNode.textContent = label;
+  }
+  if (dom.status.className !== `statusline ${kind}`) {
+    // 从 thinking 换到 working：重置计时起点，让秒表对得上这一步。
+    statusStart = Date.now();
+    dom.status.className = `statusline ${kind}`;
+  }
+}
+
+function hideStatus(): void {
+  dom.status.hidden = true;
+  dom.status.replaceChildren();
+  if (statusTimer !== null) {
+    window.clearInterval(statusTimer);
+    statusTimer = null;
+  }
+}
 
 /**
  * 刷模型面板：**应答里没有密钥**，页面只显示「当前是哪套、key 存在哪」。
@@ -138,6 +233,13 @@ async function boot(): Promise<void> {
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
 
+  // 右侧 tab：数据即导航 —— 每个按钮只带一个 tab 名，行为全在 switchTab。
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
+    button.addEventListener("click", () => {
+      if (button.dataset.tab !== undefined) switchTab(button.dataset.tab as TabId);
+    });
+  }
+
   dom.composer.addEventListener("submit", (event) => {
     event.preventDefault();
     void submit();
@@ -153,7 +255,10 @@ async function boot(): Promise<void> {
 
   setInterval(() => {
     // 正在流的时候别刷：面板的数字会跳，但气泡里的字更重要。
-    if (!busy) void refresh();
+    if (!busy) {
+      void refresh();
+      void refreshPanels();
+    }
   }, POLL_MS);
 
   await refresh();
@@ -263,6 +368,12 @@ async function send(text: string): Promise<void> {
 
   let streamed = "";
   let completed: TurnCompletedNotification | null = null;
+  let firstDelta = true;
+  // 当前在跑的那张工具卡（串行循环里同时最多一张）与它的秒表。
+  let currentCard: HTMLElement | null = null;
+  let cardTimer: number | null = null;
+  let cardStart = 0;
+  showStatus("thinking", "思考中");
 
   try {
     for await (const notification of talk({ sessionId: current, message: text, stream: true })) {
@@ -271,6 +382,10 @@ async function send(text: string): Promise<void> {
           break;
 
         case "textDelta":
+          if (firstDelta) {
+            firstDelta = false;
+            showStatus("thinking", "回复中");
+          }
           streamed += notification.delta;
           bubble.textContent = streamed;
           scrollToEnd();
@@ -358,20 +473,45 @@ async function send(text: string): Promise<void> {
           );
           break;
 
-        case "toolStarted":
-          trace.append(chip(`工具 · ${notification.tool}`, "tool"));
+        case "toolStarted": {
+          // 工具卡片（抄 openhuman 的 ToolBodies）：人话摘要 + 实时秒表，
+          // 不把 args 的 JSON 原样吐出来。
+          showStatus("working", notification.tool);
+          const card = toolCard(notification);
+          const timeNode = card.querySelector(".toolcard-time");
+          cardStart = Date.now();
+          cardTimer = window.setInterval(() => {
+            if (timeNode !== null) timeNode.textContent = elapsedSince(cardStart);
+          }, 500);
+          currentCard = card;
+          trace.append(card);
+          scrollToEnd();
           break;
+        }
 
-        case "toolCompleted":
-          trace.append(
-            chip(
-              `工具 · ${notification.tool} ${
-                notification.status === "ok" ? "好了" : "出错"
-              }${notification.durationMs === null ? "" : ` ${formatMs(notification.durationMs)}`}`,
-              "tool",
-            ),
+        case "toolCompleted": {
+          if (cardTimer !== null) {
+            window.clearInterval(cardTimer);
+            cardTimer = null;
+          }
+          currentCard = null;
+          // 结束本身就是那根卡片的句点：状态上色 + 定格耗时。
+          const done = chip(
+            `${notification.tool} ${notification.status === "ok" ? "好了" : "出错"}${
+              notification.durationMs === null ? "" : ` · ${formatMs(notification.durationMs)}`
+            }`,
+            "tool",
           );
+          done.classList.add(notification.status === "ok" ? "done-ok" : "done-bad");
+          // 出错时把输出摘一句出来 —— 工具层的失败不中断 turn，
+          // 但人应该当场看到失败原因，而不是等最后的 Error。
+          if (notification.status !== "ok" && notification.output !== "") {
+            done.title = notification.output;
+          }
+          trace.append(done);
+          scrollToEnd();
           break;
+        }
 
         case "consolidationCompleted":
           if (notification.newFacts > 0) {
@@ -413,6 +553,8 @@ async function send(text: string): Promise<void> {
     // 收尾放在 finally：中途出错也要把「正在写」的状态清掉，
     // 否则那根闪动的光标会一直留在气泡上。
     bubble.classList.remove("streaming");
+    hideStatus();
+    if (cardTimer !== null) window.clearInterval(cardTimer);
 
     if (completed !== null) {
       // 用 `reply` 覆盖流式攒出来的字：增量可能缺（背压、断线），

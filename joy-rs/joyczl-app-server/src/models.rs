@@ -10,8 +10,8 @@
 use joyczl_config::models as cfg;
 use joyczl_protocol::{
     ApprovalLogEntry, ApprovalLogResponse, ModelProfileView, ModelProfilesResponse,
-    ModelRemoveParams, ModelRemoveResponse, ModelSaveParams, ModelSaveResponse, UsageByModel,
-    UsageSummaryResponse,
+    ModelRemoveParams, ModelRemoveResponse, ModelSaveParams, ModelSaveResponse,
+    ScheduleListResponse, ScheduleStateRow, UsageByModel, UsageSummaryResponse,
 };
 use std::sync::{Mutex, RwLock};
 
@@ -96,6 +96,31 @@ fn validate_provider(provider: &str, base_url: Option<&str>) -> Result<(), Strin
 }
 
 impl Server {
+    /// 调度状态快照（迁移 0012）：`joy schedule` 登记的全部任务。
+    /// 调度器是独立进程，这里只是同一张表的只读视图；读失败返回空列表
+    /// 并说明（面板不该因为一个读错误变成坏页）。
+    pub async fn schedule_list(&self) -> ScheduleListResponse {
+        let schedules = joyczl_state::Schedules::new(self.pool.clone());
+        match schedules.list().await {
+            Ok(rows) => ScheduleListResponse {
+                jobs: rows
+                    .into_iter()
+                    .map(|row| ScheduleStateRow {
+                        name: row.name,
+                        last_fired_minute: row.last_fired_minute,
+                        claimed_minute: row.claimed_minute,
+                        catch_up: row.catch_up,
+                        delivery: row.delivery,
+                    })
+                    .collect(),
+            },
+            Err(e) => {
+                eprintln!("(joy) 调度状态读不了：{e}");
+                ScheduleListResponse { jobs: Vec::new() }
+            }
+        }
+    }
+
     /// 审批审计（迁移 0011）：最近 100 条「问了才跑」的记录，新的在前。
     /// 读失败返回空列表并说明 —— 同 usage_summary 的口径。
     pub async fn approval_log(&self) -> ApprovalLogResponse {

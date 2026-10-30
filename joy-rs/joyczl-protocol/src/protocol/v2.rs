@@ -49,6 +49,9 @@ pub mod methods {
     /// 审批审计（迁移 0011）：模型问过什么、结果如何（approved/denied/
     /// timeout/voided 四态）。hub 管理员事后回答「谁批准了 rm -rf」用。
     pub const APPROVAL_LOG: &str = "approval/log";
+    /// 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。
+    /// 无参方法。给驾驶舱的定时面板用 —— CLI 之外的第二个消费者。
+    pub const SCHEDULE_LIST: &str = "schedule/list";
 }
 
 // ===========================================================================
@@ -730,6 +733,34 @@ pub struct UsageSummaryParams;
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export_to = "v2/")]
 pub struct ApprovalLogParams;
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export_to = "v2/")]
+pub struct ScheduleListParams;
+
+/// `schedule/list` 的一行：一个定时任务的当前状态（迁移 0012）。
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ScheduleStateRow {
+    pub name: String,
+    /// 上次落定的触发分钟（去重锚点）；没跑过为 null。
+    pub last_fired_minute: Option<String>,
+    /// 非空 = 上次执行中断，等重启按 catch_up 决定补跑或放弃。
+    pub claimed_minute: Option<String>,
+    /// true = 至少一次（补跑），false = 至多一次（放弃）。
+    pub catch_up: bool,
+    /// outbox / notify / quiet。
+    pub delivery: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ScheduleListResponse {
+    /// 按名字排序的全部任务；一个都没登记过为空数组。
+    pub jobs: Vec<ScheduleStateRow>,
+}
 
 /// 一套配置的**视图**：与存储里那份的区别是它不含密钥，只说密钥在哪。
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]

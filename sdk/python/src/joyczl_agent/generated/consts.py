@@ -46,6 +46,7 @@ class Methods(str, Enum):
     MODEL_PROFILES = "model/profiles"
     MODEL_REMOVE = "model/remove"
     MODEL_SAVE = "model/save"
+    SCHEDULE_LIST = "schedule/list"
     SESSION_LIST = "session/list"
     SESSION_MESSAGES = "session/messages"
     SESSION_NEW = "session/new"

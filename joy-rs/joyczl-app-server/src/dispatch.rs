@@ -12,9 +12,9 @@ use joyczl_protocol::{
     MemoryListParams, MemoryListResponse, MemoryRememberParams, MemoryRememberResponse,
     MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo, ModelListParams,
     ModelListResponse, ModelProfilesParams, ModelRemoveParams, ModelSaveParams, RequestId,
-    SessionListParams, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
-    SessionNewParams, SessionNewResponse, TurnInterruptParams, TurnInterruptResponse,
-    TurnStartParams, UsageSummaryParams, JSONRPC_VERSION,
+    ScheduleListParams, SessionListParams, SessionListResponse, SessionMessagesParams,
+    SessionMessagesResponse, SessionNewParams, SessionNewResponse, TurnInterruptParams,
+    TurnInterruptResponse, TurnStartParams, UsageSummaryParams, JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -256,6 +256,21 @@ async fn dispatch(
             }
             let _: UsageSummaryParams = UsageSummaryParams;
             respond(server.usage_summary().await)
+        }
+
+        methods::SCHEDULE_LIST => {
+            // 无参方法：见 model/profiles 的同一段注释。
+            if let Some(value) = params {
+                if value.as_object().is_some_and(|o| !o.is_empty()) {
+                    return Err(ErrorObject {
+                        code: codes::INVALID_PARAMS,
+                        message: format!("{method} 不接受参数"),
+                        data: None,
+                    });
+                }
+            }
+            let _: ScheduleListParams = ScheduleListParams;
+            respond(server.schedule_list().await)
         }
 
         methods::APPROVAL_LOG => {

@@ -15,6 +15,32 @@ philosophy as the daemon lock: misconfigured should fail to boot, not silently
 serve something stale. Release scenarios (no joy-ts sources present) skip the
 check.
 
+### Dashboard redesign: run status, tool cards, data-as-navigation
+
+Referencing openhuman's AgentRunningStatus / ToolBodies / navConfig and
+dsh's transcript rendering — absorbed in vanilla TS (no framework, no new
+dependencies):
+
+- **Three-state run status**: waiting-on-you (a still line) / thinking
+  (shimmer + stopwatch) / working (tool name + stopwatch) — separates
+  "stuck" from "running".
+- **Tool cards**: each tool extracts one human summary from args
+  (run_command shows the command, read_file the path, fetch_url the URL),
+  with a live stopwatch and the final outcome; failures are visible
+  immediately (previously a raw JSON chip).
+- **Right panel becomes tabs (data as navigation)**: overview / memory /
+  **usage** / **approvals** / **schedules** / model — the M2d usage ledger,
+  M3b audit, and M4b schedule state finally have UI; fetched on demand
+  (only the active tab).
+- New protocol method `schedule/list` (no args; per-job last_fired/claimed/
+  catch_up/delivery snapshot); ops gains three read-only routes
+  (`GET /api/usage`, `/api/approvals`, `/api/schedules`).
+- Two-layer design tokens: a material layer (:root variables) plus a
+  semantic layer; dark mode switches one variable set; the warm-orange
+  identity stays.
+- Fixed a guaranteed-crash bug along the way: apiFetch's 401 retry called
+  itself instead of fetch — any 401 would have blown the stack.
+
 ### M4c: a scheduler run ledger — "what ran, and how it ended" has an answer
 
 - `<home>/schedule-runs.jsonl`: one JSON line per run with three

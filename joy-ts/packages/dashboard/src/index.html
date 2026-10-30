@@ -41,6 +41,9 @@
           <span class="hint" id="goal-state"></span>
         </div>
         <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
+        <!-- 运行状态三态（抄 openhuman 的 AgentRunningStatus）：
+             等你 = 静止一行；思考 = shimmer；干活 = 工具名。hidden 由 main 管。 -->
+        <div class="statusline" id="status" hidden aria-live="polite"></div>
         <form class="composer" id="composer" autocomplete="off">
           <textarea
             id="input"
@@ -53,16 +56,33 @@
       </section>
 
       <aside class="panels">
-        <section class="panel">
-          <h2>概览</h2>
+        <!-- 数据即导航（抄 openhuman 的 navConfig）：tab 就是这份数组，
+             加一个面板 = HTML 加一节 + main.ts 的 NAV 加一行。 -->
+        <nav class="tabs" aria-label="面板">
+          <button class="tab active" data-tab="overview" type="button">概览</button>
+          <button class="tab" data-tab="memory" type="button">记忆</button>
+          <button class="tab" data-tab="usage" type="button">用量</button>
+          <button class="tab" data-tab="approvals" type="button">审批</button>
+          <button class="tab" data-tab="schedules" type="button">定时</button>
+          <button class="tab" data-tab="model" type="button">模型</button>
+        </nav>
+
+        <section class="panel active" id="panel-overview">
           <div class="body" id="overview"></div>
         </section>
-        <section class="panel">
-          <h2>记忆</h2>
+        <section class="panel" id="panel-memory" hidden>
           <div class="body" id="memory"></div>
         </section>
-        <section class="panel">
-          <h2>模型</h2>
+        <section class="panel" id="panel-usage" hidden>
+          <div class="body" id="usage"></div>
+        </section>
+        <section class="panel" id="panel-approvals" hidden>
+          <div class="body" id="approvals"></div>
+        </section>
+        <section class="panel" id="panel-schedules" hidden>
+          <div class="body" id="schedules"></div>
+        </section>
+        <section class="panel" id="panel-model" hidden>
           <div class="body">
             <p class="hint" id="mp-state">当前：—</p>
             <select id="mp-picker" aria-label="已配置的模型"></select>

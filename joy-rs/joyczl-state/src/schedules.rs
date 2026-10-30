@@ -106,6 +106,15 @@ impl Schedules {
         .map(|_| ())
     }
 
+    /// 全部行的快照（驾驶舱的定时面板用）。按名字排，读失败由调用方兜底。
+    pub async fn list(&self) -> Result<Vec<ScheduleRow>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT name, last_fired_minute, claimed_minute, catch_up, delivery              FROM schedule_state ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
     /// 旧 JSON 的一次性导入：只搬 last_fired，不动策略字段。幂等 ——
     /// DB 已有值时不再覆盖（调度器只在 last_fired 为空时才调它）。
     pub async fn import_legacy(&self, name: &str, minute: &str) -> Result<(), sqlx::Error> {
@@ -220,6 +229,20 @@ mod tests {
                 .as_deref(),
             Some("2026-10-30T09:00")
         );
+    }
+
+    /// list 读回全部行，按名字有序。
+    #[tokio::test]
+    async fn list_returns_every_row_sorted() {
+        let (schedules, _dir) = db().await;
+        for (name, cu, dl) in [("b", true, "outbox"), ("a", false, "notify")] {
+            schedules.ensure(name, cu, dl).await.expect("登记");
+        }
+        let rows = schedules.list().await.expect("读回");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "a");
+        assert!(!rows[0].catch_up);
+        assert_eq!(rows[1].delivery, "outbox");
     }
 
     /// import_legacy 只搬历史；DB 已有值时（调用方保证不调，但语义上）

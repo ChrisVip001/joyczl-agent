@@ -84,6 +84,9 @@ macro_rules! protocol_types {
             ApprovalLogParams,
             ApprovalLogEntry,
             ApprovalLogResponse,
+            ScheduleListParams,
+            ScheduleStateRow,
+            ScheduleListResponse,
             SessionListParams,
             SessionListResponse,
             SessionNewParams,
@@ -229,6 +232,7 @@ fn method_entries() -> Vec<(&'static str, &'static str)> {
         ("MODEL_REMOVE", m::MODEL_REMOVE),
         ("USAGE_SUMMARY", m::USAGE_SUMMARY),
         ("APPROVAL_LOG", m::APPROVAL_LOG),
+        ("SCHEDULE_LIST", m::SCHEDULE_LIST),
     ]
 }
 

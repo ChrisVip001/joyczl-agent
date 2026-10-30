@@ -16,7 +16,10 @@ import type {
   ModelRemoveResponse,
   ModelSaveParams,
   ModelSaveResponse,
+  ApprovalLogResponse,
+  ScheduleListResponse,
   ServerNotification,
+  UsageSummaryResponse,
   SessionMessagesResponse,
   TurnStartParams,
 } from "./protocol";
@@ -45,7 +48,7 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
   const token = localStorage.getItem("joy-ops-token");
   if (token) headers.set("authorization", `Bearer ${token}`);
 
-  const response = await apiFetch(path, { ...init, headers });
+  const response = await fetch(path, { ...init, headers });
   if (response.status === 401) {
     const entered = window.prompt("这台 Joy 的 API 需要 token（服务端的 JOY_OPS_TOKEN）");
     if (entered) {
@@ -236,4 +239,25 @@ export async function removeModel(params: ModelRemoveParams): Promise<ModelRemov
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as ModelRemoveResponse;
+}
+
+/** 用量台账（迁移 0010）：per-model 聚合 + 总数。只记账不强制。 */
+export async function fetchUsage(): Promise<UsageSummaryResponse> {
+  const response = await apiFetch("/api/usage", { headers: { accept: "application/json" } });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as UsageSummaryResponse;
+}
+
+/** 审批审计（迁移 0011）：最近 100 条「问了才跑」，新的在前。 */
+export async function fetchApprovals(): Promise<ApprovalLogResponse> {
+  const response = await apiFetch("/api/approvals", { headers: { accept: "application/json" } });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ApprovalLogResponse;
+}
+
+/** 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。 */
+export async function fetchSchedules(): Promise<ScheduleListResponse> {
+  const response = await apiFetch("/api/schedules", { headers: { accept: "application/json" } });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ScheduleListResponse;
 }

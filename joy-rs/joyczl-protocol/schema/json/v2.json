@@ -1273,6 +1273,63 @@
       "title": "RetryNotification",
       "type": "object"
     },
+    "ScheduleListParams": {
+      "title": "ScheduleListParams",
+      "type": "null"
+    },
+    "ScheduleListResponse": {
+      "properties": {
+        "jobs": {
+          "description": "按名字排序的全部任务；一个都没登记过为空数组。",
+          "items": {
+            "$ref": "#/definitions/ScheduleStateRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "jobs"
+      ],
+      "title": "ScheduleListResponse",
+      "type": "object"
+    },
+    "ScheduleStateRow": {
+      "description": "`schedule/list` 的一行：一个定时任务的当前状态（迁移 0012）。",
+      "properties": {
+        "catchUp": {
+          "description": "true = 至少一次（补跑），false = 至多一次（放弃）。",
+          "type": "boolean"
+        },
+        "claimedMinute": {
+          "description": "非空 = 上次执行中断，等重启按 catch_up 决定补跑或放弃。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delivery": {
+          "description": "outbox / notify / quiet。",
+          "type": "string"
+        },
+        "lastFiredMinute": {
+          "description": "上次落定的触发分钟（去重锚点）；没跑过为 null。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "catchUp",
+        "delivery",
+        "name"
+      ],
+      "title": "ScheduleStateRow",
+      "type": "object"
+    },
     "ServerNotification": {
       "description": "一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。",
       "oneOf": [

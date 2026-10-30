@@ -13,6 +13,27 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 条哲学：配错就该起不来，而不是默默端出旧页面。发布场景（没有 joy-ts 源码
 目录）不检查。
 
+### 驾驶舱重设计：状态三态、工具卡片、数据即导航
+
+参考 openhuman 的 AgentRunningStatus / ToolBodies / navConfig 与 dsh 的
+对话渲染，vanilla TS 内消化（无框架、无新依赖）：
+
+- **运行状态三态**：等待你（静止行）/ 思考中（shimmer + 秒表）/
+  干活中（工具名 + 秒表）—— 区分「卡住了」和「在跑」。
+- **工具卡片**：每个工具从 args 提取一句人话摘要（run_command 显示命令、
+  read_file 显示路径、fetch_url 显示 URL），配实时秒表与定格结果；
+  失败当场可见（此前只有 raw JSON chip）。
+- **右侧面板 tab 化（数据即导航）**：概览 / 记忆 / **用量** / **审批** /
+  **定时** / 模型 —— M2d 用量台账、M3b 审计、M4b 调度状态终于有 UI；
+  按需取数（只刷当前 tab）。
+- 新协议方法 `schedule/list`（无参，返回每任务的 last_fired/claimed/
+  catch_up/delivery 快照）；ops 加 `GET /api/usage`、`/api/approvals`、
+  `/api/schedules` 三条只读路由。
+- 双层设计 token：材质层（:root 变量）+ 语义层，暗色只切一组变量；
+  识别色保持暖橙。
+- 顺手修一个必炸 bug：apiFetch 401 重试时误调自身（应为 fetch）——
+  任何 401 都会爆栈。
+
 ### M4c：调度 run 账本 —— 「跑过哪些、各自结局」有处可查
 
 - `<home>/schedule-runs.jsonl` 每次 run 一行 JSON：`ok`/`empty`/`error`

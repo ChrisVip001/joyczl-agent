@@ -15,11 +15,12 @@ use axum::Json;
 use chrono::Local;
 use futures_util::stream::{self, Stream};
 use joyczl_protocol::{
-    codes, methods, ApprovalRespondParams, ApprovalRespondResponse, ConfigReadResponse,
-    DashboardData, ErrorObject, GoalSetParams, GoalSetResponse, MemoryListEpisodesResponse,
-    MemoryListResponse, ModelProfilesResponse, ModelRemoveParams, ModelRemoveResponse,
-    ModelSaveParams, ModelSaveResponse, ServerNotification, SessionListResponse,
-    SessionMessagesParams, SessionMessagesResponse, TurnStartParams, TurnStartResponse,
+    codes, methods, ApprovalLogResponse, ApprovalRespondParams, ApprovalRespondResponse,
+    ConfigReadResponse, DashboardData, ErrorObject, GoalSetParams, GoalSetResponse,
+    MemoryListEpisodesResponse, MemoryListResponse, ModelProfilesResponse, ModelRemoveParams,
+    ModelRemoveResponse, ModelSaveParams, ModelSaveResponse, ScheduleListResponse,
+    ServerNotification, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
+    TurnStartParams, TurnStartResponse, UsageSummaryResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -125,6 +126,39 @@ pub async fn goal(
 ///
 /// 与 `/api/goal` 同一条纪律：这些是**只有人能改**的东西 —— 模型没有
 /// `model/*` 工具，也拿不到密钥。
+/// 用量台账（迁移 0010）：per-model 聚合 + 总数。只记账不强制。
+pub async fn usage(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    match app
+        .request::<UsageSummaryResponse>(methods::USAGE_SUMMARY, json!({}))
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// 审批审计（迁移 0011）：最近 100 条「问了才跑」，新的在前。
+pub async fn approvals(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    match app
+        .request::<ApprovalLogResponse>(methods::APPROVAL_LOG, json!({}))
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。
+pub async fn schedules(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    match app
+        .request::<ScheduleListResponse>(methods::SCHEDULE_LIST, json!({}))
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
 pub async fn model_profiles(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<ModelProfilesResponse>(methods::MODEL_PROFILES, json!({}))

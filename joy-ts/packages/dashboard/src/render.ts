@@ -4,14 +4,19 @@
 // 不管「长什么样」—— 页面变丑的时候只需要看这一个文件。
 
 import type {
+  ApprovalLogEntry,
   DashboardData,
   Episode,
   Fact,
   Message,
+  ScheduleStateRow,
   SessionSummary,
   TokenUsage,
+  ToolStartedNotification,
   TurnCompletedNotification,
   TurnMeta,
+  UsageSummaryResponse,
+  UsageByModel,
 } from "./protocol";
 
 type Attrs = Record<string, string | number | boolean | undefined>;
@@ -347,4 +352,207 @@ function formatUsage(usage: TokenUsage): string {
 
 function clock(at: Date): string {
   return at.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+// --- 新面板（用量 / 审批 / 定时）与工具卡片 ---------------------------------
+
+/** 用量面板：总数 + per-model 聚合。只记账不强制 —— 这里是账本，不是配额。 */
+export function renderUsage(data: UsageSummaryResponse): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  // 生成类型里 i64 是 bigint —— 展示层一律 Number() 落回 number。
+  fragment.append(
+    numbers([
+      ["轮次", Number(data.turns)],
+      ["输入 token", Number(data.inputTokens)],
+      ["输出 token", Number(data.outputTokens)],
+    ]),
+  );
+
+  fragment.append(
+    section(
+      "按模型",
+      data.byModel.length === 0
+        ? muted("还没有用量。聊一轮就有了。")
+        : el(
+            "ul",
+            { class: "list" },
+            // 相对条宽的分母：全部模型里最大的输入量。
+            ...data.byModel.map((row) => usageRow(row, maxInput(data.byModel))),
+          ),
+    ),
+  );
+  return fragment;
+}
+
+/** 相对条宽的分母：全部模型里最大的输入量（至少 1，避免除零）。 */
+function maxInput(rows: UsageByModel[]): number {
+  return Math.max(...rows.map((row) => Number(row.inputTokens)), 1);
+}
+
+function usageRow(row: UsageByModel, maxInput: number): HTMLElement {
+  // 条形长度按「该模型输入占最大者比例」——没有总量刻度，只有相对大小，
+  // 这正是人眼要的：谁在吃 token 一眼可见。
+  return el(
+    "li",
+    { class: "item" },
+    el(
+      "div",
+      { class: "title" },
+      el("span", { class: "subject", text: `${row.provider}/${row.model}` }),
+      el("span", { class: "tag", text: `${Number(row.turns)} 轮` }),
+    ),
+    el(
+      "div",
+      { class: "meter", role: "img", "aria-label": `${row.inputTokens} 输入 token` },
+      el("div", {
+        class: "meter-fill",
+        style: `width:${Math.min(100, Math.round((Number(row.inputTokens) / maxInput) * 100))}%`,
+      }),
+    ),
+    el("div", {
+      class: "sub",
+      text: `输入 ${Number(row.inputTokens).toLocaleString()} · 输出 ${Number(row.outputTokens).toLocaleString()}`,
+    }),
+  );
+}
+
+const OUTCOME_LABEL: Record<string, string> = {
+  approved: "已允许",
+  denied: "已拒绝",
+  timeout: "没人答",
+  voided: "已作废",
+};
+
+const OUTCOME_KIND: Record<string, string> = {
+  approved: "good",
+  denied: "bad",
+  timeout: "",
+  voided: "",
+};
+
+/** 审批日志面板：谁问过、结果如何。hub 管理员回答「谁批准了 rm -rf」用。 */
+export function renderApprovals(entries: ApprovalLogEntry[]): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  fragment.append(
+    section(
+      "最近 100 条",
+      entries.length === 0
+        ? muted("还没有「问了才跑」的记录。开启审批后，每次询问都会留一行。")
+        : el("ul", { class: "list" }, ...entries.map(approvalRow)),
+    ),
+  );
+  return fragment;
+}
+
+function approvalRow(entry: ApprovalLogEntry): HTMLElement {
+  const kind = OUTCOME_KIND[entry.outcome] ?? "";
+  return el(
+    "li",
+    { class: "item" },
+    el(
+      "div",
+      { class: "title" },
+      el("span", { class: "subject", text: entry.tool }),
+      el("span", { class: `tag ${kind}`, text: OUTCOME_LABEL[entry.outcome] ?? entry.outcome }),
+    ),
+    el("code", { class: "cmd", text: entry.argsPreview }),
+    el("div", { class: "sub", text: `${formatWhen(entry.decidedAt)} · ${entry.reason || "—"}` }),
+  );
+}
+
+/** 定时面板：每个任务的策略、上次触发、有没有中断没落定的坑。 */
+export function renderSchedules(jobs: ScheduleStateRow[]): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  fragment.append(
+    section(
+      "登记的任务",
+      jobs.length === 0
+        ? muted("没有定时任务。给 SKILL.md 加 schedule: 或在 schedules.json 里写 jobs。")
+        : el("ul", { class: "list" }, ...jobs.map(scheduleRow)),
+    ),
+  );
+  return fragment;
+}
+
+function scheduleRow(job: ScheduleStateRow): HTMLElement {
+  const children: (Node | string)[] = [
+    el(
+      "div",
+      { class: "title" },
+      el("span", { class: "subject", text: job.name }),
+      el("span", { class: "tag", text: job.delivery }),
+      el("span", { class: "tag", text: job.catchUp ? "补跑" : "放弃" }),
+    ),
+    el("div", {
+      class: "sub",
+      text: `上次触发：${job.lastFiredMinute ?? "还没跑过"}`,
+    }),
+  ];
+  // 有坑没落定 = 上次执行中断 —— 这是这个面板最该亮出来的一行。
+  if (job.claimedMinute !== null && job.claimedMinute !== undefined) {
+    children.push(
+      el("div", {
+        class: "warn",
+        text: `中断于 ${job.claimedMinute}，等调度器按「${job.catchUp ? "补跑" : "放弃"}」接管`,
+      }),
+    );
+  }
+  return el("li", { class: "item" }, ...children);
+}
+
+// --- 工具卡片注册表（抄 openhuman 的 ToolBodies 思想） ----------------------
+//
+// 每个工具从 `args` 里提取一句**人话摘要**，而不是把 JSON 原样吐出来。
+// 注册表就是一个对象字面量 —— 新工具加一行，没有兜底抽象。
+
+type ToolArgs = Record<string, unknown>;
+
+function argString(args: ToolArgs, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return "";
+}
+
+/** 工具名 → 「这一步在干什么」的一句摘要。 */
+const TOOL_SUMMARY: Record<string, (args: ToolArgs) => string> = {
+  run_command: (args) => argString(args, "command"),
+  read_file: (args) => argString(args, "path"),
+  write_file: (args) => argString(args, "path"),
+  edit_file: (args) => argString(args, "path"),
+  list_dir: (args) => argString(args, "path") || ".",
+  search_file: (args) => argString(args, "pattern"),
+  search_content: (args) => argString(args, "pattern"),
+  fetch_url: (args) => argString(args, "url"),
+  web_search: (args) => argString(args, "query"),
+  delegate_task: (args) => argString(args, "task", "description"),
+  remember: (args) => argString(args, "content"),
+  todo_write: (args) => {
+    const todos = args["todos"];
+    return Array.isArray(todos) ? `${todos.length} 项` : "看一眼";
+  },
+};
+
+/** 工具启动时画一张卡片：图标语义的标签 + 摘要 + 实时秒表（可动的部分由 main 接管）。 */
+export function toolCard(notification: ToolStartedNotification): HTMLElement {
+  const args =
+    typeof notification.args === "object" && notification.args !== null
+      ? (notification.args as ToolArgs)
+      : {};
+  const summarize = TOOL_SUMMARY[notification.tool];
+  const detail = summarize ? summarize(args) : "";
+  const children: (HTMLElement | string)[] = [
+    el("span", { class: "toolcard-name", text: notification.tool }),
+  ];
+  if (detail !== "") {
+    children.push(el("span", { class: "toolcard-detail", text: detail, title: detail }));
+  }
+  children.push(el("span", { class: "toolcard-time", text: "0s" }));
+  return el("div", { class: "toolcard" }, ...children);
+}
+
+/** 卡片里的秒表文字。`start` 是这张卡创建的时刻。 */
+export function elapsedSince(start: number): string {
+  return formatMs(Date.now() - start);
 }

@@ -381,6 +381,25 @@ class RetryNotification(BaseModel):
     turnId: str
 
 
+class ScheduleListParams(RootModel[None]):
+    root: Annotated[None, Field(title='ScheduleListParams')]
+
+
+class ScheduleStateRow(BaseModel):
+    catchUp: Annotated[
+        bool, Field(description='true = 至少一次（补跑），false = 至多一次（放弃）。')
+    ]
+    claimedMinute: Annotated[
+        str | None,
+        Field(description='非空 = 上次执行中断，等重启按 catch_up 决定补跑或放弃。'),
+    ] = None
+    delivery: Annotated[str, Field(description='outbox / notify / quiet。')]
+    lastFiredMinute: Annotated[
+        str | None, Field(description='上次落定的触发分钟（去重锚点）；没跑过为 null。')
+    ] = None
+    name: str
+
+
 class ServerNotification1(BaseModel):
     sessionId: str
     ts: Annotated[str, Field(description='ISO 8601，毫秒精度。')]
@@ -718,6 +737,13 @@ class JsonRpcResponse(BaseModel):
         Field(
             description='具体结构由 method 决定，解码方按 `*Response` 类型自行 narrow。'
         ),
+    ]
+
+
+class ScheduleListResponse(BaseModel):
+    jobs: Annotated[
+        list[ScheduleStateRow],
+        Field(description='按名字排序的全部任务；一个都没登记过为空数组。'),
     ]
 
 

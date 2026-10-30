@@ -269,6 +269,9 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/turn", post(api::turn))
         .route("/api/approval", post(api::approval))
         .route("/api/goal", post(api::goal))
+        .route("/api/usage", get(api::usage))
+        .route("/api/approvals", get(api::approvals))
+        .route("/api/schedules", get(api::schedules))
         // 多模型：列出 / 存并切换 / 删除。与终端的 /model 是同一处实现。
         .route("/api/model/profiles", get(api::model_profiles))
         .route("/api/model/save", post(api::model_save))

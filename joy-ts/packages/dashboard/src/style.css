@@ -1,587 +1,680 @@
-/* 驾驶舱的样式。
+/*
+ * 驾驶舱样式 —— 双层设计 token（抄 openhuman 的主题分层）：
  *
- * 一条规矩：**这里没有一处是在表达状态**。状态都在 DOM 的 class 上
- * （.streaming / .current / .busy / .failure），这里只负责它们长什么样。
- * 于是「页面为什么是这个样子」永远只有一个地方要找。
+ *   第一层（:root 变量）：原始材质 —— 色板、字号、间距、圆角。
+ *   第二层（.semantic 类 / 复用变量）：语义别名 ——「表面」「正文」「强调」。
+ *
+ * 亮暗两套只切第一层；改主题 = 改一组变量，不碰组件规则。
+ * 识别色保持暖橙 —— Joy 的身份不改，只是更克制地用它。
  */
 
+/* ---- 第一层：材质 ------------------------------------------------------- */
 :root {
-  color-scheme: light dark;
+  --hue: 28; /* 暖橙的色相，全站唯一色相锚点 */
 
-  --bg: #f6f5f2;
-  --panel: #fffdfa;
-  --ink: #1c1b19;
-  --dim: #6d6a64;
-  --faint: #9b978f;
-  --line: #e5e2dc;
-  --accent: #c2410c;
-  --accent-soft: #fbf0e6;
-  --chip: #f1efea;
-  --good: #15803d;
-  --bad: #b3261e;
-  --shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px rgb(0 0 0 / 4%);
-  --radius: 12px;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-body: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
+
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-md: 0.9375rem;
+  --fs-lg: 1.05rem;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  --w-side: 340px; /* 右侧面板宽 */
+}
+
+:root {
+  color-scheme: light;
+  --bg: hsl(var(--hue) 30% 97%);
+  --bg-raised: hsl(0 0% 100%);
+  --bg-inset: hsl(var(--hue) 25% 94%);
+  --fg: hsl(var(--hue) 25% 15%);
+  --fg-dim: hsl(var(--hue) 12% 45%);
+  --line: hsl(var(--hue) 20% 88%);
+  --accent: hsl(var(--hue) 85% 45%);
+  --accent-soft: hsl(var(--hue) 85% 45% / 0.12);
+  --good: hsl(150 55% 34%);
+  --good-soft: hsl(150 55% 34% / 0.12);
+  --bad: hsl(5 70% 45%);
+  --bad-soft: hsl(5 70% 45% / 0.1);
+  --me-bubble: hsl(var(--hue) 80% 92%);
+  --shadow: 0 1px 3px hsl(var(--hue) 30% 20% / 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #16151a;
-    --panel: #1d1c22;
-    --ink: #ebe8e3;
-    --dim: #9c988f;
-    --faint: #6f6b64;
-    --line: #2d2c33;
-    --accent: #f0a05a;
-    --accent-soft: #2a2118;
-    --chip: #26252c;
-    --good: #77dda2;
-    --bad: #f0a09a;
-    --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 22%);
+    color-scheme: dark;
+    --bg: hsl(var(--hue) 18% 10%);
+    --bg-raised: hsl(var(--hue) 15% 14%);
+    --bg-inset: hsl(var(--hue) 15% 18%);
+    --fg: hsl(var(--hue) 20% 88%);
+    --fg-dim: hsl(var(--hue) 12% 58%);
+    --line: hsl(var(--hue) 15% 22%);
+    --accent: hsl(var(--hue) 85% 62%);
+    --accent-soft: hsl(var(--hue) 85% 62% / 0.16);
+    --good: hsl(150 50% 55%);
+    --good-soft: hsl(150 50% 55% / 0.14);
+    --bad: hsl(5 75% 62%);
+    --bad-soft: hsl(5 75% 62% / 0.14);
+    --me-bubble: hsl(var(--hue) 40% 24%);
+    --shadow: 0 1px 3px hsl(0 0% 0% / 0.3);
   }
 }
 
+/* ---- 基座 --------------------------------------------------------------- */
 * {
   box-sizing: border-box;
 }
-
 html,
 body {
-  height: 100%;
   margin: 0;
+  height: 100%;
 }
-
 body {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  font: var(--fs-md) / 1.55 var(--font-body);
+  color: var(--fg);
   background: var(--bg);
-  color: var(--ink);
-  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+}
+code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+button {
+  font: inherit;
+  color: inherit;
 }
 
-/* --- 页头 ---------------------------------------------------------------- */
-
+/* ---- 顶栏 --------------------------------------------------------------- */
 header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 12px 20px;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--bg-raised);
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  flex: none;
 }
-
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
+  gap: var(--sp-2);
 }
-
 .brand h1 {
+  font-size: var(--fs-lg);
   margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
 }
-
 .dot {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
-
 .pill {
-  padding: 2px 9px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  background: var(--bg-inset);
   border-radius: 999px;
-  background: var(--chip);
-  color: var(--dim);
-  font-size: 12px;
-  font-family: var(--mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 2px 10px;
 }
-
 .right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--sp-3);
   min-width: 0;
-  color: var(--faint);
-  font-size: 12px;
 }
-
-.path {
-  max-width: 30ch;
+.path,
+.stamp {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl; /* 路径太长时保留尾部（更有信息量） */
-  font-family: var(--mono);
 }
 
 .ghost {
-  padding: 5px 12px;
+  background: none;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--dim);
-  font: inherit;
-  font-size: 12px;
+  border-radius: var(--r-sm);
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
 }
-
 .ghost:hover {
   border-color: var(--accent);
-  color: var(--accent);
+  background: var(--accent-soft);
+}
+.ghost:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
-/* --- 主体 ---------------------------------------------------------------- */
-
+/* ---- 主区：双栏 --------------------------------------------------------- */
 main {
+  flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: 1fr var(--w-side);
+  gap: 0;
   min-height: 0;
 }
 
+/* -- 左：对话 ------------------------------------------------------------ */
 .chat {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   min-height: 0;
-  padding: 0 20px 12px;
+  border-right: 1px solid var(--line);
 }
-
-/* 对话区顶上那条状态线：在看哪个会话，以及「更早的」（有更早的才出现）。
-   按钮显不显示由 `hidden` 属性说了算，所以这里不碰 display。 */
 .bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 2px 0;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-5);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.bar.goal {
+  border-bottom: 1px solid var(--line);
+}
+.hint {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bar.goal input {
+  flex: 1;
+  min-width: 0;
+}
+#goal-state {
+  white-space: nowrap;
 }
 
 .messages {
+  flex: 1;
   overflow-y: auto;
-  padding: 20px 0;
+  padding: var(--sp-4) var(--sp-5);
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  scroll-behavior: smooth;
+  gap: var(--sp-3);
 }
 
 .msg {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-width: 46rem;
+  max-width: min(78%, 640px);
 }
-
 .msg.me {
   align-self: flex-end;
   align-items: flex-end;
 }
-
 .msg.joy {
   align-self: flex-start;
   align-items: flex-start;
 }
-
 .bubble {
-  padding: 10px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-raised);
   box-shadow: var(--shadow);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-
 .msg.me .bubble {
-  border-color: transparent;
-  background: var(--accent);
-  color: #fff;
+  background: var(--me-bubble);
 }
-
-@media (prefers-color-scheme: dark) {
-  .msg.me .bubble {
-    color: #24160c;
-  }
+.msg.joy .bubble {
+  border-top-left-radius: var(--r-sm);
 }
-
-/* 正在流的那一条：末尾加一根闪动的竖线，一眼看出「还在说」。 */
+.msg.me .bubble {
+  border-top-right-radius: var(--r-sm);
+}
+/* 流式光标：只在 streaming 时出现（抄 openhuman 的 blinking cursor）。 */
 .bubble.streaming::after {
-  content: "";
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 2px;
-  vertical-align: -0.15em;
-  background: currentColor;
-  animation: blink 1s steps(2, start) infinite;
+  content: "▍";
+  color: var(--accent);
+  animation: blink 0.9s steps(1) infinite;
 }
-
 @keyframes blink {
   50% {
     opacity: 0;
   }
 }
 
+/* 轨迹：工具卡、审批条、图谱 —— 全收在用户气泡下面那一线。 */
 .trace {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+  max-width: 100%;
 }
 
-.trace:empty {
-  display: none;
-}
-
-.chip {
-  padding: 2px 9px;
+/* -- 工具卡片（抄 openhuman 的 ToolBodies） -------------------------------- */
+.toolcard {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  background: var(--bg-inset);
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--chip);
-  color: var(--dim);
-  font-size: 12px;
+  border-radius: var(--r-sm);
+  padding: 4px 10px;
+  max-width: 100%;
 }
-
-.chip.gate {
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: var(--accent-soft);
+.toolcard-name {
   color: var(--accent);
-}
-
-.chip.tool {
-  font-family: var(--mono);
-}
-
-.foot {
-  color: var(--faint);
-  font-size: 12px;
-  font-family: var(--mono);
-}
-
-.failure {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--bad) 8%, transparent);
-  color: var(--bad);
-  font-size: 13px;
-}
-
-.failure .code {
-  font-family: var(--mono);
-  font-size: 11px;
-  opacity: 0.75;
-}
-
-/* --- 输入 ---------------------------------------------------------------- */
-
-.composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
-  box-shadow: var(--shadow);
-}
-
-.composer:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-}
-
-.composer textarea {
-  flex: 1;
-  max-height: 40vh;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  resize: none;
-  outline: none;
-  field-sizing: content; /* 长到几行就几行；不支持的浏览器里是个固定一行的小框 */
-}
-
-.composer button {
-  padding: 7px 16px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-@media (prefers-color-scheme: dark) {
-  .composer button {
-    color: #24160c;
-  }
-}
-
-.composer button:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-
-.hint {
-  margin: 0;
-  color: var(--faint);
-  font-size: 12px;
-}
-
-.hint code {
-  color: var(--dim);
-  font-family: var(--mono);
-}
-
-/* --- 右侧面板 ------------------------------------------------------------ */
-
-.panels {
-  overflow-y: auto;
-  padding: 20px;
-  border-left: 1px solid var(--line);
-  background: var(--panel);
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-}
-
-.panel h2 {
-  margin: 0 0 10px;
-  color: var(--faint);
-  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  flex: none;
 }
-
-.panel .body {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.block h3 {
-  margin: 0 0 6px;
-  color: var(--dim);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.headline {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.headline .provider {
-  color: var(--faint);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.headline .model {
-  font-family: var(--mono);
-  font-size: 15px;
-}
-
-.numbers {
-  display: flex;
-  gap: 18px;
-}
-
-.number b {
-  display: block;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.number span {
-  color: var(--faint);
-  font-size: 11px;
-}
-
-.rows {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 14px;
-  margin: 0;
-  font-size: 13px;
-}
-
-.rows dt {
-  color: var(--faint);
-}
-
-.rows dd {
-  margin: 0;
+.toolcard-detail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--mono);
-  font-size: 12px;
+  min-width: 0;
+}
+.toolcard-time {
+  margin-left: auto;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.chip.done-ok {
+  border-color: var(--good);
+  color: var(--good);
+}
+.chip.done-bad {
+  border-color: var(--bad);
+  color: var(--bad);
 }
 
-.list {
+.chip {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.chip.tool {
+  font-family: var(--font-mono);
+}
+
+/* -- 运行状态三态（抄 openhuman 的 AgentRunningStatus） --------------------- */
+.statusline {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-5);
+  font-size: var(--fs-xs);
+  flex: none;
+}
+.statusline .status-time {
+  font-family: var(--font-mono);
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+}
+.statusline.thinking .status-label {
+  color: var(--fg-dim);
+  /* shimmer：文字做一道高光扫过 —— 「在动」不需要图标。 */
+  background: linear-gradient(
+    90deg,
+    var(--fg-dim) 40%,
+    var(--accent) 50%,
+    var(--fg-dim) 60%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 1.6s linear infinite;
+}
+.statusline.working .status-label {
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* -- 输入区 ---------------------------------------------------------------- */
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--line);
+  background: var(--bg-raised);
+  flex: none;
+}
+.composer textarea {
+  flex: 1;
+  resize: none;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  max-height: 30vh;
+}
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.composer button {
+  background: var(--accent);
+  color: hsl(0 0% 100%);
+  border: none;
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-4);
+  cursor: pointer;
+}
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* -- 右：面板（数据即导航） ------------------------------------------------- */
+.panels {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  min-height: 0;
+  background: var(--bg-raised);
 }
-
-.item {
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg);
-  font-size: 13px;
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  flex: none;
 }
-
-.item.current {
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+.tab {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.tab:hover {
+  color: var(--fg);
+  background: var(--bg-inset);
+}
+.tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-/* 会话行是可以点的（点了切过去），记忆那两栏的行不是 —— 所以「可点」是个
-   修饰类，而不是 `.item` 的默认长相。它里面是 `<button>`，按钮自带的那套
-   字体/对齐/宽度得按下去。 */
-.item.pick {
-  width: 100%;
-  font: inherit;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
+.panel {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.panel .body {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
 }
 
-.item.pick:hover {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-}
-
-.item .title {
+/* 面板里的通用构件 */
+.headline {
+  margin: 0;
+  font-size: var(--fs-md);
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-weight: 550;
+  gap: var(--sp-2);
 }
-
-.item .body {
-  margin-top: 3px;
-  color: var(--dim);
-  font-size: 12.5px;
+.block h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+}
+.number {
+  background: var(--bg-inset);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+}
+.number dt {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+.number dd {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-variant-numeric: tabular-nums;
+}
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.item {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+}
+.item.pick.current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.subject {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sub {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
   overflow-wrap: anywhere;
 }
-
-.item .sub,
-.item .when {
-  display: block;
-  color: var(--faint);
-  font-size: 11px;
-  font-family: var(--mono);
-}
-
-.subject {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--accent);
-}
-
-.tag {
+.when {
   margin-left: auto;
-  padding: 1px 7px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.tag {
+  flex: none;
+  font-size: var(--fs-xs);
   border-radius: 999px;
-  background: var(--chip);
-  color: var(--faint);
-  font-size: 10px;
-  font-weight: 500;
+  padding: 1px 8px;
+  background: var(--bg-inset);
+  color: var(--fg-dim);
 }
-
+.tag.good {
+  background: var(--good-soft);
+  color: var(--good);
+}
+.tag.bad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+.warn {
+  font-size: var(--fs-xs);
+  color: var(--bad);
+}
 .muted {
-  margin: 0;
-  color: var(--faint);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+}
+.cmd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--bg-inset);
+  border-radius: var(--r-sm);
+  padding: 2px 6px;
+  overflow-wrap: anywhere;
+  max-height: 4.5em;
+  overflow-y: auto;
+}
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--bg-inset);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  overflow-wrap: anywhere;
+  max-height: 9em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+.failure {
+  border: 1px solid var(--bad);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--bad);
+  background: var(--bad-soft);
+}
+.approval {
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  background: var(--accent-soft);
+  max-width: 100%;
+}
+.approval .approve,
+.approval .deny {
+  align-self: flex-start;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  padding: 4px 14px;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+.approval .approve {
+  border-color: var(--good);
+  color: var(--good);
+}
+.approval .deny {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.provider,
+.model {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.row {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
 }
 
-/* --- 窄屏 ---------------------------------------------------------------- */
+/* 用量条 */
+.meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  min-width: 2px;
+}
 
+/* 面板里的输入件 */
+.panel input,
+.panel select {
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3);
+  min-width: 0;
+}
+.panel input:focus,
+.panel select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+#mp-key {
+  font-family: var(--font-mono);
+}
+
+/* -- 窄屏：单栏，面板移到对话下面 ------------------------------------------ */
 @media (max-width: 900px) {
   main {
     grid-template-columns: 1fr;
     grid-template-rows: 1fr auto;
   }
-
+  .chat {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
   .panels {
-    border-left: 0;
-    border-top: 1px solid var(--line);
     max-height: 45vh;
   }
-
-  .path {
-    display: none;
+  .msg {
+    max-width: 92%;
   }
-}
-
-/* 批准条：chip + 命令 + 三个按钮。命令用等宽，方便一眼看清要跑的是什么。 */
-.approval {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 4px 0;
-}
-
-.approval .cmd {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  background: var(--chip);
-}
-
-.approval button {
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line, #d8d5cd);
-  background: transparent;
-  cursor: pointer;
-}
-
-.approval button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-/* 目标条：一行输入 + 两个按钮 + 当前状态。 */
-.goal {
-  gap: 6px;
-}
-
-.goal input {
-  flex: 1;
-  min-width: 0;
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--line, #d8d5cd);
-  background: transparent;
 }
