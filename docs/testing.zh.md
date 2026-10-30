@@ -9,7 +9,7 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 
 | 层 | 位置 | 形态 | 数量（最近一次全量） |
 |---|---|---|---|
-| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 388 通过 / 0 失败 |
+| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 402 通过 / 0 失败 |
 | 覆盖率 | `cargo llvm-cov` / `coverage` | **趋势门**，不是目标 | Rust 行 65.9%（门 60）/ Python 63%（门 60） |
 | 协议生成 | scripts/write_schema.py --check | 生成物漂移检查 | 0 漂移 |
 | 前端 | joy-ts（node --test + tsc） | 99 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |

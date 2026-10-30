@@ -34,6 +34,11 @@ pub enum NotifyEvent {
         status: String,
         exit_code: Option<i32>,
     },
+    ScheduleRan {
+        name: String,
+        status: String,
+        preview: String,
+    },
     GoalFinished {
         session_id: String,
         status: String,
@@ -64,6 +69,11 @@ impl NotifyEvent {
                 }
                 None => format!("⚙️ Joy 后台作业 {id} 结束（{status}）：`{command}`"),
             },
+            NotifyEvent::ScheduleRan {
+                name,
+                status,
+                preview,
+            } => format!("⏰ Joy 定时任务 '{name}' {status}：{preview}"),
             NotifyEvent::GoalFinished { status, reason, .. } => {
                 format!("🎯 Joy 目标停了（{status}）：{reason}")
             }

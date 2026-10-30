@@ -410,6 +410,17 @@ impl Server {
     }
 
     /// 当前设置的快照。拿到的副本随便用多久都行 —— 并发写只会影响下一轮。
+    /// 状态库连接池（joy schedule 的调度状态也要进这张库 —— 同一份数据，
+    /// 不另立存储）。Clone 便宜。
+    pub fn state_pool(&self) -> SqlitePool {
+        self.pool.clone()
+    }
+
+    /// 通知器（M3a）。joy schedule 的作业收尾投递用；没配就是 None。
+    pub fn notifier(&self) -> Option<Arc<dyn joyczl_tools::notify::Notifier>> {
+        self.notifier.clone()
+    }
+
     pub fn settings(&self) -> Settings {
         self.settings.read().expect("settings 锁不该中毒").clone()
     }

@@ -13,6 +13,21 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 条哲学：配错就该起不来，而不是默默端出旧页面。发布场景（没有 joy-ts 源码
 目录）不检查。
 
+### M4b：调度升级 —— 状态进 SQLite，防重放与每作业投递
+
+- 迁移 0012 `schedule_state`：去重（last_fired）、崩溃恢复（claimed）、
+  每作业策略（catch_up/delivery）一张表全管 —— 原 schedules-state.json
+  只做一次性导入的来源，不再是权威。
+- **dispatch 先占坑再执行**（照 openhuman 的「dispatch 先推进 next_run」
+  防重放）：触发前 `claim` 落盘，落定后 `confirm`。崩溃在两者之间时，
+  重启的恢复逻辑显式接管 —— 按 `catch_up` 字段：晨报类（=1）补跑一次
+  （至少一次），通知类（=0）放弃（至多一次）。**按作业类型给字段，
+  不做全局二选一。**
+- **每作业投递** `delivery`：`outbox`（默认）/ `notify`（文件 + 通知器，
+  新事件 ScheduleRan）/ `quiet`（只落日志）。空回答或 `NO_REPLY` 跳过
+  投递 —— 没内容的产出不值得打扰。
+- 失败也落定：没有退避机制，不该每 20 秒重试一次失败任务。
+
 ### M4a：hub 资源池 —— 高密度的最小正确解
 
 - 两个旋钮：`JOY_HUB_MAX_OPEN`（默认 32，同时最多开几个用户的

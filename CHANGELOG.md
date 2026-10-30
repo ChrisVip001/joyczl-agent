@@ -15,6 +15,23 @@ philosophy as the daemon lock: misconfigured should fail to boot, not silently
 serve something stale. Release scenarios (no joy-ts sources present) skip the
 check.
 
+### M4b: scheduler upgrade — state into SQLite, replay protection, per-job delivery
+
+- Migration 0012 `schedule_state`: dedup (last_fired), crash recovery
+  (claimed), and per-job policy (catch_up/delivery) in one table — the old
+  schedules-state.json is now only a one-time import source, no longer
+  authoritative.
+- **Claim before dispatch** (after openhuman's "advance next_run at
+  dispatch"): `claim` is persisted before the run, `confirm` after. A crash
+  in between is explicitly handled at restart by the `catch_up` field:
+  newsletters (=1) re-run once (at-least-once), notifications (=0) are
+  dropped (at-most-once). **Per-job, never a global either/or.**
+- **Per-job delivery** `delivery`: `outbox` (default) / `notify` (file +
+  notifier, new ScheduleRan event) / `quiet` (log only). An empty reply or
+  `NO_REPLY` skips delivery — output with no content isn't worth a ping.
+- Failures confirm too: with no backoff machinery, a failed job must not be
+  retried every 20 seconds.
+
 ### M4a: a hub resource pool — the minimal correct answer to density
 
 - Two knobs: `JOY_HUB_MAX_OPEN` (default 32, how many per-user app-servers

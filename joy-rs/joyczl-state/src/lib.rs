@@ -21,6 +21,7 @@ pub mod episodes;
 pub mod facts;
 pub mod fts;
 pub mod jobs;
+pub mod schedules;
 pub mod store;
 pub mod usage;
 
@@ -31,6 +32,7 @@ pub use db::open;
 pub use episodes::{EpisodeRow, Episodes};
 pub use facts::{FactRow, Facts};
 pub use jobs::{JobRow, Jobs};
+pub use schedules::{ScheduleRow, Schedules};
 pub use store::{EpisodicStore, SemanticStore};
 pub use usage::{Usage, UsageByModel, UsageSummary};
 

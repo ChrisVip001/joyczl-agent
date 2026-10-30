@@ -113,7 +113,10 @@ while let Some(frame) = rx.recv().await { … }
 
 1. **技能**：`loaded_skills(home)` 里带 `schedule:` 的，变成一条 job，
    prompt 是「按技能 '{name}' 的做法执行一次：{description}」。
-2. **`<home>/schedules.json`**：`{"jobs":[{"name","cron","prompt"}]}`；
+2. **`<home>/schedules.json`**：`{"jobs":[{"name","cron","prompt","catch_up","delivery"}]}`；
+   `catch_up`（默认 true）决定错过/中断后补跑（至少一次）还是放弃（至多一次）；
+   `delivery`（默认 outbox）决定产出往哪送 —— `outbox` 写文件 / `notify` 文件 +
+   通知器 / `quiet` 只落日志（高频任务不刷盘）；
    缺字段的条目打一行 stderr 跳过，JSON 坏了也跳过——**一条写坏的声明不该让
    整个调度器起不来**。
 

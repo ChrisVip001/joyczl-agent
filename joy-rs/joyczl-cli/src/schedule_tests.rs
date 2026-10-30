@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
-use super::{cron_matches, due_now, last_missed, load_jobs, load_state, save_state, Job};
+use super::{cron_matches, due_now, last_missed, load_jobs, load_legacy_state, Delivery, Job};
 
 fn at(y: i32, m: u32, d: u32, hh: u32, mm: u32) -> chrono::NaiveDateTime {
     NaiveDate::from_ymd_opt(y, m, d)
@@ -18,6 +18,8 @@ fn job(name: &str, cron: &str) -> Job {
         name: name.to_string(),
         cron: cron.to_string(),
         prompt: "做点事".to_string(),
+        catch_up: true,
+        delivery: Delivery::Outbox,
     }
 }
 
@@ -168,23 +170,54 @@ fn jobs_load_from_both_skills_and_the_json_file() {
 
 // ---- 7x24：状态落盘与补跑窗口 ---------------------------------------------
 
-/// fired 表落盘后读得回来；坏文件当没有。
+/// 旧状态文件读得回来（一次性导入的来源）；坏文件当没有 ——
+/// 它只承载去重信息，丢了顶多同分钟重复一次，不该让调度器起不来。
 #[test]
-fn the_fired_table_survives_a_restart() {
+fn the_legacy_state_file_is_readable_but_only_once() {
     let dir = tempfile::tempdir().expect("临时目录");
     let mut fired = HashMap::new();
     fired.insert("晨报".to_string(), "2026-10-27T08:00".to_string());
-    save_state(dir.path(), &fired);
+    let text = serde_json::to_string(&fired).expect("序列化");
+    std::fs::write(dir.path().join("schedules-state.json"), text).expect("写文件");
 
-    let loaded = load_state(dir.path());
+    let loaded = load_legacy_state(dir.path());
     assert_eq!(
         loaded.get("晨报").map(String::as_str),
         Some("2026-10-27T08:00")
     );
 
-    // 坏文件当没有 —— 去重丢了顶多同分钟重复一次，不该让调度器起不来。
+    // 坏文件当没有。
     std::fs::write(dir.path().join("schedules-state.json"), "{半截").expect("写坏文件");
-    assert!(load_state(dir.path()).is_empty());
+    assert!(load_legacy_state(dir.path()).is_empty());
+}
+
+/// schedules.json 的每作业策略字段：catch_up 与 delivery 都解析得动，
+/// 不认识的 delivery 按 outbox 兜底（不静默 —— stderr 说一声）。
+#[test]
+fn per_job_policy_fields_are_parsed() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    std::fs::write(
+        dir.path().join("schedules.json"),
+        r#"{"jobs": [
+            {"name": "晨报", "cron": "0 8 * * *", "prompt": "早", "catch_up": false, "delivery": "notify"},
+            {"name": "盯CI", "cron": "*/15 * * * *", "prompt": "看看", "delivery": "quiet"},
+            {"name": "默认", "cron": "0 12 * * *", "prompt": "午"},
+            {"name": "写错", "cron": "0 13 * * *", "prompt": "午", "delivery": "每日一报"}
+        ]}"#,
+    )
+    .expect("写声明");
+    let jobs = load_jobs(dir.path());
+    assert_eq!(jobs.len(), 4);
+    let morning = jobs.iter().find(|j| j.name == "晨报").expect("晨报");
+    assert!(!morning.catch_up, "catch_up=false 至多一次");
+    assert_eq!(morning.delivery, Delivery::Notify);
+    let ci = jobs.iter().find(|j| j.name == "盯CI").expect("盯CI");
+    assert_eq!(ci.delivery, Delivery::Quiet);
+    let plain = jobs.iter().find(|j| j.name == "默认").expect("默认");
+    assert!(plain.catch_up, "默认至少一次");
+    assert_eq!(plain.delivery, Delivery::Outbox);
+    let wrong = jobs.iter().find(|j| j.name == "写错").expect("写错");
+    assert_eq!(wrong.delivery, Delivery::Outbox, "不认识的值兜底");
 }
 
 /// 停机窗口里错过了一次 → 补最新那次；没错过 → 不补；三天前错过只补最新的。
