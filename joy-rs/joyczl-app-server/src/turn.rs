@@ -101,7 +101,7 @@ pub async fn run_turn(
         turn_id: turn_id.clone(),
     };
 
-    // 本轮工作目录：协议给了就校验（hermes 的 fail-closed）。起轮之前就拒绝，
+    // 本轮工作目录：协议给了就校验（fail-closed）。起轮之前就拒绝，
     // 不留下半个 turn。
     let turn_cwd = resolve_turn_cwd(&params.cwd)?;
     // 真用过的目录才进「最近使用」（workspaces.json）—— 驾驶舱选择器的快捷入口。
@@ -668,7 +668,7 @@ struct TurnFrame<'a> {
     route_reason: Option<String>,
 }
 
-/// 本轮工作目录的准入校验（hermes 的 fail-closed）：给了就必须是已存在的
+/// 本轮工作目录的准入校验（fail-closed）：给了就必须是已存在的
 /// 绝对路径 —— 静默回退会让「我以为在 A 目录干活」变成最难查的坏。
 /// 空串视同没给。
 pub(crate) fn resolve_turn_cwd(

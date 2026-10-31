@@ -253,8 +253,8 @@ pub struct Settings {
     pub hooks_timeout_secs: i64,
 
     /// `JOY_HUB_MAX_OPEN`：hub 同时最多开几个用户的 app-server（每个是一个
-    /// 子进程）。满了按「最久未用且没在用」驱逐 —— 抄 openhuman ProfileHost
-    /// 的三条策略：上限、LRU、in-use 永不驱逐。
+    /// 子进程）。满了按「最久未用且没在用」驱逐 —— 三条策略：
+    /// 上限、LRU、in-use 永不驱逐。
     pub hub_max_open: i64,
 
     /// `JOY_HUB_IDLE_SECS`：用户的 app-server 闲置多久后关掉（秒）。0 =

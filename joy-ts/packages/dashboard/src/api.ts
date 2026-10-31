@@ -299,7 +299,7 @@ export async function fetchFs(path: string | null, hidden = false): Promise<FsLi
 }
 
 /**
- * 在 parent 下新建一个子目录（dsh 的 createDirectory）：选择器里
+ * 在 parent 下新建一个子目录：选择器里
  * 「选目录」途中就能建目录，不用跳出弹层去开终端。名字纪律在服务端。
  */
 export async function createFolder(parent: string, name: string): Promise<string> {
@@ -313,7 +313,7 @@ export async function createFolder(parent: string, name: string): Promise<string
   return parsed.path;
 }
 
-/** 「最近使用」的工作目录（dsh workspace 思想的最小版：记住、直达）。 */
+/** 「最近使用」的工作目录（记住、直达）。 */
 export interface Recents {
   paths: string[];
 }

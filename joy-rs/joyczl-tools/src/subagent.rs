@@ -8,7 +8,7 @@
 //! 1. **只回摘要**。子代理的完整消息列表不回传 —— 那会把父的上下文撑爆，
 //!    而「把上下文交出去又整个拿回来」等于没省。
 //! 2. **不能再派生**。实现方构造子代理的工具表时会显式去掉 `delegate_task`
-//!    （codex 的 disables-collab 做法）。递归派生是那种「平时看不出来、
+//!    （显式禁止递归派生）。递归派生是那种「平时看不出来、
 //!    一旦有人试就烧穿配额」的东西。
 //! 3. **不参与交互批准**。子代理不该阻塞在人类输入上：它拿不到批准通道，
 //!    需要批准的动作直接按「拒绝」处理（见 `docs/limitations.md`）。
@@ -35,7 +35,7 @@ pub trait SubagentRunner: Send + Sync {
         task: String,
         max_iterations: Option<i32>,
         result_schema: Option<Value>,
-        // 父轮的工作目录（dsh 语义：子代理跟父任务在同一个目录里干活）。
+        // 父轮的工作目录（子代理跟父任务在同一个目录里干活）。
         parent_cwd: Option<std::path::PathBuf>,
     ) -> BoxFut;
 }

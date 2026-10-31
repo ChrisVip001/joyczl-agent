@@ -96,7 +96,7 @@ const dom = {
 let busy = false;
 
 /**
- * 暂存区（抄 pi 的「引用优先」）：选中的文件先摆在这儿，发送时才上传、
+ * 暂存区（「引用优先」）：选中的文件先摆在这儿，发送时才上传、
  * 把绝对路径注进消息 —— 引用文件和读文件是两件事，模型自己决定读不读。
  */
 const staged: File[] = [];
@@ -121,7 +121,7 @@ function renderStaged(): void {
 }
 
 /**
- * 右侧面板的导航（抄 openhuman 的 navConfig：数据即导航）。
+ * 右侧面板的导航（数据即导航）。
  * 概览/记忆随整屏轮询走；用量/审批/定时按需取 —— 只刷**当前开着**的 tab，
  * 不为看不见的面板付请求。
  */
@@ -162,7 +162,7 @@ async function refreshPanels(): Promise<void> {
   }
 }
 
-// --- 运行状态三态（抄 openhuman 的 AgentRunningStatus） -----------------------
+// --- 运行状态三态 -----------------------
 //
 // 「等你说」是静止行；「思考中/回复中」shimmer + 秒表；「干活中」带工具名。
 // 区分的是「卡住了」和「在跑」—— 秒表在动就是后者。
@@ -427,7 +427,7 @@ async function refresh(): Promise<void> {
 }
 
 /**
- * 文件夹选择器（openhuman 的形态）：服务端列目录，弹层里下钻，
+ * 文件夹选择器：服务端列目录，弹层里下钻，
  * 「选这里」把绝对路径填进顶栏的输入框。Esc 或取消即走，不强制。
  */
 async function cwdPicker(): Promise<void> {
@@ -447,12 +447,12 @@ async function cwdPicker(): Promise<void> {
   document.addEventListener("keydown", esc);
 
   let current = dom.cwd.value.trim();
-  // 点开头的目录默认藏（dsh 的 showHidden），底部有固定开关。
+  // 点开头的目录默认藏，底部有固定开关。
   let showHidden = false;
   // 「最近使用」：打开弹层时取一次（选定后会刷新）。
   let recents = await fetchRecents().catch(() => [] as string[]);
 
-  /** 祖先链每一跳都可点（dsh 的 crumbs）。非「/」开头的路径给不出链，退化为纯文本。 */
+  /** 祖先链每一跳都可点。非「/」开头的路径给不出链，退化为纯文本。 */
   function crumbs(path: string): HTMLElement {
     const bar = el("div", { class: "fscrumbs" });
     if (!path.startsWith("/")) {
@@ -488,7 +488,7 @@ async function cwdPicker(): Promise<void> {
     current = listing.path;
 
     const list = el("div", { class: "fslist" });
-    // 「最近使用」区：常去的目录不用再翻 —— 一键直达（dsh workspace 的灵魂）。
+    // 「最近使用」区：常去的目录不用再翻 —— 一键直达。
     const here = listing.entries.map((entry) => entry.path);
     const shortcuts = recents.filter((path) => path !== listing.path && !here.includes(path));
     if (shortcuts.length > 0) {
@@ -520,7 +520,7 @@ async function cwdPicker(): Promise<void> {
       list.append(...rows);
     }
 
-    // 底部动作条：新建文件夹 + 隐藏开关 + 取消（dsh 的 footer 形态）。
+    // 底部动作条：新建文件夹 + 隐藏开关 + 取消。
     const mkdir = el("button", { class: "ghost", text: "＋ 新建文件夹", type: "button" });
     mkdir.addEventListener("click", () => {
       const name = window.prompt(`在 ${current} 下新建文件夹：`);
@@ -621,7 +621,7 @@ async function send(text: string): Promise<void> {
   showStatus("thinking", "思考中");
 
   try {
-    // 本轮工作目录（dsh 的 session working-directory）：空串当没设。
+    // 本轮工作目录（会话级 working-directory）：空串当没设。
     const turnCwd = dom.cwd.value.trim();
     for await (const notification of talk({
       sessionId: current,
@@ -726,7 +726,7 @@ async function send(text: string): Promise<void> {
           break;
 
         case "toolStarted": {
-          // 工具卡片（抄 openhuman 的 ToolBodies）：人话摘要 + 实时秒表，
+          // 工具卡片：人话摘要 + 实时秒表，
           // 不把 args 的 JSON 原样吐出来。
           showStatus("working", notification.tool);
           const card = toolCard(notification);

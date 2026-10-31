@@ -38,7 +38,7 @@ means "we would like this, nobody has built it".
 ## Notifications and audit
 
 - **Notifications are best-effort**: a failed send (network down, endpoint 5xx)
-  is one stderr line — **no retries, no delivery ledger**. hermes's five-state
+  is one stderr line — **no retries, no delivery ledger**. A five-state
   delivery ledger (pending/attempting/delivered/…) waits for tier B (when job
   results can wake a session); today a notification is a shout that may not
   carry. The Slack `{"text": …}` format also works with self-hosted ntfy/Gotify
@@ -46,7 +46,7 @@ means "we would like this, nobody has built it".
 
 - **Admission to `joy hub` is one token**: there is no pairing flow, invite
   link, or OAuth — the admin runs `joy hub adduser` and the token is printed
-  once. A hermes-style pairing flow (self-service request + owner approval +
+  once. A pairing flow (self-service request + owner approval +
   rate limits/lockout) needs an unauthenticated request endpoint; it waits
   until there is a real second user. Per-user quotas likewise record but do
   not enforce (usage data is accumulating; enforcement waits for billing)
@@ -67,7 +67,7 @@ means "we would like this, nobody has built it".
 
 `read_file` / `list_dir` are on by default and bypass the execution gate — their
 trust boundary is the **process user's OS permissions**: the model can read any
-file that user can read (same as codex / pi read tools). Put files you do not
+file that user can read (as broad as typical read-only tools). Put files you do not
 want the model to see where that user cannot read them. `fetch_url` mirrors
 this: its network access does **not** go through the `run_command` sandbox (it is
 a direct in-process request) — the guard is the SSRF address check plus

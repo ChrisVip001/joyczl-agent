@@ -113,7 +113,7 @@ fn fs_browsing_lists_only_directories_and_hides_noise() {
     assert!(list_dirs("/不存在/的/目录/joy", false).is_err());
 }
 
-/// 隐藏目录开关（dsh 的 showHidden）：默认藏点开头，开了才露；
+/// 隐藏目录开关：默认藏点开头，开了才露；
 /// 构建噪音无论如何都不露。
 #[test]
 fn hidden_directories_show_only_when_asked() {
@@ -135,7 +135,7 @@ fn hidden_directories_show_only_when_asked() {
     assert!(!names.contains(&"node_modules"), "构建噪音永远不露");
 }
 
-/// 新建文件夹（dsh 的 createDirectory）：合格名字建得出来；路径形状
+/// 新建文件夹：合格名字建得出来；路径形状
 /// （分隔符、..、点开头）、超长、重名、坏父目录都挡下 —— 用户输入
 /// 进不了路径形状，与 upload 的扩展名白名单同一条纪律。
 #[test]

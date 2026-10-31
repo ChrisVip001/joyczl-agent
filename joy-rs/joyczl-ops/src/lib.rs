@@ -51,7 +51,7 @@ const PORT_SCAN: u16 = 10;
 /// 起驾驶舱，直到进程被杀掉。
 pub async fn serve(settings: Settings) -> Result<()> {
     // 绑定校验在**开任何端口之前**：非回环地址必须带 token。这条检查放启动期
-    // 而不是文档里 —— 学 deepseek-harness 的「加载期拒绝通配监听」：配错就该
+    // 而不是文档里 —— 加载期就拒绝通配监听：配错就该
     // 起不来，而不是先当十分钟内网公开服务再被人提醒。
     validate_binding(&settings.ops_host, settings.ops_token.as_deref())?;
 

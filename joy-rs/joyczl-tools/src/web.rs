@@ -335,7 +335,7 @@ pub fn search_web() -> Tool {
 // fetch_url —— 抓一个网页的正文给模型看。
 //
 // search_web 拿回的是「有哪些结果」，fetch_url 拿回的是「这一页说了什么」。
-// 三件事在实现里不可省（都抄自 dsh / nanobot 的实作）：
+// 三件事在实现里不可省：
 //
 // * **SSRF 防护**：模型是被注入的目标 —— 一个被操纵的 fetch 就是内网探测。
 //   解析后的每个 IP（**每一跳重定向都重查**）落在 loopback / 内网 /
@@ -346,7 +346,7 @@ pub fn search_web() -> Tool {
 
 /// 下载字节上限。
 const FETCH_MAX_BYTES: usize = 2 * 1024 * 1024;
-/// 返回给模型的正文字符上限（nanobot 同口径）。
+/// 返回给模型的正文字符上限。
 const FETCH_MAX_CHARS: usize = 50_000;
 /// 最多跟几跳重定向。每一跳都重新过 SSRF 检查。
 const FETCH_MAX_REDIRECTS: usize = 5;
@@ -455,7 +455,7 @@ const BLOCK_TAGS: &[&str] = &[
 
 /// HTML → 纯文本：剥标签、剔 script/style 与注释、解码常见实体、折叠空白。
 /// 手写的状态机（约 90 行）—— 不引 html2text 这类依赖，质量对「给模型读」
-/// 足够（nanobot 的兜底路径就是这个做法）。
+/// 足够（兜底路径就是这个做法）。
 pub(crate) fn html_to_text(html: &str) -> String {
     // `to_ascii_lowercase` 保字节长度：标签名都是 ASCII，多字节字符原样，
     // 于是 lower 与原文的索引一一对应，可以放心用下标切片。

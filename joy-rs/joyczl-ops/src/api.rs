@@ -159,7 +159,7 @@ pub async fn schedules(Extension(app): Extension<Arc<AppServer>>) -> Response {
     }
 }
 
-/// 单个上传文件的上限（openhuman 的预算表）：20MB。
+/// 单个上传文件的上限：20MB。
 const UPLOAD_MAX_BYTES: usize = 20 * 1024 * 1024;
 
 /// 扩展名白名单：1-8 位字母数字。双扩展、路径段、奇怪字符都不进路径。
@@ -173,9 +173,9 @@ fn safe_extension(name: &str) -> Option<String> {
 ///
 /// 通道选 octet-stream 而不是 multipart：单文件用不着 multipart 的信封，
 /// 还避开了解析器这个安全雷区（零 feature、零传递依赖）。
-/// 落盘名**完全由服务端生成**（spill 同款纪律：用户输入进不了路径），
+/// 落盘名**完全由服务端生成**（与 spill 同一条纪律：用户输入进不了路径），
 /// 原始名只取扩展名过白名单。返回相对 home 的路径 —— 前端把它注进消息，
-/// 模型用 read_file 自己读（pi/codex 的「引用优先」：引用与读取解耦）。
+/// 模型用 read_file 自己读（「引用优先」：引用与读取解耦）。
 pub async fn upload(
     Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -282,7 +282,7 @@ pub fn list_dirs(raw: &str, include_hidden: bool) -> Result<FsListing, String> {
                 return None;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            // 点开头默认藏（dsh 的 hidden 旗标语义），开了开关才露出；
+            // 点开头默认藏，开关打开才露出；
             // 构建噪音（node_modules/target）无论开关都藏 —— 点进去没有意义。
             if (name.starts_with('.') && !include_hidden)
                 || name == "node_modules"
@@ -320,7 +320,7 @@ fn default_browse_root() -> String {
 /// 为什么在服务端：浏览器的文件夹选择器**拿不到绝对路径**（File System
 /// Access API 只给句柄不给路径），而工作目录恰恰需要绝对路径 —— 所以
 /// 「像桌面应用那样选文件夹」必须由知道文件系统的这一侧来做
-/// （Jupyter、VS Code server 都是同款做法）。只读、只列目录。
+/// （Jupyter、VS Code server 的做法）。只读、只列目录。
 pub async fn fs_browse(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
@@ -347,8 +347,7 @@ pub async fn fs_browse(
     }
 }
 
-/// 在 parent 下建一个子目录，返回新目录的绝对路径（dsh 的 createDirectory
-/// verb）。独立成纯函数是为了能直接单测。
+/// 在 parent 下建一个子目录，返回新目录的绝对路径。独立成纯函数是为了能直接单测。
 ///
 /// 名字纪律与 upload 的扩展名白名单同一条：**用户输入进不了路径形状** ——
 /// 不许分隔符、不许 `..`、不许点开头（建出来的目录不该默认隐身）、

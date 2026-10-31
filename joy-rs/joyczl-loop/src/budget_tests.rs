@@ -85,7 +85,7 @@ fn the_largest_results_are_stubbed_until_it_fits() {
 
 #[test]
 fn it_stops_as_soon_as_the_batch_fits() {
-    // 与 deepseek-harness 的循环同一条：`if total <= max: break` —— 一旦装得下
+    // 装得下就停手：`if total <= max: break` —— 一旦装得下
     // 就停手，不会顺手把「本来还能留着的」也换掉。
     let mut messages = vec![
         call("1", "mcp__x__huge"),

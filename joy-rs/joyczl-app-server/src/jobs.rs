@@ -13,7 +13,7 @@
 //!   封顶，超了明说）。内存环管「活着的时候读」，这个文件管「死后读」。
 //! * **台账落库**：起跑/收尾都写 state.db 的 jobs 表（迁移 0009）。进程死了，
 //!   「跑过什么、跑到哪」还在；启动对账把挂着的标成 interrupted —— **不自动
-//!   重跑**（dsh / hermes / pi 五家参考实现的一致选择，重跑是事故放大器）。
+//!   重跑**（重跑是事故放大器）。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};

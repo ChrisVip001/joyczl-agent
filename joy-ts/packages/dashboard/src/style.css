@@ -1,5 +1,5 @@
 /*
- * 驾驶舱样式 —— 双层设计 token（抄 openhuman 的主题分层）：
+ * 驾驶舱样式 —— 双层设计 token：
  *
  *   第一层（:root 变量）：原始材质 —— 色板、字号、间距、圆角。
  *   第二层（.semantic 类 / 复用变量）：语义别名 ——「表面」「正文」「强调」。
@@ -220,7 +220,7 @@ main {
   padding: 2px var(--sp-2);
 }
 
-/* 目录选择器弹层（openhuman 的选文件夹形态）。 */
+/* 目录选择器弹层。 */
 .fsoverlay {
   position: fixed;
   inset: 0;
@@ -289,7 +289,7 @@ main {
 .fsrecent .hint {
   padding: 0 var(--sp-2);
 }
-/* 祖先链（dsh 的 crumbs）：每一跳都可点。 */
+/* 祖先链：每一跳都可点。 */
 .fscrumbs {
   display: flex;
   align-items: center;
@@ -363,7 +363,7 @@ main {
 .msg.me .bubble {
   border-top-right-radius: var(--r-sm);
 }
-/* 流式光标：只在 streaming 时出现（抄 openhuman 的 blinking cursor）。 */
+/* 流式光标：只在 streaming 时出现。 */
 .bubble.streaming::after {
   content: "▍";
   color: var(--accent);
@@ -385,7 +385,7 @@ main {
   max-width: 100%;
 }
 
-/* -- 工具卡片（抄 openhuman 的 ToolBodies） -------------------------------- */
+/* -- 工具卡片 -------------------------------- */
 .toolcard {
   display: flex;
   align-items: baseline;
@@ -441,7 +441,7 @@ main {
   font-family: var(--font-mono);
 }
 
-/* -- 运行状态三态（抄 openhuman 的 AgentRunningStatus） --------------------- */
+/* -- 运行状态三态 --------------------- */
 .statusline {
   display: flex;
   align-items: baseline;

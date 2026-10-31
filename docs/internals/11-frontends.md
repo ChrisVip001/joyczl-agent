@@ -143,7 +143,7 @@ IDENTIFY」，所以断的那几秒里说的话会丢；要补上得记住 `sess
    好心把它们导出去」；
 4. 形状对不上的通知只记日志不抛（一条坏通知不该打死客户端）。
 
-`test_every_method_has_a_response_pairing` 这类**自检型测试**值得抄：它不测行为，
+`test_every_method_has_a_response_pairing` 这类**自检型测试**值得保留：它不测行为，
 测的是「本端与协议没有漂移」。
 
 ## 11.6 `sdk/python-bin`：为什么二进制单独成包

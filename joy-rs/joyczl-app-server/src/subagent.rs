@@ -169,7 +169,7 @@ impl SubagentRunner for Delegated {
                 &home,
                 crate::Injections {
                     session_id: child_session.clone(),
-                    // 子代理跟父任务在同一个目录里干活（dsh 语义）—— 父轮 cwd 由
+                    // 子代理跟父任务在同一个目录里干活 —— 父轮 cwd 由
                     // run() 的 parent_cwd 带进来。
                     cwd,
                     // 子代理不碰后台作业：那是父轮的活，它也没有批准通道。

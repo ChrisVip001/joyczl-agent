@@ -133,7 +133,7 @@ fn the_hub_reports_its_user_count() {
     let _ = valid_user("x");
 }
 
-// ---- M2c：BYOK 的隔离是结构性的 ------------------------------------------
+// ---- BYOK 的隔离是结构性的 ------------------------------------------
 //
 // 密钥隔离不靠「记得别泄漏」，靠路径：每个用户的 home 是独立目录、独立的
 // app-server 子进程、各自的 models.json 与钥匙串。这两条测试钉住结构本身。
@@ -179,7 +179,7 @@ fn the_users_file_stores_tokens_never_model_keys() {
     );
 }
 
-// ---- M4a：资源池的三条策略（抄自 openhuman ProfileHost） --------------------
+// ---- 资源池的三条策略 --------------------
 //
 // 判定是纯函数，直接喂快照；(user, last_used, idle) 的 idle = 只有池自己
 // 持有（Arc::strong_count == 1）—— 正在服务请求的实例天然 pin 住。

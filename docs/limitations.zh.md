@@ -31,13 +31,13 @@
 ## 通知与审计
 
 - **通知是尽力而为**：发不出（网络断、端点 5xx）只往 stderr 说一声，**没有
-  重试、没有投递账本** —— hermes 的五态 delivery ledger（pending/attempting/
+  重试、没有投递账本** —— 五态 delivery ledger（pending/attempting/
   delivered/…）留给档位 B（作业结果能唤醒会话时）再引入，现在通知只是
   「顺便喊一声」，丢了就丢了。Slack 的 `{"text": …}` 格式也兼容 ntfy/Gotify
   这类自建端点；钉钉/企业微信的加签格式没做。
 
 - **多用户单机的准入是一枚 token：`joy hub` 没有 配对码/邀请链接/OAuth ——
-  管理员跑 `joy hub adduser`，token 只打印一次。hermes 式的配对码流程（用户
+  管理员跑 `joy hub adduser`，token 只打印一次。配对码流程（用户
   自助申请 + 主人批准 + 限速锁定）需要一个未鉴权的申请端点，等真有第二个
   用户时再做。per-user 配额同样记账未设限（usage 数据在攒，强制留给计费）
 
@@ -54,7 +54,7 @@
 ## 执行（`run_command`、`JOY_EXEC`）
 
 `read_file` / `list_dir` 默认开、不走执行闸门 —— 信任边界是**进程用户的操作系统
-权限**：模型能读到该用户可读的任何文件（与 codex / pi 的只读工具一致）。不想让
+权限**：模型能读到该用户可读的任何文件（与同类只读工具一致）。不想让
 模型看到的文件，放在该用户读不到的地方。`fetch_url` 与之对称：它的网络访问
 **不经过** `run_command` 的沙箱（那是进程内直连），护栏是 SSRF 地址检查 + 外站
 内容转述，不是沙箱；HTML→纯文本是手写转换器，复杂排版页的还原质量不如
@@ -149,7 +149,7 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   不该把预算带偏。要更准只能为每家厂商各带一份真实词表。
   → `joy-rs/joyczl-state/src/chat.rs`（`context_factor`）
 
-* **刻意** —— 钩子只有 **shell handler** 一种（不抄 Claude Code 的 http /
+* **刻意** —— 钩子只有 **shell handler** 一种（不做 http /
   mcp_tool / prompt / agent 四类）：那四类各自要一套契约，而 shell 已经能表达它们
   （`curl`、`joy mcp`、`llm` 都是命令）。要 HTTP 就 `curl`，要 LLM 判定就自己调模型。
 * **刻意** —— 钩子是 **Unix 优先**的：命令用 `sh` 跑，Windows 上得自己准备可执行

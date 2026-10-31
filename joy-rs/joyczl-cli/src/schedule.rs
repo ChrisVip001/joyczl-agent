@@ -18,7 +18,7 @@
 //! cron 是**手写的五字段匹配**（分 时 日 月 周），支持 `*`、`*/步长`、
 //! `a-b` 区间、`a,b` 列表 —— 覆盖个人任务的全部需要，不为一个字段引依赖。
 //!
-//! 状态与崩溃恢复（M4b，抄 openhuman 的「dispatch 先推进 next_run」）：
+//! 状态与崩溃恢复（M4b，dispatch 先推进 next_run）：
 //! 调度状态在 state.db 的 `schedule_state` 表（原 schedules-state.json 只做
 //! 一次性导入的来源，不再是权威）。触发前先 `claim` 占坑再执行，落定后
 //! `confirm` —— 崩溃在两者之间，重启时按每作业的 `catch_up` 字段决定：
@@ -30,8 +30,8 @@
 //! 空回答（或模型答 `NO_REPLY`）跳过投递 —— 没内容的产出不值得打扰。
 //!
 //! 停机期间的错过：启动时回看自上次触发以来的分钟，**补跑最新一次**
-//! （停了三天也只补一次，不补一串，回看封顶七天）。与 deepseek-harness
-//! 的 schedule-resume 同口径：错过的不静默吞掉。
+//! （停了三天也只补一次，不补一串，回看封顶七天）。错过的
+//! 不静默吞掉。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -214,8 +214,8 @@ fn load_legacy_state(home: &Path) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-/// 一次 run 的账本行（JSONL）。openhuman 的 run_log 同款三件套里 joy 缺的
-/// 就是这本账：outbox 是产出（quiet 时连产出都没有），这本账回答
+/// 一次 run 的账本行（JSONL）。outbox 是产出（quiet 时连产出都没有），
+/// 这本账回答
 /// 「跑过哪些、各自结局」—— 巡检、排障、算频率都从这一处来。
 fn run_log_line(
     name: &str,

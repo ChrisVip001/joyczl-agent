@@ -8,8 +8,8 @@ export type TurnStartParams = {
    */
   stream?: boolean | null;
   /**
-   * 本轮的工作目录（codex 的 per-turn override + dsh 的 session 语义）：
-   * 必须是已存在的绝对路径（hermes 的准入校验）；exec 的相对命令与
+   * 本轮的工作目录（逐轮覆盖语义）：
+   * 必须是已存在的绝对路径（fail-closed 准入）；exec 的相对命令与
    * read_file/list_dir 的相对路径都按它解析。缺省 = 进程 cwd（旧行为）。
    */
   cwd?: string | null;

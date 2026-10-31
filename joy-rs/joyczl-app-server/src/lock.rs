@@ -1,7 +1,6 @@
 //! 守护锁：同一个 `<home>` 只允许一个 app-server 进程。
 //!
-//! 学的是 codex 的 daemon（`app-server-daemon/src/lib.rs` 的 PID 文件 +
-//! 操作锁）：PID 文件防的是**真正的事故** —— 两个 app-server 各自持有一份
+//! 用 PID 文件 + 操作锁：PID 文件防的是**真正的事故** —— 两个 app-server 各自持有一份
 //! 内存态（审批、目标、作业表），写同一个 state.db，谁也不知道对方的存在。
 //! 「已在跑」必须是启动期的硬错误，不是警告。
 //!

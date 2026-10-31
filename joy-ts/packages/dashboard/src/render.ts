@@ -502,7 +502,7 @@ function scheduleRow(job: ScheduleStateRow): HTMLElement {
   return el("li", { class: "item" }, ...children);
 }
 
-// --- 工具卡片注册表（抄 openhuman 的 ToolBodies 思想） ----------------------
+// --- 工具卡片注册表 ----------------------
 //
 // 每个工具从 `args` 里提取一句**人话摘要**，而不是把 JSON 原样吐出来。
 // 注册表就是一个对象字面量 —— 新工具加一行，没有兜底抽象。

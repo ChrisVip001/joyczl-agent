@@ -32,7 +32,7 @@ never sees a key.
 ## Model routing (`<home>/model-routes.json`)
 
 Instead of picking the model yourself, let the server pick it per turn —
-openhuman's tier abstraction ("You don't pick the model, the task does"):
+a tier abstraction ("You don't pick the model, the task does"):
 
 ```json
 {
@@ -66,7 +66,7 @@ actually happened; the dashboard footer prints it.
 ## Model routing (`<home>/model-routes.json`)
 
 Instead of picking the model yourself, let the server pick it per turn —
-openhuman's tier abstraction ("You don't pick the model, the task does"):
+A tier abstraction ("You don't pick the model, the task does"):
 
 ```json
 {
@@ -185,7 +185,7 @@ gates, formatting, feeding tool calls to something else.
     "PostToolUse": [ { "matcher": "*", "command": "audit.sh" } ] } }
 ```
 
-**Events** (named as in Claude Code / codex): `PreToolUse`, `PostToolUse`,
+**Events** (named as commonly used in the ecosystem): `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `PermissionRequest`, `SessionStart`, `SessionEnd`, `Stop`,
 `StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`.
 
@@ -346,7 +346,7 @@ which variable to set.
 | `JOY_PORT` | `7777` | dashboard port; occupied ports scan upward |
 | `JOY_DASHBOARD_DIR` | in-repo dist | location of the built frontend |
 | `JOY_NOTIFY` | off | when on, reads `<home>/notify.json` (`{"slack": "webhook URL"}`) and pushes notifications: **approval requests / background-job finish / goal outcomes**. Fire-and-forget — a failed send is one stderr line and the turn carries on. The URL is admin-configured, so pointing it at a self-hosted intranet endpoint (ntfy/Gotify — anything accepting `{"text": …}`) is legitimate; no SSRF guard applies
-| `JOY_OPS_HOST` | `127.0.0.1` | bind address. **A non-loopback host requires `JOY_OPS_TOKEN` or startup is refused** (same rule as nanobot/dsh: a wrong config should fail to boot) |
+| `JOY_OPS_HOST` | `127.0.0.1` | bind address. **A non-loopback host requires `JOY_OPS_TOKEN` or startup is refused** (a wrong config should fail to boot) |
 | `JOY_OPS_TOKEN` | — | Bearer token for `/api/*` (constant-time compare). Optional on loopback; when set, local requests need it too. The dashboard asks once on first 401 and stores it in localStorage. **Deliberately not in `config/read`**: deployment parameters must not be visible to the model |
 | `JOY_HUB_ROOT` | — | root directory for multi-user mode (or pass `joy hub --root`) |
 | `JOY_HUB_MAX_OPEN` | 32 | how many per-user app-servers hub keeps open at once (each is a child process). When full, the least-recently-used idle instance is evicted; if everything is in use it over-commits rather than failing requests |
@@ -356,7 +356,7 @@ which variable to set.
 ## Multi-user on one machine (`joy hub`)
 
 The shape for teams: **one ops process + N users + one full home each** (the same
-shape as hermes's profiles and nanobot's session keys across the reference
+shape across the reference
 implementations; none of them build an account system).
 
 ```

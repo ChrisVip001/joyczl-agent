@@ -15,9 +15,9 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 
 ### 工作目录的选文件夹与最近使用
 
-- **可视化选文件夹**（对照 dsh 的 directory-picker）：服务端目录浏览
+- **可视化选文件夹**：服务端目录浏览
   `GET /api/fs?path=<目录>&hidden=1`（浏览器的选择器拿不到绝对路径，
-  必须由知道文件系统的一侧代劳 —— dsh 的网页端同款）+ 驾驶舱弹层
+  必须由知道文件系统的一侧代劳）+ 驾驶舱弹层
   （面包屑每一跳可点、「＋ 新建文件夹」走 `POST /api/fs/mkdir` 且名字
   过白名单、点开头默认藏可开关、构建噪音永远藏）。
 - **最近使用**：「常去的目录下次不用再选」。`<home>/workspaces.json`
@@ -28,8 +28,8 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 
 ### 按任务自动选模型（model routing）
 
-抄 openhuman 的 tier 抽象层（"You don't pick the model, the task does."），
-加上 grok bot 式的「auto」体感：
+任务档位抽象（"You don't pick the model, the task does."），
+加上「auto」的体感：
 
 - `<home>/model-routes.json`：三档 `fast`/`chat`/`reasoning` 各指向一个
   现成 profile id；`fixed` 是默认（零行为变化）。每轮重读，改完即生效。
@@ -44,27 +44,25 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 
 ### 交互三件：工作目录、文件上传、模型快切
 
-对照 codex / deepseek-harness / pi / hermes / openhuman 五家的交互，挑各自最优
-拼成 joy 的最小实现：
+把各家最优的交互拼成 joy 的最小实现：
 
-- **会话工作目录**：`TurnStartParams.cwd`（codex 的逐轮覆盖语义）→
-  `ToolCtx.cwd`。准入校验 fail-closed（hermes：必须是已存在的绝对路径）；
+- **会话工作目录**：`TurnStartParams.cwd`（逐轮覆盖语义）→
+  `ToolCtx.cwd`。准入校验 fail-closed（必须是已存在的绝对路径）；
   exec 回退链 `args.cwd > cwd > 进程 cwd`、read_file/list_dir 相对路径按它
-  解析（dsh 语义）；cwd 并入 exec 可写根（codex 的沙箱联动）；子代理继承
+  解析；cwd 并入 exec 可写根；子代理继承
   父轮 cwd。REPL `/cwd` 与驾驶舱顶栏各一个入口。
 - **文件上传**：`POST /api/upload`（octet-stream 单文件，避开 multipart
   解析器；20MB 上限）。落盘名完全由服务端生成（只取扩展名过白名单，用户
-  输进不了路径——spill 同款纪律）；前端暂存区 → 发送时上传 → 消息注入绝对
+  输进不了路径——与 spill 同一条纪律）；前端暂存区 → 发送时上传 → 消息注入绝对
   路径，模型用 read_file 自己读（pi 的「引用优先」）。图片不内嵌，见
   limitations。
 - **模型快切**：头部模型 pill 变下拉（pi 的 /model 形态），与右侧模型面板
   共用同一条 `saveModel({id, makeActive})` 切换路径——持久配置，没有
-  codex 那种「会话临时 vs 全局」之分（joy 的 profile 本来就是持久的）。
+  「会话临时 vs 全局」之分（joy 的 profile 本来就是持久的）。
 
 ### 驾驶舱重设计：状态三态、工具卡片、数据即导航
 
-参考 openhuman 的 AgentRunningStatus / ToolBodies / navConfig 与 dsh 的
-对话渲染，vanilla TS 内消化（无框架、无新依赖）：
+运行状态三态、工具卡片、导航与对话渲染，vanilla TS 内消化（无框架、无新依赖）：
 
 - **运行状态三态**：等待你（静止行）/ 思考中（shimmer + 秒表）/
   干活中（工具名 + 秒表）—— 区分「卡住了」和「在跑」。
@@ -97,7 +95,7 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 - 迁移 0012 `schedule_state`：去重（last_fired）、崩溃恢复（claimed）、
   每作业策略（catch_up/delivery）一张表全管 —— 原 schedules-state.json
   只做一次性导入的来源，不再是权威。
-- **dispatch 先占坑再执行**（照 openhuman 的「dispatch 先推进 next_run」
+- **dispatch 先占坑再执行**（dispatch 先推进 next_run
   防重放）：触发前 `claim` 落盘，落定后 `confirm`。崩溃在两者之间时，
   重启的恢复逻辑显式接管 —— 按 `catch_up` 字段：晨报类（=1）补跑一次
   （至少一次），通知类（=0）放弃（至多一次）。**按作业类型给字段，
@@ -112,13 +110,13 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 - 两个旋钮：`JOY_HUB_MAX_OPEN`（默认 32，同时最多开几个用户的
   app-server）与 `JOY_HUB_IDLE_SECS`（默认 900，闲置多久关；0 = 关闭此
   策略）。
-- 三条策略抄自 openhuman 的 ProfileHost：**上限**、**LRU/idle 驱逐**、
+- 三条策略：**上限**、**LRU/idle 驱逐**、
   **in-use 永不驱逐**。驱逐判定不用时间戳猜并发 —— 用 `Arc::strong_count`：
   只有池自己持有的实例才可能被关，正在服务请求的天然 pin 住。
 - 上限是**软的**：全都 pin 住时宁可超开也不把请求变成错误 —— 超开的是
   真实并发，不是闲置堆积。
 - 附带收获：侦察还反向验证了 joy 的「每用户一个 home + 子进程」——
-  openhuman 的 fleet 同样是 process-per-user，且自认不是生产级隔离边界。
+  同形态的 fleet 也是 process-per-user，且自认不是生产级隔离边界。
 
 ### M3b：审批审计台账 —— 「谁批准了 rm -rf」有处可查
 
@@ -152,7 +150,7 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
   `usage/summary` 协议方法给出 per-model 聚合 + 总数；写失败**不拦 turn**（记账
   是旁路）—— stderr 说一声就继续。
 - **刻意没有成本列**：BYOK 模式下钱记在用户自己的厂商账单上，费率是部署方的事
-  （token 在，费率随时能乘）。hermes 记了 `estimated_cost_usd` —— 等平台供 key
+  （token 在，费率随时能乘）。`estimated_cost_usd` 这类估算列 —— 等平台供 key
   （M4）再补，现在填的是拍脑袋数字。
 - hub 模式下这就是 per-user 记账：每个用户一个 home 一个台账；跨用户汇总是
   管理面的活（M4）。
@@ -169,8 +167,8 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
   来）；两个用户的 home 是不相交目录 —— 「A 的 key 不出现在 B 的路径」靠的
   是没有共享路径，不靠「记得别泄漏」。两条测试钉死这个结构。
 - 冒烟加了 hub 段：无 token 401 / 错 token 401 / 对 token 200 / home 被建出。
-- **刻意不做**（五家都没有）：账号密码库、OAuth、per-user 配额强制；hermes
-  式配对码准入（未鉴权端点 + 限速）延后到有真实需求时。
+- **刻意不做**（同类参考实现都没有）：账号密码库、OAuth、per-user 配额强制；
+  配对码准入（未鉴权端点 + 限速）延后到有真实需求时。
 
 ### M2 起步：驾驶舱 HTTP 面的鉴权门槛
 
@@ -183,8 +181,8 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 
 ### 7x24 的地基：作业台账、守护锁、调度补跑
 
-对着 codex / deepseek-harness / pi / hermes / nanobot 五家参考实现挖了一遍「长任务
-怎么活过崩溃」，抄回来三件（它们的答案高度一致，正好钉死了此前的开放决策）：
+对着多家参考实现挖了一遍「长任务怎么活过崩溃」，拿回三件（答案高度一致，
+正好钉死了此前的开放决策）：
 
 - **作业台账落库**（迁移 0009）：后台作业的起跑/收尾写进 state.db，输出随写
   随落到 `<home>/jobs/<pid>-<id>.log`（1 MiB 封顶）。进程崩溃后，启动对账把
@@ -192,11 +190,11 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
   自动重跑是事故放大器）；`job_list` 能看到历史，`job_output` 能回读死掉的
   作业的输出，owner 围栏对历史同样生效；
 - **守护锁**：同一个 `<home>` 只允许一个 app-server（`app-server.lock` + PID，
-  学 codex 的 daemon；崩溃残骸由下一次启动自动收）。两个常驻进程各持一份
+  daemon 形态；崩溃残骸由下一次启动自动收）。两个常驻进程各持一份
   内存态写同一个库是事故，不是功能；
 - **调度补跑**：`joy schedule` 的上次触发表落盘（原子写），启动时回看自上次
-  触发以来的分钟（封顶七天），错过就补跑**一次**并注明 —— 与 dsh 的
-  schedule-resume 同口径，错过的触发不再被静默吞掉。
+  触发以来的分钟（封顶七天），错过就补跑**一次**并注明 ——
+  错过的触发不再被静默吞掉。
 
 ### 模型有了自己的眼睛：只读文件工具
 

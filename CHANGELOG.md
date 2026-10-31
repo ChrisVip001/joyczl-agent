@@ -17,10 +17,9 @@ check.
 
 ### Folder picking and recents for the working directory
 
-- **Visual folder picking** (benchmarked against dsh's directory-picker):
+- **Visual folder picking** :
   server-side browsing via `GET /api/fs?path=<dir>&hidden=1` (the browser's
-  picker can't hand over absolute paths — the filesystem-aware side must do
-  it, same as dsh's web client) plus a dashboard overlay (breadcrumbs where
+  picker can't hand over absolute paths — the filesystem-aware side must do it) plus a dashboard overlay (breadcrumbs where
   every crumb is a jump target, "＋ 新建文件夹" via `POST /api/fs/mkdir`
   with a whitelist-checked name, dot-prefixed dirs hidden by default with a
   toggle, build noise always hidden).
@@ -35,8 +34,8 @@ check.
 
 ### Automatic per-task model routing
 
-openhuman's tier abstraction ("You don't pick the model, the task does.")
-plus a grok-bot-style "auto" feel:
+A tier abstraction ("You don't pick the model, the task does.")
+plus an "auto" feel:
 
 - `<home>/model-routes.json`: three tiers `fast`/`chat`/`reasoning`, each
   pointing at an existing profile id; `fixed` is the default (zero behavior
@@ -54,33 +53,32 @@ plus a grok-bot-style "auto" feel:
 
 ### Three interactions: working directory, file upload, model quick-switch
 
-Taking each best-in-class interaction from codex / deepseek-harness / pi /
-hermes / openhuman and assembling joy's minimal version:
+Assembling joy's minimal version from the best-in-class interactions
+observed across reference harnesses:
 
-- **Session working directory**: `TurnStartParams.cwd` (codex's per-turn
-  override semantics) → `ToolCtx.cwd`. Admission is fail-closed (hermes: must
-  be an absolute path that exists); exec's fallback chain is
+- **Session working directory**: `TurnStartParams.cwd` (per-turn
+  override semantics) → `ToolCtx.cwd`. Admission is fail-closed (must be an
+  absolute path that exists); exec's fallback chain is
   `args.cwd > cwd > process cwd`, and `read_file`/`list_dir` resolve relative
-  paths against it (dsh's session working-directory); the cwd joins exec's
-  writable roots (codex's sandbox linkage); subagents inherit the parent
+  paths against it; the cwd joins exec's
+  writable roots; subagents inherit the parent
   turn's cwd. Entries: REPL `/cwd` and the dashboard header.
 - **File upload**: `POST /api/upload` (octet-stream, single file — no multipart
   parser; 20MB cap). The on-disk name is fully server-generated (only the
   extension is taken from the user, whitelist-checked — user input never
   enters the path, same discipline as spill); the frontend stages files, then
   uploads on send and injects absolute paths into the message — the model
-  reads them with `read_file` (pi's reference-first). Images are not embedded;
+  reads them with `read_file` (reference-first). Images are not embedded;
   see limitations.
-- **Model quick-switch**: the header model pill becomes a dropdown (pi's
-  /model form), sharing the same `saveModel({id, makeActive})` path as the
-  model panel — persistent config, without codex's session-vs-global split
+- **Model quick-switch**: the header model pill becomes a dropdown, sharing the same
+  `saveModel({id, makeActive})` path as the
+  model panel — persistent config, without a session-vs-global split
   (joy's profiles are persistent by design).
 
 ### Dashboard redesign: run status, tool cards, data-as-navigation
 
-Referencing openhuman's AgentRunningStatus / ToolBodies / navConfig and
-dsh's transcript rendering — absorbed in vanilla TS (no framework, no new
-dependencies):
+Run status, tool cards, navigation and transcript rendering — absorbed in
+vanilla TS (no framework, no new dependencies):
 
 - **Three-state run status**: waiting-on-you (a still line) / thinking
   (shimmer + stopwatch) / working (tool name + stopwatch) — separates
@@ -120,8 +118,8 @@ dependencies):
   (claimed), and per-job policy (catch_up/delivery) in one table — the old
   schedules-state.json is now only a one-time import source, no longer
   authoritative.
-- **Claim before dispatch** (after openhuman's "advance next_run at
-  dispatch"): `claim` is persisted before the run, `confirm` after. A crash
+- **Claim before dispatch** (advance next_run at
+  dispatch): `claim` is persisted before the run, `confirm` after. A crash
   in between is explicitly handled at restart by the `catch_up` field:
   newsletters (=1) re-run once (at-least-once), notifications (=0) are
   dropped (at-most-once). **Per-job, never a global either/or.**
@@ -136,7 +134,7 @@ dependencies):
 - Two knobs: `JOY_HUB_MAX_OPEN` (default 32, how many per-user app-servers
   hub keeps open) and `JOY_HUB_IDLE_SECS` (default 900, close after idle;
   0 disables the policy).
-- Three strategies borrowed from openhuman's ProfileHost: a **cap**,
+- Three strategies for the pool: a **cap**,
   **LRU/idle eviction**, and **never evict in-use instances**. Eviction
   doesn't guess concurrency from timestamps — it uses `Arc::strong_count`:
   only instances held solely by the pool can be closed; anything serving a
@@ -144,8 +142,8 @@ dependencies):
 - The cap is **soft**: when everything is pinned, the pool over-commits
   rather than turning requests into errors — the overshoot is real
   concurrency, not idle accumulation.
-- A bonus from the recon: openhuman's fleet also validates joy's "one home,
-  one process per user" — their fleet is process-per-user too, and admits
+- A bonus from the recon: comparable fleets also validate joy's "one home,
+  one process per user" — they are process-per-user too, and admit
   it is not a production multi-tenant boundary.
 
 ### M3b: an approval audit — "who approved that rm -rf" has an answer now
@@ -188,7 +186,7 @@ requests** (come approve in the dashboard), **background-job finishes**
   is a sidecar) — one stderr line and on it goes.
 - **Deliberately no cost column**: under BYOK the money shows up on each user's
   own provider bill; rates are the deployment's business (tokens are recorded,
-  multiply whenever needed). hermes carries `estimated_cost_usd` — that waits
+  multiply whenever needed). An `estimated_cost_usd` column — that waits
   for platform-provided keys (M4); today it would be made-up numbers.
 - In hub mode this is per-user accounting: one home, one ledger per user;
   cross-user aggregation belongs to an admin surface (M4).
@@ -210,7 +208,7 @@ requests** (come approve in the dashboard), **background-job finishes**
 - The smoke suite gained a hub section: no token 401 / wrong token 401 / right
   token 200 / home actually created.
 - **Deliberately not built** (none of the references have it): accounts and
-  password stores, OAuth, per-user quota enforcement; hermes-style pairing-code
+  password stores, OAuth, per-user quota enforcement; pairing-code
   admission (an unauthenticated endpoint + rate limits) waits for a real need.
 
 ### M2 begins: an auth gate on the dashboard's HTTP surface
@@ -228,9 +226,9 @@ requests** (come approve in the dashboard), **background-job finishes**
 
 ### The groundwork for 7x24: job ledger, daemon lock, schedule catch-up
 
-Studied how the five reference harnesses (codex / deepseek-harness / pi / hermes /
-nanobot) keep long tasks alive across crashes and ported back three pieces — their
-answers agree so closely that the previously open decisions are now settled:
+Studied how reference harnesses keep long tasks alive across crashes and ported
+back three pieces — their answers agree so closely that the previously open
+decisions are now settled:
 
 - **Job ledger in the database** (migration 0009): background-job start/finish
   go into state.db and output streams to `<home>/jobs/<pid>-<id>.log` (1 MiB cap).
@@ -238,14 +236,14 @@ answers agree so closely that the previously open decisions are now settled:
   keeps output readable — **never auto-rerun** (unanimous across references:
   auto-rerun is an incident amplifier). `job_list` shows history, `job_output`
   reads dead jobs' output, and the owner fence covers history too;
-- **Daemon lock**: one app-server per `<home>` (`app-server.lock` + PID, after
-  codex's daemon; locks left by dead processes are reaped on next start). Two
+- **Daemon lock**: one app-server per `<home>` (`app-server.lock` + PID;
+  locks left by dead processes are reaped on next start). Two
   resident processes each holding in-memory state while writing one database is
   an incident, not a feature;
 - **Schedule catch-up**: `joy schedule` persists its last-fired table (atomic
   write) and, at boot, looks back over the minutes since each job's last firing
   (capped at seven days), firing the latest missed slot **once**, marked as
-  catch-up — same semantics as dsh's schedule-resume; missed firings are no
+  catch-up — missed firings are no
   longer silently swallowed.
 
 ### The model can see files now: read-only file tools

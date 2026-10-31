@@ -48,7 +48,7 @@ mod oauth_tests;
 mod mcp_server_tests;
 
 /// 一条已经连上、握过手的连接。调用要排队，所以里面是一把 async 锁。
-/// 熔断参数。默认抄 hermes：**连续 3 次失败开 60 秒断路器**。
+/// 熔断参数：**连续 3 次失败开 60 秒断路器**。
 #[derive(Debug, Clone, Copy)]
 pub struct BreakerPolicy {
     pub failures: u32,

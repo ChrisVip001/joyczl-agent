@@ -308,7 +308,7 @@ async fn list_dir_edge_cases_are_honest() {
     assert!(out.contains("read_file"), "{out}");
 }
 
-/// 相对路径按本轮工作目录解析（dsh 语义）：ctx.cwd 设了，"note.txt" 就在它
+/// 相对路径按本轮工作目录解析（会话级语义）：ctx.cwd 设了，"note.txt" 就在它
 /// 下面找 —— 不再按进程 cwd，也不会静默回退。
 #[tokio::test]
 async fn relative_paths_resolve_against_the_turn_cwd() {

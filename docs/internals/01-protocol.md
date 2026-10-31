@@ -25,7 +25,7 @@ src/export_tests.rs 生成入口（标了 #[ignore]，只在需要时跑）
 `v2.rs:7-16` 定了几条硬规矩：
 
 - 类型后缀固定：请求参数 `*Params`、应答 `*Response`、推送 `*Notification`。
-- wire 一律 camelCase（`#[serde(rename_all = "camelCase")]` + 同款 `#[ts]`）。
+- wire 一律 camelCase（`#[serde(rename_all = "camelCase")]` + 配套的 `#[ts]`）。
 - **整数字段一律 `i32`，不用 `i64`**。原因很具体：`i64` 会被 ts-rs 映射成 TS 的
   `bigint`，而 `JSON.parse` 得到的是 `number`，写起来不报错、跑起来不符。
   存储层是 i64，跨层时用 `narrow()` 夹到 `i32`（`app-server/lib.rs`）。
@@ -76,7 +76,7 @@ model/list
   （`-32000` provider 错、`-32001` 工具错、`-32002` **还没实现**）。
   最后这个刻意与 `METHOD_NOT_FOUND` 分开：「还没做」和「你拼错了」是两件事。
 
-## 1.5 单一来源生成管线（本项目最值得抄的一段）
+## 1.5 单一来源生成管线
 
 **问题**：Rust 是权威，但 TS 与 Python 也要类型。三种语言各写一份必然漂移。
 

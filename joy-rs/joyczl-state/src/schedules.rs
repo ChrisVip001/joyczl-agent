@@ -2,7 +2,7 @@
 //! 策略，全部落在 state.db 一张表里 —— 原先的 `schedules-state.json`
 //! 从此只做一次性导入的来源，不再是权威。
 //!
-//! 模型（照 openhuman 的「dispatch 先推进 next_run」防重放，joy 版）：
+//! 模型（dispatch 先推进 next_run 防重放，joy 版）：
 //!
 //! ```text
 //! tick 发现该触发 ──► claim(name, minute)      ← 先占坑（崩溃前已持久化）

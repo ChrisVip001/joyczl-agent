@@ -69,7 +69,7 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
 * `approvalRequested`：有一条命令在等人批准（工具、命令原文、拒因、时限）。
   收到之后要调 `approval/respond`，那一轮才继续；**不回答就是拒绝**。
 * `textDelta`：流式文本增量；仅 `stream:true` 时产生。
-* `cwd`（可选）：本轮工作目录。必须是已存在的绝对路径（hermes 的 fail-closed）；`run_command` 的回退链是 `args.cwd > cwd > 进程 cwd`，`read_file`/`list_dir` 的相对路径也按它解析（dsh 的 session working-directory）。子代理继承父轮的 cwd。
+* `cwd`（可选）：本轮工作目录。必须是已存在的绝对路径（fail-closed）；`run_command` 的回退链是 `args.cwd > cwd > 进程 cwd`，`read_file`/`list_dir` 的相对路径也按它解析（会话级 working-directory）。子代理继承父轮的 cwd。
 * `toolStarted` / `toolCompleted`：工具开始与完成（含耗时与状态）。
 * `turnCompleted`：`reply`、`iterations`、`usage`、`meta`（gate / graph /
   tools / model / provider / latency / interrupted / guardHits / retries）。

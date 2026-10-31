@@ -1,8 +1,8 @@
 //! 多用户单机：一个 ops 进程，N 个用户，各自完整的 home。
 //!
-//! 学的是两家的现成答案：**hermes 的 profile**（每个租户一套 HOME ——
+//! 两个现成答案：**per-租户 profile**（每个租户一套 HOME ——
 //! config/记忆/凭据天然隔离，`JOY_HOME` 本来就是全部状态的根）与
-//! **nanobot 的 per-session 锁**（并发按 key 分开）。没有账号系统 ——
+//! **per-session 锁**（并发按 key 分开）。没有账号系统 ——
 //! 五家参考实现没有一家有；准入就是 `<root>/users.json` 里的一枚 token，
 //! 鉴权逻辑与单用户模式完全同一条（Bearer + 常量时间比较）。
 //!
@@ -145,7 +145,7 @@ pub(crate) fn stale_entries(
 
 /// 多用户宿主：解析 token → 懒加载该用户的 app-server。
 ///
-/// 池的三条策略抄自 openhuman 的 ProfileHost：**slot 上限**
+/// 池的三条策略：**slot 上限**
 /// （`JOY_HUB_MAX_OPEN`，每个实例是一个子进程）、**LRU/idle 驱逐**
 /// （`JOY_HUB_IDLE_SECS`，0 = 不按闲置关）、**in-use 永不驱逐**。
 /// 上限是软的：全都 pin 住时宁可超开也不把请求变成错误 —— 那是真实

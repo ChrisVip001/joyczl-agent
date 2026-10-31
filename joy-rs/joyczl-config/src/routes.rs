@@ -1,6 +1,5 @@
 //! `<home>/model-routes.json` —— 按任务档位自动选模型的路由表。
 //!
-//! 抄 openhuman 的 tier 抽象层：**「You don't pick the model, the task does.」**
 //! 用户给「任务档位」配模型（每个档位指向一个现成 profile 的 id），而不是给
 //! 每个模型贴标签 —— profile 本身保持原样（provider + model + key 一应俱全），
 //! 路由只做「档位 → profile id」的查表。
@@ -17,8 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// 三个任务档位（openhuman 有 7 个，joy 只留真正用得上的三个 —— 没有消费者的
-/// 档位是死配置）：
+/// 三个任务档位：
 /// * `fast` —— 答一句、改个错字（默认不单独配：落到 chat 那套）；
 /// * `chat` —— 日常对话 + 工具活；
 /// * `reasoning` —— 长推理、大上下文。

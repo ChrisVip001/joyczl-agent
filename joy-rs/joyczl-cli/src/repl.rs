@@ -27,7 +27,7 @@ pub async fn run(server: Server) -> Result<()> {
     println!();
 
     let mut session_id = new_session_id();
-    // 本会话的工作目录（dsh 的 session working-directory）：客户端状态，
+    // 本会话的工作目录（会话级 working-directory）：客户端状态，
     // 每轮 turn 都带给服务端。/cwd 命令负责校验。
     let mut cwd: Option<std::path::PathBuf> = None;
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
@@ -68,7 +68,7 @@ pub async fn run(server: Server) -> Result<()> {
     Ok(())
 }
 
-/// `/cwd` —— 本会话的工作目录（dsh 的 session working-directory）。
+/// `/cwd` —— 本会话的工作目录（会话级 working-directory）。
 /// 校验在命令里做（进 turn 之前就把坏路径告诉用户），之后每轮 turn 都带上它。
 fn set_cwd(cwd: Option<std::path::PathBuf>, input: &str) -> Option<std::path::PathBuf> {
     let rest = input.trim_start_matches("/cwd").trim();
@@ -99,7 +99,7 @@ fn set_cwd(cwd: Option<std::path::PathBuf>, input: &str) -> Option<std::path::Pa
     Some(path)
 }
 
-/// `/route` —— 按任务档位自动选模型（openhuman 的 tier 抽象）。
+/// `/route` —— 按任务档位自动选模型（任务档位抽象）。
 ///
 /// 与 `/model` 同一条纪律：**只有人能到这里**。路由是服务端策略，模型没有
 /// 换模型的工具；人类 pin（active profile）优先于任何档位映射。

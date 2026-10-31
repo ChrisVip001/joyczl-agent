@@ -86,7 +86,7 @@ pub struct ToolCtx {
     pub chat: Chat,
     pub calendar: Calendar,
     pub home: PathBuf,
-    /// 本轮的工作目录（dsh 的 session working-directory）。None = 进程 cwd。
+    /// 本轮的工作目录（会话级 working-directory）。None = 进程 cwd。
     /// exec 的回退链：args.cwd > cwd > 进程 cwd；read_file/list_dir 的相对路径也按它解析。
     pub cwd: Option<PathBuf>,
     /// 这一轮属于哪个会话。日志与落盘用它归属（子代理给一个自己的名字，

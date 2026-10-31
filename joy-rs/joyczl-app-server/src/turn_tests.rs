@@ -923,7 +923,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
     assert_eq!(meta_retries, 1, "meta 里的次数是实测的");
 }
 
-/// 工作目录准入（hermes 的 fail-closed）：合法的过；相对路径、不存在的路径都挡下；
+/// 工作目录准入（fail-closed）：合法的过；相对路径、不存在的路径都挡下；
 /// 空串视同没给 —— 与协议侧「缺省 = 进程 cwd」同一个语义。
 #[test]
 fn turn_cwd_validation_is_fail_closed() {

@@ -3,19 +3,19 @@
 //! 这是「不改循环就能加行为」的那个口子：审计、策略门禁、格式化、把工具调用
 //! 喂给外部系统 —— 都挂在事件上，而不是去 fork 一份 Joy。
 //!
-//! 只做 shell handler（不抄 Claude Code 的 http / mcp_tool / prompt / agent 四类）：
+//! 只做 shell handler（不做 http / mcp_tool / prompt / agent 四类）：
 //! 那四类各自要一套契约，而 shell 已经能表达它们（`curl`、`joy mcp`、`llm` 都是
 //! 一条命令）。少做的那部分写进了 `docs/limitations.md`。
 //!
 //! 三条规矩，都是从踩过的坑里来的：
 //!
-//! 1. **exit 2 是唯一靠退出码阻断的方式**（与 Claude Code 同口径）。exit 1 是
+//! 1. **exit 2 是唯一靠退出码阻断的方式**。exit 1 是
 //!    非阻塞错误：命令写错了不该让所有工具瘫痪，但**必须**在 stderr 留下痕迹。
-//! 2. **策略事件超时 fail-closed、观察事件 fail-open**（抄 hermes）。`PreToolUse`
+//! 2. **策略事件超时 fail-closed、观察事件 fail-open**。`PreToolUse`
 //!    是一个闸门 —— 它没能在时限内表态，就不该默认放行；而 `PostToolUse` 只是
 //!    旁观者，挂了不该影响已经发生的事。
 //! 3. **文件被改过就不执行**：装载时记下内容哈希，运行中一旦变了就拒绝执行新的
-//!    内容并说明原因（对齐 codex 的 `trusted_hash`）。改掉一个正在生效的策略钩
+//!    内容并说明原因（信任哈希校验）。改掉一个正在生效的策略钩
 //!    是那种「悄悄换了闸门」的事，宁可停下来让人看见。
 //!
 //! 命令收到 JSON 载荷（`hook_event_name` / `session_id` / `cwd` / `tool_name` /
@@ -37,7 +37,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 
-/// 12 个事件。名字与 Claude Code / codex 保持一致 —— 用户从别的 harness 抄配置
+/// 12 个事件。名字采用生态里通行的叫法 —— 用户从别的工具搬配置
 /// 过来时不必学第二套命名。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum HookEvent {
@@ -507,7 +507,7 @@ fn json_reason(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 把一次结果并进总结果：**先到者优先**（顺序即优先级，与 Claude Code 同）。
+/// 把一次结果并进总结果：**先到者优先**（顺序即优先级）。
 fn merge(into: &mut HookOutcome, one: HookOutcome) {
     if into.blocked.is_none() {
         into.blocked = one.blocked;

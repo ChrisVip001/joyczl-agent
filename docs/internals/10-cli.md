@@ -118,7 +118,7 @@ run 账本：`<home>/schedule-runs.jsonl` 每次 run 追加一行 JSON
 `ok`/`empty`/`error`，error 也是一等公民（巡检时正是要找的那行）；
 `delivered` 只指写了 outbox 文件（quiet 是有产出不落盘，与 empty 的
 没产出是两回事）。写失败只往 stderr 说一声 —— 账本是旁路。这是
-openhuman run_log 三件套里 joy 缺的那件：outbox 是产出，账本回答
+outbox 是产出，账本回答
 「跑过哪些、各自结局」。
 
 2. **`<home>/schedules.json`**：`{"jobs":[{"name","cron","prompt","catch_up","delivery"}]}`；

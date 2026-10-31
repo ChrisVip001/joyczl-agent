@@ -49,7 +49,7 @@
           <span class="hint" id="goal-state"></span>
         </div>
         <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
-        <!-- 运行状态三态（抄 openhuman 的 AgentRunningStatus）：
+        <!-- 运行状态三态：
              等你 = 静止一行；思考 = shimmer；干活 = 工具名。hidden 由 main 管。 -->
         <div class="statusline" id="status" hidden aria-live="polite"></div>
         <form class="composer" id="composer" autocomplete="off">
@@ -74,7 +74,7 @@
       </section>
 
       <aside class="panels">
-        <!-- 数据即导航（抄 openhuman 的 navConfig）：tab 就是这份数组，
+        <!-- 数据即导航：tab 就是这份数组，
              加一个面板 = HTML 加一节 + main.ts 的 NAV 加一行。 -->
         <nav class="tabs" aria-label="面板">
           <button class="tab active" data-tab="overview" type="button">概览</button>
