@@ -277,6 +277,10 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         // 目录浏览：驾驶舱选工作目录用（只读、只列目录）。
         .route("/api/fs", get(api::fs_browse))
         .route("/api/fs/mkdir", post(api::fs_mkdir))
+        .route(
+            "/api/fs/recents",
+            get(api::fs_recents).post(api::fs_recents_record),
+        )
         // 多模型：列出 / 存并切换 / 删除。与终端的 /model 是同一处实现。
         .route("/api/model/profiles", get(api::model_profiles))
         .route("/api/model/save", post(api::model_save))

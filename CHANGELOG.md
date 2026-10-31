@@ -15,6 +15,24 @@ philosophy as the daemon lock: misconfigured should fail to boot, not silently
 serve something stale. Release scenarios (no joy-ts sources present) skip the
 check.
 
+### Folder picking and recents for the working directory
+
+- **Visual folder picking** (benchmarked against dsh's directory-picker):
+  server-side browsing via `GET /api/fs?path=<dir>&hidden=1` (the browser's
+  picker can't hand over absolute paths — the filesystem-aware side must do
+  it, same as dsh's web client) plus a dashboard overlay (breadcrumbs where
+  every crumb is a jump target, "＋ 新建文件夹" via `POST /api/fs/mkdir`
+  with a whitelist-checked name, dot-prefixed dirs hidden by default with a
+  toggle, build noise always hidden).
+- **Recents**: "directories you visit often don't need re-selecting".
+  `<home>/workspaces.json` with canonicalize dedup (symlink spellings and
+  trailing slashes don't create duplicates), most-recent-first, capped at 8;
+  two recording points — when a turn carries a validated cwd, and when the
+  dashboard's "选这个目录" is clicked (intent is expressed at selection
+  time, no need to wait for the turn). A "最近使用" block at the top of the
+  picker jumps in one click. `GET/POST /api/fs/recents` (ops-local view,
+  not in the protocol).
+
 ### Automatic per-task model routing
 
 openhuman's tier abstraction ("You don't pick the model, the task does.")

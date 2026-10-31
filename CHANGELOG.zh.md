@@ -13,6 +13,19 @@ dist 是构建产物且被 gitignore，没有任何机制逼人重建 —— 出
 条哲学：配错就该起不来，而不是默默端出旧页面。发布场景（没有 joy-ts 源码
 目录）不检查。
 
+### 工作目录的选文件夹与最近使用
+
+- **可视化选文件夹**（对照 dsh 的 directory-picker）：服务端目录浏览
+  `GET /api/fs?path=<目录>&hidden=1`（浏览器的选择器拿不到绝对路径，
+  必须由知道文件系统的一侧代劳 —— dsh 的网页端同款）+ 驾驶舱弹层
+  （面包屑每一跳可点、「＋ 新建文件夹」走 `POST /api/fs/mkdir` 且名字
+  过白名单、点开头默认藏可开关、构建噪音永远藏）。
+- **最近使用**：「常去的目录下次不用再选」。`<home>/workspaces.json`
+  canonicalize 去重（符号链与尾部斜杠不产生第二条）、命中移前、封顶
+  8 条；两个记录点 —— turn 带了校验通过的 cwd 时、驾驶舱「选这个目录」
+  时（意图在选的时候就表达，不必等轮次跑完）。选择器顶部「最近使用」
+  区一键直达。`GET/POST /api/fs/recents`（ops 本地视图，不进协议）。
+
 ### 按任务自动选模型（model routing）
 
 抄 openhuman 的 tier 抽象层（"You don't pick the model, the task does."），

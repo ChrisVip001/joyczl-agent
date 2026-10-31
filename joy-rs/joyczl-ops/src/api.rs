@@ -395,6 +395,44 @@ pub async fn fs_mkdir(Query(params): Query<std::collections::HashMap<String, Str
     }
 }
 
+/// 「最近使用」的应答（ops 本地视图，同 /api/fs 的待遇）。
+fn recents_response(home: &std::path::Path) -> Response {
+    Json(json!({
+        "paths": joyczl_config::workspaces::load_workspaces(home).paths,
+    }))
+    .into_response()
+}
+
+/// `GET /api/fs/recents` —— 最近用过的目录（选工作目录的快捷入口）。
+pub async fn fs_recents(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    let config: ConfigReadResponse = match app.request(methods::CONFIG_READ, json!({})).await {
+        Ok(config) => config,
+        Err(error) => return failed(StatusCode::BAD_GATEWAY, error),
+    };
+    recents_response(std::path::Path::new(&config.config.home))
+}
+
+/// `POST /api/fs/recents?path=<目录>` —— 选择器里「选这个目录」时记一笔
+/// （轮次还没跑也要记：用户的意图在这里就已经表达了）。
+pub async fn fs_recents_record(
+    Extension(app): Extension<Arc<AppServer>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let config: ConfigReadResponse = match app.request(methods::CONFIG_READ, json!({})).await {
+        Ok(config) => config,
+        Err(error) => return failed(StatusCode::BAD_GATEWAY, error),
+    };
+    let home = std::path::PathBuf::from(config.config.home);
+    if let Some(path) = params
+        .get("path")
+        .map(String::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        joyczl_config::workspaces::record_workspace(&home, path);
+    }
+    recents_response(&home)
+}
+
 pub async fn model_profiles(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<ModelProfilesResponse>(methods::MODEL_PROFILES, json!({}))

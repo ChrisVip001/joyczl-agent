@@ -313,6 +313,32 @@ export async function createFolder(parent: string, name: string): Promise<string
   return parsed.path;
 }
 
+/** 「最近使用」的工作目录（dsh workspace 思想的最小版：记住、直达）。 */
+export interface Recents {
+  paths: string[];
+}
+
+/** 最近用过的目录（服务端持久化在 home/workspaces.json）。 */
+export async function fetchRecents(): Promise<string[]> {
+  const response = await apiFetch("/api/fs/recents", {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) return [];
+  return ((await response.json()) as Recents).paths;
+}
+
+/** 选定一个目录：记进「最近使用」。失败不碍事 —— 便利品没有资格报警。 */
+export async function recordRecent(path: string): Promise<void> {
+  try {
+    await apiFetch(`/api/fs/recents?path=${encodeURIComponent(path)}`, {
+      method: "POST",
+      headers: { accept: "application/json" },
+    });
+  } catch {
+    /* 忽略：下次 turn 用了它还会记。 */
+  }
+}
+
 /** 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。 */
 export async function fetchSchedules(): Promise<ScheduleListResponse> {
   const response = await apiFetch("/api/schedules", { headers: { accept: "application/json" } });

@@ -280,6 +280,15 @@ main {
 .fsrow:hover {
   background: var(--bg-inset);
 }
+/* 「最近使用」区：常去目录的快捷块。 */
+.fsrecent {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: var(--sp-1);
+  margin-bottom: var(--sp-1);
+}
+.fsrecent .hint {
+  padding: 0 var(--sp-2);
+}
 /* 祖先链（dsh 的 crumbs）：每一跳都可点。 */
 .fscrumbs {
   display: flex;

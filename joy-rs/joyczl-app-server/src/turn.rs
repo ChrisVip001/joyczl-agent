@@ -104,6 +104,13 @@ pub async fn run_turn(
     // 本轮工作目录：协议给了就校验（hermes 的 fail-closed）。起轮之前就拒绝，
     // 不留下半个 turn。
     let turn_cwd = resolve_turn_cwd(&params.cwd)?;
+    // 真用过的目录才进「最近使用」（workspaces.json）—— 驾驶舱选择器的快捷入口。
+    if let Some(path) = &turn_cwd {
+        joyczl_config::workspaces::record_workspace(
+            &server.settings().home,
+            &path.display().to_string(),
+        );
+    }
 
     sink.notification(ServerNotification::TurnStarted(TurnStartedNotification {
         turn_id: turn_id.clone(),

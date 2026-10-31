@@ -19,6 +19,8 @@ import {
   setGoal,
   createFolder,
   fetchFs,
+  fetchRecents,
+  recordRecent,
   talk,
   uploadFile,
 } from "./api";
@@ -447,6 +449,8 @@ async function cwdPicker(): Promise<void> {
   let current = dom.cwd.value.trim();
   // 点开头的目录默认藏（dsh 的 showHidden），底部有固定开关。
   let showHidden = false;
+  // 「最近使用」：打开弹层时取一次（选定后会刷新）。
+  let recents = await fetchRecents().catch(() => [] as string[]);
 
   /** 祖先链每一跳都可点（dsh 的 crumbs）。非「/」开头的路径给不出链，退化为纯文本。 */
   function crumbs(path: string): HTMLElement {
@@ -483,6 +487,24 @@ async function cwdPicker(): Promise<void> {
     }
     current = listing.path;
 
+    const list = el("div", { class: "fslist" });
+    // 「最近使用」区：常去的目录不用再翻 —— 一键直达（dsh workspace 的灵魂）。
+    const here = listing.entries.map((entry) => entry.path);
+    const shortcuts = recents.filter((path) => path !== listing.path && !here.includes(path));
+    if (shortcuts.length > 0) {
+      const block = el("div", { class: "fsrecent" });
+      block.append(el("p", { class: "hint", text: "最近使用" }));
+      for (const path of shortcuts) {
+        const row = el("button", {
+          class: "fsrow",
+          text: `🕒 ${path}`,
+          type: "button",
+        });
+        row.addEventListener("click", () => void show(path));
+        block.append(row);
+      }
+      list.append(block);
+    }
     const rows = listing.entries.map((entry) => {
       const row = el("button", {
         class: "fsrow",
@@ -492,8 +514,7 @@ async function cwdPicker(): Promise<void> {
       row.addEventListener("click", () => void show(entry.path));
       return row;
     });
-    const list = el("div", { class: "fslist" });
-    if (rows.length === 0) {
+    if (rows.length === 0 && shortcuts.length === 0) {
       list.append(muted("这层没有子目录了。要选的就是当前显示的目录。"));
     } else {
       list.append(...rows);
@@ -521,6 +542,10 @@ async function cwdPicker(): Promise<void> {
     const pick = el("button", { class: "approve", text: "选这个目录", type: "button" });
     pick.addEventListener("click", () => {
       dom.cwd.value = listing.path;
+      // 记进「最近使用」—— 下次打开弹层直接在顶部。
+      void recordRecent(listing.path).then(() => {
+        recents = [listing.path, ...recents.filter((p) => p !== listing.path)].slice(0, 8);
+      });
       close();
       document.removeEventListener("keydown", esc);
     });

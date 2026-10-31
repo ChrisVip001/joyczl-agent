@@ -8,6 +8,7 @@
 
 pub mod models;
 pub mod routes;
+pub mod workspaces;
 
 use std::path::PathBuf;
 
