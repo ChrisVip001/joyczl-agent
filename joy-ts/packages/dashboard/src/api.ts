@@ -287,14 +287,30 @@ export async function uploadFile(file: File): Promise<string> {
  * 浏览器的文件夹选择器拿不到绝对路径，所以「像桌面应用那样选文件夹」
  * 由知道文件系统的服务端代劳 —— 只读、只列子目录。
  */
-export async function fetchFs(path: string | null): Promise<FsListing> {
+export async function fetchFs(path: string | null, hidden = false): Promise<FsListing> {
   const query = new URLSearchParams();
   if (path) query.set("path", path);
+  if (hidden) query.set("hidden", "1");
   const response = await apiFetch(`/api/fs?${query.toString()}`, {
     headers: { accept: "application/json" },
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as FsListing;
+}
+
+/**
+ * 在 parent 下新建一个子目录（dsh 的 createDirectory）：选择器里
+ * 「选目录」途中就能建目录，不用跳出弹层去开终端。名字纪律在服务端。
+ */
+export async function createFolder(parent: string, name: string): Promise<string> {
+  const query = new URLSearchParams({ path: parent, name });
+  const response = await apiFetch(`/api/fs/mkdir?${query.toString()}`, {
+    method: "POST",
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  const parsed = (await response.json()) as { path: string };
+  return parsed.path;
 }
 
 /** 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。 */

@@ -280,6 +280,33 @@ main {
 .fsrow:hover {
   background: var(--bg-inset);
 }
+/* 祖先链（dsh 的 crumbs）：每一跳都可点。 */
+.fscrumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  min-height: 24px;
+  white-space: nowrap;
+}
+.fsc {
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: var(--fs-xs);
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.fsc:last-child {
+  color: var(--fg);
+  font-weight: 600;
+}
+.fsc:hover {
+  background: var(--bg-inset);
+  color: var(--fg);
+}
 .bar.goal input {
   flex: 1;
   min-width: 0;

@@ -265,7 +265,7 @@ pub struct FsEntry {
 
 /// 列一个目录下的**子目录**（只读、只列目录 —— 选工作目录用不到文件）。
 /// 独立成纯函数是为了能直接单测，不必起一个 app-server。
-pub fn list_dirs(raw: &str) -> Result<FsListing, String> {
+pub fn list_dirs(raw: &str, include_hidden: bool) -> Result<FsListing, String> {
     let path = std::path::PathBuf::from(raw);
     if !path.is_absolute() {
         return Err(format!("'{raw}' 必须是绝对路径"));
@@ -282,8 +282,12 @@ pub fn list_dirs(raw: &str) -> Result<FsListing, String> {
                 return None;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            // 系统噪音目录藏掉：选择器里点进 /dev /proc 没有意义。
-            if name.starts_with('.') || name == "node_modules" || name == "target" {
+            // 点开头默认藏（dsh 的 hidden 旗标语义），开了开关才露出；
+            // 构建噪音（node_modules/target）无论开关都藏 —— 点进去没有意义。
+            if (name.starts_with('.') && !include_hidden)
+                || name == "node_modules"
+                || name == "target"
+            {
                 return None;
             }
             Some(FsEntry {
@@ -326,8 +330,60 @@ pub async fn fs_browse(
         .filter(|s| !s.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(default_browse_root);
-    match list_dirs(&raw) {
+    let include_hidden = params
+        .get("hidden")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+    match list_dirs(&raw, include_hidden) {
         Ok(listing) => Json(listing).into_response(),
+        Err(why) => failed(
+            StatusCode::BAD_REQUEST,
+            ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: why,
+                data: None,
+            },
+        ),
+    }
+}
+
+/// 在 parent 下建一个子目录，返回新目录的绝对路径（dsh 的 createDirectory
+/// verb）。独立成纯函数是为了能直接单测。
+///
+/// 名字纪律与 upload 的扩展名白名单同一条：**用户输入进不了路径形状** ——
+/// 不许分隔符、不许 `..`、不许点开头（建出来的目录不该默认隐身）、
+/// 长度封顶 64。
+pub fn create_subdir(parent_raw: &str, name: &str) -> Result<String, String> {
+    let parent = std::path::PathBuf::from(parent_raw);
+    if !parent.is_absolute() {
+        return Err(format!("父目录 '{parent_raw}' 必须是绝对路径"));
+    }
+    if !parent.is_dir() {
+        return Err(format!("父目录 '{parent_raw}' 不存在或不是目录"));
+    }
+    let name = name.trim();
+    let bad = |why: &str| format!("目录名 '{name}' 不合格：{why}");
+    if name.is_empty() || name.len() > 64 {
+        return Err(bad("1-64 个字符"));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.starts_with('.') {
+        return Err(bad("不能包含路径形状（分隔符、..、点开头）"));
+    }
+    let target = parent.join(name);
+    if target.exists() {
+        return Err(format!("'{name}' 在 {parent_raw} 下已经存在"));
+    }
+    std::fs::create_dir(&target).map_err(|why| format!("建不动：{why}"))?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+/// `POST /api/fs/mkdir?path=<父目录>&name=<目录名>` —— 选择器里的
+/// 「新建文件夹」。只读浏览之外唯一的一个写动作，名字过白名单。
+pub async fn fs_mkdir(Query(params): Query<std::collections::HashMap<String, String>>) -> Response {
+    let parent = params.get("path").cloned().unwrap_or_default();
+    let name = params.get("name").cloned().unwrap_or_default();
+    match create_subdir(&parent, &name) {
+        Ok(created) => Json(json!({ "path": created })).into_response(),
         Err(why) => failed(
             StatusCode::BAD_REQUEST,
             ErrorObject {

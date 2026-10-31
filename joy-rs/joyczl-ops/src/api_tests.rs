@@ -97,7 +97,7 @@ fn fs_browsing_lists_only_directories_and_hides_noise() {
     std::fs::create_dir(root.join(".hidden")).unwrap();
     std::fs::create_dir(root.join("target")).unwrap();
 
-    let listing = list_dirs(&root.to_string_lossy()).expect("列得动");
+    let listing = list_dirs(&root.to_string_lossy(), false).expect("列得动");
     let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(
         names,
@@ -109,6 +109,56 @@ fn fs_browsing_lists_only_directories_and_hides_noise() {
         Some(root.parent().unwrap().to_string_lossy().as_ref())
     );
 
-    assert!(list_dirs("相对/路径").is_err(), "相对路径拒绝");
-    assert!(list_dirs("/不存在/的/目录/joy").is_err());
+    assert!(list_dirs("相对/路径", false).is_err(), "相对路径拒绝");
+    assert!(list_dirs("/不存在/的/目录/joy", false).is_err());
+}
+
+/// 隐藏目录开关（dsh 的 showHidden）：默认藏点开头，开了才露；
+/// 构建噪音无论如何都不露。
+#[test]
+fn hidden_directories_show_only_when_asked() {
+    use super::list_dirs;
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    let root = dir.path();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    std::fs::create_dir(root.join("node_modules")).unwrap();
+    std::fs::create_dir(root.join("normal")).unwrap();
+
+    let hidden_off = list_dirs(&root.to_string_lossy(), false).expect("列得动");
+    let names: Vec<&str> = hidden_off.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["normal"], "默认只有普通目录");
+
+    let hidden_on = list_dirs(&root.to_string_lossy(), true).expect("列得动");
+    let names: Vec<&str> = hidden_on.entries.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&".git"), "开了开关能看到点开头");
+    assert!(!names.contains(&"node_modules"), "构建噪音永远不露");
+}
+
+/// 新建文件夹（dsh 的 createDirectory）：合格名字建得出来；路径形状
+/// （分隔符、..、点开头）、超长、重名、坏父目录都挡下 —— 用户输入
+/// 进不了路径形状，与 upload 的扩展名白名单同一条纪律。
+#[test]
+fn folder_creation_rejects_path_shapes() {
+    use super::create_subdir;
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    let root = dir.path().to_string_lossy().to_string();
+
+    let created = create_subdir(&root, "新项目").expect("建得出来");
+    assert!(std::path::Path::new(&created).is_dir());
+
+    for bad in [
+        "a/b",
+        "a\\b",
+        "..",
+        "x/../y",
+        ".hidden",
+        "",
+        "x".repeat(65).as_str(),
+    ] {
+        assert!(create_subdir(&root, bad).is_err(), "该挡：{bad:?}");
+    }
+    assert!(create_subdir(&root, "新项目").is_err(), "重名挡下");
+    assert!(create_subdir("/不存在/joy", "x").is_err(), "坏父目录挡下");
 }

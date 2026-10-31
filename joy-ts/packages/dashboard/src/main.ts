@@ -17,6 +17,7 @@ import {
   respondApproval,
   saveModel,
   setGoal,
+  createFolder,
   fetchFs,
   talk,
   uploadFile,
@@ -444,12 +445,35 @@ async function cwdPicker(): Promise<void> {
   document.addEventListener("keydown", esc);
 
   let current = dom.cwd.value.trim();
+  // 点开头的目录默认藏（dsh 的 showHidden），底部有固定开关。
+  let showHidden = false;
+
+  /** 祖先链每一跳都可点（dsh 的 crumbs）。非「/」开头的路径给不出链，退化为纯文本。 */
+  function crumbs(path: string): HTMLElement {
+    const bar = el("div", { class: "fscrumbs" });
+    if (!path.startsWith("/")) {
+      bar.append(el("code", { class: "fscur", text: path }));
+      return bar;
+    }
+    const parts = path.split("/").filter((segment) => segment !== "");
+    const root = el("button", { class: "fsc", text: "/", type: "button" });
+    root.addEventListener("click", () => void show("/"));
+    bar.append(root);
+    let prefix = "";
+    for (const segment of parts) {
+      prefix += `/${segment}`;
+      const crumb = el("button", { class: "fsc", text: segment, type: "button" });
+      crumb.addEventListener("click", () => void show(prefix));
+      bar.append(crumb);
+    }
+    return bar;
+  }
 
   async function show(path: string | null): Promise<void> {
     panel.replaceChildren(el("p", { class: "hint", text: "读目录中…" }));
     let listing: Awaited<ReturnType<typeof fetchFs>>;
     try {
-      listing = await fetchFs(path);
+      listing = await fetchFs(path, showHidden);
     } catch (error: unknown) {
       panel.replaceChildren(
         el("p", { class: "hint", text: `读不动：${String(error)}` }),
@@ -458,15 +482,6 @@ async function cwdPicker(): Promise<void> {
       return;
     }
     current = listing.path;
-
-    const title = el("div", { class: "fsbar" },
-      el("code", { class: "fscur", text: listing.path }),
-    );
-    if (listing.parent !== null) {
-      const up = el("button", { class: "ghost", text: "↑ 上一级", type: "button" });
-      up.addEventListener("click", () => void show(listing.parent));
-      title.append(up);
-    }
 
     const rows = listing.entries.map((entry) => {
       const row = el("button", {
@@ -484,13 +499,37 @@ async function cwdPicker(): Promise<void> {
       list.append(...rows);
     }
 
+    // 底部动作条：新建文件夹 + 隐藏开关 + 取消（dsh 的 footer 形态）。
+    const mkdir = el("button", { class: "ghost", text: "＋ 新建文件夹", type: "button" });
+    mkdir.addEventListener("click", () => {
+      const name = window.prompt(`在 ${current} 下新建文件夹：`);
+      if (name === null || name.trim() === "") return;
+      void createFolder(current, name.trim())
+        .then(() => show(current))
+        .catch((error: unknown) => window.alert(`建不了：${String(error)}`));
+    });
+    const hiddenToggle = el("button", {
+      class: "ghost",
+      text: showHidden ? "隐藏点开头" : "显示隐藏目录",
+      type: "button",
+    });
+    hiddenToggle.addEventListener("click", () => {
+      showHidden = !showHidden;
+      void show(current);
+    });
+
     const pick = el("button", { class: "approve", text: "选这个目录", type: "button" });
     pick.addEventListener("click", () => {
       dom.cwd.value = listing.path;
       close();
       document.removeEventListener("keydown", esc);
     });
-    panel.replaceChildren(title, list, el("div", { class: "row" }, pick, closeButton()));
+    panel.replaceChildren(
+      crumbs(listing.path),
+      list,
+      el("div", { class: "row" }, pick, closeButton()),
+      el("div", { class: "row" }, mkdir, hiddenToggle),
+    );
   }
 
   function closeButton(): HTMLButtonElement {
