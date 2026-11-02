@@ -1,0 +1,26 @@
+[package]
+name = "joyczl-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "THE GRAPH —— 节点、边、波次。graph 不替代 loop，它安排 loop 被调用的位置。"
+
+[lib]
+name = "joyczl_graph"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+chrono = { workspace = true }
+futures-util = { workspace = true }
+joyczl-loop = { workspace = true }
+joyczl-provider = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

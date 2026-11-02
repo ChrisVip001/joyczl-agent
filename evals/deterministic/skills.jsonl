@@ -1,0 +1,7 @@
+# 技能策略与显式引用：
+#   - allow-model-invocation: false 的技能**不会**被关键词隐式带进来；
+#   - 消息里写 $技能名 会强制载入它的正文，并且把引用从送给模型的消息里剥掉；
+#   - 引用了不存在的技能时给模型一句提示，而不是装作没看见。
+{"id":"explicit-skill-reference-loads-the-body","description":"$技能名 强制载入正文（不靠关键词重合），消息里只留剩下的字","files":{"skills/weekly-review/SKILL.md":"---\nname: weekly-review\ndescription: review the week\ndependencies: none\n---\n第一步：先看日历。\n"},"gate":{"retrieve":false,"query":"","reason":"note"},"turns":[{"message":"$weekly-review 帮我看看这周","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"好的。"}]}],"expect":{"last_prompt_contains":["第一步：先看日历。"],"last_prompt_not_contains":["$weekly-review"]}}
+{"id":"an-unknown-skill-reference-is-a-hint","description":"引用了不存在的技能：模型拿到一句提示，消息照常送出去","gate":{"retrieve":false,"query":"","reason":"note"},"turns":[{"message":"$nope 帮我看看这周","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"没有这个技能。"}]}],"expect":{"last_prompt_contains":["没有叫 'nope' 的技能"]}}
+{"id":"an-opted-out-skill-is-not-triggered-by-keywords","description":"allow-model-invocation: false：关键词重合也不隐式载入","files":{"skills/secret/SKILL.md":"---\nname: secret\ndescription: quarterly roadmap planning ritual\nallow-model-invocation: false\n---\n这段正文不该自己冒出来。\n"},"gate":{"retrieve":false,"query":"","reason":"note"},"turns":[{"message":"help me plan the quarterly roadmap","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"好的。"}]}],"expect":{"last_prompt_not_contains":["这段正文不该自己冒出来。"]}}

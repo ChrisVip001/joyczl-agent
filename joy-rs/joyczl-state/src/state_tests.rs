@@ -1,0 +1,387 @@
+//! state 的集成测试：真的开一个临时 SQLite 文件跑，in-memory 不行 ——
+//! sqlx 的连接池里每个连接会拿到各自独立的 `:memory:` 库。
+
+use sqlx::sqlite::SqlitePool;
+
+use crate::{Chat, Episodes, Facts};
+
+async fn temp_db(name: &str) -> SqlitePool {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let path = dir.path().join(name);
+    let pool = crate::open(&path).await.expect("打开数据库");
+    // TempDir 一出作用域就删目录，而 sqlite 还会建 -wal/-shm 文件。
+    // 测试进程反正马上就退出，让它泄漏比让数据库消失更安全。
+    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    pool
+}
+
+/// 重复的事实不入库：返回已存在的那条，并把「不是新记的」交出来。
+#[tokio::test]
+async fn a_duplicate_fact_is_not_stored_twice() {
+    let facts = Facts::new(temp_db("dedup.db").await);
+
+    let (first, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
+    assert!(is_new, "第一次当然是新记的");
+
+    // 一模一样：不新记，把已有的那条交回来。
+    let (again, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
+    assert!(!is_new);
+    assert_eq!(again.id, first.id);
+
+    // 大小写与首尾空白不算区别（模型与提炼的排版会有出入）；来源与类别也算不上
+    // 区别 —— 说的还是同一件事。
+    let (spaced, is_new) = facts
+        .add("alex", "  喜欢早会  ", "consolidation", "fact")
+        .await
+        .unwrap();
+    assert!(!is_new, "首尾空白不该让它变成新的一条");
+    assert_eq!(spaced.id, first.id);
+
+    // 内容真的不同才新记。
+    let (other, is_new) = facts
+        .add("alex", "喜欢下午的会", "user", "user")
+        .await
+        .unwrap();
+    assert!(is_new);
+    assert!(other.id > first.id);
+
+    assert_eq!(facts.recent(10, 0).await.unwrap().len(), 2, "库里就两条");
+}
+
+/// 实测校准估算：比值 = 实测 / 估算，夹在 0.5..=2.0。
+#[tokio::test]
+async fn context_observations_pair_measured_with_estimated() {
+    let chat = Chat::new(temp_db("context.db").await);
+    assert_eq!(
+        chat.context_factor("s").await.unwrap(),
+        None,
+        "没有记录就不校准"
+    );
+
+    chat.observe_context("s", 1000, 800).await.unwrap();
+    let factor = chat.context_factor("s").await.unwrap().unwrap();
+    assert!(
+        (factor - 1.25).abs() < 1e-9,
+        "实测比估算大 → 1.25，实际 {factor}"
+    );
+
+    // 覆盖写：只关心最近一次（模型/工具集变了，旧比值就不作数）。
+    chat.observe_context("s", 900, 1800).await.unwrap();
+    let factor = chat.context_factor("s").await.unwrap().unwrap();
+    assert!(factor < 1.0, "这次估多了：{factor}");
+
+    // 0 值不记（图路径不走 loop，拿 0 算比值会得出荒唐的倍率）。
+    chat.observe_context("zero", 0, 100).await.unwrap();
+    assert_eq!(chat.context_factor("zero").await.unwrap(), None);
+
+    // 极端值夹住：一次异常请求不该把预算带偏。
+    chat.observe_context("wild", 100_000, 10).await.unwrap();
+    assert_eq!(chat.context_factor("wild").await.unwrap(), Some(2.0));
+}
+
+/// 类别：认得的按原样存，不认得的一律落 `fact`（收敛在写入口）。
+#[tokio::test]
+async fn fact_kinds_are_normalised_at_the_write_entry() {
+    let facts = Facts::new(temp_db("kinds.db").await);
+    facts
+        .add("a", "写歪的类别", "user", "PREFERENCE")
+        .await
+        .unwrap();
+    let rows = facts.recent(10, 0).await.unwrap();
+    assert_eq!(rows[0].kind, "fact", "未知类别落兜底");
+
+    facts
+        .add("b", "正经类别", "user", "feedback")
+        .await
+        .unwrap();
+    let rows = facts.recent(10, 0).await.unwrap();
+    assert!(rows.iter().any(|row| row.kind == "feedback"));
+    // 大小写不敏感（模型可能写成 Feedback）。
+    facts
+        .add("c", "大小写", "user", "  Project ")
+        .await
+        .unwrap();
+    let rows = facts.recent(10, 0).await.unwrap();
+    assert!(rows.iter().any(|row| row.kind == "project"));
+}
+
+/// 提炼失败会**退避**：同一批坏行不该每轮都被重试一遍。
+#[tokio::test]
+async fn failed_consolidation_rows_are_backed_off() {
+    let chat = Chat::new(temp_db("backoff.db").await);
+    chat.append_exchange("m", "r", "default", "cli", None)
+        .await
+        .unwrap();
+    let rows = chat.unconsolidated().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let ids: Vec<i64> = rows.iter().map(|(id, _, _)| *id).collect();
+
+    chat.mark_consolidation_failed(&ids).await.unwrap();
+    assert_eq!(
+        chat.unconsolidated().await.unwrap().len(),
+        0,
+        "退避期间捞不到"
+    );
+
+    // 行还在（失败不丢日志），而且没有被标成已提炼。
+    assert_eq!(chat.session_history("default").await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn open_creates_the_schema() {
+    let pool = temp_db("schema.db").await;
+    let tables: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .fetch_all(&pool)
+            .await
+            .expect("查表名");
+    for expected in ["facts", "facts_fts", "episodes", "episodes_fts", "chat_log"] {
+        assert!(
+            tables.contains(&expected.to_string()),
+            "缺表 {expected}：{tables:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn facts_search_finds_by_keyword() {
+    let pool = temp_db("facts.db").await;
+    let facts = Facts::new(pool);
+    facts
+        .add("alex", "Alex prefers morning meetings", "user", "user")
+        .await
+        .unwrap();
+    facts
+        .add("project", "The Acme demo is on Friday", "user", "user")
+        .await
+        .unwrap();
+
+    let hit = facts.search("morning", 4).await.unwrap();
+    assert_eq!(hit.len(), 1, "应当只命中一条：{hit:?}");
+    assert_eq!(hit[0].subject, "alex");
+
+    let hit = facts.search("acme", 4).await.unwrap();
+    assert_eq!(hit[0].content, "The Acme demo is on Friday");
+}
+
+#[tokio::test]
+async fn search_never_errors_on_junk_input() {
+    let pool = temp_db("junk.db").await;
+    let facts = Facts::new(pool);
+    facts
+        .add("alex", "Alex prefers morning meetings", "user", "user")
+        .await
+        .unwrap();
+
+    // 检索门失败开放：这些输入一旦让 SQL 报错，就会退化成「每轮都检索」。
+    for junk in ["", "???", "\"", "a:b", "(unclosed", "*", "alex OR", "---"] {
+        let out = facts.search(junk, 4).await;
+        assert!(out.is_ok(), "{junk:?} 让检索报错了：{:?}", out.err());
+    }
+}
+
+#[tokio::test]
+async fn deleting_a_fact_keeps_the_index_in_sync() {
+    let pool = temp_db("delete.db").await;
+    let facts = Facts::new(pool);
+    facts
+        .add("alex", "Alex prefers morning meetings", "user", "user")
+        .await
+        .unwrap();
+    assert_eq!(facts.search("morning", 4).await.unwrap().len(), 1);
+
+    let removed = facts.forget_subject("alex").await.unwrap();
+    assert_eq!(removed, 1);
+    // 触发器没同步的话，这里会捞到一条指向已删除行的幽灵结果。
+    assert!(
+        facts.search("morning", 4).await.unwrap().is_empty(),
+        "FTS 索引没跟着删"
+    );
+}
+
+#[tokio::test]
+async fn episodes_search_and_recent() {
+    let pool = temp_db("episodes.db").await;
+    let eps = Episodes::new(pool);
+    eps.add("2026-09-01", "planned the Acme demo with Alex")
+        .await
+        .unwrap();
+    eps.add("2026-09-10", "booked a catch-up on Friday")
+        .await
+        .unwrap();
+
+    assert_eq!(eps.search("acme", 4).await.unwrap().len(), 1);
+
+    let recent = eps.recent(10).await.unwrap();
+    assert_eq!(recent[0].happened_at, "2026-09-10", "最近的应当排最前");
+}
+
+#[tokio::test]
+async fn chat_log_round_trip_and_consolidation_marking() {
+    let pool = temp_db("chat.db").await;
+    let chat = Chat::new(pool);
+    chat.append_exchange("hi", "hello", "default", "cli", None)
+        .await
+        .unwrap();
+    chat.append_exchange(
+        "remember alex likes mornings",
+        "noted",
+        "default",
+        "cli",
+        Some("{\"iterations\":1}"),
+    )
+    .await
+    .unwrap();
+
+    let pending = chat.unconsolidated().await.unwrap();
+    assert_eq!(pending.len(), 4, "4 行（2 轮 × user/assistant）");
+
+    // 认领即标记：认完就不该再有待提炼的行。
+    let claimed = chat.claim_unconsolidated().await.unwrap();
+    assert_eq!(claimed.len(), 4, "认领拿回自己认到的那 4 行");
+    assert!(chat.unconsolidated().await.unwrap().is_empty());
+
+    let history = chat.session_history("default").await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].0, "hi");
+}
+
+#[tokio::test]
+async fn sessions_are_just_labels_on_the_chat_log() {
+    let pool = temp_db("sessions.db").await;
+    let chat = Chat::new(pool);
+    chat.append_exchange("first topic", "a", "s1", "cli", None)
+        .await
+        .unwrap();
+    chat.append_exchange("second topic", "b", "s2", "cli", None)
+        .await
+        .unwrap();
+    chat.append_exchange("more", "c", "s2", "cli", None)
+        .await
+        .unwrap();
+
+    let sessions = chat.sessions().await.unwrap();
+    assert_eq!(sessions.len(), 2);
+    // s2 有更多消息，按 last_at 排序后应当在最前（同一秒内插入，靠 messages 兜底判断）
+    let s2 = sessions.iter().find(|s| s.id == "s2").expect("s2 存在");
+    assert_eq!(s2.messages, 4, "s2 有 2 轮 = 4 行");
+    assert_eq!(s2.title, "second topic", "标题应当是该会话第一条用户消息");
+}
+
+#[tokio::test]
+async fn messages_page_backwards_from_the_newest() {
+    let pool = temp_db("messages.db").await;
+    let chat = Chat::new(pool);
+    for round in 1..=2 {
+        chat.append_exchange(
+            &format!("问 {round}"),
+            &format!("答 {round}"),
+            "default",
+            "cli",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    chat.append_exchange(
+        "问 3",
+        "答 3",
+        "default",
+        "cli",
+        Some(r#"{"iterations":7}"#),
+    )
+    .await
+    .unwrap();
+    chat.append_exchange("别的会话", "不该混进来", "other", "cli", None)
+        .await
+        .unwrap();
+
+    // 最新的一页，**最新的在最前** —— 方向由用法决定：先拿最近一页，再往更早走。
+    let page = chat.messages("default", None, 2).await.unwrap();
+    let contents: Vec<&str> = page.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, ["答 3", "问 3"], "最新的那条该在最前");
+    assert_eq!(page[0].role, "assistant");
+
+    // 遥测原样带出来（列里的 JSON 文本，解析成什么形状是出口那一层的事）；
+    // user 行上没有它。
+    assert_eq!(page[0].meta.as_deref(), Some(r#"{"iterations":7}"#));
+    assert!(page[1].meta.is_none());
+
+    // 顺着最老那条的 id 往回：只拿到更早的，不含已经看过的那两行。
+    let older = chat
+        .messages("default", Some(page[1].id), 10)
+        .await
+        .unwrap();
+    let contents: Vec<&str> = older.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, ["答 2", "问 2", "答 1", "问 1"]);
+
+    // 会话是硬边界。
+    let other = chat.messages("other", None, 10).await.unwrap();
+    assert_eq!(other.len(), 2);
+    assert_eq!(other[0].content, "不该混进来");
+}
+
+#[tokio::test]
+async fn chinese_search_works_character_wise() {
+    let pool = temp_db("cjk.db").await;
+    let facts = Facts::new(pool);
+    facts
+        .add("阿明", "阿明喜欢早上的会议", "user", "user")
+        .await
+        .unwrap();
+
+    let hit = facts.search("早上", 4).await.unwrap();
+    assert_eq!(hit.len(), 1, "中文检索没命中：{hit:?}");
+}
+
+// ---- 滚动摘要的单调守卫 ----------------------------------------------------
+
+/// 摘要**只往前滚**：新的不被旧的盖，旧的也盖不掉新的。
+///
+/// 没有守卫时（`ON CONFLICT … DO UPDATE` 不带 WHERE），并发压缩会按**写入顺序**
+/// 决定谁留下 —— 于是用户可能拿到一份更旧的摘要，而界面毫无异常。
+#[tokio::test]
+async fn a_rollup_only_moves_forward() {
+    let chat = Chat::new(temp_db("rollup.db").await);
+
+    // 第一次：覆盖 5 轮。
+    assert!(chat.save_rollup("s", 5, "前五轮的摘要").await.unwrap());
+    // 更新的（10 轮）写进去。
+    assert!(chat.save_rollup("s", 10, "前十轮的摘要").await.unwrap());
+    let (covered, summary) = chat.load_rollup("s").await.unwrap().expect("有摘要");
+    assert_eq!(covered, 10);
+    assert_eq!(summary, "前十轮的摘要");
+
+    // 更旧的（7 轮）被挡下：库里那份仍然更新。
+    assert!(
+        !chat.save_rollup("s", 7, "第七轮的摘要").await.unwrap(),
+        "回退该被挡下"
+    );
+    let (covered, summary) = chat.load_rollup("s").await.unwrap().expect("有摘要");
+    assert_eq!(covered, 10, "没被旧的盖掉");
+    assert_eq!(summary, "前十轮的摘要");
+
+    // 同一 covered_turns 不算更新（不是严格大于）—— 重复写同一版没有意义。
+    assert!(!chat.save_rollup("s", 10, "又一版").await.unwrap());
+}
+
+/// 并发参数是真的配上了：**10 秒**等锁 + WAL。
+///
+/// 这两个 PRAGMA 决定「多进程同时写时是排队还是直接报 database is locked」——
+/// 它们默默失效过一次（改代码时被跳过），所以钉住数值，而不是只钉「设过了」。
+#[tokio::test]
+async fn the_pool_waits_for_locks_and_uses_wal() {
+    let pool = temp_db("pragmas.db").await;
+
+    let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(busy_timeout, 10_000, "等锁该是 10 秒（SQLite 官方建议值）");
+
+    let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(journal.to_lowercase(), "wal", "读不该被写堵住");
+}

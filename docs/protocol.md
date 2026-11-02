@@ -1,0 +1,107 @@
+# Protocol reference (app-server v2)
+
+English | [简体中文](protocol.zh.md)
+
+`joy app-server` speaks **newline-delimited JSON-RPC 2.0** on stdin/stdout:
+one request per line; responses and notifications interleave (notifications
+before the response). Every type is defined in
+`joyczl-protocol/src/protocol/v2.rs` (63 types) and generated into TypeScript
+(`schema/typescript/v2/`) and Python pydantic (`sdk/python/generated/`).
+**Changing the protocol requires `just write-app-server-schema`.**
+
+## Methods (13)
+
+| Method | Request → Response | Purpose |
+|---|---|---|
+| `turn/start` | `TurnStartParams` → `TurnStartResponse` | run one conversation turn; the response follows all notifications |
+| `turn/interrupt` | `TurnInterruptParams` → `TurnInterruptResponse` |
+| `goal/set` (set or clear a goal) and the `GoalRound` notification (one per
+judgement):
+
+```
+you>  /goal make the tests green
+       → goal/set  {sessionId, condition: "make the tests green"}
+       ← {active: true, condition: "make the tests green", roundsUsed: 0, maxRounds: 5}
+… the turn ends without satisfying it …
+       ← GoalRound {turnId, round: 1, maxRounds: 5, status: "continuing", reason: "two red"}
+… another round …
+       ← GoalRound {turnId, round: 2, maxRounds: 5, status: "satisfied", reason: "all green"}
+```
+
+`TurnMeta.goalStatus` / `goalRounds` carry the outcome and the count into the turn's metadata.
+
+- `routeReason` (optional): how this turn's model was chosen — `auto:reasoning → ds-r1` or `fallback: …` (see `model-routes.json` in configuration). Empty when nothing was chosen (fixed mode, or the routing picked the active profile).
+
+`approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | answer one approval request; `accepted: false` when it arrived too late | cancel a running turn; `interrupted:false` = already finished |
+| `session/new` | `SessionNewParams` → `SessionNewResponse` | new session label (creates nothing) |
+| `session/list` | `SessionListParams` → `SessionListResponse` | session list (cursor-paged) |
+| `session/messages` | `SessionMessagesParams` → `SessionMessagesResponse` | a conversation's messages, newest first, paging upward |
+| `memory/search` | `MemorySearchParams` → `MemorySearchResponse` | keyword search over facts + episodes |
+| `memory/list` | `MemoryListParams` → `MemoryListResponse` | recent facts (cursor-paged) |
+| `memory/list-episodes` | `MemoryListEpisodesParams` → `MemoryListEpisodesResponse` | recent episodes |
+| `memory/remember` | `MemoryRememberParams` → `MemoryRememberResponse` | store a fact |
+| `memory/forget` | `MemoryForgetParams` → `MemoryForgetResponse` | delete by subject |
+| `config/read` | `ConfigReadParams` → `ConfigReadResponse` | full configuration view |
+| `config/write` | `ConfigWriteParams` → `ConfigWriteResponse` | apply a patch, hot-reload (persisted to settings.json) |
+| `model/list` | `ModelListParams` → `ModelListResponse` | model catalog across 12 providers |
+| `model/profiles` | `ModelProfilesParams` → `ModelProfilesResponse` | configured profiles + the active one (**no secrets**, only a "where the key lives" pointer) |
+| `model/save` | `ModelSaveParams` → `ModelSaveResponse` | create/update a profile and make it active; `id` + `makeActive` alone = switch |
+| `model/remove` | `ModelRemoveParams` → `ModelRemoveResponse` | delete a profile and its credential |
+| `approval/log` | `ApprovalLogParams` → `ApprovalLogResponse` | the approval audit (migration 0011): the last 100 "ask-before-run" records, newest first. Four outcomes: `approved` / `denied` / `timeout` (nobody answered) / `voided` (turn ended). This is how a hub admin answers "who approved that rm -rf" afterwards |
+| `schedule/list` | `ScheduleListParams` → `ScheduleListResponse` | the schedule state snapshot (migration 0012): per-job `last_fired` / `claimed` / `catch_up` / `delivery`. Read-only — the scheduler owns writes. `claimed` non-empty means the last run was interrupted and the next scheduler boot will resolve it by `catch_up` |
+| `usage/summary` | `UsageSummaryParams` → `UsageSummaryResponse` | the usage ledger (migration 0010): per-model aggregates + totals. **Accounting only, no enforcement** — no quotas, no rate limits; under BYOK the money shows up on each user's own provider bill. In hub mode this is per-user accounting (one home, one ledger per user) |
+
+Conventions: methods are `<resource>/<method>` (singular resource); payloads
+are named `*Params` / `*Response` / `*Notification`; wire fields are
+camelCase; integers are `i32` only (`i64` maps to ts-rs `bigint` while
+`JSON.parse` yields `number` — a runtime mismatch); list methods always use
+`cursor`/`limit` → `data` + `next_cursor`.
+
+## turn/start notification sequence
+
+```
+turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCompleted*
+            → consolidationCompleted? → turnCompleted → (response)
+```
+
+`retry` can precede any model call (gate, loop, summarizer), so it is
+**insertable** rather than fixed in place.
+
+* `gateDecided`: the retrieval gate's ruling (retrieve/skip + reason + query).
+* `retry`: one retry (attempt, reason, delay). Emitted **every time** — a retry
+  is never silent; `meta.retries` carries the total.
+* `approvalRequested`: a command is waiting for approval (tool, the command
+  itself, why, deadline). Answer it with `approval/respond` or the turn stays
+  blocked; **no answer is a refusal**.
+* `textDelta`: streamed text increment; only with `stream:true`.
+* `cwd` (optional): the turn's working directory. Must be an absolute path that exists (fail-closed); `run_command` resolves its fallback chain as `args.cwd > cwd > process cwd`, and relative paths in `read_file`/`list_dir` resolve against it (session-level working-directory). Subagents inherit the parent turn's cwd.
+* `toolStarted` / `toolCompleted`: tool begin and end (duration, status).
+* `turnCompleted`: `reply`, `iterations`, `usage`, `meta` (gate / graph /
+  tools / model / provider / latency / interrupted / guardHits / retries).
+  The meta is persisted with the conversation.
+
+### `Fact.kind`
+
+What a memory is about: `user` / `feedback` / `project` / `reference` /
+`fact` (the fallback). It travels in `memory/search` and `memory/list`
+responses and in the retrieval context; `memory/remember` may send it, and an
+unknown value is normalised to `fact`.
+
+## Error codes
+
+| Code | Meaning |
+|---|---|
+| -32700 / -32600 / -32601 / -32602 / -32603 | standard JSON-RPC: parse / request / method not found / params / internal |
+| `-32000` PROVIDER_ERROR | model-side failure (missing key, 401, rate limit…), with what to do |
+| `-32001` TOOL_ERROR | tool execution failed (the error also returns to the model as text; the turn continues) |
+| `-32002` NOT_IMPLEMENTED | defined but not yet implemented (all 13 methods are implemented) |
+
+## Clients
+
+* TypeScript: `joy-ts/packages/client` (`StdioTransport` + `JoyClient`;
+  notifications dispatch on the `type` discriminant).
+* Python: `sdk/python/joyczl_agent` (`JoyClient.connect()` spawns the
+  subprocess, pydantic validates at runtime; discriminate notifications with
+  `n.type`, never isinstance).
+* The terminal REPL and dashboard drive the same method surface in-process
+  and over HTTP respectively.

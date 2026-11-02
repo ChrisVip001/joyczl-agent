@@ -1,0 +1,5 @@
+# 工具参数 schema 校验：不合法的参数在 handler 之前就被挡下，且报错具体到字段
+# （模型据此能改对）。第二条还钉住「被纠正后重试成功」这条真实路径。
+# 一行一个用例；脚本队列顺序 = 真实调用顺序（先门，再模型应答）。
+{"id":"schema-rejects-bad-arguments","description":"参数类型不对：schema 先挡下，报错带字段路径","gate":{"retrieve":false,"query":"","reason":"tool"},"responses":[{"tool_use":{"name":"save_note","args":{"subject":42,"content":"x"}}},{"text":"参数不对，我改成字符串再来一次。"}],"expect":{"tools_used":["save_note"],"tool_output_contains":["schema","subject"],"reply_contains":["再来一次"]}}
+{"id":"schema-bad-then-good","description":"模型被报错纠正后重试成功：第二次真的写进记忆","gate":{"retrieve":false,"query":"","reason":"tool"},"responses":[{"tool_use":{"name":"save_note","args":{"subject":"alex"}}},{"tool_use":{"name":"save_note","args":{"subject":"alex","content":"喜欢早会"}}},{"text":"记下了。"}],"expect":{"tools_used":["save_note","save_note"],"tool_output_contains":["已记住","schema"],"reply_contains":["记下了"]}}

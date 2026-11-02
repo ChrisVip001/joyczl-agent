@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // 这个包**不产出** JS：产物交给 esbuild（见 package.json 的 build）。
+    // 于是这里就是纯类型检查，基础配置可以不改 —— noEmit 和
+    // allowImportingTsExtensions 一起用着正好，协议 shim 可以直接引生成物的 .ts。
+    //
+    // 为什么不自己 tsc 出 JS：生成物在包的目录之外，而 tsc 的 rootDir
+    // 不允许程序里有外面的 .ts（TS6059）—— 那会逼着我们把生成物抄一份进来，
+    // 而抄一份就又开始漂移了，正是这套架构在消灭的东西。
+    "module": "esnext",
+    "moduleResolution": "bundler",
+
+    // 浏览器里没有 process / Buffer。不写 types 的话 @types/node 会被自动
+    // 带进来，于是那些东西在页面代码里也能通过类型检查 —— 等运行时才炸。
+    "types": [],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
+  },
+  "include": ["src/**/*.ts"]
+}

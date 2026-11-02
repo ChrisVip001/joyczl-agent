@@ -1,0 +1,2 @@
+# 仓库里这个目录是空的：真二进制由 `just build-python-bin` 从 joy-rs/target 拷进来，
+# 而编译产物不进版本库。

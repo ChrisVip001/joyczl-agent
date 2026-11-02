@@ -1,0 +1,13 @@
+{
+  "name": "@joy/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "app-server 的 TypeScript 客户端：起进程、收发帧、把通知分发给订阅者。",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

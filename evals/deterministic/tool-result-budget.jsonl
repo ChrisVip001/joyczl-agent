@@ -1,0 +1,4 @@
+# 轮内工具结果预算：把阈值调到极小，任何工具结果都会被换成桩 ——
+# 于是「模型看到的第二次请求里带的是桩」这件事可以被确定性断言。
+# 桩里必须写清省略了多少，以及完整输出落在哪儿（不静默）。
+{"id":"an-oversized-tool-result-is-stubbed-before-the-model-sees-it","description":"工具结果超预算就换桩，并指出完整输出在 spill/","settings":{"tool_result_total_chars":10,"tool_result_max_chars":10},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"tool_use":{"name":"save_note","args":{"subject":"alex","content":"喜欢早上的会议"}}},{"text":"记下了。"}],"expect":{"last_prompt_contains":["已截断","完整输出在 spill/"]}}

@@ -1,0 +1,7 @@
+# 子代理：默认关（模型连它的名字都看不见）、开了能把活派出去并只拿回结论、
+# 而子代理**不能再派生**（它的工具表里根本没有 delegate_task）。
+# 脚本队列 = 真实调用顺序：门 → 父（工具调用）→ 子代理内部的模型调用 → 父（收尾）。
+# 子代理与父共用同一个模型，所以它那次调用也从这个队列里取。
+{"id":"delegate-off-by-default","description":"没开 JOY_DELEGATE：工具不存在，模型调它得到诚实的文本","gate":{"retrieve":false,"query":"","reason":"tool"},"responses":[{"tool_use":{"name":"delegate_task","args":{"task":"查一下"}}},{"text":"这台机器上还没有开启子代理。"}],"expect":{"tools_used":["delegate_task"],"tool_output_contains":["没有叫 'delegate_task' 的工具"]}}
+{"id":"delegate-hands-off-a-task","description":"开了之后派活，只把结论带回来（父轮不接收子代理的完整消息）","settings":{"delegate_enabled":true},"gate":{"retrieve":false,"query":"","reason":"task"},"responses":[{"tool_use":{"name":"delegate_task","args":{"task":"查一下今天的安排"}}},{"text":"十点有会。"},{"text":"子代理说十点有会。"}],"expect":{"tools_used":["delegate_task"],"tool_output_contains":["子代理回话了","十点有会"],"reply_contains":["十点有会"]}}
+{"id":"a-subagent-cannot-delegate-again","description":"子代理的工具表里没有 delegate_task —— 递归派生结构性不存在","settings":{"delegate_enabled":true},"gate":{"retrieve":false,"query":"","reason":"task"},"responses":[{"tool_use":{"name":"delegate_task","args":{"task":"把这件活再分出去"}}},{"tool_use":{"name":"delegate_task","args":{"task":"再分一层"}}},{"text":"我派不出去，直接给结论：四。"},{"text":"子代理说答案是四。"}],"expect":{"tools_used":["delegate_task"],"tool_output_contains":["delegate_task（失败）"],"reply_contains":["四"]}}

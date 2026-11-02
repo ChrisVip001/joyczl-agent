@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Joy 驾驶舱</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="dot" aria-hidden="true"></span>
+        <h1>Joy</h1>
+        <select class="pill" id="model" aria-label="切换模型"></select>
+      </div>
+      <div class="right">
+        <span class="path" id="home"></span>
+        <span class="stamp" id="stamp"></span>
+        <button class="ghost" id="refresh" type="button">刷新</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="chat">
+        <div class="bar">
+          <p class="hint">
+            会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
+          </p>
+          <input
+            id="cwd"
+            class="cwd"
+            type="text"
+            placeholder="工作目录（可选）—— 命令与相对路径都按它解析"
+            aria-label="本轮工作目录"
+            spellcheck="false"
+          />
+          <button class="ghost" id="older" type="button" hidden>更早的 ↑</button>
+        </div>
+        <div class="bar goal">
+          <input
+            id="goal"
+            type="text"
+            placeholder="目标（比如：让测试全绿）。没达成会自动续轮，直到你说撤掉"
+            aria-label="目标"
+          />
+          <button class="ghost" id="goal-set" type="button">设目标</button>
+          <button class="ghost" id="goal-clear" type="button">撤掉</button>
+          <span class="hint" id="goal-state"></span>
+        </div>
+        <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
+        <!-- 运行状态三态：
+             等你 = 静止一行；思考 = shimmer；干活 = 工具名。hidden 由 main 管。 -->
+        <div class="statusline" id="status" hidden aria-live="polite"></div>
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="staged" id="staged" hidden></div>
+          <input id="file" type="file" multiple hidden />
+          <button
+            class="ghost attach"
+            id="attach"
+            type="button"
+            title="附上文件（20MB 以内；模型会自己去读）"
+          >
+            ＋
+          </button>
+          <textarea
+            id="input"
+            rows="1"
+            placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
+            aria-label="消息"
+          ></textarea>
+          <button id="send" type="submit">发送</button>
+        </form>
+      </section>
+
+      <aside class="panels">
+        <!-- 数据即导航：tab 就是这份数组，
+             加一个面板 = HTML 加一节 + main.ts 的 NAV 加一行。 -->
+        <nav class="tabs" aria-label="面板">
+          <button class="tab active" data-tab="overview" type="button">概览</button>
+          <button class="tab" data-tab="memory" type="button">记忆</button>
+          <button class="tab" data-tab="usage" type="button">用量</button>
+          <button class="tab" data-tab="approvals" type="button">审批</button>
+          <button class="tab" data-tab="schedules" type="button">定时</button>
+          <button class="tab" data-tab="model" type="button">模型</button>
+        </nav>
+
+        <section class="panel active" id="panel-overview">
+          <div class="body" id="overview"></div>
+        </section>
+        <section class="panel" id="panel-memory" hidden>
+          <div class="body" id="memory"></div>
+        </section>
+        <section class="panel" id="panel-usage" hidden>
+          <div class="body" id="usage"></div>
+        </section>
+        <section class="panel" id="panel-approvals" hidden>
+          <div class="body" id="approvals"></div>
+        </section>
+        <section class="panel" id="panel-schedules" hidden>
+          <div class="body" id="schedules"></div>
+        </section>
+        <section class="panel" id="panel-model" hidden>
+          <div class="body">
+            <p class="hint" id="mp-state">当前：—</p>
+            <select id="mp-picker" aria-label="已配置的模型"></select>
+            <input
+              id="mp-id"
+              type="text"
+              placeholder="名字（比如 ds、公司-openai）"
+              aria-label="配置名字"
+            />
+            <input
+              id="mp-provider"
+              type="text"
+              placeholder="厂商（deepseek / openai / ollama…）"
+              aria-label="厂商"
+            />
+            <input
+              id="mp-model"
+              type="text"
+              placeholder="模型（留空用厂商默认）"
+              aria-label="模型"
+            />
+            <input
+              id="mp-key"
+              type="password"
+              autocomplete="off"
+              placeholder="密钥，或 env:DEEPSEEK_API_KEY 这种变量名"
+              aria-label="密钥"
+            />
+            <div class="row">
+              <button class="ghost" id="mp-save" type="button">保存并切换</button>
+              <button class="ghost" id="mp-remove" type="button">删除这套</button>
+            </div>
+            <p class="hint">
+              密钥优先进系统钥匙串；Windows 与没有钥匙串时会退回明文文件
+              （0600）—— 保存后这里会如实说是哪一种。
+            </p>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

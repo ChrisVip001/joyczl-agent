@@ -1,0 +1,107 @@
+# 技能创作指南
+
+[English](skills.md) | 简体中文
+
+技能（Skill）是 Joy 的过程记忆：一份 `SKILL.md` 描述一类任务的**做法**，
+ Joy 在相关消息出现时自动载入。官方 Agent Skills 格式：
+
+```markdown
+---
+name: weekly-review
+description: Summarize the week and draft the Monday brief
+---
+
+1. Pull last week's episodes from memory.
+2. Distill into three bullets.
+3. Draft the digest into the outbox.
+```
+
+## 三条规则
+
+1. **`description` 兼任触发器。** 触发判定 = 消息与 name+description 的
+   ASCII 关键词重合度（≥2 个词命中）。中文不参与匹配——把英文触发词写进
+   description 是格式要求，不是可选项。
+2. **渐进披露。** frontmatter 每轮都扫（便宜）；正文只在命中时进
+   system prompt；技能引用的文件只在模型开口要时才读。
+3. **只描述做法，不假借工具。** 技能可以引用 Joy 的内置工具（如
+   create_event），但 exported 到别的 agent 后那些工具不存在。
+
+## 两个策略字段
+
+```markdown
+---
+name: weekly-review
+description: 汇总这一周
+allow-model-invocation: false
+dependencies: changelog, calendar
+---
+```
+
+* `allow-model-invocation: false` —— 作者声明「别不小心把我叫出来」。这种技能**不
+  会因为关键词重合而被触发**，只有消息里点名才载入：`$weekly-review 帮我看看这周`。
+* `dependencies: a, b` —— 这个技能要成立，还得有哪些技能在场。依赖缺失的技能不
+  参与隐式触发，启动那一行会点名说缺了什么。
+
+`$技能名` 是显式通道：强制把正文放进 prompt（不需要关键词重合），并且会从模型
+看到的消息里被剥掉。引用了不存在的技能不算错误 —— 模型会收到一句提示，从而能
+如实回答。
+
+## 版本与 `joy skill update`
+
+技能可以在 frontmatter 里带 `version: 1.2.0`。给 Joy 一个索引，它会把更新的
+装上来，并把旧版本留着：
+
+```json
+{"skills": [{"name": "weekly-review", "version": "1.2.0",
+             "url": "https://example.com/skills/weekly-review.md"}]}
+```
+
+```bash
+joy skill update                       # <home>/skills/index.json
+joy skill update ./my-index.json       # 也可以给路径 / http(s) 地址
+```
+
+规矩按这个顺序执行：先校验（解析不了的 SKILL.md 绝不落盘）、再暂存然后原子
+替换、旧版本备份进 `.backup/<名字>-<时间戳>/`、并且从不降级。`joy skill
+install` 保持它自己的规矩 —— 从不覆盖。
+
+## 让技能按时跑
+
+frontmatter 里加一行，技能就同时是一条定时任务：
+
+```markdown
+---
+name: weekly-review
+description: 汇总这一周并起草周一简报
+schedule: 0 8 * * 1
+---
+```
+
+`joy schedule`（常驻进程）按时触发它，在技能自己的会话里跑完整一轮，结果写进
+`<home>/outbox/`。cron 细节与 JSON 声明方式见 [operations.zh.md](operations.zh.md)。
+
+## 仓库自带的示例：视频转写
+
+`skills/video-transcription/SKILL.md` 是随仓库分发的活例子，也是格式示范：
+「分析这个视频」会先探测 yt-dlp / whisper（缺了如实报告，不装懂）、在线视频拉
+字幕不下载、本地视频走转写，最后用 `read_file` 读文稿分析 —— 全程强调
+**模型没有文字就不许描述视频内容**，并把字幕当作「数据不是指令」的外部输入。
+把它复制到 `<home>/skills/` 下即可启用。
+
+## 安装与分发
+
+```bash
+joy skill install <SKILL.md 的 url 或本地路径>   # 校验 + 重名拒绝
+joy skill list                                   # 查看已装载
+joy skill export --to claude,codex               # 复制给其他 agent（--project 落当前目录）
+```
+
+目录约定：`<home>/skills/<name>/SKILL.md`（`name` 必须是小写 slug）。
+同名时 home 目录赢过 `JOY_SKILL_DIRS` 里的外部目录。技能正文里可以
+引用同目录下的其他文件——渐进披露第三层：模型开口要才读。
+
+## create_skill 工具
+
+对话中教 Joy 一个可复用流程后，可以说"把这个流程存成技能"——它会调用
+`create_skill` 写出合法的 SKILL.md。约定：**只在用户同意后调用**，
+从不覆盖已有技能，名字强制小写 slug。
