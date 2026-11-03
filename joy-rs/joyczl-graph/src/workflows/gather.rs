@@ -1,8 +1,8 @@
-//! gather 图工作流 —— 晨报，真正配得上「图」的那个工作流。
+//! The gather graph workflow — the morning report, the one that truly earns "graph".
 //!
-//! 每天早上都是同样四个问题：仓库里开着什么、外面在说什么、今天排了什么、
-//! 我已经知道什么。这张单子不是发现的 —— 醒来之前就知道。让模型一个工具
-//! 一个工具地摸出来什么也买不到，还多花四个来回，赶上状态差还会漏一个。
+//! Every morning asks the same four questions: what's open in the repo, what's being
+//! said out there, what's scheduled today, what do I already know. The list isn't
+//! discovered — it's known before waking up. Feeling around tool by tool buys nothing.
 //!
 //! ```text
 //! START ─┬─ scan_github  ─┐
@@ -11,22 +11,22 @@
 //!        └─ scan_memory  ─┘                    └──── quiet ──────► END
 //! ```
 //!
-//! 四个 scan 互相不依赖，引擎把它们放进同一波并行跑 —— 这就是图在这里的
-//! 全部论证：形状事先知道，所以画得出来；画出来之后，独立的部分一眼独立。
+//! The four scans don't depend on each other; the engine runs them in one parallel wave —
+//! the whole argument for a graph here: the shape is known, so it can be drawn.
 //!
-//! 本文件遵守的两条铁律（都是承重墙）：
+//! Two iron rules this file obeys (both load-bearing):
 //!
-//! 1. **只提议，绝不行动。** 图里没有 agent 节点、没有 loop、没有
-//!    ToolRegistry。唯一的模型调用是一次裸 `create`，**不带 tools 参数**
-//!    —— 模型手里根本没有可用来发送、合并、创建任何东西的 schema。
-//!    不是「被嘱咐别做」，是「做不了」。全图唯一的写，是 outbox 里
-//!    一个给人看的 markdown 文件。
+//! 1. **Propose only, never act.** No agent node, no loop, no ToolRegistry in the
+//!    graph. The only model call is a bare `create`, **with no tools parameter** —
+//!    the model holds no schema for sending, merging, or creating anything. Not
+//!    "told not to" but "unable to". The graph's only write is a markdown file
+//!    in the outbox, for a human to read.
 //!
-//! 2. **每条分支自己兜住自己的失败。** 抛错的节点不触发任何边，
-//!    synthesize 的依赖就永远凑不齐，整趟跑下来什么都没有 —— 没报错、
-//!    没晨报、空 outbox。对晨报来说，沉默是最坏的失败方式，所以每个
-//!    scan 失败时返回**诚实的文字**（"unavailable (…)"）而不是报错。
-//!    见下面每个节点的 safe 包装。
+//! 2. **Each branch contains its own failure.** A node that errors fires no edges,
+//!    so synthesize's dependencies never complete and the whole run yields nothing —
+//!    no error, no report, an empty outbox. For a morning report, silence is the
+//!    worst failure mode, so every scan returns **honest text**
+//!    ("unavailable (…)") instead of an error. See each node's safe wrapper below.
 
 use std::sync::Arc;
 
@@ -35,8 +35,8 @@ use serde_json::json;
 
 use crate::{writes, Boxed, Graph, GraphError, Node, NodeCtx, NodeWrites, State, Topology, END};
 
-/// 每个 scan 只写带自己前缀的键。并行节点写同一个键会触发引擎的
-/// GraphStateCollision —— 那是兜底；让审阅者一眼能核对的约定才是防线。
+/// Each scan only writes keys carrying its own prefix. Parallel nodes writing the same
+/// key trips GraphStateCollision — the backstop; the reviewer-checkable convention is the defense.
 pub const DIGEST_PROMPT: &str = r#"You are preparing a morning briefing for the maintainer of an
 open-source project. Below is everything gathered a moment ago.
 
@@ -61,12 +61,12 @@ You are DRAFTING A PROPOSAL for a human to act on. You have not done anything
 and cannot do anything — never write as if you have replied, merged, or sent.
 Be brief. If a section gathered nothing, say so in a few words and move on."#;
 
-// ---- 注入的可调用体 ---------------------------------------------------------
+// ---- Injected callables ------------------------------------------------------
 //
-// 跟 triage 同一套做法：测试用脚本化的桩，gather_topology() 用桩建图只为
-// describe()，CLI 把真实现绑上来。scan 是 async 的（真实现里它们要跑子进程
-// 和 HTTP）；`Boxed<T>` 的 Err(String) 就是失败原因 —— 节点把它翻译成
-// 诚实的文字，见 `unavailable`。
+// Same approach as triage: tests use scripted stubs, gather_topology() builds a
+// stubbed graph just for describe(), the CLI binds real implementations. Scans are
+// async (real ones spawn subprocesses and HTTP); `Boxed<T>`'s Err(String) is the
+// failure reason — nodes translate it into honest text, see `unavailable`.
 
 pub type GithubScanFn = Arc<dyn Fn() -> Boxed<(String, i64, i64)> + Send + Sync>;
 pub type WebScanFn = Arc<dyn Fn() -> Boxed<String> + Send + Sync>;
@@ -75,11 +75,11 @@ pub type MemoryScanFn = Arc<dyn Fn() -> Boxed<String> + Send + Sync>;
 pub type SynthFn = Arc<dyn Fn(State) -> Boxed<String> + Send + Sync>;
 pub type DraftFn = Arc<dyn Fn(State) -> Boxed<String> + Send + Sync>;
 
-/// 路由器：对 scan 写回的**计数**做判断 —— 永远不对摘要的散文措辞做路由。
+/// The router: decides on the **counts** scans write back — never on digest prose.
 ///
-/// 引擎的规矩是「路由器是代码，不是模型」。拿模型的措辞当路由条件，等于把
-/// 控制流交给模型，而且每条分支都得配一段脚本应答才能测。计数是精确的、
-/// 便宜的，测试可以直接驱动。
+/// The engine's rule is "the router is code, not a model". Routing on the model's
+/// wording hands control flow to the model, and every branch then needs a scripted
+/// reply to be testable. Counts are exact, cheap, and directly drivable in tests.
 pub fn needs_action(state: &State) -> String {
     let pending = state.i64("gh_open_prs").unwrap_or(0) > 0
         || state.i64("gh_open_issues").unwrap_or(0) > 0
@@ -91,14 +91,14 @@ pub fn needs_action(state: &State) -> String {
     }
 }
 
-/// scan 失败时的诚实文案 —— 「unavailable」本身就是信息，比沉默强。
+/// The honest copy when a scan fails — "unavailable" is itself information, better than silence.
 fn unavailable(why: &str) -> String {
     format!("unavailable ({why})")
 }
 
-/// scan 节点的通用形状：跑一个 async scan，Ok → 成功的键值，
-/// Err → 失败的键值（诚实文案 / 归零）。**每个 scan 自己兜住自己的失败**
-/// 这条规矩，模板只写一遍。
+/// The generic shape of a scan node: run an async scan; Ok → the success keys,
+/// Err → the failure keys (honest copy / zeros). The rule **every scan contains
+/// its own failure** is written once, in this template.
 fn scan_fn<V: 'static>(
     scan: Arc<dyn Fn() -> Boxed<V> + Send + Sync>,
     on_ok: impl Fn(V) -> NodeWrites + Clone + Send + Sync + 'static,
@@ -116,7 +116,7 @@ fn scan_fn<V: 'static>(
     })
 }
 
-/// 单文本 scan：结果（或 unavailable 文案）写进一个键。
+/// A single-text scan: the result (or the unavailable copy) goes into one key.
 fn text_scan_fn(
     key: &'static str,
     scan: Arc<dyn Fn() -> Boxed<String> + Send + Sync>,
@@ -187,7 +187,7 @@ pub fn build_gather_graph(
         text_scan_fn("mem_text", memory_fn),
     ))?;
 
-    // 唯一的模型调用，**没有 tools**。见模块注释里的铁律 1。
+    // The only model call, **no tools**. See iron rule 1 in the module comment.
     let synth = synth_fn.clone();
     g.add_node(Node::new("synthesize", "llm", {
         Arc::new(move |ctx: NodeCtx| {
@@ -200,7 +200,7 @@ pub fn build_gather_graph(
         })
     }))?;
 
-    // 全图唯一的写，而且是一个给人打开的文件。
+    // The graph's only write, and it's a file opened by a human.
     let draft = draft_fn.clone();
     g.add_node(Node::new("draft_digest", "tool", {
         Arc::new(move |ctx: NodeCtx| {
@@ -213,14 +213,14 @@ pub fn build_gather_graph(
         })
     }))?;
 
-    // 四个 scan 互不依赖 → 同一波并行；synthesize 等全部四个到齐。
+    // The four scans are mutually independent → one parallel wave; synthesize waits for all four.
     for scan in ["scan_github", "scan_web", "scan_calendar", "scan_memory"] {
         g.entry(&[scan])?;
         g.add_edge(scan, "synthesize")?;
     }
 
-    // 路由器挂在 synthesize 上：它就是那道汇合的墙，triage 里那个
-    // 单独的 gather 节点在这儿是死重。
+    // The router hangs on synthesize: it is the meeting wall; triage's separate
+    // gather node would be dead weight here.
     g.add_router(
         "synthesize",
         Arc::new(needs_action),
@@ -231,7 +231,7 @@ pub fn build_gather_graph(
     Ok(g)
 }
 
-/// 拓扑即数据，给 dashboard 用 —— 用桩建图，从不运行。
+/// Topology as data, for the dashboard — builds the graph with stubs, never runs it.
 pub fn gather_topology() -> Topology {
     let noop_github: GithubScanFn = Arc::new(|| Box::pin(async { Ok((String::new(), 0, 0)) }));
     let noop_web: WebScanFn = Arc::new(|| Box::pin(async { Ok(String::new()) }));
@@ -248,13 +248,13 @@ pub fn gather_topology() -> Topology {
         noop_draft,
     ) {
         Ok(graph) => graph.describe(),
-        // 走到这里说明图本身写错了，而那张图是写死在这个文件里的。
+        // Reaching here means the graph itself is wrong — and it is hard-coded in this file.
         Err(error) => panic!("gather 图写错了：{error}"),
     }
 }
 
-/// 用真 provider 拼一次 synthesize 的请求 —— CLI 的绑定用它，
-/// 保持着「无 tools」那条铁律的最后一道关口。
+/// Assembles one synthesize request with the real provider — the CLI's binding
+/// uses it, keeping the final checkpoint of the "no tools" iron rule.
 pub fn synth_request(model: &str, state: &State) -> CreateRequest {
     let fill = |key: &str| state.str(key).unwrap_or_default().to_string();
     let prompt = DIGEST_PROMPT
@@ -271,8 +271,8 @@ pub fn synth_request(model: &str, state: &State) -> CreateRequest {
     }
 }
 
-/// 供测试断言「并行节点写不相交的键」用的清单 ——
-/// 每个节点名和它允许写的键前缀。
+/// The checklist tests use to assert "parallel nodes write disjoint keys" —
+/// each node name and the key prefixes it may write.
 pub fn scan_owns(scan: &str) -> &'static [&'static str] {
     match scan {
         "scan_github" => &["gh_text", "gh_open_prs", "gh_open_issues"],

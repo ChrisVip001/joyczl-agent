@@ -1,13 +1,13 @@
-//! stdio 传输：一行一条 JSON-RPC 消息。
+//! The stdio transport: one JSON-RPC message per line.
 //!
-//! 选换行分隔 JSON 而不是 Content-Length 分帧，是因为它既能被
-//! `echo '…' | joy app-server` 手工调试，也能被任何语言的三行代码接上
-//! （写一行、读一行）。LSP/MCP 那套分帧带来的复杂度，在这个规模上
-//! 换不到对等的好处。
+//! Newline-delimited JSON was chosen over Content-Length framing because it can be hand-debugged with
+//! `echo '…' | joy app-server`, and connected from any language in three lines of code
+//! (write a line, read a line). The complexity of LSP/MCP-style framing buys nothing comparable
+//! at this scale.
 //!
-//! **stdout 只有一个 writer 在写。** 请求循环把通知和应答都塞进通道，
-//! writer 按序落盘并逐帧 flush —— 流式的 `textDelta` 因此能一条一条
-//! 到达浏览器，而不会跟应答交错或写坏。
+//! **stdout has exactly one writer.** The request loop pushes notifications and responses into the
+//! channel, and the writer persists them in order, flushing frame by frame — so the streamed
+//! `textDelta`s arrive at the browser one by one, without interleaving with responses or corrupting lines.
 
 use anyhow::Result;
 use joyczl_protocol::{
@@ -22,7 +22,7 @@ use crate::{handle, EventSink, Frame, Server};
 pub async fn run_stdio(server: Server) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Frame>();
 
-    // 唯一的 stdout writer。
+    // The one and only stdout writer.
     let writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
         while let Some(frame) = rx.recv().await {
@@ -41,7 +41,7 @@ pub async fn run_stdio(server: Server) -> Result<()> {
                 || stdout.write_all(b"\n").await.is_err()
                 || stdout.flush().await.is_err()
             {
-                // 客户端断了：writer 退出，通道里的剩余帧随之丢弃。
+                // The client is gone: the writer exits, and remaining frames in the channel are dropped with it.
                 break;
             }
         }
@@ -54,23 +54,23 @@ pub async fn run_stdio(server: Server) -> Result<()> {
             continue;
         }
 
-        // 解析不了请求时 id 无从得知（JSON-RPC 规定此时 id 为 null），
-        // 所以 parse error 走单独一支。
+        // When the request cannot be parsed, the id is unknowable (JSON-RPC says id is null then),
+        // so parse errors take their own branch.
         let sink = EventSink::new(tx.clone());
         match serde_json::from_str::<JsonRpcRequest>(line) {
             Ok(request) => {
                 if request.method == joyczl_protocol::methods::TURN_START {
-                    // 只有 turn/start 需要并发：它一跑几十秒，read 循环必须
-                    // 继续读 —— 否则 turn/interrupt 这类快请求永远进不来，
-                    // 打断也就无从谈起。
+                    // Only turn/start needs concurrency: it runs for tens of seconds, so the read loop must
+                    // keep reading — otherwise fast requests like turn/interrupt never get in, and
+                    // interrupting becomes impossible.
                     let server = server.clone();
                     tokio::spawn(async move {
                         handle(&server, request, sink).await;
                     });
                 } else {
-                    // 其余方法照旧按序处理：脚本一行一行喂进来时，「上一句
-                    // 的写入下一句查得到」是合理预期，乱序会让冒烟测试里
-                    // 的 remember → search → forget 互相踩脚。
+                    // The other methods are handled in order as before: when a script feeds lines one by one,
+                    // "the previous line's write is visible to the next line's query" is a fair expectation;
+                    // reordering would make remember → search → forget in smoke tests step on each other.
                     handle(&server, request, sink).await;
                 }
             }
@@ -86,7 +86,7 @@ pub async fn run_stdio(server: Server) -> Result<()> {
         }
     }
 
-    // 请求循环结束（stdin 关闭）：放手让 writer 把通道里剩的帧写完再退。
+    // The request loop is over (stdin closed): let go and let the writer finish the remaining frames before exiting.
     drop(tx);
     let _ = writer.await;
     Ok(())

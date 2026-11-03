@@ -14,76 +14,76 @@ import type { LarkFrame, LarkFrameHeader } from "./lark-proto.ts";
 export type { Responder } from "./bridge.ts";
 
 /**
- * 飞书（Lark）适配器 —— **长连接**，不用公网地址。
+ * The Lark (Feishu) adapter — **long connection**, no public address needed.
  *
- * 这是四家里协议最别扭的一家，别扭在两处：
+ * The most awkward protocol of the four, awkward in two ways:
  *
- * 1. **帧不是 JSON，是飞书私有的 protobuf**（`pbbp2`）。所以旁边多了一个
- *    `lark-proto.ts`：只解这一个消息的手写编解码。官方给的路子是引 SDK，而这个
- *    项目从 Discord 那家起就没引过平台的 SDK —— 为了一个消息拖进来一整个
- *    protobuf 运行时，代价比收益大。
- * 2. **要先拿地址再去连**。不是打开一个固定的 wss 地址就完事：得先拿
- *    AppID/AppSecret 换一个**带一次性票据的**地址，再连那个。换来的地址里有
- *    `service_id`，之后每一帧都得带上它。
+ * 1. **Frames aren't JSON but Lark's private protobuf** (`pbbp2`). Hence the neighboring
+ *    `lark-proto.ts`: a handwritten codec for this one message. The official route is pulling in
+ *    an SDK, but this project hasn't pulled in a platform SDK since Discord — a whole protobuf
+ *    runtime for one message costs more than it buys.
+ * 2. **Fetch the address before connecting**. Not just opening a fixed wss URL: trade
+ *    AppID/AppSecret for an address **carrying a one-time ticket**, then connect to that. The
+ *    address contains a `service_id` that every later frame must carry.
  *
- * 顺带一个跟微信正好相反的对照：**飞书把「先应答、后回答」写成了明文规矩**
- * （收到数据帧要在 3 秒内回一个 ACK，答复另走 HTTP 发）。微信那边我们只能自己
- * 掐一个 4 秒的表。所以这里没有竞速 —— 收到帧就先把 ACK 拍回去，然后慢慢想。
+ * A contrast with WeChat, exactly reversed: **Lark wrote "ack first, answer later" into the
+ * rules** (a data frame must be ACKed within 3 seconds; the reply goes out over HTTP). WeChat
+ * made us time a 4-second watch ourselves. So no race here — ACK immediately, then think.
  */
 
 /**
- * 一条消息的字数上限。
+ * Character cap for one message.
  *
- * 飞书文本消息的请求体上限是 **150KB**，超了报 `230025`。30k 字符在中文下约
- * 90KB，留了余量。这只是个「有界」的选择而不是踩过的墙 —— 官方文档的发送消息
- * 那页并没有写这个数。
+ * Lark's text-message request body caps at **150KB**, erroring `230025` past it. 30k chars is
+ * ~90KB in Chinese, with headroom. This is a "bounded" choice, not a wall actually hit — the
+ * official send-message page never states the number.
  */
 export const MESSAGE_LIMIT = 30_000;
 
-/** 飞书，以及国际版 Lark。两个域的接口路径一模一样，只有域名不同。 */
+/** Lark, and international Lark. The two domains share API paths; only the host differs. */
 const DOMAINS = {
   feishu: { api: "https://open.feishu.cn/open-apis", ws: "https://open.feishu.cn" },
   lark: { api: "https://open.larksuite.com/open-apis", ws: "https://open.larksuite.com" },
 } as const;
 
-/** 服务端没给心跳间隔时的默认值。 */
+/** Default heartbeat interval when the server doesn't send one. */
 const DEFAULT_PING_MS = 120_000;
 
 /**
- * 心跳间隔的下限。**这个有据可依**：官方 SDK 里写着小于 10 秒的要「静默忽略」，
- * 也就是照旧用默认值 —— 服务端算下一轮心跳是按自己那个间隔来的，改得比这更勤
- * 只会把轮次搅乱。
+ * Lower bound for the heartbeat interval. **This one is documented**: the official SDK says
+ * intervals under 10 seconds are to be "silently ignored" — keep the default. The server counts
+ * heartbeat rounds by its own interval; beating more often only scrambles the rounds.
  */
 const MIN_PING_MS = 10_000;
 
-/** ACK 的负载。固定长这样，两个第三方实现给的都是这一串。 */
+/** The ACK payload. Fixed shape; both third-party implementations send exactly this. */
 const ACK_PAYLOAD = new TextEncoder().encode('{"code":200,"headers":{},"data":[]}');
 
-/** 记多久的 `message_id` 用来去重。飞书重发不会隔半小时那么久。 */
+/** How long to remember `message_id`s for dedup. Lark's re-sends never wait half an hour. */
 const SEEN_TTL_MS = 30 * 60 * 1000;
 
-/** 分片的半成品留多久。到点了直接扔 —— 少一片的事件永远凑不齐。 */
+/** How long to keep fragment stubs. Expired ones are dropped — a missing piece never completes. */
 const FRAGMENT_TTL_MS = 5 * 60 * 1000;
 
-/** 重连退避的封顶。跟 Discord 那家同一个数。 */
+/** Reconnect backoff cap. Same number as the Discord adapter. */
 const MAX_PAUSE_MS = 30_000;
 
 /**
- * 多久没收到任何东西就当这根连接已经死了。
+ * How long with nothing received before this connection is declared dead.
  *
- * 半开的 TCP 连接（合上笔记本、NAT 超时）不会报错，只会安静地不再送来任何东西 ——
- * 这是长连接最恶心的一种坏法：进程还在，用户以为它还活着。两个第三方实现都用
- * 300 秒；这里跟着心跳间隔走，服务端把间隔调大时也还成立。
+ * A half-open TCP connection (closed laptop, NAT timeout) doesn't error; it just quietly stops
+ * delivering — the nastiest failure: the process lives on, users think it's alive. Both
+ * third-party implementations use 300s; here it follows the heartbeat interval, still holding if raised.
  */
 function idleTimeoutMs(pingMs: number): number {
   return Math.max(300_000, pingMs * 2 + 60_000);
 }
 
 /**
- * 从握手换来的地址里解出 `service_id`。
+ * Extract `service_id` from the handshake URL.
  *
- * 之后每一帧的 3 号字段都得填它，填错了服务端当没听见 —— 又一个安静的失败。
- * 所以单独一个函数、单独测。
+ * Field 3 of every later frame must carry it; a wrong value makes the server act deaf — another
+ * silent failure. Hence a separate function, separately tested.
  */
 export function serviceIdOf(url: string): number {
   let raw: string | null;
@@ -97,7 +97,7 @@ export function serviceIdOf(url: string): number {
   return Number.isSafeInteger(value) ? value : 0;
 }
 
-/** 心跳帧：控制帧，身上只挂一个 `type: ping`。`seqId` 是自己发出去的序号。 */
+/** Heartbeat frame: a control frame carrying only `type: ping`. `seqId` is our own counter. */
 export function buildPing(service: number, seqId: bigint): LarkFrame {
   return {
     ...emptyFrame(),
@@ -109,14 +109,14 @@ export function buildPing(service: number, seqId: bigint): LarkFrame {
 }
 
 /**
- * ACK 帧：把收到的那一帧**整体回显**，只换两处 —— 负载换成固定的那串 JSON，
- * 再补一个 `biz_rt`。
+ * The ACK frame: **echo the received frame whole**, changing only two things — the payload
+ * becomes the fixed JSON string, and a `biz_rt` header is added.
  *
- * 是「回显」而不是「新造一帧」：帧里的 `seqId` 和 `logId` 是服务端用来把这次
- * 应答对上是哪个请求的，编一个新号就没对上了。所以连 headers 的顺序都留着。
+ * "Echo" rather than "build a new frame": the frame's `seqId` and `logId` are how the server
+ * matches this reply to its request; inventing new numbers breaks the match. Even header order stays.
  *
- * **不改传进来的那帧** —— 它后面还要用来读事件，顺手改掉的话会在离现场很远的
- * 地方出问题。
+ * **Don't mutate the frame passed in** — it's still needed to read the event; mutating it in
+ * place causes failures far from the scene.
  */
 export function buildAck(frame: LarkFrame): LarkFrame {
   const headers: LarkFrameHeader[] = [...frame.headers];
@@ -126,14 +126,14 @@ export function buildAck(frame: LarkFrame): LarkFrame {
   return { ...frame, headers, payload: ACK_PAYLOAD };
 }
 
-/** 只认这一种事件。别的（卡片回调、入群、撤回）先不接。 */
+/** Only this one event type is accepted. Others (card callbacks, joins, recalls) aren't wired yet. */
 const MESSAGE_EVENT = "im.message.receive_v1";
 
 /**
- * 把正文里那些 `@_user_1` 占位符抹掉。
+ * Strip the `@_user_1` placeholders out of the text.
  *
- * 飞书在 `content.text` 里放的是占位符，真名在 `mentions` 里。占位符对模型来说
- * 是噪音，直接去掉 —— 两个第三方实现也是这么干的。
+ * Lark puts placeholders in `content.text`, with real names in `mentions`. Placeholders are
+ * noise to the model — remove them directly; both third-party implementations do the same.
  */
 export function stripMentionKeys(text: string): string {
   return text
@@ -143,13 +143,13 @@ export function stripMentionKeys(text: string): string {
 }
 
 /**
- * pong 里可能夹带新的心跳间隔（服务端自己调）。
+ * A pong may carry a new heartbeat interval (the server tunes it itself).
  *
- * 返回 `null` 是「这次没说」，跟「说了 0 秒」是两回事 —— 分得开才敢照着改。
+ * Returning `null` means "not stated this time" — not the same as "stated 0 seconds"; keep them apart.
  *
- * **小于 10 秒的一律当没说**（不是夹到 10 秒）：官方 SDK 对这种情况就是「静默
- * 忽略、照旧用默认值」。这个数服务端是按自己那一轮算的，夹一下反而会把轮次
- * 搅乱 —— 客气地当成没提，比自己改一个数安全。
+ * **Anything under 10 seconds counts as unstated** (not clamped to 10): the official SDK's
+ * answer is "silently ignore, keep the default". The server counts its rounds by that number;
+ * clamping would scramble them — politely treating it as unmentioned beats picking a number.
  */
 export function pingIntervalOf(frame: LarkFrame): number | null {
   if (frame.payload === undefined || frame.payload.length === 0) return null;
@@ -166,7 +166,7 @@ export function pingIntervalOf(frame: LarkFrame): number | null {
   }
 }
 
-/** 取一个 header 上的整数。空串和垃圾都当 0。 */
+/** Read an integer from one header. Empty strings and garbage both count as 0. */
 function headerInt(frame: LarkFrame, key: string): number {
   const raw = headerValue(frame, key);
   if (raw === "") return 0;
@@ -174,7 +174,7 @@ function headerInt(frame: LarkFrame, key: string): number {
   return Number.isSafeInteger(value) ? value : 0;
 }
 
-/** 把一帧的 `data` 收成字节。不是二进制就返回 `null`。 */
+/** Collect a frame's `data` into bytes. Not binary: `null`. */
 function toBytes(data: unknown): Uint8Array | null {
   if (data instanceof Uint8Array) return data;
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -199,11 +199,11 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ---- 连出来的那根 socket ---------------------------------------------------
+// ---- The socket we connect with ---------------------------------------------------
 
 /**
- * 连接的最小形状。跟 Discord 那家一样，是为了测试里能塞一个假的进去 ——
- * 它只有 WebSocket 的那几个回调和两个方法。
+ * The minimal shape of a connection. Like Discord's, it exists so tests can slot a fake in —
+ * just the WebSocket callbacks plus two methods.
  */
 export interface LarkSocket {
   send(data: string | Uint8Array): void;
@@ -213,11 +213,11 @@ export interface LarkSocket {
   onclose: (() => void) | null;
   onerror: (() => void) | null;
   /**
-   * 二进制帧要以 `ArrayBuffer` 递过来。
+   * Binary frames must arrive as `ArrayBuffer`.
    *
-   * 这不是可有可无的：WHATWG 的 WebSocket 默认给的是 **Blob**，而 Blob 只能
-   * 异步读。真按默认值走，表现是「连上了、一帧都读不出来」—— 又一次安静的失败。
-   * 默认工厂会把它设成 `arraybuffer`，万一还是收到 Blob 也会明确喊一声。
+   * Not optional: WHATWG's WebSocket defaults to **Blob**, readable only asynchronously. With
+   * the default you get "connected, yet not one frame decodes" — another silent failure. The
+   * default factory sets `arraybuffer`, and a stray Blob is called out loudly.
    */
   binaryType?: string;
 }
@@ -227,9 +227,9 @@ export type LarkSocketFactory = (url: string) => LarkSocket;
 export interface LarkAdapterOptions {
   appId: string;
   appSecret: string;
-  /** 白名单：只有这些 `open_id` 说的话才理。不填 = 谁都理。 */
+  /** Allowlist: only these `open_id`s get answered. Unset = answer everyone. */
   allow?: readonly string[];
-  /** 连国际版 Lark（`open.larksuite.com`）而不是飞书。 */
+  /** Connect to international Lark (`open.larksuite.com`) instead of Feishu. */
   lark?: boolean;
   fetch?: typeof globalThis.fetch;
   socket?: LarkSocketFactory;
@@ -277,19 +277,19 @@ export class LarkAdapter {
   #stopped = false;
   #failures = 0;
 
-  /** 收到读不了的帧时，每次连接只喊一声，别刷屏。 */
+  /** When an undecodable frame arrives, complain once per connection, not every frame. */
   #warnedFrame = false;
 
-  /** 已经处理过的 `message_id` → 处理时间。飞书重发时靠它跳过。 */
+  /** Processed `message_id`s → time processed. Lark re-sends are skipped via this. */
   readonly #seen = new Map<string, number>();
 
-  /** 攒到一半的分片。`message_id` → 各片。 */
+  /** Half-assembled fragments. `message_id` → the pieces. */
   readonly #fragments = new Map<string, { parts: Array<Uint8Array | undefined>; at: number }>();
 
-  /** `tenant_access_token` 有 2 小时，缓存起来，别每条消息都去要。 */
+  /** `tenant_access_token` lasts 2 hours; cache it instead of asking per message. */
   #token: { value: string; until: number } | undefined;
 
-  /** 机器人自己的 `open_id`，用来判断群里是不是在叫它。`null` = 还没问过。 */
+  /** The bot's own `open_id`, to tell whether a group message calls it. `null` = not asked yet. */
   #selfId: string | undefined | null = null;
   #warnedSelf = false;
 
@@ -310,12 +310,12 @@ export class LarkAdapter {
     this.#onLog?.(text);
   }
 
-  /** 一直连到被叫停。断了就重连，退避翻倍、封顶 30 秒。 */
+  /** Keep connecting until stopped. Reconnect on drops with doubled backoff, capped at 30s. */
   async run(): Promise<void> {
     while (!this.#stopped) {
       try {
         await this.#connect();
-        // 连上过就把之前的失败记录清零：一次断线不该让下一次重连也等很久。
+        // A connection reached clears the failure count: one drop shouldn't lengthen the next wait.
         this.#failures = 0;
         if (this.#stopped) return;
         await this.#pause("长连接断了");
@@ -327,10 +327,10 @@ export class LarkAdapter {
   }
 
   /**
-   * 退避一会儿再重连。
+   * Back off a while, then reconnect.
    *
-   * 这里**不是一觉睡到底**，而是每 200 毫秒醒一下看有没有被叫停 —— 不然按
-   * `Ctrl-C` 之后还得干等十几秒才退得出去。（跟 Discord 那家同一个写法。）
+   * This is **not one long sleep** — wake every 200ms to check for a stop, otherwise Ctrl-C
+   * would sit out a dozen seconds before exiting. (Same pattern as the Discord adapter.)
    */
   async #pause(reason: string, error?: unknown): Promise<void> {
     this.#failures += 1;
@@ -352,13 +352,13 @@ export class LarkAdapter {
     this.#socket = undefined;
   }
 
-  // ---- 换地址、连上、然后一直读 ------------------------------------------
+  // ---- Trade for the address, connect, then read forever ------------------------------------------
 
   /**
-   * 一次完整的连接：换地址 → 连上 → 读帧，直到它断或者被叫停。
+   * One full connection: trade for the address → connect → read frames, until it drops or is stopped.
    *
-   * 换地址那步失败会**抛出去**（重连从 `run` 那边算）；连上之后的断开是正常
-   * 返回，因为那是长连接本来就该有的一部分。
+   * A failure in the address step **throws** (reconnects are counted from `run`'s side); a drop
+   * after connecting returns normally, since that's a normal part of a long connection's life.
    */
   async #connect(): Promise<void> {
     const endpoint = await this.#handshake();
@@ -399,8 +399,8 @@ export class LarkAdapter {
       };
 
       socket.onopen = () => {
-        // 第一帧必须由我们发出去：服务端不会先开口，所以得等它真的连上。
-        // 标准 WebSocket 的 `onopen` 是异步来的，抢在它之前 send 会直接抛。
+        // The first frame must be ours: the server never speaks first, so wait for a real connect.
+        // The standard WebSocket's `onopen` arrives async — sending before it throws outright.
         restartHeartbeat(pingMs);
         beat();
         watchdog = setInterval(() => {
@@ -446,9 +446,9 @@ export class LarkAdapter {
           return;
         }
 
-        // **先把 ACK 拍回去**，再去干别的。飞书要求 3 秒内应答，而「想清楚再
-        // 回答」可能要好几个来回 —— 应答和答复在这里是两件事，这也是为什么
-        // 这里没有微信那种竞速。
+        // **Slam the ACK back first**, then do anything else. Lark requires a reply within 3
+        // seconds, while "thinking it over" may take several round trips — acknowledgment and
+        // answer are two things here, which is why there's no WeChat-style race.
         this.#ack(socket, frame);
 
         void this.#onData(frame).catch((error: unknown) => {
@@ -470,8 +470,8 @@ export class LarkAdapter {
     try {
       socket.send(encodeFrame(frame));
     } catch (error) {
-      // 发不出去不该把整个网关带走 —— 下一轮心跳还会再试，再不行看门狗会把
-      // 它判死然后重连。
+      // A failed send must not take the gateway down — the next heartbeat retries, and the
+      // watchdog declares death and reconnects if it keeps failing.
       this.#log(`一帧没发出去：${explain(error)}`);
     }
   }
@@ -481,16 +481,16 @@ export class LarkAdapter {
   }
 
   /**
-   * 拿 AppID/AppSecret 换一个带票据的连接地址。
+   * Trade AppID/AppSecret for a ticketed connection address.
    *
-   * 注意换来的地址里有 `service_id`，**之后每一帧都要带**。
+   * Note the address carries a `service_id` that **every later frame must include**.
    */
   async #handshake(): Promise<{ url: string; service: number; pingMs: number }> {
     const response = await this.#fetch(`${this.#wsBase}/callback/ws/endpoint`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        // 官方 SDK 都会带这个。不带多半也能拿到地址，但那不是设想的用法。
+        // The official SDKs all send this. It probably works without, but that's not the intended use.
         locale: "zh",
       },
       body: JSON.stringify({ AppID: this.#appId, AppSecret: this.#appSecret }),
@@ -513,27 +513,27 @@ export class LarkAdapter {
       );
     }
 
-    // 握手给的间隔跟 pong 里给的是同一套规矩：小于 10 秒当没说。
+    // The handshake interval follows the same rule as the pong's: under 10 seconds counts as unstated.
     const seconds = envelope.data?.ClientConfig?.PingInterval ?? 0;
     const pingMs = seconds >= MIN_PING_MS / 1000 ? seconds * 1000 : DEFAULT_PING_MS;
 
     return { url, service: serviceIdOf(url), pingMs };
   }
 
-  // ---- 帧 → 事件 ----------------------------------------------------------
+  // ---- Frames → events ----------------------------------------------------------
 
-  /** 数据帧处理完一轮。ACK 已经先发过了，所以这里出错不会让飞书重发。 */
+  /** One data frame processed. The ACK already went out, so an error here won't trigger a re-send. */
   async #onData(frame: LarkFrame): Promise<void> {
     const type = headerValue(frame, "type");
     if (type !== "event") {
-      // "card" 是交互卡片的回调。留句话，不然以后有人对着日志猜。
+      // "card" is an interactive-card callback. Leave a line, or someone will be guessing from logs.
       if (type !== "") this.#log(`收到 ${type} 帧，还没接`);
       return;
     }
 
     const messageId = headerValue(frame, "message_id");
     const payload = this.#reassemble(frame, messageId);
-    if (payload === null) return; // 分片还差几片
+    if (payload === null) return; // fragments still incomplete
 
     if (messageId !== "" && !this.#claim(messageId)) {
       this.#log("这一条刚才处理过了（飞书重发），跳过");
@@ -552,11 +552,11 @@ export class LarkAdapter {
   }
 
   /**
-   * 把分片拼回一整段。没分片的话原样返回。
+   * Reassemble fragments into one payload. Unfragmented: returned as-is.
    *
-   * 返回 `null` 是「还差几片，别当它处理完了」—— 这一点要紧：把半截 JSON 拿去
-   * 解析，只会得到一句「事件不是 JSON，丢掉」，然后你永远不知道真实原因是一条
-   * 大消息。
+   * `null` means "pieces still missing, don't treat it as done" — this matters: parsing half a
+   * JSON only yields "event isn't JSON, dropped", and you'd never learn the real cause was one
+   * large message.
    */
   #reassemble(frame: LarkFrame, messageId: string): Uint8Array | null {
     const payload = frame.payload ?? new Uint8Array(0);
@@ -566,14 +566,14 @@ export class LarkAdapter {
     if (sum <= 1) return payload;
 
     if (messageId === "" || seq < 0 || seq >= sum) {
-      // 说了要分片，却没给分组键、或者序号越界 —— 这帧是坏的。当成整条会拿到
-      // 半截 JSON，不如直接扔掉。
+      // It declared fragmentation but gave no group key, or the index is out of range — the frame
+      // is broken. Treating it as whole would yield half a JSON; dropping it outright is better.
       this.#log(`分片帧不对劲（sum=${sum} seq=${seq}），丢掉`);
       return null;
     }
 
-    // `new Array(sum)` 建出来的是**稀疏**数组，空洞会被 `some`/`reduce` 跳过 ——
-    // 那样拿到第一片就以为凑齐了，正好掉进上面说的那个坑。必须 `fill` 成实心的。
+    // `new Array(sum)` builds a **sparse** array; holes get skipped by `some`/`reduce` — you'd
+    // think one piece completes it, falling into the trap above. It must be `fill`ed solid.
     const blank = (): Array<Uint8Array | undefined> =>
       new Array<Uint8Array | undefined>(sum).fill(undefined);
 
@@ -589,7 +589,7 @@ export class LarkAdapter {
     return concat(entry.parts as Uint8Array[]);
   }
 
-  /** 第一次见这个 `message_id` 就返回 `true`，并记下它。 */
+  /** Returns `true` the first time this `message_id` is seen, and records it. */
   #claim(messageId: string): boolean {
     const at = this.#seen.get(messageId);
     if (at !== undefined && Date.now() - at < SEEN_TTL_MS) return false;
@@ -597,7 +597,7 @@ export class LarkAdapter {
     return true;
   }
 
-  /** 顺手把过期的记性清掉。每次心跳跑一回。 */
+  /** Sweep expired memories while at it. Runs once per heartbeat. */
   #sweep(): void {
     const now = Date.now();
     for (const [key, at] of this.#seen) {
@@ -608,7 +608,7 @@ export class LarkAdapter {
     }
   }
 
-  // ---- 事件 → 一句话 ------------------------------------------------------
+  // ---- Events → one reply ------------------------------------------------------
 
   async #dispatch(event: LarkEvent): Promise<void> {
     if (event.header?.event_type !== MESSAGE_EVENT) return;
@@ -617,8 +617,8 @@ export class LarkAdapter {
     const sender = event.event?.sender;
     if (message === undefined || sender === undefined) return;
 
-    // 机器人自己发的消息也会从这条连接回来（比如刚发出去的那条答复）。
-    // 不挡住就是自问自答。
+    // Messages the bot itself sent also come back over this connection (like the reply just sent).
+    // Unblocked, it would answer itself.
     if (sender.sender_type === "app" || sender.sender_type === "bot") return;
 
     const openId = sender.sender_id?.open_id ?? "";
@@ -633,8 +633,8 @@ export class LarkAdapter {
       return;
     }
 
-    // 群里不叫它就别接话 —— 跟 Discord 那条同一个理由：一个对每句话都插嘴的
-    // 机器人，第二天就会被移出群。单聊里没必要，那儿本来就只有你们俩。
+    // In groups, stay silent unless called — same reason as Discord: a bot that chimes in on
+    // everything gets removed from the group the next day. DMs don't need it; it's just you two.
     const inGroup = (message.chat_type ?? "p2p") !== "p2p";
     if (inGroup && !(await this.#mentionsMe(message.mentions ?? []))) return;
 
@@ -659,7 +659,7 @@ export class LarkAdapter {
     await this.#say(chatId, reply);
   }
 
-  /** 文本消息的 `content` 是 `{"text":"..."}` 这样一段 JSON。 */
+  /** A text message's `content` is a JSON blob like `{"text":"..."}`. */
   #textOf(content: string): string {
     if (content === "") return "";
     try {
@@ -671,13 +671,13 @@ export class LarkAdapter {
   }
 
   /**
-   * 群里这条是不是在叫它。
+   * Is this group message calling the bot?
    *
-   * 得先知道自己是谁：飞书的 `mentions` 是**这条消息里所有的 @**，@ 到同事也算。
-   * 所以要拿机器人的 `open_id` 去比。
+   * First we must know who we are: Lark's `mentions` holds **every @ in the message**, including
+   * ones @-ing colleagues. So compare against the bot's `open_id`.
    *
-   * 拿不到的话退回到「有 @ 就算」—— 会多嘴，但不会漏掉叫你。这条退路上的日志
-   * 得说清楚，不然多嘴这事没人查得动。
+   * If it can't be fetched, fall back to "any @ counts" — chattier, but it never misses a call.
+   * The log on that fallback path must say so clearly, or nobody could ever debug the chattiness.
    */
   async #mentionsMe(mentions: readonly LarkMention[]): Promise<boolean> {
     if (mentions.length === 0) return false;
@@ -693,9 +693,9 @@ export class LarkAdapter {
   }
 
   /**
-   * 机器人自己的 `open_id`。问不到就返回 `undefined`（只问一次，不再试）。
+   * The bot's own `open_id`. Returns `undefined` when unanswerable (asked once, never retried).
    *
-   * 响应形状（核实过，两处一致）：
+   * Response shape (verified, two sources agree):
    *
    * ```json
    * { "code": 0, "msg": "ok",
@@ -703,13 +703,13 @@ export class LarkAdapter {
    *            "ip_white_list": [], "open_id": "ou_…" } }
    * ```
    *
-   * 两个要紧的点：`bot` 在**顶层**，不是套在 `data` 里；要的字段就叫 `open_id`
-   * （跟 APP_ID 的 `cli_…` 完全是两码事）。来源：官方文档的响应体表，和官方
-   * Go SDK 的生成代码 `BotGetResult{Bot *BotInfo `json:"bot"`}` —— 两边对得上。
+   * Two crucial points: `bot` sits at the **top level**, not inside `data`; the field is
+   * literally named `open_id` (nothing like the APP_ID's `cli_…`). Sources: the official docs'
+   * response table and the Go SDK's generated `BotGetResult{Bot *BotInfo `json:"bot"`}` — they agree.
    *
-   * 这个接口要求应用**已开启机器人能力并发布**。没开的话它回一个非 0 的 `code`：
-   * 有响应、但没有 `bot`。这种情况必须单独记一笔 —— 不然退化成宽松规则之后，
-   * 你只看到它在群里乱接话，却查不到是因为机器人能力没开。
+   * This API requires the app to **have bot capability enabled and be published**. Otherwise it
+   * returns a non-zero `code`: a response, but no `bot`. Log that case separately — once we
+   * degrade to the loose rule, the trace that bot capability was off is nowhere to be found.
    */
   async #botOpenId(): Promise<string | undefined> {
     if (this.#selfId !== null) return this.#selfId;
@@ -750,12 +750,12 @@ export class LarkAdapter {
     return this.#selfId;
   }
 
-  // ---- 发出去 --------------------------------------------------------------
+  // ---- Sending out --------------------------------------------------------------
 
   /**
-   * 拿 `tenant_access_token`。缓存到快过期为止。
+   * Fetch `tenant_access_token`. Cached until near expiry.
    *
-   * 提前 2 分钟作废，免得卡在「刚取到就过期」那条缝上。
+   * Invalidated 2 minutes early, so we don't land in the "expired right after fetching" crack.
    */
   async #accessToken(): Promise<string> {
     if (this.#token !== undefined && Date.now() < this.#token.until) return this.#token.value;
@@ -782,13 +782,13 @@ export class LarkAdapter {
     return value;
   }
 
-  /** 一条太长的答复切成几条发。切法跟另外三家共用。 */
+  /** Split an overlong reply into several messages. Same splitting as the other three. */
   async #say(chatId: string, text: string): Promise<void> {
     for (const chunk of splitMessage(text, MESSAGE_LIMIT)) {
       try {
         await this.#sendText(chatId, chunk);
       } catch (error) {
-        // 发不出去不该把这条连接带走 —— 用户没看到答复，但网关还得接着干活。
+        // A failed send must not take the connection down — the gateway must keep serving.
         this.#log(`发消息失败：${explain(error)}`);
         return;
       }
@@ -796,8 +796,8 @@ export class LarkAdapter {
   }
 
   async #sendText(chatId: string, text: string): Promise<void> {
-    // 令牌失效会返回 HTTP 200 + 一个非零 code，所以不能只看 response.ok。
-    // 99991663 / 99991661 是「令牌不对/过期」—— 撞上了就扔掉缓存重来一次。
+    // A stale token returns HTTP 200 with a non-zero code, so response.ok alone isn't enough.
+    // 99991663 / 99991661 mean "token wrong/expired" — drop the cache and retry once on a hit.
     for (let attempt = 0; ; attempt += 1) {
       const token = await this.#accessToken();
       const response = await this.#fetch(`${this.#apiBase}/im/v1/messages?receive_id_type=chat_id`, {
@@ -827,10 +827,10 @@ export class LarkAdapter {
 }
 
 /**
- * 真的那根 WebSocket。
+ * The real WebSocket.
  *
- * `binaryType` 是这里唯一不能省的一行：默认值是 `blob`，而 Blob 只能异步读 ——
- * 按默认值走就是「连上了、一帧都读不出来」。
+ * `binaryType` is the one line that can't be skipped here: the default is `blob`, and a Blob is
+ * only readable asynchronously — with the default you get "connected, not one frame decodes".
  */
 function defaultSocketFactory(url: string): LarkSocket {
   const socket = new WebSocket(url);

@@ -4,7 +4,7 @@ export type GraphNodeStartedNotification = {
   workflow: string;
   node: string;
   /**
-   * 第几次进入该节点（>1 只可能出现在有意设计的环里）。
+   * Which visit to this node this is (>1 only happens in deliberately designed loops).
    */
   visit: number;
 };

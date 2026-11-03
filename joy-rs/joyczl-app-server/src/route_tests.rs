@@ -1,7 +1,7 @@
-//! 路由决策的纯函数测试 —— tier 选择与缺省回落链。
+//! Pure-function tests for route decisions — tier selection and the fallback chain.
 //!
-//! 与 Server 的集成（真实解析、回落路径）由 eval 的 mock provider 场景覆盖；
-//! 这里钉住的是规则本身。
+//! Integration with Server (real resolution, fallback paths) is covered by eval's mock-provider scenarios;
+//! what is pinned here is the rules themselves.
 
 use joyczl_config::routes::{RouteFile, RouteMode};
 use std::collections::HashMap;
@@ -19,8 +19,8 @@ fn routes_with(entries: &[(&str, &str)]) -> RouteFile {
     routes
 }
 
-/// 窗口的一半是分界：小消息 chat，超过一半 reasoning。窗口跟着 chat 档
-/// 自己的 provider 走 —— 同一条规则在 32k 本地模型和 1M gemini 上都成立。
+/// Half the window is the boundary: small messages chat, past half reasoning. The window follows the
+/// chat tier's own provider — the same rule holds on a 32k local model and a 1M gemini alike.
 #[test]
 fn tier_is_reasoning_past_half_the_window() {
     assert_eq!(pick_tier(1_000, 32_768), "chat");
@@ -34,8 +34,8 @@ fn tier_is_reasoning_past_half_the_window() {
     assert_eq!(pick_tier(600_000, 1_000_000), "reasoning");
 }
 
-/// 缺省链：reasoning/fast 缺项都落 chat，chat 缺项落 active，
-/// 全缺时返回 None（调用方回落 active 并说明）。
+/// The fallback chain: missing reasoning/fast entries fall to chat, a missing chat entry falls to active,
+/// and when everything is missing it returns None (the caller falls back to active and explains).
 #[test]
 fn tier_lookup_falls_back_through_the_chain() {
     let empty = routes_with(&[]);
@@ -65,7 +65,7 @@ fn tier_lookup_falls_back_through_the_chain() {
         Some("ds")
     );
 
-    // 只配了 reasoning 一条：fast 经 chat 缺项直达 active —— 不会误用 reasoning。
+    // Only reasoning is configured: fast reaches active through the missing chat entry — reasoning is never misused.
     let only_reasoning = routes_with(&[("reasoning", "ds-r1")]);
     assert_eq!(
         profile_for_tier(&only_reasoning, "fast", Some("oa")).as_deref(),
@@ -73,8 +73,8 @@ fn tier_lookup_falls_back_through_the_chain() {
     );
 }
 
-/// 模糊带：小于 2k 显然是 chat（不花分类调用），过半窗口已被 L0 判走，
-/// 只有中间这段才值得问一次便宜模型。
+/// The ambiguous band: below 2k is obviously chat (no classify call spent), past half the window L0 has
+/// already ruled — only the middle stretch is worth one cheap-model question.
 #[test]
 fn classification_only_runs_in_the_ambiguous_band() {
     use super::needs_classify;
@@ -88,9 +88,9 @@ fn classification_only_runs_in_the_ambiguous_band() {
     );
 }
 
-/// 分类器回答的解析：fail-open —— 首词是 reasoning 才算，含糊/空白/
-/// 多余解释一律当 chat。偏向保守：误判 chat 只是少省点钱，误判
-/// reasoning 是白花贵模型的钱。
+/// Parsing the classifier's reply: fail-open — only a first word of reasoning counts; vagueness, blank,
+/// or extra explanation is all chat. Bias conservative: misjudging chat only saves less money; misjudging
+/// reasoning wastes money on the expensive model.
 #[test]
 fn tier_reply_parsing_fails_open() {
     use super::parse_tier_reply;

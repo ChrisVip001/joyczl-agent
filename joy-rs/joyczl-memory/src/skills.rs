@@ -1,54 +1,54 @@
-//! 过程记忆 —— SKILL.md：怎么做事，只在相关时载入。
+//! Procedural memory — SKILL.md: how to do things, loaded only when relevant.
 //!
-//! 官方 Anthropic Agent Skills 格式：YAML frontmatter 带 `name` 和
-//! `description`（description 兼任触发器 —— 不设自定义 `triggers` 字段）。
+//! The official Anthropic Agent Skills format: YAML frontmatter with `name` and
+//! `description` (doubles as the trigger — no custom `triggers` field).
 //!
-//! 渐进披露，真正要紧的部分：
-//!   1. 每个技能的 frontmatter 永远被扫到（便宜）；
-//!   2. 技能的**正文**只在它跟消息匹配时才进 prompt；
-//!   3. 技能引用的文件只在模型开口要时才读。
+//! Progressive disclosure, the parts that really matter:
+//!   1. every skill's frontmatter is always scanned (cheap);
+//!   2. a skill's **body** enters the prompt only when it matches the message;
+//!   3. files a skill references are read only when the model asks for them.
 //!
-//! 触发是**透明**的 —— 消息与 name+description 的关键词重合度，没有
-//! embedding，没有魔法，得分心算得出来。
+//! Triggering is **transparent** — keyword overlap between the message and
+//! name+description; no embedding, no magic, the score is computable by hand.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// 解析出来的一个技能。`body` 只有匹配上才会被读进 prompt。
+/// One parsed skill. `body` is read into the prompt only on a match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skill {
     pub name: String,
     pub description: String,
     pub body: String,
     pub path: PathBuf,
-    /// 可选的五字段 cron（`0 8 * * 1-5`）：带上它的技能同时是一条**定时
-    /// 任务**，由 `joy schedule` 常驻进程按时触发（见 cli 的 schedule.rs）。
+    /// Optional five-field cron (`0 8 * * 1-5`): such a skill is also a **scheduled
+    /// job**, fired on time by the `joy schedule` resident process (see cli schedule.rs).
     pub schedule: Option<String>,
-    /// 可选版本号（`version: 1.2.0`）：`joy skill update` 靠它判断要不要换。
+    /// Optional version (`version: 1.2.0`): `joy skill update` uses it to decide on replacement.
     pub version: Option<String>,
-    /// `allow-model-invocation: false` —— 作者声明「别让模型自己想起来用我」。
-    /// 这种技能只走**显式引用**（消息里写 `$技能名`）。默认 true。
+    /// `allow-model-invocation: false` — the author says "don't let the model use me
+    /// on its own"; such skills only respond to explicit `$skillname` references. Default true.
     pub allow_model_invocation: bool,
-    /// `dependencies: a, b` —— 兑现这个技能还需要哪些技能在场。
-    /// 缺了依赖的技能不参与隐式触发（它的正文多半在假设别人已经铺好路）。
+    /// `dependencies: a, b` — which skills must be present to fulfill this one. A skill
+    /// with missing deps skips implicit triggering (its body assumes others paved the way).
     pub dependencies: Vec<String>,
 }
 
-/// 解析 SKILL.md 的文本（loader 与 create_skill 工具共用同一套校验）。
+/// Parses SKILL.md text (loader and the create_skill tool share one validation).
 ///
-/// 形状必须是：
+/// The shape must be:
 /// ```text
 /// ---
 /// name: weekly-review
 /// description: ...
 /// ---
-/// 正文……
+/// body text…
 /// ```
-/// frontmatter 里没有 `name` 或 `description` 就不算技能。
+/// No `name` or `description` in the frontmatter → not a skill.
 pub fn parse_skill_text(text: &str) -> Option<Skill> {
-    // 行尾规范化：Windows 用户编辑过的技能文件是 CRLF，git 在 Windows 上
-    // checkout 出来的也是 —— 硬匹配 \"---\n\" 会让它们全部解析失败
-    // （CI 的 Windows job 实测抓到过）。CRLF → LF 一行解决，正文不受影响。
+    // Line-ending normalization: skill files edited by Windows users are CRLF, and so
+    // is what git checks out on Windows — hard-matching \"---\n\" fails them all (a
+    // CI Windows job caught this). CRLF → LF in one line; the body is unaffected.
     let text = text.replace("\r\n", "\n");
     let rest = text.strip_prefix("---\n")?;
     let (front, body) = rest.split_once("\n---\n")?;
@@ -66,10 +66,10 @@ pub fn parse_skill_text(text: &str) -> Option<Skill> {
         match key.trim() {
             "name" => name = Some(value.to_string()),
             "description" => description = Some(value.to_string()),
-            // 空值等于没写 —— 一条 `schedule:` 后面什么都没有，不是任务。
+            // An empty value equals unwritten — a bare `schedule:` is not a job.
             "schedule" if !value.is_empty() => schedule = Some(value.to_string()),
             "version" if !value.is_empty() => version = Some(value.to_string()),
-            // 两种拼法都认：写成下划线却静默失效，是那种要读源码才查得清的坑。
+            // Both spellings accepted: an underscore form silently doing nothing is a bug you'd need the source to find.
             "allow-model-invocation" | "allow_model_invocation" => {
                 allow_model_invocation =
                     !matches!(value.to_lowercase().as_str(), "false" | "no" | "0");
@@ -104,8 +104,8 @@ fn parse_file(path: &Path) -> Option<Skill> {
     Some(skill)
 }
 
-/// 消息与技能描述共用的分词：小写、连续的 ASCII 字母数字、至少 3 个字符。
-/// 中文不参与 —— 触发词要写进 description，这也是 Skills 格式的要求。
+/// Tokenizer shared by messages and skill descriptions: lowercase ASCII alphanumeric
+/// runs, ≥3 chars. Chinese excluded — triggers belong in the description, per format.
 fn tokens(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     let mut out = Vec::new();
@@ -127,8 +127,8 @@ fn tokens(text: &str) -> Vec<String> {
     out
 }
 
-/// 扫描技能目录。目录变更（新增/编辑 SKILL.md）时自动重扫，
-/// 所以会话中途 create_skill 写下的技能下一轮就生效。
+/// Scans the skill directories. Rescans automatically on directory changes (new or
+/// edited SKILL.md), so a skill written mid-session by create_skill applies next turn.
 pub struct SkillLoader {
     dirs: Vec<PathBuf>,
     skills: Vec<Skill>,
@@ -136,8 +136,8 @@ pub struct SkillLoader {
 }
 
 impl SkillLoader {
-    /// 目录列表：`home/skills`（装出来的 + agent 自己写的），加上
-    /// `JOY_SKILL_DIRS` 里冒号分隔的额外目录（自带 / 社区技能包）。
+    /// Directory list: `home/skills` (installed + agent-written), plus the
+    /// colon-separated extra dirs in `JOY_SKILL_DIRS` (bundled / community packs).
     pub fn dirs_for(home: &Path) -> Vec<PathBuf> {
         let mut dirs = vec![home.join("skills")];
         if let Some(extra) = std::env::var_os("JOY_SKILL_DIRS") {
@@ -156,7 +156,7 @@ impl SkillLoader {
         loader
     }
 
-    /// 目录指纹：每个 SKILL.md 的路径 + 修改时间。
+    /// Directory fingerprint: each SKILL.md's path + mtime.
     fn scan_sig(&self) -> Vec<(PathBuf, SystemTime)> {
         let mut sig = Vec::new();
         for dir in &self.dirs {
@@ -191,16 +191,17 @@ impl SkillLoader {
         self.sig = self.scan_sig();
     }
 
-    /// 当前已装载的技能（name + description 那一层，不含正文）。
+    /// Currently loaded skills (the name + description layer, no bodies).
     pub fn skills(&self) -> &[Skill] {
         &self.skills
     }
 
-    /// 透明触发：消息与 name+description 的关键词重合数 ≥ 2 才算命中，
-    /// 取重合最多的前 `max_skills` 个。目录变了就先重扫。
+    /// Transparent triggering: a hit needs keyword overlap ≥ 2 between the message
+    /// and name+description; the top `max_skills` by overlap win. Rescans first if
+    /// the directories changed.
     ///
-    /// 两类技能不参与隐式触发：作者声明 `allow-model-invocation: false` 的，
-    /// 以及依赖缺失的（见 `dangling_dependencies`）。
+    /// Two kinds skip implicit triggering: `allow-model-invocation: false` skills,
+    /// and skills with missing dependencies (see `dangling_dependencies`).
     pub fn match_message(&mut self, message: &str, max_skills: usize) -> Vec<&Skill> {
         if self.scan_sig() != self.sig {
             self.refresh();
@@ -231,15 +232,15 @@ impl SkillLoader {
             .collect()
     }
 
-    /// 技能段落的构造结果。
+    /// The result of building the skill section.
     pub fn hits(&mut self, message: &str) -> SkillHits {
         if self.scan_sig() != self.sig {
             self.refresh();
         }
 
-        // 显式引用：`$名字` 强制载入那个技能的正文，不靠关键词重合 ——
-        // 作者把 `allow-model-invocation` 关掉之后，这是**唯一**的入口。
-        // 先只收**名字**：`match_message` 要可变借用，持有 &Skill 会和它打架。
+        // Explicit references: `$name` force-loads that skill's body without keyword
+        // overlap — after `allow-model-invocation` is off, this is the **only**
+        // entrance. Collect **names** first: `match_message` takes a mutable borrow.
         let mut chosen: Vec<String> = Vec::new();
         let mut hints: Vec<String> = Vec::new();
         let mut stripped = String::new();
@@ -253,8 +254,8 @@ impl SkillLoader {
             if self.skills.iter().any(|skill| skill.name == name) {
                 chosen.push(name.to_string());
             } else {
-                // 不报错（用户可能只是打了个 $），但要让模型知道这件事，
-                // 它才能回一句「没有叫 x 的技能」而不是装作没看见。
+                // No error (the user may have just typed a $), but the model must know,
+                // so it can reply "no skill named x" instead of ignoring it.
                 hints.push(format!("用户引用了 ${name}，但没有叫 '{name}' 的技能。"));
             }
         }
@@ -266,7 +267,7 @@ impl SkillLoader {
             }
         }
 
-        // 顺序即优先级：显式引用的排在前面。
+        // Order is priority: explicit references come first.
         let section = chosen
             .iter()
             .filter_map(|name| self.skills.iter().find(|skill| &skill.name == name))
@@ -277,8 +278,8 @@ impl SkillLoader {
         SkillHits {
             section,
             message: if stripped.is_empty() {
-                // 整条消息就是一个引用（`$weekly-review`）：剥完只剩空的，
-                // 那就把引用本身还给模型，别让它面对一条空消息。
+                // The whole message was one reference (`$weekly-review`): stripping leaves
+                // it empty, so hand the reference back rather than an empty message.
                 message.to_string()
             } else {
                 stripped
@@ -287,7 +288,7 @@ impl SkillLoader {
         }
     }
 
-    /// 依赖指向了不存在（或没装）的技能：返回缺的那个名字。
+    /// A dependency points at a missing (or uninstalled) skill: returns the missing name.
     pub fn dangling_dependencies(&mut self) -> Vec<(String, String)> {
         if self.scan_sig() != self.sig {
             self.refresh();
@@ -302,18 +303,18 @@ impl SkillLoader {
     }
 }
 
-/// 技能段落的构造结果。
+/// The result of building the skill section.
 #[derive(Debug, Clone, Default)]
 pub struct SkillHits {
-    /// 拼进 system prompt 的段落。空串 = 一个都没命中，调用方就不加标题。
+    /// The section spliced into the system prompt. Empty = no hits; the caller then skips the header.
     pub section: String,
-    /// **剥掉 `$技能名` 之后**的消息（引用是给 loader 看的，模型看正文就够）。
+    /// The message with `$skillname` **stripped** (references are for the loader, not the model).
     pub message: String,
-    /// 显式引用了不存在的技能时的提示，交给模型去回一句。
+    /// Hints for explicit references to nonexistent skills, for the model to reply to.
     pub hints: Vec<String>,
 }
 
-/// 这个技能的依赖里，哪一个不在场。
+/// Which of this skill's dependencies is absent.
 fn missing_dependency(skill: &Skill, loaded: &[String]) -> Option<String> {
     skill
         .dependencies
@@ -322,30 +323,30 @@ fn missing_dependency(skill: &Skill, loaded: &[String]) -> Option<String> {
         .cloned()
 }
 
-/// `joy skill list` 的一行。
+/// One row of `joy skill list`.
 #[derive(Debug, Clone)]
 pub struct LoadedSkill {
     pub name: String,
     pub description: String,
     pub folder: PathBuf,
-    /// 带上就是一条定时任务（见 cli 的 schedule.rs）。
+    /// Present means this is a scheduled job (see the cli's schedule.rs).
     pub schedule: Option<String>,
-    /// 带上就能被 `joy skill update` 认版本。
+    /// Present lets `joy skill update` recognize versions.
     pub version: Option<String>,
-    /// 作者声明「别让模型自动用我」（只走 `$技能名` 显式引用）。
+    /// The author says "don't let the model auto-use me" (explicit `$skillname` only).
     pub allow_model_invocation: bool,
-    /// 需要哪些技能在场。
+    /// Which skills must be present.
     pub dependencies: Vec<String>,
 }
 
-/// 全部已装载技能，按名字去重，`home/skills` 的同名技能赢过其它目录
-/// —— 跟 loader 的优先级是同一条。SKILL.md 直接躺在技能根目录的、
-/// `_incoming`（install 的暂存区）里的，都不算可导出的技能。
+/// All loaded skills, deduped by name; a same-name skill in `home/skills` beats other
+/// directories — same priority as the loader. SKILL.md files sitting directly in the
+/// skills root, or in `_incoming` (install's staging area), don't count as exportable.
 pub fn loaded_skills(home: &Path) -> Vec<LoadedSkill> {
     let dirs = SkillLoader::dirs_for(home);
     let mut by_name: std::collections::BTreeMap<String, LoadedSkill> =
         std::collections::BTreeMap::new();
-    // home 最后插入 → 同名覆盖（赢过 JOY_SKILL_DIRS 里的）。
+    // home inserted last → same-name overwrite (beats the JOY_SKILL_DIRS entries).
     for dir in dirs.iter().skip(1).chain(dirs.first()) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
@@ -378,8 +379,8 @@ pub fn loaded_skills(home: &Path) -> Vec<LoadedSkill> {
     by_name.into_values().collect()
 }
 
-/// 递归收集一个技能文件夹的全部文件（相对路径 → 字节），跳过垃圾。
-/// export 用它做「有没有被对方改过」的对比，也用它复制。
+/// Recursively collects all files of a skill folder (relative path → bytes), skipping
+/// junk. export uses it both for the "modified on the other side" diff and to copy.
 fn collect_files(folder: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     let mut files = std::collections::BTreeMap::new();
     fn walk(folder: &Path, base: &Path, files: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
@@ -404,10 +405,10 @@ fn collect_files(folder: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> 
     files
 }
 
-/// `joy skill export` 的执行体：把每个技能文件夹复制到
-/// `<base>/<target>/skills/<名>/`。对方手里那份**被改过的副本默认保留**
-/// （`force` 才覆盖）—— 那可能是人家在另一个 agent 里做的修改。
-/// 返回逐行的人读输出。
+/// The body of `joy skill export`: copies each skill folder to
+/// `<base>/<target>/skills/<name>/`. A copy **modified on the other side is kept by
+/// default** (only `force` overwrites) — it may be their edits in another agent.
+/// Returns line-by-line human-readable output.
 pub fn export_skills(home: &Path, targets: &[(String, PathBuf)], force: bool) -> Vec<String> {
     let skills = loaded_skills(home);
     let mut lines = Vec::new();
@@ -451,13 +452,13 @@ fn copy_dir(src: &Path, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 技能名必须是 slug：小写字母、数字、连字符，且不以连字符开头或结尾。
+/// A skill name must be a slug: lowercase letters, digits, hyphens, not starting or
+/// ending with a hyphen.
 ///
-/// **只有一个来源**：名字要变成目录名（`<home>/skills/<名>/`），而
-/// `create_skill`、`joy skill install`、`joy skill update` 三条写入路径都得
-/// 过这一关。三处各写一遍的后果是它们**已经分叉过一次**（一条路径放行首尾
-/// 带连字符的名字，另两条不放行）—— 同一个名字在不同入口一边能过一边不能过，
-/// 这类不一致比任何单条规则本身都更难查。
+/// **One source of truth**: the name becomes a directory (`<home>/skills/<n>/`), and
+/// all three write paths — `create_skill`, `joy skill install`, `joy skill update` —
+/// must pass this gate. Three copies **diverged once** (one allowed edge hyphens,
+/// others didn't) — inconsistency across entrances is harder to debug than any rule.
 pub fn is_slug(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -467,9 +468,9 @@ pub fn is_slug(name: &str) -> bool {
         && !name.ends_with('-')
 }
 
-/// `joy skill install` 的执行体：收到 SKILL.md 的**文本**（网络抓取由
-/// CLI 做），校验 frontmatter（与 create_skill 同一套），落位
-/// `<home>/skills/<名>/SKILL.md`。重名一律拒绝 —— 从不覆盖已有技能。
+/// The body of `joy skill install`: receives SKILL.md **text** (fetching is the
+/// CLI's job), validates frontmatter (same set as create_skill), and lands it at
+/// `<home>/skills/<name>/SKILL.md`. Name clashes are always rejected — never overwrite.
 pub fn install_from_text(home: &Path, text: &str) -> Result<String, String> {
     let skill = parse_skill_text(text).ok_or_else(|| {
         "不是合法的技能：SKILL.md 需要 YAML frontmatter，含 name 和 description。".to_string()

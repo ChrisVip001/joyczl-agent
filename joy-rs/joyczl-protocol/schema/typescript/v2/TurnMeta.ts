@@ -5,59 +5,59 @@ import type { TokenUsage } from "./TokenUsage";
 import type { ToolCallRecord } from "./ToolCallRecord";
 
 /**
- * 一轮 turn 的遥测。落库到 chat_log.meta，所以重开一个旧会话
- * 仍能看到当时是哪个脑子的哪个决定，而不只是最终那句回复。
+ * Telemetry for one turn. Persisted into chat_log.meta, so reopening an old
+ * session still shows which brain made which decision, not just the final reply.
  */
 export type TurnMeta = {
   gate: GateDecision | null;
   /**
-   * graph 没介入时为 null。
+   * Null when no graph was involved.
    */
   graph: GraphInfo | null;
   iterations: number;
   latencyMs: number;
   tools: Array<ToolCallRecord>;
   /**
-   * 真正回答这一轮的模型：被 graph 判成 quick 时是小模型，如实记录。
+   * The model that actually answered this turn: the small model when the graph routed quick, recorded as-is.
    */
   model: string;
   provider: string;
   /**
-   * 这一轮的 token 用量。只走过 `turnCompleted`、没进库的历史缺陷
-   * 已经补上：现在它随 meta 一起落进 chat_log，重看历史也看得到花了多少。
+   * Token usage for this turn. The historical flaw of only reaching `turnCompleted`
+   * without being persisted is fixed: it now lands in chat_log with the meta, so past turns show their cost too.
    */
   usage: TokenUsage | null;
   /**
-   * 这一轮被 `turn/interrupt` 打断时为 true。
-   * 旧库里的 meta 没有这个字段 —— `#[serde(default)]` 让它们照常解析。
+   * True when this turn was cut short by `turn/interrupt`.
+   * Older metas in the DB lack this field — `#[serde(default)]` lets them parse as before.
    */
   interrupted: boolean;
   /**
-   * 循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。
-   * 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。
+   * How many times the loop guard fired this turn (0 = the model never got stuck
+   * repeating/alternating tool calls). Zero is normal; non-zero means part of this turn's budget went to spinning in place.
    */
   guardHits: number;
   /**
-   * 命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。
+   * What the guard told the model when it fired (a human-readable explanation; null otherwise).
    */
   guardNote: string | null;
   /**
-   * 这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。
+   * How many provider retries happened this turn (rate limits / transient faults). Zero is the norm.
    */
   retries: number;
   /**
-   * 目标循环的出口（`continuing` / `satisfied` / `impossible` /
-   * `round-limit` / `blocked`）。没设目标就是 `None`。
+   * The goal loop's exit (`continuing` / `satisfied` / `impossible` /
+   * `round-limit` / `blocked`). `None` when no goal is set.
    */
   goalStatus: string | null;
   /**
-   * 这个目标到这一轮为止续了几轮。没设目标就是 0。
+   * How many rounds this goal has consumed up to this turn. 0 when no goal is set.
    */
   goalRounds: number;
   /**
-   * 这轮的模型是怎么选的（路由，见 route.rs）：`auto:reasoning → ds-r1`
-   * / `fallback: …`。fixed 模式与「选中的就是 active」时是 `None` ——
-   * 页脚保持干净，只有真的发生了选择/回落才说话。
+   * How this turn's model was chosen (routing, see route.rs): `auto:reasoning → ds-r1`
+   * or `fallback: …`. `None` in fixed mode and when the chosen one is already active —
+   * the footer stays quiet and only speaks when a choice/fallback actually happened.
    */
   routeReason: string | null;
 };

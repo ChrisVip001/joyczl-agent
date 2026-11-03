@@ -3,7 +3,7 @@ import type { ModelProfileView } from "./ModelProfileView";
 
 export type ModelProfilesResponse = {
   /**
-   * 当前生效的 id（没配就是 null）。
+   * The currently active id (null when nothing is configured).
    */
   activeId: string | null;
   profiles: Array<ModelProfileView>;

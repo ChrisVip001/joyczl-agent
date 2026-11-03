@@ -5,7 +5,7 @@ export type JsonRpcResponse = {
   jsonrpc: string;
   id: RequestId;
   /**
-   * 具体结构由 method 决定，解码方按 `*Response` 类型自行 narrow。
+   * The concrete shape depends on method; decoders narrow it to the matching `*Response` type themselves.
    */
   result: unknown;
 };

@@ -1,4 +1,4 @@
-//! 上下文压缩的测试：水位线算术、滚动折叠、失败兜底。
+//! Compaction tests: waterline arithmetic, rolling fold, failure fallback.
 
 use joyczl_provider::mock::Mock;
 
@@ -10,7 +10,7 @@ fn pairs(n: usize) -> Vec<(String, String)> {
         .collect()
 }
 
-/// 一个临时 state.db 上的三个句柄 —— 同一个 crate 的其它测试模块也这么起。
+/// Three handles on one temporary state.db — other test modules in this crate start alike.
 async fn stores() -> (
     joyczl_state::Facts,
     joyczl_state::Episodes,
@@ -20,7 +20,7 @@ async fn stores() -> (
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     (
         joyczl_state::Facts::new(pool.clone()),
         joyczl_state::Episodes::new(pool.clone()),
@@ -30,15 +30,15 @@ async fn stores() -> (
 
 #[test]
 fn the_waterline_only_reports_turns_newly_pushed_out() {
-    // 10 轮、窗口 4：被挤出 6 轮。还没摘要过 → 全给。
+    // 10 turns, window 4: 6 evicted. Never summarized → give all.
     assert_eq!(newly_evicted(&pairs(10), 4, 0).len(), 6);
-    // 已经摘要到 6 轮 → 没有新东西。
+    // Summarized through turn 6 → nothing new.
     assert!(newly_evicted(&pairs(10), 4, 6).is_empty());
-    // 又聊了两轮 → 只给新挤出的那两轮，不重算全史。
+    // Two more turns → only the two newly evicted, no full recompute.
     let fresh = newly_evicted(&pairs(12), 4, 6);
     assert_eq!(fresh.len(), 2);
     assert_eq!(fresh[0].0, "问题 6");
-    // 会话还没超过窗口 → 什么都不用做。
+    // Session still within the window → nothing to do.
     assert!(newly_evicted(&pairs(3), 12, 0).is_empty());
 }
 
@@ -56,7 +56,7 @@ async fn rolling_forward_folds_new_turns_into_the_previous_summary() {
     assert_eq!(covered, 3, "水位线要往前走");
     assert!(summary.contains("发版"), "{summary}");
 
-    // 喂给模型的东西：既有上一版摘要，也有新轮次 —— 折叠而不是重来。
+    // Fed to the model: the previous summary and the new turns — folded, not redone.
     let sent = mock.received.lock().unwrap()[0].messages[0].text();
     assert!(
         sent.contains("之前聊过项目排期。"),
@@ -67,7 +67,7 @@ async fn rolling_forward_folds_new_turns_into_the_previous_summary() {
 
 #[tokio::test]
 async fn a_dead_summarizer_falls_back_to_a_deterministic_excerpt() {
-    // 模型罢工（队列空 = 报错）。内容绝不能丢：兜底摘录里要能看见原文。
+    // The model strikes (empty queue = error). Content must survive: the fallback excerpt shows the original.
     let mock = Mock::new(vec![]);
     let (covered, summary) = roll_forward(&mock, "small", None, &pairs(2)).await;
 
@@ -79,7 +79,7 @@ async fn a_dead_summarizer_falls_back_to_a_deterministic_excerpt() {
 
 #[tokio::test]
 async fn an_empty_model_answer_is_treated_as_a_failure() {
-    // 回了个空字符串：与失败同等对待 —— 空摘要等于丢内容。
+    // An empty string reply: treated as failure — an empty summary is lost content.
     let mock = Mock::new(vec![Mock::text("   ")]);
     let (_, summary) = roll_forward(&mock, "small", None, &pairs(1)).await;
     assert!(summary.contains("问题 0"), "{summary}");
@@ -110,7 +110,7 @@ async fn refresh_persists_the_waterline_so_the_next_turn_does_not_recompute() {
     assert_eq!(stored.0, 5);
     assert_eq!(stored.1, "第一版摘要。");
 
-    // 轮次没涨：这一轮不再调模型（队列里没有第二句）。
+    // Turn count unchanged: no second model call this round (nothing left in the queue).
     let again = refresh(&chat, &mock, "small", "s1", &pairs(5), 0)
         .await
         .expect("不重算");
@@ -132,7 +132,7 @@ fn the_token_budget_decides_how_many_turns_survive() {
     assert!(turns_that_fit(&pairs, 1_000_000) == 5);
     assert_eq!(turns_that_fit(&[], 100), 0, "没有历史就没有轮次");
 
-    // 预算只够装下后面一部分：从**最新**往回装。
+    // The budget fits only a trailing part: packed from the **newest** backwards.
     let tight = turns_that_fit(&pairs, 40);
     assert!(
         (1..5).contains(&tight),

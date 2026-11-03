@@ -1,6 +1,6 @@
-// 由 ts-rs 生成物汇总而来，别手改。
-// 生成逻辑：joyczl-protocol/src/export.rs 的 write_consts。
-// 清单在 `rpc::codes`。key 跟 Rust 侧常量同名，好让两边 grep 得到同一处。
+// Assembled from the ts-rs generated files — do not edit by hand.
+// Generation logic: write_consts in joyczl-protocol/src/export.rs.
+// Inventory at `rpc::codes`.key 跟 Rust 侧常量同名，好让两边 grep 得到同一处。
 export const CODES = {
   PARSE_ERROR: -32700,
   INVALID_REQUEST: -32600,

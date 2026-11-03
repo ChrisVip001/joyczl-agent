@@ -1,28 +1,28 @@
-//! 混合检索：关键词那条腿 + 向量那条腿，用 RRF 合起来。
+//! Hybrid retrieval: the keyword leg plus the vector leg, fused with RRF.
 //!
-//! 单靠关键词，问「上次说的那个上线安排」永远找不到「10 月 15 日发版」——
-//! 字面上没有一个词重合。单靠向量，专名（`JOY_HOME`、`state.db`）又常常
-//! 被糊掉。两条腿各自排序、再按名次融合，正好互补。
+//! Keywords alone: asking "that launch plan from before" never finds "ship on Oct 15" —
+//! not one literal word overlaps. Vectors alone blur proper names (`JOY_HOME`,
+//! `state.db`). Each leg ranks on its own, then fuse by rank — they complement.
 //!
-//! **融合用名次不用分数**（RRF：`Σ 1/(k + rank)`，k=60）：关键词的 bm25 与
-//! 余弦相似度量纲完全不同，硬凑成一个分数是编数据；名次是两者都有的、
-//! 可比的东西。k=60 是原论文里的默认值，压住头部波动。
+//! **Fuse by rank, not score** (RRF: `Σ 1/(k + rank)`, k=60): bm25 and cosine
+//! similarity have entirely different scales; forcing one score is making data up.
+//! Rank is the one thing both have that compares. k=60 is the paper default.
 //!
-//! 失败开放，与这个 crate 的其它成员一致：embedding 服务不可用就只用
-//! 关键词那条腿，绝不让一次网络故障变成「什么都想不起来」。
+//! Fail-open, like the rest of this crate: when the embedding service is down, use
+//! the keyword leg only — one network failure must never become "remembering nothing".
 
 use anyhow::Result;
 use joyczl_provider::embed::Embedder;
 use joyczl_state::{FactRow, Facts};
 
-/// 向量那条腿的相似度门槛。低于它的当作无关 —— 余弦相似度在 0.3 以下
-/// 基本是「同一个语言」而不是「同一个话题」。
+/// Similarity threshold for the vector leg. Below it counts as unrelated — cosine
+/// similarity under 0.3 usually means "same language", not "same topic".
 const MIN_SIMILARITY: f32 = 0.30;
 
-/// RRF 的名次平滑常数（原论文默认）。
+/// RRF's rank-smoothing constant (paper default).
 const RRF_K: f32 = 60.0;
 
-/// 余弦相似度。长度不等或零向量都返回 0（当作无关，而不是报错）。
+/// Cosine similarity. Mismatched lengths or zero vectors return 0 (unrelated, not an error).
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
@@ -41,8 +41,8 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     dot / (na.sqrt() * nb.sqrt())
 }
 
-/// 两路结果的 RRF 融合。同名次并列时，先出现的（关键词那条腿）在前 ——
-/// 精确匹配总是比「大概相关」更值得相信。
+/// RRF fusion of the two result sets. On rank ties, the earlier (keyword leg) comes
+/// first — an exact match is always more believable than "probably relevant".
 pub fn rrf_fuse(keyword: &[FactRow], semantic: &[FactRow]) -> Vec<FactRow> {
     use std::collections::HashMap;
 
@@ -58,7 +58,7 @@ pub fn rrf_fuse(keyword: &[FactRow], semantic: &[FactRow]) -> Vec<FactRow> {
     }
 
     let mut ranked: Vec<(i64, f32)> = scores.into_iter().collect();
-    // 分数降序；同分按 id 升序，保证结果稳定（同一个查询每次得到同样的顺序）。
+    // Score descending; ties by id ascending, keeping results stable (same query, same order).
     ranked.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -70,9 +70,9 @@ pub fn rrf_fuse(keyword: &[FactRow], semantic: &[FactRow]) -> Vec<FactRow> {
         .collect()
 }
 
-/// 向量那条腿：算查询向量，跟库里所有带向量的行比一遍。
+/// The vector leg: compute the query vector and compare against every vectorized row.
 ///
-/// 出错就返回空 —— 调用方（`search_hybrid`）会退回纯关键词。
+/// On error return empty — the caller (`search_hybrid`) falls back to pure keywords.
 async fn semantic_hits(
     facts: &Facts,
     embedder: &Embedder,
@@ -97,7 +97,7 @@ async fn semantic_hits(
     Ok(scored.into_iter().take(top_k).map(|(_, row)| row).collect())
 }
 
-/// 混合检索。没给 embedder（开关关着）就是纯关键词 —— 与升级前完全一样。
+/// Hybrid retrieval. No embedder given (flag off) means pure keywords — exactly as before the upgrade.
 pub async fn search_hybrid(
     facts: &Facts,
     embedder: Option<&Embedder>,
@@ -111,7 +111,7 @@ pub async fn search_hybrid(
     let semantic = match semantic_hits(facts, embedder, query, top_k as usize * 2).await {
         Ok(hits) => hits,
         Err(e) => {
-            // 一条腿断了不致命：关键词那条腿照样站着。
+            // One broken leg isn't fatal: the keyword leg still stands.
             eprintln!("(joy) 向量检索不可用，这次只用关键词：{e}");
             return keyword;
         }
@@ -125,8 +125,8 @@ pub async fn search_hybrid(
         .collect()
 }
 
-/// `joy memory reindex` 的执行体：给还没有向量的事实补上向量。
-/// 返回补了多少条。
+/// The body of `joy memory reindex`: backfills vectors for facts that lack one.
+/// Returns how many were backfilled.
 pub async fn reindex(facts: &Facts, embedder: &Embedder) -> Result<usize> {
     let mut done = 0usize;
     loop {
@@ -135,7 +135,7 @@ pub async fn reindex(facts: &Facts, embedder: &Embedder) -> Result<usize> {
             return Ok(done);
         }
         for row in batch {
-            // subject + content 一起 embed：主题词常常正是检索时想问的词。
+            // Embed subject + content together: the subject is often what retrieval asks for.
             let text = format!("{}: {}", row.subject, row.content);
             match embedder.embed(&text).await {
                 Ok(vector) => {

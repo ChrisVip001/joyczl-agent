@@ -1,7 +1,7 @@
-//! 确定性用例的形状。一份用例 = 脚本化的模型应答 + 对 harness 行为的断言。
+//! The shape of a deterministic case. One case = scripted model replies + assertions on harness behavior.
 //!
-//! 单轮用例直接写 `message` / `gate` / `responses`；跨轮行为（滑窗、折叠、
-//! consolidation、config 生效、session 隔离）用 `turns` 数组，每轮一段脚本。
+//! Single-turn cases write `message` / `gate` / `responses` directly; cross-turn behavior
+//! (sliding window, folding, consolidation, config reload, session isolation) uses `turns`.
 
 use joyczl_provider::mock::Mock;
 use joyczl_provider::CreateResponse;
@@ -15,53 +15,53 @@ pub struct Scenario {
     pub id: String,
     #[serde(default)]
     pub description: String,
-    /// 单轮便捷字段：与 `turns` 二选一。
+    /// Single-turn convenience fields: either these or `turns`, not both.
     #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
     pub gate: Option<Value>,
     #[serde(default)]
     pub responses: Vec<ScriptedResponse>,
-    /// 单轮便捷字段：收到第 N 个流式增量后打断。
+    /// Single-turn convenience field: interrupt after the Nth streaming increment.
     #[serde(default)]
     pub interrupt_after_deltas: Option<usize>,
-    /// 多轮：每轮一段脚本（gate / responses / 会话 id / 打断 / 配置补丁）。
+    /// Multi-turn: one script per turn (gate / responses / session id / interrupt / config patch).
     #[serde(default)]
     pub turns: Option<Vec<TurnScript>>,
     #[serde(default)]
     pub expect: Expectations,
-    /// 覆盖若干 Settings 旋钮（滑窗、consolidate 频率……）。
+    /// Overrides a few Settings knobs (sliding window, consolidate frequency, …).
     #[serde(default)]
     pub settings: SettingsOverrides,
-    /// 开跑前写进 home 的文件（相对路径）—— mcp.json 与假服务器用。
+    /// Files written into home before the run (relative paths) — for mcp.json and fake servers.
     #[serde(default)]
     pub files: Option<std::collections::BTreeMap<String, String>>,
-    /// 前置依赖缺失时跳过本用例（"python3" / "sh" / "sandbox"）。跳过不算失败。
+    /// Skip this case when a prerequisite is missing ("python3" / "sh" / "sandbox"). A skip is not a failure.
     #[serde(default)]
     pub prereq: Option<String>,
 }
 
-/// 多轮中一轮的脚本。
+/// The script for one turn of a multi-turn case.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TurnScript {
     pub message: String,
-    /// 会话标签。不填 = "eval"。
+    /// Session label. Unset = "eval".
     #[serde(default)]
     pub session_id: Option<String>,
-    /// 检索门的脚本。不给 = 门收到非 JSON（顺手测失败开放）。
+    /// The retrieval gate's script. Unset = the gate gets non-JSON (fail-open tested for free).
     #[serde(default)]
     pub gate: Option<Value>,
     #[serde(default)]
     pub responses: Vec<ScriptedResponse>,
-    /// 本轮结束后写入的 `config/write` 补丁（验证配置热生效）。
+    /// A `config/write` patch applied after this turn (verifies hot config reload).
     #[serde(default)]
     pub apply_patch: Option<Value>,
-    /// 收到第 N 个流式增量后打断这一轮（验证 turn/interrupt）。
+    /// Interrupt this turn after the Nth streaming increment (verifies turn/interrupt).
     #[serde(default)]
     pub interrupt_after_deltas: Option<usize>,
 }
 
-/// Settings 旋钮的用例级覆盖。
+/// Case-level overrides of Settings knobs.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SettingsOverrides {
     #[serde(default)]
@@ -74,25 +74,25 @@ pub struct SettingsOverrides {
     pub max_iterations: Option<i32>,
     #[serde(default)]
     pub max_tokens: Option<i32>,
-    /// 覆盖上下文窗口的近似值 —— token 触发的压缩要能在用例里钉死。
+    /// Approximate context window override — token-triggered compaction must be pinnable in a case.
     #[serde(default)]
     pub context_window: Option<u32>,
     #[serde(default)]
     pub compact_threshold: Option<f64>,
     #[serde(default)]
     pub graph_workflows: Option<bool>,
-    /// 执行工具的开与放行规则（见 joyczl-tools 的 exec.rs）。
+    /// Exec tool toggle and allow rules (see joyczl-tools' exec.rs).
     #[serde(default)]
     pub exec_enabled: Option<bool>,
-    /// 子代理（`JOY_DELEGATE`）。
+    /// Subagents (`JOY_DELEGATE`).
     #[serde(default)]
     pub delegate_enabled: Option<bool>,
     #[serde(default)]
     pub exec_allow: Option<Vec<String>>,
-    /// 生命周期钩子（`JOY_HOOKS`）。
+    /// Lifecycle hooks (`JOY_HOOKS`).
     #[serde(default)]
     pub hooks_enabled: Option<bool>,
-    /// 轮内工具结果预算（见 joyczl-loop 的 budget.rs）。
+    /// In-turn tool result budget (see joyczl-loop's budget.rs).
     #[serde(default)]
     pub tool_result_total_chars: Option<i64>,
     #[serde(default)]
@@ -100,7 +100,7 @@ pub struct SettingsOverrides {
 }
 
 impl Scenario {
-    /// 展开成逐轮脚本：`turns` 优先；否则从单轮字段合成一轮。
+    /// Expands to per-turn scripts: `turns` wins; otherwise one turn is synthesized from the single-turn fields.
     pub fn effective_turns(&self) -> Vec<TurnScript> {
         if let Some(turns) = &self.turns {
             return turns.clone();
@@ -115,12 +115,12 @@ impl Scenario {
         }]
     }
 
-    /// mock 应答队列 = 各轮脚本按执行顺序展平（gate 先、应答后）。
-    /// consolidation 之类的额外模型调用也按时间序插在队列里 ——
-    /// 用例作者按 run_turn 的真实顺序排即可。统一流式：interrupt 用例
-    /// 依赖增量，其余用例不受影响（断言看的是拼起来的完整文本）。
-    /// gate 缺省时自动补一句非 JSON 的应答 —— 门失败开放，且不吞
-    /// loop 的应答（这正是缺省语义："懒得写 gate 就测失败开放"）。
+    /// The mock reply queue = all turn scripts flattened in execution order (gate first,
+    /// replies after). Extra model calls like consolidation are inserted in time order —
+    /// case authors just follow run_turn's real order. Uniform streaming: interrupt cases
+    /// depend on increments; others don't (assertions read the assembled full text). An
+    /// unset `gate` auto-pads a non-JSON reply — the gate fails open without swallowing
+    /// the loop's reply (the default semantics: "no gate written → fail-open tested").
     pub fn build_mock(&self, home: &std::path::Path) -> Mock {
         let mut responses: Vec<CreateResponse> = Vec::new();
         for turn in self.effective_turns() {
@@ -137,7 +137,7 @@ impl Scenario {
     }
 }
 
-/// 模型的下一句：要么纯文本，要么一次工具调用。
+/// The model's next move: either plain text or one tool call.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptedResponse {
@@ -154,9 +154,9 @@ impl ScriptedResponse {
         match self {
             ScriptedResponse::Text(text) => Mock::text(text),
             ScriptedResponse::ToolUse { name, args } => {
-                // 工具参数里的 {{home}} 替换成用例自己的 home —— 文件装置
-                // （scenario.files）写在 home 里，脚本要能指到它。
-                // 展开规则见 `expand_home`：正斜杠，所以参数仍是合法 JSON。
+                // {{home}} in tool arguments becomes the case's own home — file fixtures
+                // (scenario.files) live in home, and the script must be able to point at
+                // them. Expansion per `expand_home`: forward slashes, so args stay valid JSON.
                 let replaced = crate::expand_home(&args.to_string(), home);
                 let args: Value = serde_json::from_str(&replaced).unwrap_or_else(|error| {
                     eprintln!(
@@ -170,48 +170,49 @@ impl ScriptedResponse {
     }
 }
 
-/// 断言集。全是「应包含 / 不应包含 / 序列相等」级别的检查 ——
-/// 确定性 eval 的每个判定都必须可复现，不靠另一个模型。
+/// The assertion set. All checks are "must contain / must not contain / sequence
+/// equals" grade — every deterministic eval verdict must be reproducible, never
+/// resting on another model.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Expectations {
     #[serde(default)]
     pub reply_contains: Vec<String>,
     #[serde(default)]
     pub reply_not_contains: Vec<String>,
-    /// 工具名的**有序**序列（空 vec = 不检查；多轮时按轮累计）。
+    /// The **ordered** sequence of tool names (empty vec = unchecked; accumulated across turns).
     #[serde(default)]
     pub tools_used: Vec<String>,
-    /// 任一工具输出必须包含的片段 —— 区分「调了但失败」与「真跑通了」。
+    /// Fragments any tool output must contain — separates "called but failed" from "really ran through".
     #[serde(default)]
     pub tool_output_contains: Vec<String>,
-    /// `"retrieve"` 或 `"skip"`（每轮都查；任一轮不符即失败）。
+    /// `"retrieve"` or `"skip"` (checked every turn; any mismatch fails).
     #[serde(default)]
     pub gate: Option<String>,
     #[serde(default)]
     pub iterations: Option<i32>,
-    /// 发出的 consolidation 通知里的新事实总数。
+    /// Total new facts across emitted consolidation notifications.
     #[serde(default)]
     pub consolidation_new_facts: Option<i32>,
-    /// 最后一轮被打断过。
+    /// The last turn was interrupted.
     #[serde(default)]
     pub interrupted: Option<bool>,
-    // ---- prompt 断言（harness 到底给模型看了什么）----
-    /// 所有模型请求的全文里出现过。
+    // ---- prompt assertions (what the harness actually showed the model) ----
+    /// Appeared in the full text of every model request.
     #[serde(default)]
     pub prompt_contains: Vec<String>,
-    /// 所有模型请求的全文里都不出现。
+    /// Appeared in none of the model requests' full text.
     #[serde(default)]
     pub prompt_not_contains: Vec<String>,
-    /// **最后一个**模型请求里出现过（查"最新一轮看见了什么"）。
+    /// Appeared in the **last** model request (asks "what did the newest turn see").
     #[serde(default)]
     pub last_prompt_contains: Vec<String>,
-    /// 最后一个模型请求里不出现。
+    /// Did not appear in the last model request.
     #[serde(default)]
     pub last_prompt_not_contains: Vec<String>,
 }
 
-/// judge 用例：真模型答一轮，裁判按 criteria 打分。没有脚本应答 ——
-/// 被考的就是真的 Joy。
+/// A judge case: a real model answers one turn, the referee scores by criteria. No
+/// scripted replies — the real Joy is under test.
 #[derive(Debug, Clone, Deserialize)]
 pub struct JudgeScenario {
     pub id: String,
@@ -223,11 +224,11 @@ pub struct JudgeScenario {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct JudgeSpec {
-    /// 这条用例最看重什么（裁判 rubric 里的定制段）。
+    /// What this case cares about most (a custom section of the referee's rubric).
     pub criteria: String,
 }
 
-/// 读 judge 用例（与确定性用例同一份 JSONL 形状，目录/文件都认）。
+/// Reads judge cases (same JSONL shape as deterministic cases; directories and files both accepted).
 pub fn load_judge(paths: &[PathBuf]) -> anyhow::Result<Vec<JudgeScenario>> {
     let mut scenarios = Vec::new();
     for path in paths {
@@ -254,7 +255,7 @@ pub fn load_judge(paths: &[PathBuf]) -> anyhow::Result<Vec<JudgeScenario>> {
     Ok(scenarios)
 }
 
-/// 读全部确定性用例：每个路径是 JSONL 文件或目录（目录则吃它下面的 *.jsonl）。
+/// Reads all deterministic cases: each path is a JSONL file or directory (a directory consumes its *.jsonl).
 pub fn load_all(paths: &[PathBuf]) -> anyhow::Result<Vec<Scenario>> {
     let mut scenarios = Vec::new();
     for path in paths {
@@ -294,9 +295,9 @@ mod tests {
 
     #[test]
     fn home_in_tool_args_stays_valid_json_for_windows_paths() {
-        // Windows 的 home 带反斜杠。裸替换会把工具参数变成非法 JSON，
-        // 于是装置路径静默退化成字面量 {{home}} —— read_file / list_dir
-        // 在自己的装置文件上反而报「找不到文件」。
+        // Windows homes carry backslashes. A bare replacement turns tool arguments into
+        // invalid JSON, so fixture paths silently degrade to the literal {{home}} —
+        // read_file / list_dir then report "file not found" on their own fixture.
         let home = std::path::Path::new(r"C:\Users\joy\AppData\Local\Temp\.tmp42");
         let scripted = ScriptedResponse::ToolUse {
             name: "read_file".to_string(),

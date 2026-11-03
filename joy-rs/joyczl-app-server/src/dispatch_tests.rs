@@ -1,8 +1,8 @@
-//! 出口那一层的测试：库里的行 → 协议里的值。
+//! Tests for the outlet layer: rows in the db → values in the protocol.
 //!
-//! 只测两个纯函数（`iso` 和 `to_message`）。真跟 state 打交道的那部分由两头
-//! 夹住 —— 里面是 `state_tests.rs` 的 SQL，外面是 `smoke-dashboard.sh` 的
-//! 真实 HTTP 往返。这一层不该长出第二套 SQL。
+//! Only two pure functions are tested (`iso` and `to_message`). The part that really talks to state is
+//! pinched from both ends — inside, the SQL in `state_tests.rs`; outside, the real HTTP round-trips of
+//! `smoke-dashboard.sh`. This layer must never grow a second set of SQL.
 
 use super::{iso, iso_opt, to_message};
 use joyczl_protocol::MessageRole;
@@ -18,8 +18,8 @@ fn row(role: &str, meta: Option<&str>) -> MessageRow {
     }
 }
 
-/// 库里存的是 `datetime('now')`：UTC、空格分隔、**没有时区标记**。
-/// 出去必须带上 `Z` —— 不带的话浏览器按本地时间读，东八区就整整差 8 小时。
+/// The db stores `datetime('now')`: UTC, space-separated, **no timezone marker**.
+/// Outbound it must carry a `Z` — without it the browser reads local time, a full 8-hour shift in UTC+8.
 #[test]
 fn sqlite_datetime_goes_out_as_iso_8601_utc() {
     assert_eq!(
@@ -33,7 +33,7 @@ fn sqlite_datetime_goes_out_as_iso_8601_utc() {
     );
 }
 
-/// 认不出来就原样带出去：这只是一层格式化，没资格让整个方法报错。
+/// What it cannot parse passes through unchanged: this is only a formatting layer, with no standing to error the whole method.
 #[test]
 fn iso_passes_through_what_it_cannot_parse() {
     for weird in ["", "2026-09-19T16:46:49+08:00", "不是时间"] {
@@ -41,8 +41,8 @@ fn iso_passes_through_what_it_cannot_parse() {
     }
 }
 
-/// 角色是**闭集**：只有这两种画得出来。认不出来的跳过，
-/// 而不是硬塞一个值进去骗前端的 `switch`。
+/// Roles are a **closed set**: only these two are renderable. Unrecognizable ones are skipped,
+/// rather than forcing a value in to fool the frontend's `switch`.
 #[test]
 fn only_renderable_roles_make_it_into_the_protocol() {
     assert_eq!(
@@ -57,8 +57,8 @@ fn only_renderable_roles_make_it_into_the_protocol() {
     assert!(to_message(row("", None)).is_none());
 }
 
-/// 遥测那一列是 JSON 文本：形状将来会变，也可能是手写进去的脏数据。
-/// 解不出来就当没有遥测 —— 历史的主体是说过的话，不是遥测。
+/// The telemetry column is JSON text: its shape will change, or it may be hand-written dirty data.
+/// Unparsable means no telemetry — the body of history is what was said, not the telemetry.
 #[test]
 fn broken_telemetry_does_not_take_the_message_with_it() {
     let raw = r#"{"gate":null,"graph":null,"iterations":2,"latencyMs":120,
@@ -76,7 +76,7 @@ fn broken_telemetry_does_not_take_the_message_with_it() {
     assert_eq!(broken.content, "你好");
 }
 
-/// 行号与时刻要原样过桥：行号就是下一页的游标。
+/// The row id and timestamp cross the bridge unchanged: the row id is the next page's cursor.
 #[test]
 fn id_and_timestamp_survive_the_trip() {
     let message = to_message(row("user", None)).expect("user");

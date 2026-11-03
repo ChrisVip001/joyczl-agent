@@ -1,17 +1,17 @@
-//! 把人类的输入变成 FTS5 能安全吃下的查询。
+//! Turn human input into a query FTS5 can safely digest.
 
-/// 用户说什么都可能：引号、星号、冒号、半个括号。直接拼进 `MATCH` 会抛
-/// SQLite 语法错误 —— 而检索门是**失败开放**的，一次报错就会退化成「每轮都检索」。
-/// 所以这里把输入切成词、逐个加引号、用 OR 连起来：语法永远合法，语义也够用
-/// （命中任意一个词即可，比整串精确匹配更符合「想起相关的」）。
+/// Users type anything: quotes, asterisks, colons, half a bracket. Splicing it straight into
+/// `MATCH` throws SQLite syntax errors — and the retrieval gate is **fail-open**, one error
+/// degrades into "search every turn". So the input is split into words, each quoted, joined
+/// with OR: always-legal grammar; any word matching suffices ("recall something related").
 ///
-/// 返回 `None` 表示没有任何可用词（全是标点 / 空串），调用方应当跳过检索。
+/// `None` means no usable words (all punctuation / empty); the caller should skip search.
 ///
-/// 分词器是 trigram（见 migrations/0002），按连续三字符切片建索引，中文天然可用。
-/// 短于 3 个字符的词切不出三元组——那部分交给 [`like_pattern`] 兜底。
+/// The tokenizer is trigram (see migrations/0002): indexing by 3-char slices, CJK works
+/// naturally. Words shorter than 3 chars yield no trigrams — [`like_pattern`] covers those.
 pub fn to_match_expr(input: &str) -> Option<String> {
-    // 按「非字母数字」切，而不是只削掉首尾：中间的冒号、斜杠一样会破坏
-    // FTS5 语法（`a:b` 不是一个合法的裸词，虽然加引号后能过，但语义也不对）。
+    // Split on "non-alphanumeric" rather than trimming ends: colons and slashes inside
+    // break FTS5 grammar too (`a:b` is not a legal bare word, quoted or not, semantically).
     let tokens: Vec<String> = input
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
@@ -25,20 +25,20 @@ pub fn to_match_expr(input: &str) -> Option<String> {
     }
 }
 
-/// FTS 没命中时的兜底：普通 LIKE 子串扫描。
+/// The fallback when FTS misses: an ordinary LIKE substring scan.
 ///
-/// 覆盖两类情况：查询词短于 3 个字符（中文两字词很常见，切不出三元组），
-/// 以及 trigram 对极短英文词同样无能为力。个人记忆库就几千行，
-/// 一次全表 LIKE 是微秒级 —— 不值得为此引入外部分词器。
+/// Covers two cases: query terms shorter than 3 chars (two-char CJK words are common; no
+/// trigrams), and trigram's inability on very short English words. A personal memory store
+/// is a few thousand rows; one full LIKE scan is microseconds — no external tokenizer needed.
 ///
-/// 通配符 `%` `_` 会被剔掉，否则用户能用它把 LIKE 变成全表扫描（虽然也
-/// 只是慢，但没必要留这个口子）。
+/// The wildcards `%` `_` are stripped, or a user could turn LIKE into a full-table scan
+/// (only slow, but no reason to leave that door open).
 pub fn like_pattern(input: &str) -> Option<String> {
-    // 只剔掉 LIKE 自己的两个通配符，其余原样保留 ——
-    // 包括空格，因为「alex morning」作为连续子串去匹配才是用户想要的。
+    // Strip only LIKE's own two wildcards, keep everything else —
+    // including spaces, since "alex morning" as one contiguous substring is what's wanted.
     let needle: String = input.chars().filter(|c| !matches!(c, '%' | '_')).collect();
     let needle = needle.trim();
-    // 至少得有一个字母数字（中文也算），否则这次扫描注定是空转。
+    // At least one alphanumeric (CJK counts), or this scan is doomed to idle.
     if !needle.chars().any(char::is_alphanumeric) {
         None
     } else {
@@ -60,7 +60,7 @@ mod fts_tests {
 
     #[test]
     fn strips_punctuation_that_would_break_the_grammar() {
-        // 每个词都被加引号，所以危险字符必须一个都不剩地先被切掉。
+        // Every word gets quoted, so dangerous characters must be split off completely first.
         for bad in [
             "what's on?",
             "a:b",
@@ -71,7 +71,7 @@ mod fts_tests {
             "a/b",
         ] {
             if let Some(expr) = to_match_expr(bad) {
-                // 逐个检查被加引号的词，而不是整串（整串里本来就有引号和 OR）。
+                // Check the quoted words one by one, not the whole string (it has quotes and OR anyway).
                 for token in expr.split(" OR ") {
                     let inside = token.trim_matches('"');
                     for dangerous in ['(', ')', ':', '*', '"', '/', '-'] {
@@ -87,7 +87,7 @@ mod fts_tests {
 
     #[test]
     fn splits_on_inner_punctuation_too() {
-        // 只削首尾的话 "a:b" 会整块留下来。
+        // Trimming only the ends would keep "a:b" whole.
         assert_eq!(to_match_expr("a:b").as_deref(), Some("\"a\" OR \"b\""));
     }
 
@@ -101,7 +101,7 @@ mod fts_tests {
     #[test]
     fn like_pattern_keeps_chinese_and_drops_wildcards() {
         assert_eq!(like_pattern("早上").as_deref(), Some("%早上%"));
-        // 用户塞进来的 % 不能变成通配符。
+        // A user-supplied % must not become a wildcard.
         assert_eq!(like_pattern("a%b").as_deref(), Some("%ab%"));
     }
 }

@@ -1,30 +1,30 @@
-//! Joy app-server v2 —— 契约本体。
+//! Joy app-server v2 — the contract itself.
 //!
-//! 这一份定义同时喂给三方：Rust app-server（直接用）、TypeScript 前端
-//! （ts-rs 生成）、Python SDK（schemars → datamodel-code-generator）。
-//! **改这里就是改协议**，改完必须跑 `just write-app-server-schema`。
+//! This single definition feeds three consumers: the Rust app-server (as-is),
+//! the TypeScript frontend (ts-rs), the Python SDK (schemars → datamodel-code-generator).
+//! **Editing this file means editing the protocol**; run `just write-app-server-schema` after.
 //!
-//! 命名规则：
-//!   * `*Params`        客户端 → 服务端的请求载荷
-//!   * `*Response`      服务端 → 客户端的应答载荷
-//!   * `*Notification`  服务端 → 客户端的推送
-//!   * wire 上一律 camelCase；枚举值也 camelCase
-//!   * 时间戳用 Unix 秒（`*_at`）或 ISO 8601 字符串（面向人类展示的字段）
-//!   * **整数字段一律 `i32`**，不用 `i64`：`i64` 会被 ts-rs 映射成 TypeScript 的
-//!     `bigint`，而 `JSON.parse` 出来的是 `number`，类型对不上会在运行时炸。
-//!     这里的每个整数都是计数 / id / 毫秒，量级远小于 2^31；存储层内部仍可用
-//!     i64（SQLite rowid），跨过协议边界时再收窄。
+//! Naming rules:
+//!   * `*Params`        request payload, client → server
+//!   * `*Response`      response payload, server → client
+//!   * `*Notification`  push message, server → client
+//!   * camelCase everywhere on the wire; enum values too
+//!   * timestamps: Unix seconds (`*_at`) or ISO 8601 strings (human-facing fields)
+//!   * **integer fields are always `i32`**, never `i64`: ts-rs maps `i64` to
+//!     TypeScript `bigint` while `JSON.parse` yields `number` — a mismatch
+//!     that blows up at runtime. Every integer here is a count / id /
+//!     milliseconds, well below 2^31; storage may still use i64, narrowed at the boundary.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{JsonSchema, TS};
 
-/// JSON-RPC 方法名。`<resource>/<method>`，resource 单数。
+/// JSON-RPC method names. `<resource>/<method>`, resource in singular.
 pub mod methods {
     pub const TURN_START: &str = "turn/start";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const APPROVAL_RESPOND: &str = "approval/respond";
-    /// 设/清一个目标（条件）。**只有人能让它开始或停下** —— 模型没有这个能力。
+    /// Set/clear a goal (condition). **Only a human can start or stop it** — the model cannot.
     pub const GOAL_SET: &str = "goal/set";
     pub const SESSION_LIST: &str = "session/list";
     pub const SESSION_NEW: &str = "session/new";
@@ -37,25 +37,25 @@ pub mod methods {
     pub const CONFIG_READ: &str = "config/read";
     pub const CONFIG_WRITE: &str = "config/write";
     pub const MODEL_LIST: &str = "model/list";
-    /// 列出已配置的多套模型 + 当前那套。**只有人能改** —— 模型没有这些能力。
+    /// List configured model profiles + the active one. **Human-only to change** — the model cannot.
     pub const MODEL_PROFILES: &str = "model/profiles";
-    /// 新增/改一套配置（`make_active` 时顺带切过去）。只带 `id` + `make_active`
-    /// 就是「切换」—— 不该逼用户为了切换重发一次密钥。
+    /// Add/update a profile (switching along the way when `make_active` is set). Passing
+    /// only `id` + `make_active` means "switch" — switching must not force re-sending a key.
     pub const MODEL_SAVE: &str = "model/save";
     pub const MODEL_REMOVE: &str = "model/remove";
-    /// 用量汇总（迁移 0010）：per-model 聚合 + 总数。**只记账不强制** ——
-    /// 没有配额、没有限速；BYOK 模式下钱记在用户自己的厂商账单上。
+    /// Usage summary (migration 0010): per-model aggregates + totals. **Bookkeeping only, no enforcement** —
+    /// no quotas, no rate limits; in BYOK mode the cost lands on the user's own vendor bill.
     pub const USAGE_SUMMARY: &str = "usage/summary";
-    /// 审批审计（迁移 0011）：模型问过什么、结果如何（approved/denied/
-    /// timeout/voided 四态）。hub 管理员事后回答「谁批准了 rm -rf」用。
+    /// Approval audit (migration 0011): what the model asked and how it went
+    /// (approved/denied/timeout/voided). Lets a hub admin later answer "who approved rm -rf".
     pub const APPROVAL_LOG: &str = "approval/log";
-    /// 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。
-    /// 无参方法。给驾驶舱的定时面板用 —— CLI 之外的第二个消费者。
+    /// Schedule state snapshot (migration 0012): per-job last_fired/claimed/catch_up/delivery.
+    /// Zero-arg method. Feeds the dashboard's schedule panel — the second consumer beyond the CLI.
     pub const SCHEDULE_LIST: &str = "schedule/list";
 }
 
 // ===========================================================================
-// 通用
+// Common
 // ===========================================================================
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -67,8 +67,8 @@ pub struct TokenUsage {
     pub output_tokens: i32,
 }
 
-/// 检索门的判定：这一轮到底要不要翻记忆。
-/// Joy 的 hero moment —— 默认全量检索既慢又会让无关记忆带偏答案。
+/// The retrieval gate's verdict: whether this turn should search memory at all.
+/// Joy's hero moment — retrieving everything by default is slow and lets irrelevant memories skew answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -84,13 +84,13 @@ pub enum GateDecisionKind {
 #[ts(export_to = "v2/")]
 pub struct GateDecision {
     pub decision: GateDecisionKind,
-    /// 门给的理由（≤5 个词的那种）。失败开放时带上原因，便于排查。
+    /// The gate's reason (the ≤5-word kind). Present on fail-open so it can be debugged.
     pub reason: String,
-    /// 判定为 retrieve 时的检索词；skip 时为 null。
+    /// The search query when the verdict is retrieve; null when skipping.
     pub query: Option<String>,
 }
 
-/// triage graph 把这一轮判成「快回答」还是「完整走一圈」。
+/// Whether the triage graph routed this turn as a "quick answer" or a "full lap".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -108,7 +108,7 @@ pub struct GraphInfo {
     pub workflow: String,
     pub route: GraphRouteKind,
     pub reason: String,
-    /// 实际走过的节点名，顺序即执行顺序。
+    /// The node names actually traversed, in execution order.
     pub path: Vec<String>,
 }
 
@@ -131,29 +131,29 @@ pub struct ToolCallRecord {
     pub duration_ms: Option<i32>,
 }
 
-/// 一次「要不要执行」的询问。
+/// A "may I execute this?" query.
 ///
-/// 服务端把问题抛给客户端后**等待**（默认 120 秒），回答由 `approval/respond`
-/// 送来。没人回答、超时、或者根本没有批准通道 —— 一律**按拒绝处理**：默认
-/// 拒绝是这个功能的地基，不是它的边界情况。
+/// After throwing the question to the client the server **waits** (120 s by default);
+/// the answer arrives via `approval/respond`. No reply, timeout, or no approval
+/// channel at all — everything is **treated as denied**: default-deny is this feature's foundation, not its edge case.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ApprovalRequestedNotification {
     pub turn_id: String,
-    /// 这一轮内的请求号，回答时要原样带回来。
+    /// Request id within this turn; echo it back verbatim when answering.
     pub request_id: String,
-    /// 想执行什么（工具名，目前只有 `run_command`）。
+    /// What wants to run (tool name; currently only `run_command`).
     pub tool: String,
-    /// 给人看的动作预览：命令原文，或参数摘要。
+    /// Human-facing action preview: the raw command or an args summary.
     pub args_preview: String,
-    /// 为什么没被放行规则直接放行。
+    /// Why the allow rules did not let it through automatically.
     pub reason: String,
-    /// 多少毫秒内没人回答就按拒绝算。
+    /// How many milliseconds of silence count as a denial.
     pub expires_in_ms: i32,
 }
 
-/// `approval/respond` 的参数。
+/// Parameters for `approval/respond`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -161,112 +161,112 @@ pub struct ApprovalRespondParams {
     pub turn_id: String,
     pub request_id: String,
     pub approved: bool,
-    /// 记住这个决定：把这条命令本身写进 `<home>/settings.json` 的放行表
-    /// （不加通配 —— 用户批准的是这条命令，不是这一类）。
+    /// Remember this decision: write the command itself into the allowlist in
+    /// `<home>/settings.json` (no wildcards — the user approved this command, not this kind).
     #[serde(default)]
     pub remember: bool,
 }
 
-/// `goal/set` 的参数。`condition` 为空 = 清除目标。
+/// Parameters for `goal/set`. Empty `condition` = clear the goal.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct GoalSetParams {
     pub session_id: String,
-    /// 目标条件（自然语言，比如「让测试全绿」）。空/不传 = 清除。
+    /// The goal condition (natural language, e.g. "make the tests green"). Empty/absent = clear.
     #[serde(default)]
     pub condition: Option<String>,
 }
 
-/// `goal/set` 的应答：设完之后的权威状态。
+/// Response to `goal/set`: the authoritative state after setting.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct GoalSetResponse {
-    /// 现在有活跃目标吗。
+    /// Whether a goal is currently active.
     pub active: bool,
     pub condition: Option<String>,
-    /// 这个目标已经续了几轮。
+    /// How many rounds this goal has already consumed.
     #[serde(default)]
     pub rounds_used: i32,
     pub max_rounds: i32,
 }
 
-/// 目标循环每判一次就发一条 —— 「为什么又跑了一轮」从来不靠猜。
+/// One notification per goal-loop verdict — "why did it run another round" is never guessed.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct GoalRoundNotification {
     pub turn_id: String,
-    /// 第几轮（从 1 开始）。
+    /// Which round (starting at 1).
     pub round: i32,
     pub max_rounds: i32,
-    /// `continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。
+    /// `continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`.
     pub status: String,
-    /// 判断器给的理由（或出口的原因）。
+    /// The judge's reason (or the reason for exiting).
     pub reason: String,
 }
 
-/// `approval/respond` 的应答。
+/// Response to `approval/respond`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ApprovalRespondResponse {
-    /// 这个请求还在等人回答吗？太晚送达（已超时或那一轮已经结束）时为 false ——
-    /// 客户端据此知道「我的回答没人听」，而不是以为批准生效了。
+    /// Is this request still awaiting an answer? False when the reply arrives too
+    /// late (timed out, or the turn already ended) — the client learns nobody heard its answer.
     pub accepted: bool,
 }
 
-/// 一轮 turn 的遥测。落库到 chat_log.meta，所以重开一个旧会话
-/// 仍能看到当时是哪个脑子的哪个决定，而不只是最终那句回复。
+/// Telemetry for one turn. Persisted into chat_log.meta, so reopening an old
+/// session still shows which brain made which decision, not just the final reply.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnMeta {
     pub gate: Option<GateDecision>,
-    /// graph 没介入时为 null。
+    /// Null when no graph was involved.
     pub graph: Option<GraphInfo>,
     pub iterations: i32,
     pub latency_ms: i32,
     pub tools: Vec<ToolCallRecord>,
-    /// 真正回答这一轮的模型：被 graph 判成 quick 时是小模型，如实记录。
+    /// The model that actually answered this turn: the small model when the graph routed quick, recorded as-is.
     pub model: String,
     pub provider: String,
-    /// 这一轮的 token 用量。只走过 `turnCompleted`、没进库的历史缺陷
-    /// 已经补上：现在它随 meta 一起落进 chat_log，重看历史也看得到花了多少。
+    /// Token usage for this turn. The historical flaw of only reaching `turnCompleted`
+    /// without being persisted is fixed: it now lands in chat_log with the meta, so past turns show their cost too.
     #[serde(default)]
     pub usage: Option<TokenUsage>,
-    /// 这一轮被 `turn/interrupt` 打断时为 true。
-    /// 旧库里的 meta 没有这个字段 —— `#[serde(default)]` 让它们照常解析。
+    /// True when this turn was cut short by `turn/interrupt`.
+    /// Older metas in the DB lack this field — `#[serde(default)]` lets them parse as before.
     #[serde(default)]
     pub interrupted: bool,
-    /// 循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。
-    /// 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。
+    /// How many times the loop guard fired this turn (0 = the model never got stuck
+    /// repeating/alternating tool calls). Zero is normal; non-zero means part of this turn's budget went to spinning in place.
     #[serde(default)]
     pub guard_hits: i32,
-    /// 命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。
+    /// What the guard told the model when it fired (a human-readable explanation; null otherwise).
     #[serde(default)]
     pub guard_note: Option<String>,
-    /// 这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。
+    /// How many provider retries happened this turn (rate limits / transient faults). Zero is the norm.
     #[serde(default)]
     pub retries: i32,
-    /// 目标循环的出口（`continuing` / `satisfied` / `impossible` /
-    /// `round-limit` / `blocked`）。没设目标就是 `None`。
+    /// The goal loop's exit (`continuing` / `satisfied` / `impossible` /
+    /// `round-limit` / `blocked`). `None` when no goal is set.
     #[serde(default)]
     pub goal_status: Option<String>,
-    /// 这个目标到这一轮为止续了几轮。没设目标就是 0。
+    /// How many rounds this goal has consumed up to this turn. 0 when no goal is set.
     #[serde(default)]
     pub goal_rounds: i32,
-    /// 这轮的模型是怎么选的（路由，见 route.rs）：`auto:reasoning → ds-r1`
-    /// / `fallback: …`。fixed 模式与「选中的就是 active」时是 `None` ——
-    /// 页脚保持干净，只有真的发生了选择/回落才说话。
+    /// How this turn's model was chosen (routing, see route.rs): `auto:reasoning → ds-r1`
+    /// or `fallback: …`. `None` in fixed mode and when the chosen one is already active —
+    /// the footer stays quiet and only speaks when a choice/fallback actually happened.
     #[serde(default)]
     pub route_reason: Option<String>,
 }
 
 // ===========================================================================
-// 记忆
+// Memory
 // ===========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -277,10 +277,10 @@ pub struct Fact {
     pub id: i32,
     pub subject: String,
     pub content: String,
-    /// `user`（直接告诉它的）或 `consolidation`（从对话里提炼的）。
+    /// `user` (told directly) or `consolidation` (distilled from conversations).
     pub source: String,
-    /// 这条事实**关于什么**：`user` / `feedback` / `project` / `reference` /
-    /// `fact`（兜底）。分类不出来的都落在 `fact`。
+    /// What this fact is **about**: `user` / `feedback` / `project` / `reference` /
+    /// `fact` (fallback). Anything that resists classification lands on `fact`.
     pub kind: String,
     pub created_at: Option<String>,
 }
@@ -291,14 +291,14 @@ pub struct Fact {
 #[ts(export_to = "v2/")]
 pub struct Episode {
     pub id: i32,
-    /// ISO 8601 日期。
+    /// ISO 8601 date.
     pub happened_at: String,
     pub summary: String,
     pub created_at: Option<String>,
 }
 
 // ===========================================================================
-// 会话 / 模型 / 配置
+// Sessions / models / config
 // ===========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -307,18 +307,18 @@ pub struct Episode {
 #[ts(export_to = "v2/")]
 pub struct SessionSummary {
     pub id: String,
-    /// 会话标题 = 第一条用户消息的前 60 个字。
+    /// Session title = the first 60 characters of the first user message.
     pub title: String,
     pub messages: i32,
     pub started_at: Option<String>,
     pub last_at: Option<String>,
 }
 
-/// 消息的角色。**闭集**，故意不留「未知」这个口子。
+/// A message's role. A **closed set** — deliberately no "unknown" escape hatch.
 ///
-/// `chat_log` 里将来若真多出别的角色，`session/messages` 会**跳过**那些行，
-/// 而不是硬塞一个值进来 —— 前端那个 `switch` 才能是穷尽的，
-/// 「还有第三种角色要画」这种事就会在编译期现形。
+/// If some future `chat_log` really does grow other roles, `session/messages` will **skip**
+/// those rows rather than force a value in — so the frontend `switch` can stay exhaustive
+/// and "there is a third role to render" shows up at compile time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -328,24 +328,24 @@ pub enum MessageRole {
     Assistant,
 }
 
-/// 会话历史里的一条消息：`chat_log` 的一行。
+/// One message in session history: a row of `chat_log`.
 ///
-/// 跟实时那一路（`turnStarted` / `textDelta` / `turnCompleted`）说的是同一场
-/// 对话的两个视角：实时那一路只为**这一次连接**活着（刷新即消失），
-/// 这一条让「刷新、换台设备、换个时候再看」成为可能。
+/// Same conversation, second viewpoint alongside the live stream (`turnStarted` /
+/// `textDelta` / `turnCompleted`): the live stream lives only for **this connection**
+/// (gone on refresh); this one makes "refresh, switch devices, look back later" possible.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Message {
-    /// chat_log 的行号。**也是游标**：`session/messages` 的 cursor 就是它。
-    /// 用行号而不是时间戳：同一轮的两行是同一秒写进去的，时间戳分不出先后。
+    /// The chat_log row number. **Also the cursor**: it is `session/messages`' cursor.
+    /// Row numbers over timestamps: both rows of one turn are written in the same second, so timestamps cannot order them.
     pub id: i32,
     pub role: MessageRole,
     pub content: String,
-    /// ISO 8601（UTC）。写进来的时刻。
+    /// ISO 8601 (UTC). When it was written.
     pub at: String,
-    /// 这一轮的遥测（检索门 / 工具 / 迭代 / 模型 / usage），**只有 assistant 行上有**。
+    /// This turn's telemetry (gate / tools / iterations / model / usage), **present only on assistant rows**.
     pub meta: Option<TurnMeta>,
 }
 
@@ -361,7 +361,7 @@ pub struct ModelInfo {
     pub fast: Option<String>,
 }
 
-/// 配置的**读取视图**。字段刻意全量且非可选：读出来就该是完整现状。
+/// The **read view** of config. Fields are deliberately complete and non-optional: reading it yields the full current state.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -372,7 +372,7 @@ pub struct SettingsView {
     pub small_model: String,
     pub max_iterations: i32,
     pub max_tokens: i32,
-    /// 工作记忆滑窗：只把最近 N 轮塞进 prompt。
+    /// Working-memory sliding window: only the last N turns go into the prompt.
     pub history_turns: i32,
     pub consolidate_every: i32,
     pub retrieval_top_k: i32,
@@ -383,7 +383,7 @@ pub struct SettingsView {
     pub home: String,
 }
 
-/// 配置的**写入补丁**。只传要改的字段，null 表示不改。
+/// The **write patch** for config. Pass only the fields to change; null means leave as-is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -407,13 +407,13 @@ pub struct SettingsPatch {
     pub experimental: Option<bool>,
     #[ts(optional = nullable)]
     pub graph_workflows: Option<bool>,
-    /// 放行表（`JOY_EXEC_ALLOW`）的整表替换 —— 「记住这条命令」写的就是它。
+    /// Whole-table replacement of the allowlist (`JOY_EXEC_ALLOW`) — what "remember this command" writes.
     #[ts(optional = nullable)]
     pub exec_allow: Option<Vec<String>>,
 }
 
 impl SettingsPatch {
-    /// 一个要改的字段都没有。
+    /// Not a single field to change.
     pub fn is_empty(&self) -> bool {
         let p = self;
         p.max_iterations.is_none()
@@ -427,8 +427,8 @@ impl SettingsPatch {
             && p.graph_workflows.is_none()
     }
 
-    /// 用 `newer` 里非空的字段盖掉自己 —— 累计补丁时用：
-    /// 已保存的补丁是新补丁的地基，而不是反过来。
+    /// Overwrite self with the non-null fields of `newer` — for accumulating patches:
+    /// the saved patch is the foundation of the new one, not the other way around.
     pub fn merge_newer(&mut self, newer: &Self) {
         let p = newer;
         if p.max_iterations.is_some() {
@@ -465,7 +465,7 @@ impl SettingsPatch {
 }
 
 // ===========================================================================
-// 请求 / 应答
+// Requests / responses
 // ===========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -476,12 +476,12 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub session_id: Option<String>,
     pub message: String,
-    /// 是否逐 token 推送 `textDelta`。dashboard 开着，脚本调用关着。
+    /// Whether to stream `textDelta` token by token. On for the dashboard, off for scripts.
     #[ts(optional = nullable)]
     pub stream: Option<bool>,
-    /// 本轮的工作目录（逐轮覆盖语义）：
-    /// 必须是已存在的绝对路径（fail-closed 准入）；exec 的相对命令与
-    /// read_file/list_dir 的相对路径都按它解析。缺省 = 进程 cwd（旧行为）。
+    /// Working directory for this turn (per-turn override semantics):
+    /// must be an existing absolute path (fail-closed admission); relative exec commands
+    /// and relative read_file/list_dir paths resolve against it. Default = process cwd (old behavior).
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
 }
@@ -507,7 +507,7 @@ pub struct TurnInterruptParams {
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnInterruptResponse {
-    /// false = 这一轮已经跑完了，没打断到什么。
+    /// false = this turn already finished; nothing was interrupted.
     pub interrupted: bool,
 }
 
@@ -536,7 +536,7 @@ pub struct SessionListResponse {
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SessionNewParams {
-    /// 不给就由服务端生成。
+    /// Generated by the server when absent.
     #[ts(optional = nullable)]
     pub session_id: Option<String>,
 }
@@ -549,32 +549,32 @@ pub struct SessionNewResponse {
     pub session_id: String,
 }
 
-/// 读一个会话说过的话。
+/// Read what was said in a session.
 ///
-/// **为什么需要它**：没有这个方法，页面上那场对话就只活在浏览器里 ——
-/// 刷新一下全没了。它同时是「切换会话」的前提：切过去至少能看见那边说过什么。
+/// **Why it exists**: without it, the conversation on the page lives only
+/// in the browser — a refresh erases it. Also the prerequisite for "switch session".
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SessionMessagesParams {
     pub session_id: String,
-    /// 只取比这条消息**更早**的（往上翻旧账）。不给就是最新的那一页。
+    /// Fetch only messages **older** than this one (paging back through history). Absent = the newest page.
     #[ts(optional = nullable)]
     pub cursor: Option<String>,
     #[ts(optional = nullable)]
     pub limit: Option<u32>,
 }
 
-/// 消息**最新的在最前** —— 跟对话本身的方向相反，因为「往上翻」才是
-/// 这个方法的用法：先拿最近一页，再顺着 `nextCursor` 往更早的地方走。
+/// Messages with the **newest first** — opposite to the conversation's direction,
+/// because "paging back" is the point: take the latest page, then follow `nextCursor` into the past.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SessionMessagesResponse {
     pub data: Vec<Message>,
-    /// 还有更早的才给：把它当下一次的 cursor。null = 到底了。
+    /// Present only when older messages exist: pass it as the next cursor. null = the end.
     pub next_cursor: Option<String>,
 }
 
@@ -604,8 +604,8 @@ pub struct MemorySearchResponse {
 pub struct MemoryRememberParams {
     pub subject: String,
     pub content: String,
-    /// 不给就是 `user`（用户直接说的）。consolidation 从对话里提炼时传
-    /// `consolidation`，这样前端能区分「你告诉它的」和「它自己总结的」。
+    /// Defaults to `user` (said directly by the user). Consolidation passes
+    /// `consolidation` when distilling from conversations, so the frontend can tell "you told it" from "it summarized itself".
     #[ts(optional = nullable)]
     pub source: Option<String>,
 }
@@ -615,7 +615,7 @@ pub struct MemoryRememberParams {
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct MemoryRememberResponse {
-    /// 写进去的完整 fact，带 id —— 前端可以直接插进列表，不用再查一次。
+    /// The full fact as written, with id — the frontend can insert it directly, no re-query needed.
     pub fact: Fact,
 }
 
@@ -632,7 +632,7 @@ pub struct MemoryForgetParams {
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct MemoryForgetResponse {
-    /// 实际删掉多少条。0 表示本来就没有这个主题的记忆。
+    /// How many were actually deleted. 0 means there was no memory of this subject to begin with.
     pub removed: i32,
 }
 
@@ -665,8 +665,8 @@ pub struct MemoryListEpisodesParams {
     pub limit: Option<u32>,
 }
 
-/// 情景记忆的列表。**没有 cursor**：`Episodes::recent` 只按时间倒序取最近 N 条，
-/// 存储层没有偏移量的概念。与其编一个用不了的游标，不如诚实地返回 null。
+/// The episode list. **No cursor**: `Episodes::recent` only fetches the most recent N by
+/// time desc — storage has no notion of offset. Rather than invent an unusable cursor, it honestly returns null.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -681,7 +681,7 @@ pub struct MemoryListEpisodesResponse {
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadParams {
-    /// 只取这几个 key；不给就全量返回。
+    /// Fetch only these keys; absent = return everything.
     #[ts(optional = nullable)]
     pub keys: Option<Vec<String>>,
 }
@@ -707,7 +707,7 @@ pub struct ConfigWriteParams {
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigWriteResponse {
-    /// 写入后的完整配置，便于前端直接替换本地缓存。
+    /// The full config after writing, so the frontend can replace its local cache outright.
     pub config: SettingsView,
 }
 
@@ -729,9 +729,9 @@ pub struct ModelListResponse {
     pub next_cursor: Option<String>,
 }
 
-/// `model/profiles` 的应答：已配置的多套模型 + 当前那套。
-// 单元结构体：没有任何字段，也就没有 rename_all 可言（ts-rs 会拒绝
-// 空结构体上的 rename_all —— 它没有字段可重命名）。
+/// Response to `model/profiles`: all configured model profiles + the active one.
+// Unit struct: no fields at all, so rename_all does not apply (ts-rs rejects
+// rename_all on an empty struct — there are no fields to rename).
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export_to = "v2/")]
 pub struct ModelProfilesParams;
@@ -748,19 +748,19 @@ pub struct ApprovalLogParams;
 #[ts(export_to = "v2/")]
 pub struct ScheduleListParams;
 
-/// `schedule/list` 的一行：一个定时任务的当前状态（迁移 0012）。
+/// One row of `schedule/list`: a scheduled job's current state (migration 0012).
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ScheduleStateRow {
     pub name: String,
-    /// 上次落定的触发分钟（去重锚点）；没跑过为 null。
+    /// The last settled trigger minute (the dedup anchor); null if it never ran.
     pub last_fired_minute: Option<String>,
-    /// 非空 = 上次执行中断，等重启按 catch_up 决定补跑或放弃。
+    /// Non-null = the last run was interrupted; on restart catch_up decides whether to re-run or give up.
     pub claimed_minute: Option<String>,
-    /// true = 至少一次（补跑），false = 至多一次（放弃）。
+    /// true = at-least-once (re-run), false = at-most-once (give up).
     pub catch_up: bool,
-    /// outbox / notify / quiet。
+    /// outbox / notify / quiet.
     pub delivery: String,
 }
 
@@ -768,17 +768,17 @@ pub struct ScheduleStateRow {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ScheduleListResponse {
-    /// 按名字排序的全部任务；一个都没登记过为空数组。
+    /// All jobs sorted by name; an empty array when none was ever registered.
     pub jobs: Vec<ScheduleStateRow>,
 }
 
-/// 一套配置的**视图**：与存储里那份的区别是它不含密钥，只说密钥在哪。
+/// A profile's **view**: unlike the stored copy it contains no secret, only where the secret lives.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ModelProfileView {
     pub id: String,
-    /// `joyczl-provider` 的 provider id。
+    /// The provider id in `joyczl-provider` terms.
     pub provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -786,11 +786,11 @@ pub struct ModelProfileView {
     pub small_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    /// 凭据的位置：`keychain` / `file` / `env:VAR` / `memory` / 无（本地模型）。
-    /// **只是指针，不是密钥本身** —— 界面拿它如实显示「你的 key 存在哪」。
+    /// Where the credential lives: `keychain` / `file` / `env:VAR` / `memory` / none (local model).
+    /// **A pointer, not the key itself** — the UI uses it to honestly show "where your key is stored".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_source: Option<String>,
-    /// 这套现在是当前生效的吗。
+    /// Whether this profile is currently active.
     pub active: bool,
 }
 
@@ -798,13 +798,13 @@ pub struct ModelProfileView {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ModelProfilesResponse {
-    /// 当前生效的 id（没配就是 null）。
+    /// The currently active id (null when nothing is configured).
     pub active_id: Option<String>,
     pub profiles: Vec<ModelProfileView>,
 }
 
-/// `model/save` 的参数。`provider` 只在**新建**时必填 —— 只带 `id` +
-/// `make_active` 就是切换。
+/// Parameters for `model/save`. `provider` is required only when **creating** —
+/// passing only `id` + `make_active` means switch.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -818,14 +818,14 @@ pub struct ModelSaveParams {
     pub small_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    /// 密钥本身。不给 = 保持原样（改模型、切换都不用重发）。
+    /// The key itself. Absent = keep as-is (changing models or switching never requires re-sending).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
-    /// 用环境变量里的 key（写 `DEEPSEEK_API_KEY` 这样的变量名）：Joy 只读它，
-    /// 不复制进任何文件。
+    /// Use a key from an environment variable (pass a name like `DEEPSEEK_API_KEY`):
+    /// Joy only reads it and never copies it into any file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_env: Option<String>,
-    /// 存完就设为当前（默认 true —— 第一次配置时这是最顺手的）。
+    /// Make it active right after saving (default true — the smoothest on first setup).
     #[serde(default)]
     pub make_active: Option<bool>,
 }
@@ -835,13 +835,13 @@ pub struct ModelSaveParams {
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ModelSaveResponse {
     pub id: String,
-    /// 这套现在是当前生效的吗。
+    /// Whether this profile is currently active.
     pub active: bool,
     pub active_id: Option<String>,
-    /// 凭据**实际**落在哪：`keychain` / `file` / `env:VAR` / `memory` / `none`。
-    /// 兜底成明文文件时也要如实说 —— 不能让用户以为进了钥匙串。
+    /// Where the credential **actually** landed: `keychain` / `file` / `env:VAR` / `memory` / `none`.
+    /// Fall back to a plaintext file and say so honestly — never let the user assume the keychain.
     pub key_stored_in: String,
-    /// 切换后的当前模型（`provider / model`），没配好就是 null。
+    /// The current model after switching (`provider / model`); null when not fully configured.
     pub current: Option<String>,
 }
 
@@ -857,12 +857,12 @@ pub struct ModelRemoveParams {
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ModelRemoveResponse {
     pub removed: bool,
-    /// 删的是当前那套时，active 会跟着清空。
+    /// When the active profile is removed, active is cleared along with it.
     pub active_id: Option<String>,
 }
 
-/// `usage/summary` 的应答：per-model 聚合 + 总数。hub 模式下这就是 per-user
-/// 记账（每个用户一个 home、一个 state.db，台账天然按人隔离）。
+/// Response to `usage/summary`: per-model aggregates + totals. In hub mode this is per-user
+/// bookkeeping (one home and one state.db per user — the ledger is isolated by person by construction).
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -884,7 +884,7 @@ pub struct UsageSummaryResponse {
     pub by_model: Vec<UsageByModel>,
 }
 
-/// `approval/log` 的一行：一次「问了才跑」的完整记录。
+/// One row of `approval/log`: the complete record of one "ask before running".
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -894,7 +894,7 @@ pub struct ApprovalLogEntry {
     pub tool: String,
     pub args_preview: String,
     pub reason: String,
-    /// approved / denied / timeout / voided 四态之一。
+    /// One of approved / denied / timeout / voided.
     pub outcome: String,
     pub decided_at: String,
 }
@@ -903,29 +903,29 @@ pub struct ApprovalLogEntry {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct ApprovalLogResponse {
-    /// 新的在前，服务端封顶 100 条。
+    /// Newest first, capped at 100 entries by the server.
     pub entries: Vec<ApprovalLogEntry>,
 }
 
 // ===========================================================================
-// 驾驶舱
+// Dashboard
 // ===========================================================================
 
-/// 驾驶舱首屏要的全部东西，一次取齐。
+/// Everything the dashboard's first screen needs, fetched in one shot.
 ///
-/// 它不是某个 RPC 的应答，而是 `joy dashboard` 那个 HTTP 端点
-/// （`GET /api/data`）的载荷。**为什么定义在协议 crate 里**：因为判断标准
-/// 只有一条 —— 它跨语言。浏览器那一侧要按它做类型检查，手抄一遍就又会
-/// 漂移，而这正是整个工程在消灭的东西。
+/// It is not the response to any RPC but the payload of the `joy dashboard` HTTP
+/// endpoint (`GET /api/data`). **Why it lives in the protocol crate**: the only
+/// criterion is that it crosses languages. The browser side type-checks against it, and hand-copying
+/// it would drift again — exactly what this whole effort exists to eliminate.
 ///
-/// 字段都直接复用协议里的类型：驾驶舱不做二次建模，它就是这些数据的
-/// 一个视图。
+/// Fields reuse protocol types directly: the dashboard does no second modeling —
+/// it is just a view over these data.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DashboardData {
-    /// ISO 8601，毫秒精度。页面上显示「数据是什么时候的」。
+    /// ISO 8601, millisecond precision. The page shows "when is this data from".
     pub generated_at: String,
     pub config: SettingsView,
     pub sessions: Vec<SessionSummary>,
@@ -934,7 +934,7 @@ pub struct DashboardData {
 }
 
 // ===========================================================================
-// 通知（服务端 → 客户端，一轮 turn 的全部过程）
+// Notifications (server → client, the full course of one turn)
 // ===========================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -945,7 +945,7 @@ pub struct TurnStartedNotification {
     pub turn_id: String,
     pub session_id: String,
     pub user_message: String,
-    /// ISO 8601，毫秒精度。
+    /// ISO 8601, millisecond precision.
     pub ts: String,
 }
 
@@ -955,23 +955,23 @@ pub struct TurnStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct TextDeltaNotification {
     pub turn_id: String,
-    /// 流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。
+    /// A streaming text delta. Present only when `turn/start` passed `stream: true`.
     pub delta: String,
 }
 
-/// 一次「正在重试」的说明。
+/// A "retrying now" notice.
 ///
-/// 重试**从不静默**：用户看到的是这句话，而不是一段莫名其妙的长时间停顿。
+/// Retries are **never silent**: the user sees this message, not an inexplicable long pause.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct RetryNotification {
     pub turn_id: String,
-    /// 第几次重试（从 1 开始）。
+    /// Which retry attempt (starting at 1).
     pub attempt: i32,
-    /// 为什么重试（`HTTP 429` / `网络错误：…`）。
+    /// Why it is retrying (`HTTP 429` / `network error: …`).
     pub reason: String,
-    /// 等了多久。
+    /// How long it waited.
     pub delay_ms: i32,
 }
 
@@ -991,7 +991,7 @@ pub struct GateDecidedNotification {
 pub struct ToolStartedNotification {
     pub turn_id: String,
     pub tool: String,
-    /// 模型给的参数，结构随工具而定。
+    /// The model-supplied arguments; structure depends on the tool.
     #[ts(type = "unknown")]
     pub args: serde_json::Value,
 }
@@ -1003,7 +1003,7 @@ pub struct ToolStartedNotification {
 pub struct ToolCompletedNotification {
     pub turn_id: String,
     pub tool: String,
-    /// 工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。
+    /// The text the tool returned to the model. Failure details live here too — the turn is not aborted.
     pub output: String,
     pub status: ToolStatus,
     pub duration_ms: Option<i32>,
@@ -1014,7 +1014,7 @@ pub struct ToolCompletedNotification {
 #[ts(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConsolidationCompletedNotification {
-    /// 这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。
+    /// How many new facts this batch distilled; 0 means not due yet or nothing surfaced.
     pub new_facts: i32,
 }
 
@@ -1034,7 +1034,7 @@ pub struct GraphStartedNotification {
 pub struct GraphNodeStartedNotification {
     pub workflow: String,
     pub node: String,
-    /// 第几次进入该节点（>1 只可能出现在有意设计的环里）。
+    /// Which visit to this node this is (>1 only happens in deliberately designed loops).
     pub visit: i32,
 }
 
@@ -1046,9 +1046,9 @@ pub struct GraphNodeEndedNotification {
     pub workflow: String,
     pub node: String,
     pub ms: i32,
-    /// 该节点写回了哪些 state key。
+    /// Which state keys the node wrote back.
     pub keys: Vec<String>,
-    /// 节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。
+    /// Error text when the node throws; errors are logged, never rethrown, and the run still finishes normally.
     pub error: Option<String>,
 }
 
@@ -1087,10 +1087,10 @@ pub struct ErrorNotification {
     pub data: Option<serde_json::Value>,
 }
 
-/// 一轮 turn 的全部过程事件。
+/// The full stream of events for one turn.
 ///
-/// `type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated
-/// union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。
+/// `type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated
+/// union. **No failure here should crash the client**: this only describes "what happened".
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -1099,9 +1099,9 @@ pub enum ServerNotification {
     TurnStarted(TurnStartedNotification),
     TextDelta(TextDeltaNotification),
     GateDecided(GateDecidedNotification),
-    /// 正在重试（限流/临时故障）：**每次必发**，不静默。
+    /// Retrying now (rate limit / transient fault): **sent every time**, never silent.
     Retry(RetryNotification),
-    /// 有一条命令在等人批准：先回它，那一轮才会继续。
+    /// A command is waiting for approval: answer it first, then the turn continues.
     ApprovalRequested(ApprovalRequestedNotification),
     GoalRound(GoalRoundNotification),
     ToolStarted(ToolStartedNotification),
@@ -1111,8 +1111,8 @@ pub enum ServerNotification {
     GraphNodeStarted(GraphNodeStartedNotification),
     GraphNodeEnded(GraphNodeEndedNotification),
     GraphEnded(GraphEndedNotification),
-    /// 装了 `Box`：它带的 `TurnMeta` 比别的变体大一个量级，而通知是按事件
-    /// 构造、在通道里搬运的。ts-rs 对 `Box<T>` 透明，TS/Python 生成物不受影响。
+    /// Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and
+    /// notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.
     TurnCompleted(Box<TurnCompletedNotification>),
     Error(ErrorNotification),
 }

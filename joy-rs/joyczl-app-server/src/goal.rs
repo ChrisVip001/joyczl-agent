@@ -1,19 +1,19 @@
-//! 目标循环：把「没做完就接着做」交给**人**来启动。
+//! The goal loop: handing "keep going until it is done" to **a human** to start.
 //!
-//! 一条目标（自然语言条件）挂在一个会话上。主循环停下来时，不直接收工，而是叫一个
-//! **判断器**看一遍：目标达成了吗？没达成，就把理由当成下一条用户消息，**回到同一个
-//! 会话**再跑一轮。三条约束：
+//! One goal (a natural-language condition) hangs on a session. When the main loop stops, instead of
+//! wrapping up it calls a **judge** to look once: is the goal met? If not, the reason becomes the next
+//! user message and another round runs **in the same session**. Three constraints:
 //!
-//! * **判断器只用便宜模型、没有工具、只看对话**：让它看一眼就说结论，不许它自己动手。
-//!   判断器一旦有工具，它就成了第二个执行体 —— 而它的判断本来就不该有副作用。
-//! * **轮次有上限**：`JOY_GOAL_MAX_ROUNDS`（默认 5）。超了就置 `round-limit`，
-//!   **如实告诉用户没完成**：不伪装完成、也不清掉目标 —— 记录还在，人可以看着办。
-//! * **只有人能设/改/清**：模型没有 `goal/set` 这个工具，它甚至看不见这条路径。
-//!   所以「模型自己给自己派活」在这里不是被禁止，而是不存在。
+//! * **The judge uses only the cheap model, has no tools, and only reads the conversation**: it looks
+//!   once and states a conclusion; it is not allowed to act. With tools it becomes a second executor — and its judgement should never have side effects.
+//! * **Rounds are capped**: `JOY_GOAL_MAX_ROUNDS` (default 5). Beyond that the status becomes `round-limit`,
+//!   **telling the user honestly it is not done**: no faking completion, no clearing the goal — the record stays, the human decides.
+//! * **Only a human can set/change/clear**: the model has no `goal/set` tool; it cannot even see this
+//!   path. So "the model assigning itself work" is not forbidden here — it does not exist.
 //!
-//! 终止态（satisfied / impossible / round-limit / blocked）会记在目标上：循环不再
-//! 自己继续跑，等下一句人类的话或一次 `goal/set`。否则每一轮都会把同一个判断再问一遍，
-//! 白花钱还把「已经停下的东西」演成「还在跑」。
+//! Terminal states (satisfied / impossible / round-limit / blocked) are recorded on the goal: the loop
+//! no longer continues on its own, waiting for the next human message or a `goal/set`. Otherwise every turn
+//! would re-ask the same judgement, wasting money while staging "already stopped" as "still running".
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -21,28 +21,28 @@ use std::sync::{Arc, Mutex};
 use joyczl_provider::{ContentBlock, CreateRequest, Message, Resolved};
 use serde_json::Value;
 
-/// 判断器最多看多少字符的对话记录（它是便宜模型，但也不是免费）。
+/// How many characters of transcript the judge may read at most (a cheap model, but not free).
 const JUDGE_TRANSCRIPT_CHARS: usize = 8_000;
-/// 判断器的输出上限：它只该回一个 JSON。
+/// The judge's output cap: it should only return one JSON.
 const JUDGE_MAX_TOKENS: i32 = 512;
 
 #[derive(Debug, Clone)]
 pub struct Goal {
     pub condition: String,
-    /// 已经续了几轮（跨 turn 累计，人看得见）。
+    /// How many rounds have been continued (accumulated across turns, visible to the human).
     pub rounds: i32,
-    /// 终止态：`Some` 表示循环已经停了（等下一句人类的话）。
+    /// Terminal state: `Some` means the loop has stopped (waiting for the next human message).
     pub status: Option<String>,
 }
 
-/// 会话 -> 目标。**同一会话同时只有一个活跃目标**。
+/// Session -> goal. **At most one active goal per session at a time**.
 pub type Goals = Arc<Mutex<HashMap<String, Goal>>>;
 
 pub fn store() -> Goals {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-/// 设一个目标（`condition` 为空 = 清除）。返回设完之后的权威状态。
+/// Set a goal (empty `condition` = clear). Returns the authoritative state after setting.
 pub fn set(goals: &Goals, session: &str, condition: Option<&str>) -> Option<Goal> {
     let mut table = goals.lock().expect("goal 锁不该中毒");
     match condition.map(str::trim).filter(|text| !text.is_empty()) {
@@ -62,7 +62,7 @@ pub fn set(goals: &Goals, session: &str, condition: Option<&str>) -> Option<Goal
     }
 }
 
-/// 还在跑的目标（终止态的不返回 —— 循环已经停了）。
+/// The still-running goal (terminal-state goals are not returned — the loop has stopped).
 pub fn active(goals: &Goals, session: &str) -> Option<Goal> {
     goals
         .lock()
@@ -72,13 +72,13 @@ pub fn active(goals: &Goals, session: &str) -> Option<Goal> {
         .cloned()
 }
 
-/// 读一眼（含终止态的目标）—— 测试与诊断用。
+/// Peek (including terminal-state goals) — for tests and diagnostics.
 #[allow(dead_code)]
 pub fn read(goals: &Goals, session: &str) -> Option<Goal> {
     goals.lock().expect("goal 锁不该中毒").get(session).cloned()
 }
 
-/// 记一轮并返回累计轮数。
+/// Record one round and return the accumulated count.
 pub fn bump(goals: &Goals, session: &str) -> i32 {
     let mut table = goals.lock().expect("goal 锁不该中毒");
     match table.get_mut(session) {
@@ -90,14 +90,14 @@ pub fn bump(goals: &Goals, session: &str) -> i32 {
     }
 }
 
-/// 盖一个终止态：循环接下来不再自己跑。
+/// Stamp a terminal state: the loop no longer runs on its own from here.
 pub fn finish(goals: &Goals, session: &str, status: &str) {
     if let Some(goal) = goals.lock().expect("goal 锁不该中毒").get_mut(session) {
         goal.status = Some(status.to_string());
     }
 }
 
-/// 判断器的一句话结论。
+/// The judge's one-sentence conclusion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Judgement {
     pub ok: bool,
@@ -105,7 +105,7 @@ pub struct Judgement {
     pub reason: String,
 }
 
-/// 叫判断器看一眼。失败是 `Err`（调用方据此停续轮并**保住目标**）。
+/// Ask the judge to look once. Failure is an `Err` (the caller stops continuing and **keeps the goal**).
 pub async fn judge(
     resolved: &Resolved,
     condition: &str,
@@ -162,8 +162,8 @@ pub async fn judge(
         .to_string();
 
     if ok && impossible {
-        // 自相矛盾的答案 = 没想清楚。当作没达成，并把这件事说出来 ——
-        // 按「达成」处理会让循环在一个说不清的目标上收工。
+        // A self-contradictory answer = muddled thinking. Treat it as not met, and say so —
+        // handling it as "met" would let the loop wrap up on an unspeakable goal.
         return Ok(Judgement {
             ok: false,
             impossible: false,

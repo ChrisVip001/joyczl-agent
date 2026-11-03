@@ -1,11 +1,11 @@
-//! 向量化：混合检索的另一条腿。
+//! Embeddings: the other leg of hybrid retrieval.
 //!
-//! 走 OpenAI 兼容的 `POST {base}/embeddings`（`{"model":…, "input":…}`）——
-//! Ollama、OpenAI、以及大多数兼容网关都认这个形状，所以这里不需要为每家
-//! 写一个实现。
+//! Uses the OpenAI-compatible `POST {base}/embeddings` (`{"model":…, "input":…}`) —
+//! Ollama, OpenAI, and most compatible gateways accept this shape, so no per-vendor
+//! implementation is needed here.
 //!
-//! 刻意的克制：**失败就是失败**，没有重试、没有降级。向量是关键词检索的
-//! 加分项，算不出来时那条腿短了，检索本身照样工作（见 memory 的检索融合）。
+//! Deliberate restraint: **failure is failure** — no retries, no fallbacks. Vectors are a
+//! bonus for keyword retrieval; short that leg, retrieval itself still works (memory fusion).
 
 use std::time::Duration;
 
@@ -34,8 +34,8 @@ impl Embedder {
         }
     }
 
-    /// 从设置里装配。`JOY_EMBED_MODEL` 决定模型，端点默认跟当前 provider
-    /// 走（本地 Ollama 与云端服务都成立）。
+    /// Assemble from settings. `JOY_EMBED_MODEL` picks the model; the endpoint defaults to
+    /// the current provider's (true for local Ollama and cloud services alike).
     pub fn from_settings(settings: &joyczl_config::Settings) -> Result<Self, String> {
         let model = settings
             .embed_model
@@ -47,7 +47,7 @@ impl Embedder {
             .clone()
             .or_else(|| info.and_then(|i| i.base_url.map(str::to_string)))
             .ok_or("这个 provider 没有默认端点：用 JOY_BASE_URL 指名 embedding 服务")?;
-        // key 没有也照发（本地服务不需要）——跟 chat 那边同一条规矩。
+        // Send even without a key (local services need none) — the same rule as chat.
         let key = settings
             .api_key
             .clone()
@@ -104,7 +104,7 @@ impl Embedder {
     }
 }
 
-/// 这个 provider 有没有默认端点可以当 embedding 服务用。
+/// Whether this provider has a default endpoint usable as an embedding service.
 pub fn default_endpoint(provider: &str) -> Option<&'static str> {
     PROVIDERS
         .iter()

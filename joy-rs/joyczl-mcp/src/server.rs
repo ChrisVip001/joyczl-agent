@@ -1,24 +1,24 @@
-//! `joy mcp serve` —— 反过来的一侧：把 Joy 的**记忆**暴露成 MCP 工具。
+//! `joy mcp serve` — the reverse side: expose Joy's **memory** as MCP tools.
 //!
-//! 在客户端一侧，Joy 把别人的 MCP 服务器插成自己的工具；在这里，Joy 自己
-//! 成为一台 MCP 服务器，让别的 agent（Claude Code、codex 或任何会说 MCP
-//! 的东西）读写同一份记忆。语义很直接：Joy 是这台机器上的**个人记忆层**，
-//! 谁来问都答同一份事实 —— 记忆在 state.db 里，不在某个会话的上下文里。
+//! On the client side Joy plugs other MCP servers in as its tools; here Joy itself becomes
+//! an MCP server, letting other agents (Claude Code, codex, anything speaking MCP) read and
+//! write the same memory. Direct semantics: Joy is the **personal memory layer** on this
+//! machine; whoever asks gets the same facts — memory lives in state.db, not in a session.
 //!
-//! 只暴露记忆，不暴露工具：让另一个 agent 隔着 MCP 指挥 Joy 去发消息、
-//! 建日程，那是「代理的代理」，权限会绕开用户亲手按下的那些开关。记忆是
-//! 只读为主的数据，边界清楚。
+//! Memory only, no tools: letting another agent command Joy over MCP to send messages or
+//! build schedules is "an agent's agent", and permissions would bypass the switches the
+//! user pressed by hand. Memory is mostly read-only data with a clean boundary.
 //!
-//! 传输就是换行分隔的 JSON-RPC（与 app-server 同一套分帧，MCP 的 stdio
-//! 传输本来就是这个形状）。日志只走 stderr —— stdout 是协议通道。
+//! The transport is newline-delimited JSON-RPC (the same framing as app-server; MCP's
+//! stdio transport is exactly this shape). Logs go to stderr only — stdout is the protocol.
 
 use anyhow::Result;
 use joyczl_state::{Episodes, Facts};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-/// 协议版本。服务器实现的是这一版；客户端报告别的版本时照常应答 ——
-/// 版本协商的失败模式不该是「一句话都连不上」。
+/// Protocol version. The server implements this one; clients reporting other versions are
+/// answered all the same — version negotiation must not fail as "not a word gets through".
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
 pub struct MemoryServer {
@@ -27,12 +27,12 @@ pub struct MemoryServer {
 }
 
 impl MemoryServer {
-    /// 只收记忆的两个句柄，不收连接池 —— 这层是协议翻译，不该认识 sqlx。
+    /// Only the two memory handles, no connection pool — this layer is protocol translation, not sqlx.
     pub fn new(facts: Facts, episodes: Episodes) -> Self {
         Self { facts, episodes }
     }
 
-    /// 一行请求进去，一行应答出来。通知（没有 id）返回 None。
+    /// One request line in, one response line out. Notifications (no id) return None.
     pub async fn handle(&self, request: Value) -> Option<Value> {
         let id = request.get("id").cloned();
         let method = request
@@ -41,7 +41,7 @@ impl MemoryServer {
             .unwrap_or_default()
             .to_string();
 
-        // 通知：MCP 的 initialized 走这条 —— 不该有应答。
+        // Notification: MCP's `initialized` goes through here — there must be no answer.
         let id = id?;
 
         let result = match method.as_str() {
@@ -75,8 +75,8 @@ impl MemoryServer {
             .ok_or((-32602, "tools/call 少了 name".to_string()))?;
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        // 工具执行失败是**结果里的文本**（isError: true），不是 JSON-RPC
-        // 错误 —— 与 Joy 自己的工具层同一条规矩：调用方读得到原因。
+        // Tool execution failures are **text inside the result** (isError: true), not a
+        // JSON-RPC error — same rule as Joy's own tool layer: the caller can read why.
         let text = match name {
             "memory_search" => self.search(&args).await,
             "memory_remember" => self.remember(&args).await,
@@ -172,7 +172,7 @@ impl MemoryServer {
             .join("\n"))
     }
 
-    /// 名字与 `memory_episodes` 的工具名撞了，方法借用一下不同的词。
+    /// Name collides with the `memory_episodes` tool name; the method borrows a different word.
     async fn episodes(&self, args: &Value) -> Result<String, String> {
         let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(5) as u32;
         let episodes = self
@@ -190,7 +190,7 @@ impl MemoryServer {
             .join("\n"))
     }
 
-    /// stdio 主循环：一行一个请求，一行一个应答。读完 stdin 就退。
+    /// stdio main loop: one request per line, one response per line. EOF on stdin exits.
     pub async fn run_stdio(self) -> Result<()> {
         let mut lines = BufReader::new(tokio::io::stdin()).lines();
         let mut out = tokio::io::stdout();
@@ -234,7 +234,7 @@ fn require_str(args: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("参数 '{key}' 必须是非空字符串。"))
 }
 
-/// 暴露给外部的五个记忆工具。**只有记忆** —— 见模块头里为什么。
+/// The five memory tools exposed outside. **Memory only** — see the module header for why.
 fn tool_declarations() -> Vec<Value> {
     vec![
         json!({

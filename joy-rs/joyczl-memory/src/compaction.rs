@@ -1,30 +1,30 @@
-//! 上下文压缩：滑窗之外的对话，压成一段话带回 prompt。
+//! Context compaction: conversation beyond the sliding window, folded back into the prompt.
 //!
-//! 滑窗（`JOY_HISTORY_TURNS`）是硬边界：更老的轮次不再进 prompt。对短会话
-//! 无所谓，对长会话就是失忆 —— 「我们上周聊过什么」从上下文里彻底消失。
-//! 压缩把被挤出去的那部分**折进一段摘要**，摘要随会话存进 state.db，
-//! 每轮拼在 system prompt 里。摘要是往前滚的：每次只处理新挤出去的几轮，
-//! 不重算全史。
+//! The sliding window (`JOY_HISTORY_TURNS`) is a hard boundary: older turns no longer
+//! enter the prompt. Fine for short sessions; amnesia for long ones — "what did we
+//! discuss last week" vanishes from context. Compaction **folds the evicted part
+//! into one summary**, stored per session in state.db and spliced into the system
+//! prompt every turn. The summary rolls forward: only newly evicted turns, no full recompute.
 //!
-//! 三条规矩，跟这个 crate 的其它成员一致：
+//! Three rules, consistent with the rest of this crate:
 //!
-//! * **失败开放**：摘要调用失败就退回**确定性兜底**（把被挤出的轮次截断
-//!   拼接），绝不因为模型不配合而丢内容 —— 摘要再糙，也好过整段对话凭空消失。
-//! * **只往前滚**：已覆盖的轮次不重算。摘要是省 token 的手段，不是第二个
-//!   记忆源；事实来源永远是 state.db 里的 chat_log。
-//! * **可观测**：调用方拿到的是 `(覆盖轮数, 摘要)`，谁都能看出这段摘要
-//!   管到哪儿为止。
+//! * **Fail-open**: a failed summary call falls back to the **deterministic fallback**
+//!   (truncated concatenation of evicted turns); content is never lost to a stubborn
+//!   model — a rough summary beats a conversation vanishing into thin air.
+//! * **Roll forward only**: covered turns aren't recomputed. The summary saves tokens;
+//!   it isn't a second memory source; the truth stays chat_log in state.db.
+//! * **Observable**: the caller gets `(covered turns, summary)` — where it ends is visible.
 //!
-//! 工具输出不需要在这里修剪：写入时就经过 `fold_tool_activity` 折成了
-//! 一行带截断的文本（见 app-server 的 turn.rs），历史里本来就没有巨块。
+//! Tool output needs no trimming here: writes already pass through `fold_tool_activity`
+//! into one truncated line (see app-server's turn.rs) — history has no huge blocks.
 
 use anyhow::Result;
 use joyczl_provider::{CreateRequest, Message, Provider};
 
-/// 兜底摘要的字符上限。够放下几轮对话的骨架，又不至于自己变成上下文炸弹。
+/// Char cap for the fallback summary. Enough for a few turns' skeleton, without becoming a bomb.
 const FALLBACK_CHARS: usize = 600;
 
-/// 摘要的提示词。要的是**留住事实**，不是文学加工。
+/// The summarizer prompt. The goal is **keeping facts**, not literary polish.
 const SUMMARIZER_PROMPT: &str = "\
 You are compressing the older part of a conversation between a user and their \
 assistant, so it can stay in the context window as a short paragraph. Keep \
@@ -32,11 +32,11 @@ every fact, name, decision, number and open thread. Drop pleasantries and \
 repetition. Write plain prose in the language of the conversation. No \
 headings, no lists, no commentary about the task itself.";
 
-/// 把新挤出去的轮次折进已有的摘要。**永不返回 Err** —— 模型失败时
-/// 用确定性兜底顶上。
+/// Folds newly evicted turns into the existing summary. **Never returns Err** — the
+/// deterministic fallback covers model failures.
 ///
-/// 返回 `(新的覆盖轮数, 新摘要)`。`previous` 是上一版摘要（覆盖了多少轮 +
-/// 正文），`newly_evicted` 是这次新挤出去的老轮次。
+/// Returns `(new covered count, new summary)`. `previous` is the last summary
+/// (covered turns + body); `newly_evicted` is the old turns evicted this time.
 pub async fn roll_forward(
     client: &dyn Provider,
     model: &str,
@@ -49,7 +49,7 @@ pub async fn roll_forward(
     };
     let covered_now = covered_before + newly_evicted.len() as i32;
 
-    // 拼给模型看的原文：上一版摘要 + 这次新挤出去的轮次。
+    // Material for the model: the previous summary plus this batch of newly evicted turns.
     let mut material = String::new();
     if !previous_summary.trim().is_empty() {
         material.push_str("Earlier summary:\n");
@@ -65,7 +65,7 @@ pub async fn roll_forward(
         system: Some(SUMMARIZER_PROMPT.to_string()),
         messages: vec![Message::user_text(material.clone())],
         tools: Vec::new(),
-        // 摘要要短：给多了它会顺手把对话复述一遍。
+        // Keep the summary short: given more, it will happily retell the conversation.
         max_tokens: 700,
     };
 
@@ -73,7 +73,7 @@ pub async fn roll_forward(
         Ok(response) => {
             let summary = response.text().trim().to_string();
             if summary.is_empty() {
-                // 回了个空 —— 跟失败同等对待：兜底至少不会丢内容。
+                // Empty reply — treated the same as failure: the fallback at least loses nothing.
                 (
                     covered_now,
                     fallback_summary(&previous_summary, newly_evicted),
@@ -89,7 +89,7 @@ pub async fn roll_forward(
     }
 }
 
-/// 确定性兜底：截断拼接。**不加工**，只保证「东西还在」。
+/// The deterministic fallback: truncated concatenation. **No processing**, just "the stuff is still there".
 fn fallback_summary(previous: &str, newly_evicted: &[(String, String)]) -> String {
     let mut text = String::new();
     if !previous.trim().is_empty() {
@@ -116,10 +116,10 @@ fn clip(text: &str, max: usize) -> String {
     format!("{cut}…")
 }
 
-/// 这个会话现在需要摘要吗？返回本次要折叠的轮次（可能为空）。
+/// Does this session need a summary now? Returns the turns to fold (may be empty).
 ///
-/// 只在「老于窗口的轮次还没被摘要覆盖过」时才给东西 —— 这是滚动语义的
-/// 全部：`covered` 是水位线，只看水位线以上的新挤出部分。
+/// Yields only when turns older than the window aren't yet covered — that's the whole
+/// rolling semantics: `covered` is the waterline; process only new evictions above it.
 pub fn newly_evicted(
     pairs: &[(String, String)],
     window: usize,
@@ -133,18 +133,18 @@ pub fn newly_evicted(
     pairs[covered..evicted_len].to_vec()
 }
 
-/// 预算里装得下多少轮：从**最新**往回装，装到装不下为止。
+/// How many turns fit the budget: pack from the **newest** backwards until full.
 ///
-/// 这是「按 token 触发压缩」的落点：预算小了，保留下来的轮次就少，
-/// 被挤出去的部分由 `roll_forward` 折进摘要。至少保留 1 轮 —— 连最新一轮
-/// 都不给的话，模型会对着摘要回答「你刚才说了什么」。
+/// This is where "compact by token budget" lands: a smaller budget keeps fewer turns,
+/// evicted ones folded into the summary by `roll_forward`. At least 1 turn is kept —
+/// with nothing current, the model answers "what did you just say" from the summary.
 ///
-/// 估算是近似的（见 `joyczl_provider::tokens`），所以这里只需要量级对。
+/// Estimation is approximate (see `joyczl_provider::tokens`); only magnitude must be right.
 pub fn turns_that_fit(pairs: &[(String, String)], budget: usize) -> usize {
     let mut used = 0usize;
     let mut kept = 0usize;
     for (user, assistant) in pairs.iter().rev() {
-        // 两条消息 + 各自固定开销（与 joyczl_provider::tokens 的算法保持一致）。
+        // Both messages plus fixed overhead each (kept in sync with joyczl_provider::tokens).
         let cost = joyczl_provider::tokens::estimate_text(user)
             + joyczl_provider::tokens::estimate_text(assistant)
             + 8;
@@ -157,7 +157,7 @@ pub fn turns_that_fit(pairs: &[(String, String)], budget: usize) -> usize {
     kept
 }
 
-/// 把摘要接到 system prompt 里。空摘要返回 None，调用方就不加这一段。
+/// Splices the summary into the system prompt. Empty summary returns None; the caller skips it.
 pub fn summary_section(summary: &str) -> Option<String> {
     let summary = summary.trim();
     if summary.is_empty() {
@@ -166,11 +166,11 @@ pub fn summary_section(summary: &str) -> Option<String> {
     Some(format!("\nEarlier in this conversation:\n{summary}"))
 }
 
-/// 便捷入口：算 + 存 + 返回要用的摘要。`Ok(None)` 表示这次不需要动。
-/// 这次会真的压缩吗？
+/// Convenience entry: compute + save + return the summary to use. `Ok(None)` = nothing to do.
+/// Will this actually compact?
 ///
-/// `refresh` 与 app-server 的 `PreCompact` 钩子都要知道这件事 —— 判断只写一处，
-/// 否则钩子会在「其实没压」的时候也响（或者反过来漏掉真正的压缩）。
+/// Both `refresh` and app-server's `PreCompact` hook need this — the check lives in
+/// one place, or the hook rings when nothing compacted (or misses a real compaction).
 pub async fn due(
     chat: &joyczl_state::Chat,
     session_id: &str,
@@ -181,7 +181,7 @@ pub async fn due(
     !newly_evicted(pairs, window, covered).is_empty()
 }
 
-/// 已经折进摘要的轮数。
+/// How many turns are already folded into the summary.
 async fn covered_upto(chat: &joyczl_state::Chat, session_id: &str) -> i32 {
     chat.load_rollup(session_id)
         .await
@@ -206,11 +206,12 @@ pub async fn refresh(
         return Ok(previous.map(|(_, summary)| summary));
     }
     let (covered_now, summary) = roll_forward(client, model, previous, &fresh).await;
-    // 存失败只影响下次重算（多花一次调用）—— 不能连累这轮对话。
+    // A save failure only costs a recompute next time (one extra call) — never this turn.
     match chat.save_rollup(session_id, covered_now, &summary).await {
         Err(e) => eprintln!("(joy) 滚动摘要落库失败（这轮照常用）：{e}"),
-        // 被单调守卫挡下：库里已经有一份更新的摘要（并发压缩，见 chat.rs 的说明）。
-        // 不静默 —— 否则没人知道这一轮算出来的摘要没进去。
+        // Blocked by the monotonic guard: the store already holds a newer summary
+        // (concurrent compaction, see chat.rs); not silent, or nobody learns this
+        // round's summary never landed.
         Ok(false) => {
             eprintln!("(joy) 滚动摘要没写进去：库里已有一份覆盖更多轮次的（并发压缩，按新的算）")
         }

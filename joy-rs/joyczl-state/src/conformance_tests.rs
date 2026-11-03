@@ -1,6 +1,6 @@
-//! 契约验收跑在本家的 SQLite 实现上。将来的每个记忆后端（pgvector、
-//! 托管 API……）在自己的测试里调用同一套 `exercise_*` —— 一行不多写，
-//! 契约一次不漏。
+//! Contract acceptance runs on the homegrown SQLite implementation. Every future memory
+//! backend (pgvector, hosted API…) calls the same `exercise_*` in its own tests — not one
+//! line more, not one contract clause missed.
 
 use super::conformance::{exercise_episodic, exercise_semantic};
 use super::store::SemanticStore;
@@ -11,7 +11,7 @@ async fn stores() -> (Facts, Episodes) {
     let pool = crate::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     (Facts::new(pool.clone()), Episodes::new(pool))
 }
 
@@ -31,8 +31,8 @@ async fn sqlite_episodic_store_honours_the_contract() {
         .expect("本家实现不得违反自己定的契约");
 }
 
-/// trait 与固有方法并存时，固有方法必须仍然照常工作 ——
-/// 这是对「委托实现」本身的回归测试。
+/// When a trait and inherent methods coexist, the inherent ones must still work —
+/// a regression test for the delegation implementations themselves.
 #[tokio::test]
 async fn trait_objects_and_inherent_calls_agree() {
     let (facts, _episodes) = stores().await;

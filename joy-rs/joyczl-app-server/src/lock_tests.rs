@@ -1,7 +1,7 @@
-//! 守护锁的测试：真冲突、崩溃残骸收尸、Drop 清理。
+//! Guardian lock tests: a real conflict, reaping crash wreckage, Drop cleanup.
 //!
-//! 活进程判定用「起一个立即退出的子进程拿它的 pid」—— 那个 pid 必然死透，
-//! 也不会撞上测试机上的真实长驻进程。
+//! Liveness is judged by "spawn a child that exits immediately and take its pid" — that pid is certainly
+//! dead, and will not collide with a real long-lived process on the test machine.
 
 use super::lock;
 use std::io::Write;
@@ -10,7 +10,7 @@ fn temp_home() -> tempfile::TempDir {
     tempfile::tempdir().expect("临时目录")
 }
 
-/// 第二个进程拿同一把锁：硬错误，错误里带着在跑的 PID。
+/// A second process takes the same lock: a hard error, carrying the running PID.
 #[test]
 fn a_second_acquire_on_a_live_lock_fails() {
     let dir = temp_home();
@@ -24,11 +24,11 @@ fn a_second_acquire_on_a_live_lock_fails() {
     drop(first);
 }
 
-/// 锁文件在但进程死了：自动收尸，第二次能拿到。
+/// The lock file exists but the process is dead: reaped automatically, the second acquire succeeds.
 #[test]
 fn a_stale_lock_from_a_dead_process_is_reaped() {
     let dir = temp_home();
-    // 造一个「必然已死」的 pid：起个立即退出的子进程，等它结束。
+    // Manufacture a "certainly dead" pid: spawn a child that exits immediately and wait for it.
     let mut child = std::process::Command::new("true")
         .spawn()
         .expect("起子进程");
@@ -44,7 +44,7 @@ fn a_stale_lock_from_a_dead_process_is_reaped() {
     assert!(!lock_path.exists(), "Drop 后锁文件该没了");
 }
 
-/// 锁文件内容损坏（不是数字）：同样当残骸收掉，不卡死人。
+/// A corrupt lock file (not a number): reaped like wreckage too, never a hang.
 #[test]
 fn a_corrupt_lock_file_is_also_reaped() {
     let dir = temp_home();
@@ -55,7 +55,7 @@ fn a_corrupt_lock_file_is_also_reaped() {
     assert!(!lock_path.exists());
 }
 
-/// 正常释放后可以再拿（REPL 关了再开的场景）。
+/// After a normal release it can be acquired again (the REPL closed and reopened).
 #[test]
 fn release_then_acquire_again() {
     let dir = temp_home();

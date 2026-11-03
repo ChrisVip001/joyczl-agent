@@ -1,20 +1,20 @@
-//! `<home>/workspaces.json` —— 最近用过的目录（驾驶舱选工作目录的快捷入口）。
+//! `<home>/workspaces.json` — recently used dirs (quick entries for the cockpit workdir picker).
 //!
-//! dsh 的 workspace 是一条领域记录（uuid + realpath + 会话归属）；joy 的
-//! cwd 本来就是每轮参数、不持久，所以这里只取它最有用的那一小块：
-//! **「用过的目录记住，下次一键直达」**。这是便利品，不是事实源 ——
-//! 文件坏了、写失败了，都不该连累任何一轮对话。
+//! dsh's workspace is a domain record (uuid + realpath + session ownership); joy's cwd is
+//! already a per-turn parameter, not persisted, so this keeps only its most useful bit:
+//! **"remember used directories for one-click access next time"** — a convenience, not a
+//! source of truth; a broken file or failed write must never drag down any turn.
 //!
-//! 三条纪律：
-//! * **canonicalize 去重**（dsh 的 realpath 判重）：同一个目录换了符号链
-//!   写法或尾部斜杠，不产生两条记录。
-//! * **命中移前**：最近用的在最上面。
-//! * **封顶 8 条**：这是快捷方式列表，不是历史账本。
+//! Three disciplines:
+//! * **canonicalize dedup** (dsh's realpath matching): the same directory under a different
+//!   symlink spelling or trailing slash produces no duplicate entry.
+//! * **Move hits to front**: most recently used on top.
+//! * **Cap at 8 entries**: this is a shortcut list, not a history ledger.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// 最多记几条。
+/// How many entries to keep at most.
 const MAX_PATHS: usize = 8;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ pub fn workspaces_path(home: &Path) -> PathBuf {
     home.join("workspaces.json")
 }
 
-/// 读。文件不存在、损坏 —— 一律空列表（失败开放，同 routes 的纪律）。
+/// Read. Missing or broken file — always an empty list (fail-open, same discipline as routes).
 pub fn load_workspaces(home: &Path) -> WorkspacesFile {
     std::fs::read_to_string(workspaces_path(home))
         .ok()
@@ -35,8 +35,8 @@ pub fn load_workspaces(home: &Path) -> WorkspacesFile {
         .unwrap_or_default()
 }
 
-/// 记一笔。canonicalize 去重（失败就用原样 —— 目录不存在也算「想去」）、
-/// 命中移前、封顶；写失败静默 —— 便利品没有资格报警。
+/// Record an entry. canonicalize dedup (on failure keep as-is — nonexistent still counts as
+/// "want to go"), move hits to front, cap; silent on write failure — convenience never alarms.
 pub fn record_workspace(home: &Path, raw: &str) {
     let canonical = std::fs::canonicalize(raw).unwrap_or_else(|_| PathBuf::from(raw));
     let path = canonical.to_string_lossy().to_string();
@@ -70,8 +70,8 @@ mod workspaces_tests {
         std::fs::create_dir(&a).unwrap();
         std::fs::create_dir(&b).unwrap();
 
-        // 期望值也走 canonicalize —— macOS 的 tempdir 住在符号链后面
-        // （/var → /private/var），记录的是规范形式。
+        // Expected values also go through canonicalize — macOS tempdir lives behind a
+        // symlink (/var → /private/var), and what is recorded is the canonical form.
         let ca = std::fs::canonicalize(&a)
             .unwrap()
             .to_string_lossy()
@@ -82,14 +82,14 @@ mod workspaces_tests {
             .to_string();
 
         record_workspace(dir.path(), &a.to_string_lossy());
-        // 同一目录换个写法（尾部斜杠）：canonicalize 判重，不产生第二条。
+        // Same directory, different spelling (trailing slash): canonicalize dedups, no second entry.
         record_workspace(dir.path(), &format!("{}/", a.display()));
         assert_eq!(load_workspaces(dir.path()).paths.len(), 1);
 
         record_workspace(dir.path(), &b.to_string_lossy());
         assert_eq!(load_workspaces(dir.path()).paths, vec![cb, ca.clone()]);
 
-        // 再记 a：移到最前。
+        // Record a again: moved to front.
         record_workspace(dir.path(), &a.to_string_lossy());
         assert_eq!(load_workspaces(dir.path()).paths[0], ca);
     }
@@ -105,8 +105,8 @@ mod workspaces_tests {
         assert_eq!(load_workspaces(dir.path()).paths.len(), MAX_PATHS);
     }
 
-    /// 不存在的目录也照记（canonicalize 失败用原样）——「想去但还没建」
-    /// 是合法意图，选择器那边点了自然会得到一句人话。
+    /// A nonexistent directory is still recorded (canonicalize failure keeps as-is) — "want
+    /// to go but not built yet" is legitimate intent; the picker will say so in plain words.
     #[test]
     fn a_missing_directory_is_still_recorded() {
         let dir = tempfile::tempdir().expect("临时目录");

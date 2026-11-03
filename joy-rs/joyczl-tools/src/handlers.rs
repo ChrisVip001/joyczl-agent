@@ -1,7 +1,7 @@
-//! 内置工具。
+//! Built-in tools.
 //!
-//! 每个工具的输出都**如实说明结果落在了哪儿**（本地文件、state.db 的哪张表）。
-//! 这不是客套：模型会把这段话转述给用户，写清楚它才不会虚报「已同步到云端」。
+//! Every tool's output **states truthfully where the result landed** (local file, state.db table).
+//! Not politeness: the model relays it to the user; clear text avoids a false "synced to the cloud".
 
 use std::sync::Arc;
 
@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 
 use crate::{opt_u32, require_str, Tool, ToolCtx};
 
-/// 记忆相关的四个工具：存、忘、查、列。
-/// 它们是 Joy「自己管自己的记忆」的那部分 —— 用户说「忘掉这条」时，
-/// 走的就是 forget_note，而不是某个隐藏的管理命令。
+/// The four memory tools: save, forget, search, list.
+/// They are the part of Joy that "manages its own memory" — when the user says
+/// "forget this one", it goes through forget_note, not some hidden admin command.
 pub fn memory_tools() -> Vec<Tool> {
     vec![
         Tool {
@@ -32,12 +32,12 @@ pub fn memory_tools() -> Vec<Tool> {
                 Box::pin(async move {
                     let subject = require_str(&args, "subject")?;
                     let content = require_str(&args, "content")?;
-                    // 类别可选：模型不写就是 `fact`（写入口会收敛未知值）。
+                    // Category is optional: if the model omits it, it's `fact` (the write entry normalizes unknown values).
                     let kind = args.get("kind").and_then(Value::as_str).unwrap_or("fact");
                     let (row, is_new) = ctx.facts.add(&subject, &content, "user", kind).await?;
                     if !is_new {
-                        // 直说「已经记过了」：模型据此就不必再存一遍，用户也知道
-                        // 自己的话没有被记成两条。
+                        // Say "already remembered" outright: the model knows not to save it again,
+                        // and the user knows their words weren't recorded twice.
                         return Ok(format!(
                             "这条已经记过了（没有重复入库）：#{} {} — {}",
                             row.id, row.subject, row.content
@@ -135,8 +135,8 @@ pub fn memory_tools() -> Vec<Tool> {
     ]
 }
 
-/// 让模型知道现在几点。没有它，模型只能猜「今天星期几」——
-/// 而猜错了日程就会跟着错。
+/// Lets the model know what time it is. Without it, the model can only guess "what day is today" —
+/// and a wrong guess makes the schedule wrong too.
 pub fn current_time() -> Tool {
     Tool {
         name: "current_time".to_string(),
@@ -158,8 +158,8 @@ pub fn current_time() -> Tool {
     }
 }
 
-/// P2 内置工具全集。以后按开关条件往里加 —— 注册表的组装是**显式的**，
-/// 不用宏也不用扫目录，让「这个工具为什么在」一眼能查。
+/// The full P2 built-in tool set. More get added behind flags later — the registry is assembled
+/// **explicitly**: no macros, no directory scanning, so "why is this tool here" is checkable at a glance.
 pub fn build_default() -> crate::ToolRegistry {
     let mut registry = crate::ToolRegistry::new();
     for tool in memory_tools() {
@@ -173,7 +173,7 @@ pub fn build_default() -> crate::ToolRegistry {
     registry.register(crate::messages::send_message());
     registry.register(crate::web::search_web());
     registry.register(crate::web::fetch_url());
-    // 只读文件工具：无副作用，默认就有（读取不走执行闸门 —— 见 fs.rs 的模块注释）。
+    // Read-only file tools: no side effects, present by default (reads skip the execution gate — see fs.rs docs).
     registry.register(crate::fs::read_file());
     registry.register(crate::fs::list_dir());
     registry

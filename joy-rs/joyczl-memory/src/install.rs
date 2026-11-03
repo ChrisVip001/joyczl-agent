@@ -1,17 +1,17 @@
-//! 技能的安装与更新：取回 → 校验 → 比对版本 → 暂存 → 备份 → 原子替换。
+//! Skill install and update: fetch → validate → compare versions → stage → backup → atomic swap.
 //!
-//! 顺序不是随便排的，每一步都在防一类事故：
+//! The order isn't arbitrary; each step guards against one class of accident:
 //!
-//! * **先校验**：内容过不了 `parse_skill_text`（缺 name/description）就不动
-//!   磁盘 —— 装进去一个解析不了的技能，等于把已有能力换成一个坏文件。
-//! * **先暂存再替换**：新内容先落到 `<home>/skills/.staging/`，成了才动目标
-//!   目录。中途失败留下的是一份垃圾文件，不是一个坏掉的技能。
-//! * **替换前备份**：老版本挪进 `<home>/skills/.backup/<名字>-<时间戳>/`，
-//!   要回退就是一条 `mv`。
-//! * **不降级**：装着的版本更新就不动它（除非用户删掉重装）。
+//! * **Validate first**: content failing `parse_skill_text` (missing name/description)
+//!   never touches disk — an unparseable skill swaps a working one for a bad file.
+//! * **Stage, then replace**: new content lands in `<home>/skills/.staging/` first;
+//!   the target moves only on success. Mid-way failure leaves junk, not a broken skill.
+//! * **Backup before replace**: the old version moves to `<home>/skills/.backup/<name>-<ts>/`;
+//!   rolling back is one `mv`.
+//! * **No downgrade**: a newer installed version is left alone (unless the user reinstalls).
 //!
-//! 取回（HTTP 还是本地文件）由调用方注入 —— 这一层不认识网络，测试也就不
-//! 需要网络。
+//! Fetching (HTTP vs local file) is injected by the caller — this layer knows nothing
+//! about the network, so tests need no network either.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use crate::skills::{is_slug, parse_skill_text};
 
-/// 索引里的一条。`url` 可以是 http(s)，也可以是本地路径。
+/// One entry of the index. `url` may be http(s) or a local path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexEntry {
     pub name: String,
@@ -29,26 +29,26 @@ pub struct IndexEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// 装上了（`None` = 以前没装过）。
+    /// Installed (`None` = wasn't installed before).
     Installed {
         name: String,
         from: Option<String>,
         to: String,
     },
-    /// 已经是最新的。
+    /// Already up to date.
     UpToDate { name: String, version: String },
-    /// 装着的是更新的版本，没动。
+    /// The installed version is newer; left untouched.
     Ahead {
         name: String,
         installed: String,
         offered: String,
     },
-    /// 失败了，磁盘没动。
+    /// Failed; disk untouched.
     Failed { name: String, why: String },
 }
 
 impl Outcome {
-    /// 给人看的一行。
+    /// One human-readable line.
     pub fn line(&self) -> String {
         match self {
             Outcome::Installed { name, from, to } => match from {
@@ -70,7 +70,7 @@ impl Outcome {
     }
 }
 
-/// 解析索引。坏条目跳过并给出原因 —— 一条写坏的条目不该让整次更新失败。
+/// Parses the index. Bad entries are skipped with a reason — one broken entry must not fail the update.
 pub fn parse_index(text: &str) -> Result<(Vec<IndexEntry>, Vec<String>), String> {
     let parsed: Value =
         serde_json::from_str(text).map_err(|e| format!("索引不是合法 JSON：{e}"))?;
@@ -97,10 +97,10 @@ pub fn parse_index(text: &str) -> Result<(Vec<IndexEntry>, Vec<String>), String>
     Ok((entries, warnings))
 }
 
-/// 装了 `installed`、索引给的是 `offered` —— 要不要换？
+/// Installed `installed`, index offers `offered` — replace or not?
 ///
-/// 纯数字点分版本按段比大小；非数字（`2024-05` 这种）退化成字符串比较，
-/// 只求「不降级」这条规矩成立。
+/// Pure numeric dotted versions compare segment by segment; non-numeric (`2024-05`)
+/// degrades to string comparison — just enough to keep the "no downgrade" rule.
 pub fn needs_update(installed: Option<&str>, offered: &str) -> bool {
     let Some(installed) = installed else {
         return true;
@@ -111,7 +111,7 @@ pub fn needs_update(installed: Option<&str>, offered: &str) -> bool {
     }
     match (numeric(installed), numeric(offered)) {
         (Some(a), Some(b)) => b > a,
-        _ => false, // 比不了大小就不动 —— 宁可少更新，不可来回折腾
+        _ => false, // uncomparable → don't touch — better fewer updates than thrash
     }
 }
 
@@ -122,22 +122,22 @@ fn numeric(version: &str) -> Option<Vec<u32>> {
         .collect()
 }
 
-/// 把一份技能的正文装进 `<home>/skills/<名字>/SKILL.md`。
+/// Installs a skill's body into `<home>/skills/<name>/SKILL.md`.
 ///
-/// 校验不过就返回 Err，磁盘一个字节都不动。
+/// Returns Err on failed validation without touching a byte on disk.
 ///
-/// 全新安装走 `skills::install_from_text`（与 `joy skill install` 同一条
-/// 路径、同一套校验）；只有**替换已有版本**才走下面的暂存 + 备份 + 原子换 ——
-/// 新装没有要保护的东西，替换有。
+/// Fresh installs go through `skills::install_from_text` (same path and validation
+/// as `joy skill install`); only **replacing an existing version** takes the staging
+/// + backup + atomic swap below — fresh installs have nothing to protect, replacements do.
 pub fn install(home: &Path, name: &str, content: &str) -> Result<PathBuf, String> {
-    // 路径穿越的第一道闸：名字必须是 slug。
+    // First gate against path traversal: the name must be a slug.
     if !is_slug(name) {
         return Err(format!("技能名 '{name}' 不是合法 slug"));
     }
     let skill = parse_skill_text(content)
         .ok_or("内容不是一个合法的 SKILL.md（frontmatter 缺 name 或 description）")?;
-    // 索引说叫什么、文件里就得写什么：装一个名不对版的技能，
-    // 等于让索引与目录从此对不上。
+    // Whatever the index calls it, the file must say: a name mismatch desyncs the
+    // index from the directory from then on.
     if skill.name != name {
         return Err(format!(
             "索引说它叫 '{name}'，文件里写的是 '{}' —— 拒绝装一个名不对版的技能",
@@ -157,13 +157,13 @@ pub fn install(home: &Path, name: &str, content: &str) -> Result<PathBuf, String
     std::fs::write(staging.join("SKILL.md"), content)
         .map_err(|e| format!("写暂存文件失败：{e}"))?;
 
-    // 老版本先备份：替换失败还能回去（走到这里必然已存在 —— 新装那条
-    // 分支上面就返回了）。
+    // Back up the old version first: a failed replacement can still go back (it must
+    // exist here — the fresh-install branch already returned above).
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let backup = skills.join(".backup").join(format!("{name}-{stamp}"));
     copy_dir(&target, &backup).map_err(|e| format!("备份失败：{e}"))?;
     std::fs::remove_dir_all(&target).map_err(|e| format!("清掉旧版本失败：{e}"))?;
-    // 原子替换：同一文件系统内的 rename。
+    // Atomic replace: a rename within the same filesystem.
     std::fs::rename(&staging, &target).map_err(|e| format!("替换失败：{e}"))?;
     Ok(target.join("SKILL.md"))
 }
@@ -182,15 +182,15 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 本地已装的版本（读 SKILL.md 的 frontmatter）。
+/// The locally installed version (reads the SKILL.md frontmatter).
 pub fn installed_version(home: &Path, name: &str) -> Option<String> {
     let path = home.join("skills").join(name).join("SKILL.md");
     let text = std::fs::read_to_string(path).ok()?;
     parse_skill_text(&text).and_then(|skill| skill.version)
 }
 
-/// 按索引更新一遍。`fetch` 由调用方注入（HTTP 或本地文件），
-/// 这样这一层既不知道网络，测试也不需要网络。
+/// Updates everything per the index. `fetch` is injected by the caller (HTTP or local
+/// file), so this layer knows nothing about the network and tests need none.
 pub async fn update_all<F, Fut>(home: &Path, entries: &[IndexEntry], fetch: F) -> Vec<Outcome>
 where
     F: Fn(String) -> Fut,

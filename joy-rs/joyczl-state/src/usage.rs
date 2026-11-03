@@ -1,14 +1,14 @@
-//! 用量台账（迁移 0010）：只记账，不强制。
+//! Usage ledger (migration 0010): bookkeeping only, never enforcement.
 //!
-//! 每个 turn 一行；`summary` 用 SQL 现算 per-model 聚合。刻意没有成本列 ——
-//! BYOK 模式下钱记在用户自己的厂商账单上，费率是部署方的事（token 在，
-//! 费率随时能乘）。**在 hub 模式下这就是 per-user 记账**：每个用户一个
-//! home、一个 state.db，台账天然按人隔离；跨用户汇总等有管理面再说。
+//! One row per turn; `summary` computes per-model aggregates in SQL. Deliberately no cost
+//! column — under BYOK the money is on the user's own vendor bill; rates are the deployer's
+//! business (tokens are stored; rates can be applied anytime). **In hub mode this is
+//! per-user bookkeeping**: one home, one state.db per user; isolated per person by nature.
 
 use anyhow::Result;
 use sqlx::{FromRow, SqlitePool};
 
-/// 按模型聚合的一行。
+/// One aggregated row per model.
 #[derive(Debug, Clone, FromRow)]
 pub struct UsageByModel {
     pub provider: String,
@@ -18,7 +18,7 @@ pub struct UsageByModel {
     pub output_tokens: i64,
 }
 
-/// 全量汇总。
+/// Full summary.
 #[derive(Debug, Clone, Default)]
 pub struct UsageSummary {
     pub turns: i64,
@@ -27,7 +27,7 @@ pub struct UsageSummary {
     pub by_model: Vec<UsageByModel>,
 }
 
-/// 用量台账。Clone 便宜（一个连接池句柄），与 Jobs 同一条理由。
+/// The usage ledger. Clone is cheap (one pool handle), same reason as Jobs.
 #[derive(Clone)]
 pub struct Usage {
     pool: SqlitePool,
@@ -38,7 +38,7 @@ impl Usage {
         Self { pool }
     }
 
-    /// 记一个 turn 的用量。写失败**绝不拦 turn** —— 记账是旁路，不是主路。
+    /// Record one turn's usage. Write failure **never blocks the turn** — bookkeeping is a side path.
     pub async fn record(
         &self,
         session_id: &str,
@@ -61,7 +61,7 @@ impl Usage {
         Ok(())
     }
 
-    /// 全量汇总（per-model 聚合 + 总数），by_model 按累计输入降序。
+    /// Full summary (per-model aggregates + totals), by_model sorted by total input desc.
     pub async fn summary(&self) -> Result<UsageSummary> {
         let by_model = sqlx::query_as::<_, UsageByModel>(
             "SELECT provider, model, COUNT(*) AS turns,
@@ -95,7 +95,7 @@ mod tests {
         (Usage::new(pool), dir)
     }
 
-    /// 记进去的聚合得出来；by_model 按输入降序；空表返回零。
+    /// What goes in aggregates out; by_model sorted by input desc; empty table returns zeros.
     #[tokio::test]
     async fn records_and_aggregates_by_model() {
         let (usage, _dir) = db().await;
@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(summary.input_tokens, 1300);
         assert_eq!(summary.output_tokens, 140);
         assert_eq!(summary.by_model.len(), 2);
-        // 按累计输入降序：gpt-5.2（1000）在前。
+        // Sorted by total input desc: gpt-5.2 (1000) first.
         assert_eq!(summary.by_model[0].model, "gpt-5.2");
         assert_eq!(summary.by_model[0].turns, 1);
         assert_eq!(summary.by_model[1].model, "deepseek-chat");

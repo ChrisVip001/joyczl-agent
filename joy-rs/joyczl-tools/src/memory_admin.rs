@@ -1,9 +1,9 @@
-//! manage_memory —— 记忆的维护面。
+//! manage_memory — the maintenance surface for memory.
 //!
-//! 查（search_memory）和列（list_memory）是日常动作；这个工具管的是
-//! 修与删：改一条事实的正文、按编号删一条事实或情景。
-//! 按**编号**操作（编号来自 list_memory / search_memory 的输出），
-//! 而不是按内容 —— 按内容删会误伤同主题的好记忆。
+//! Query (search_memory) and list (list_memory) are everyday actions; this tool handles
+//! edit and delete: change a fact's body, or delete a fact/episode by id. Operations go
+//! by **id** (from list_memory / search_memory output), not by content — deleting by
+//! content would take out good memories on the same topic.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::{require_str, Tool, ToolCtx};
-// 名字规则与 joy skill install / update 共用一处（它会变成目录名）。
+// Name rule shared with joy skill install / update (it becomes the directory name).
 use joyczl_memory::skills::is_slug;
 
 fn opt_i64(args: &Value, key: &str) -> Result<Option<i64>> {
@@ -81,11 +81,11 @@ pub fn manage_memory() -> Tool {
     }
 }
 
-/// create_skill —— 把用户教的工作流固化成 SKILL.md（过程记忆的写入口）。
+/// create_skill — turns a user-taught workflow into a SKILL.md (procedural memory's write entry).
 ///
-/// 只在**用户同意之后**才调用（这条规矩写在 SOUL.md 里）：agent 自己
-/// 批准自己写行为准则，和 update_soul 不设防是同一种事故。
-/// 从不覆盖已有技能 —— 内置的或用户写的都不行。
+/// Only call **after the user agrees** (this rule lives in SOUL.md): an agent approving
+/// its own code of conduct is the same accident as an unguarded update_soul.
+/// Never overwrite an existing skill — built-in or user-written alike.
 pub fn create_skill() -> Tool {
     Tool {
         name: "create_skill".to_string(),

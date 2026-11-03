@@ -5,12 +5,12 @@ export type Fact = {
   subject: string;
   content: string;
   /**
-   * `user`（直接告诉它的）或 `consolidation`（从对话里提炼的）。
+   * `user` (told directly) or `consolidation` (distilled from conversations).
    */
   source: string;
   /**
-   * 这条事实**关于什么**：`user` / `feedback` / `project` / `reference` /
-   * `fact`（兜底）。分类不出来的都落在 `fact`。
+   * What this fact is **about**: `user` / `feedback` / `project` / `reference` /
+   * `fact` (fallback). Anything that resists classification lands on `fact`.
    */
   kind: string;
   createdAt: string | null;

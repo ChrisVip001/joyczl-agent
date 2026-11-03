@@ -1,9 +1,9 @@
-// 驾驶舱的主程序：开机把当前会话的历史拉回来，然后等着说话。
+// The dashboard's main program: on boot, pull back the current session's history, then wait for input.
 //
-// 页面本身**没有状态**：会话、记忆、配置都在 Rust 那边（app-server 背后是
-// state.db）。这里只有「在看哪个会话」和「这一轮正在流」这两个临时的视图状态，
-// 刷新一下就回到默认。也就是说，浏览器崩了、标签页关了，什么都不丢 ——
-// 这是这套分层最值钱的地方。
+// The page itself is **stateless**: sessions, memory, and config all live on the Rust side
+// (behind app-server is state.db). The only temporary view state here is "which session is being
+// viewed" and "whether a turn is streaming"; a refresh returns to defaults. In other words, if the
+// browser crashes or the tab closes, nothing is lost — that's the most valuable part of this layering.
 
 import type { TurnCompletedNotification } from "./protocol";
 import {
@@ -44,18 +44,18 @@ import {
 } from "./render";
 
 /**
- * 现在在看哪个会话。
+ * Which session is currently being viewed.
  *
- * 会话不是存在浏览器里的东西，只是 chat_log 上的一个标签 —— 所以「切换」
- * 就是换这个变量、再重新拉一遍历史，没有别的。
- * 默认会话是好事：终端里的 `joy` 说的也是这一条线，接得上。
+ * A session is not stored in the browser — just a label on chat_log — so "switching" means
+ * changing this variable and re-fetching the history, nothing more. The default session is
+ * a good thing: `joy` in the terminal talks on the same line too, so they connect.
  */
 let current = "default";
 
-/** 往上翻旧账的游标。`null` = 已经翻到最早了。 */
+/** Cursor for paging back through older messages. `null` = already at the earliest. */
 let olderCursor: string | null = null;
 
-/** 面板多久自己刷一次。都是本地 RPC，几微秒，不心疼。 */
+/** How often the panels refresh themselves. All local RPC, a few microseconds, no cost. */
 const POLL_MS = 15_000;
 
 const dom = {
@@ -96,8 +96,8 @@ const dom = {
 let busy = false;
 
 /**
- * 暂存区（「引用优先」）：选中的文件先摆在这儿，发送时才上传、
- * 把绝对路径注进消息 —— 引用文件和读文件是两件事，模型自己决定读不读。
+ * Staging area ("reference first"): files wait here, uploaded on send with absolute paths
+ * injected into the message — referencing and reading are two things; the model decides.
  */
 const staged: File[] = [];
 
@@ -121,9 +121,9 @@ function renderStaged(): void {
 }
 
 /**
- * 右侧面板的导航（数据即导航）。
- * 概览/记忆随整屏轮询走；用量/审批/定时按需取 —— 只刷**当前开着**的 tab，
- * 不为看不见的面板付请求。
+ * Navigation for the right-side panels (data as navigation).
+ * Overview/memory follow the full-screen poll; usage/approvals/schedules are fetched on demand —
+ * only the **currently open** tab is refreshed, paying no requests for panels that aren't visible.
  */
 type TabId = "overview" | "memory" | "usage" | "approvals" | "schedules" | "model";
 let activeTab: TabId = "overview";
@@ -139,7 +139,7 @@ function switchTab(tab: TabId): void {
   void refreshPanels();
 }
 
-/** 按需面板：只有当前 tab 是那三个新面板之一时才发请求。 */
+/** On-demand panels: only fire a request when the current tab is one of the three new panels. */
 async function refreshPanels(): Promise<void> {
   try {
     if (activeTab === "usage") {
@@ -162,10 +162,10 @@ async function refreshPanels(): Promise<void> {
   }
 }
 
-// --- 运行状态三态 -----------------------
+// --- Run state, three kinds -----------------------
 //
-// 「等你说」是静止行；「思考中/回复中」shimmer + 秒表；「干活中」带工具名。
-// 区分的是「卡住了」和「在跑」—— 秒表在动就是后者。
+// "Waiting for you" is static; "Thinking/Replying" gets shimmer + stopwatch; "Working" carries
+// the tool name. It distinguishes "stuck" from "running" — a moving stopwatch means the latter.
 
 let statusTimer: number | null = null;
 let statusStart = 0;
@@ -188,7 +188,7 @@ function showStatus(kind: "thinking" | "working", label: string): void {
     if (labelNode !== null) labelNode.textContent = label;
   }
   if (dom.status.className !== `statusline ${kind}`) {
-    // 从 thinking 换到 working：重置计时起点，让秒表对得上这一步。
+    // Switching from thinking to working: reset the timer start so the stopwatch matches this step.
     statusStart = Date.now();
     dom.status.className = `statusline ${kind}`;
   }
@@ -204,7 +204,7 @@ function hideStatus(): void {
 }
 
 /**
- * 刷模型面板：**应答里没有密钥**，页面只显示「当前是哪套、key 存在哪」。
+ * Refresh the model panel: **no keys in the response** — only the active profile and key location.
  */
 async function refreshModels(): Promise<void> {
   try {
@@ -226,7 +226,7 @@ async function refreshModels(): Promise<void> {
     }
     dom.mpPicker.hidden = response.profiles.length === 0;
 
-    // 头部的快速切换（pi 的 /model 形态）：眼前一点就能切，不用进面板。
+    // Quick switch in the header (pi's /model shape): one glance away, no panel needed.
     dom.model.replaceChildren();
     if (response.profiles.length === 0) {
       const option = document.createElement("option");
@@ -249,12 +249,12 @@ async function refreshModels(): Promise<void> {
 }
 
 /**
- * 保存（并切换）。密钥那一栏填 `env:变量名` 就只读环境变量、不存下来；
- * 填真正的 key 则优先交给系统钥匙串。
+ * Save (and switch). Filling the key field with `env:VAR_NAME` only reads the env var
+ * without storing it; a real key is handed to the system keychain first.
  */
 /**
- * 切到某套已配置的模型：只带 id，其余留空 = 保留原样
- * （不该为了切换重发一次密钥）。头部下拉与面板共用。
+ * Switch to a configured model profile: only the id is sent, the rest left empty = keep
+ * as is (a switch shouldn't re-send the key). Shared by the header dropdown and the panel.
  */
 async function switchModel(id: string): Promise<void> {
   if (id === "") return;
@@ -309,7 +309,7 @@ async function boot(): Promise<void> {
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
 
-  // 右侧 tab：数据即导航 —— 每个按钮只带一个 tab 名，行为全在 switchTab。
+  // Right-side tabs: data as navigation — each button carries one tab name; behavior in switchTab.
   for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
     button.addEventListener("click", () => {
       if (button.dataset.tab !== undefined) switchTab(button.dataset.tab as TabId);
@@ -322,7 +322,7 @@ async function boot(): Promise<void> {
   });
 
   dom.input.addEventListener("keydown", (event) => {
-    // Enter 发送，Shift+Enter 换行 —— 聊天框的老规矩。
+    // Enter sends, Shift+Enter adds a newline — the old chat-box convention.
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
@@ -330,7 +330,7 @@ async function boot(): Promise<void> {
   });
 
   setInterval(() => {
-    // 正在流的时候别刷：面板的数字会跳，但气泡里的字更重要。
+    // Don't refresh while streaming: panel numbers would jump, but the bubble's words matter more.
     if (!busy) {
       void refresh();
       void refreshPanels();
@@ -339,7 +339,7 @@ async function boot(): Promise<void> {
 
   await refresh();
   await open(current);
-  // 目标条：设/撤都走同一处（`goal/set`）—— 与终端里的 `/goal` 是同一件事。
+  // Goal bar: set/clear both go through the same place (`goal/set`) — same as `/goal` in the terminal.
   const applyGoal = (condition: string | null) => {
     void setGoal({ sessionId: current, condition })
       .then((response) => {
@@ -365,7 +365,7 @@ async function boot(): Promise<void> {
     }
   });
 
-  // 工作目录的「浏览」按钮：像桌面应用那样选文件夹（服务端代劳列目录）。
+  // The working directory's "Browse" button: pick a folder like a desktop app (server lists it).
   const cwdBrowse = el("button", {
     class: "ghost",
     text: "浏览…",
@@ -375,7 +375,7 @@ async function boot(): Promise<void> {
   cwdBrowse.addEventListener("click", () => void cwdPicker());
   dom.cwd.before(cwdBrowse);
 
-  // 附件：选了先摆暂存区，发送时才上传 —— 中途反悔不用付任何代价。
+  // Attachments: staged first, uploaded on send — backing out mid-way costs nothing.
   dom.attach.addEventListener("click", () => dom.file.click());
   dom.file.addEventListener("change", () => {
     for (const file of dom.file.files ?? []) staged.push(file);
@@ -383,12 +383,12 @@ async function boot(): Promise<void> {
     renderStaged();
   });
 
-  // 头部快速切换：与面板下拉同一处实现（saveModel 只带 id = 保留原配置）。
+  // Header quick switch: same implementation as the panel dropdown (saveModel with id only = keep).
   dom.model.addEventListener("change", () => {
     void switchModel(dom.model.value).then(() => refreshModels());
   });
 
-  // 模型面板：切换、保存、删除都走 `model/*` —— 与终端里的 /model 是同一处实现。
+  // Model panel: switch, save, remove all go through `model/*` — same as /model in the terminal.
   dom.mpSave.addEventListener("click", () => void applyModel());
   dom.mpPicker.addEventListener("change", () => {
     void switchModel(dom.mpPicker.value);
@@ -410,7 +410,7 @@ async function boot(): Promise<void> {
   dom.input.focus();
 }
 
-/** 把一屏数据画上去。 */
+/** Paint one screen of data. */
 async function refresh(): Promise<void> {
   try {
     const data = await fetchDashboard();
@@ -420,15 +420,15 @@ async function refresh(): Promise<void> {
     dom.home.title = data.config.home;
     dom.stamp.textContent = formatStamp(data.generatedAt);
   } catch (error) {
-    // 拉不到数据是常态（app-server 刚起来、进程挂了），
-    // 所以显示成一件事，而不是抛到控制台里没人看见。
+    // Failing to fetch data is normal (app-server just started, or the process died),
+    // so show it as one thing instead of throwing into a console nobody sees.
     dom.overview.replaceChildren(failureOf(error));
   }
 }
 
 /**
- * 文件夹选择器：服务端列目录，弹层里下钻，
- * 「选这里」把绝对路径填进顶栏的输入框。Esc 或取消即走，不强制。
+ * Folder picker: the server lists directories, you drill down in the overlay,
+ * and "Pick here" fills the absolute path into the top bar's input. Esc or cancel just leaves.
  */
 async function cwdPicker(): Promise<void> {
   const overlay = el("div", { class: "fsoverlay" });
@@ -447,12 +447,12 @@ async function cwdPicker(): Promise<void> {
   document.addEventListener("keydown", esc);
 
   let current = dom.cwd.value.trim();
-  // 点开头的目录默认藏，底部有固定开关。
+  // Dot-prefixed directories are hidden by default; a fixed toggle sits at the bottom.
   let showHidden = false;
-  // 「最近使用」：打开弹层时取一次（选定后会刷新）。
+  // "Recents": fetched once when the overlay opens (refreshed after picking).
   let recents = await fetchRecents().catch(() => [] as string[]);
 
-  /** 祖先链每一跳都可点。非「/」开头的路径给不出链，退化为纯文本。 */
+  /** Every hop of the ancestor chain is clickable. Paths not starting with "/" degrade to text. */
   function crumbs(path: string): HTMLElement {
     const bar = el("div", { class: "fscrumbs" });
     if (!path.startsWith("/")) {
@@ -488,7 +488,7 @@ async function cwdPicker(): Promise<void> {
     current = listing.path;
 
     const list = el("div", { class: "fslist" });
-    // 「最近使用」区：常去的目录不用再翻 —— 一键直达。
+    // "Recents" block: frequently visited directories need no digging — one click reaches.
     const here = listing.entries.map((entry) => entry.path);
     const shortcuts = recents.filter((path) => path !== listing.path && !here.includes(path));
     if (shortcuts.length > 0) {
@@ -520,7 +520,7 @@ async function cwdPicker(): Promise<void> {
       list.append(...rows);
     }
 
-    // 底部动作条：新建文件夹 + 隐藏开关 + 取消。
+    // Bottom action bar: new folder + hidden toggle + cancel.
     const mkdir = el("button", { class: "ghost", text: "＋ 新建文件夹", type: "button" });
     mkdir.addEventListener("click", () => {
       const name = window.prompt(`在 ${current} 下新建文件夹：`);
@@ -542,7 +542,7 @@ async function cwdPicker(): Promise<void> {
     const pick = el("button", { class: "approve", text: "选这个目录", type: "button" });
     pick.addEventListener("click", () => {
       dom.cwd.value = listing.path;
-      // 记进「最近使用」—— 下次打开弹层直接在顶部。
+      // Recorded into "Recents" — right at the top next time the overlay opens.
       void recordRecent(listing.path).then(() => {
         recents = [listing.path, ...recents.filter((p) => p !== listing.path)].slice(0, 8);
       });
@@ -574,8 +574,8 @@ async function submit(): Promise<void> {
   const text = dom.input.value.trim();
   if ((text === "" && staged.length === 0) || busy) return;
 
-  // 附件先上传（顺序传，好让消息里的路径与文件一一对应）；
-  // 注的是绝对路径 —— turn 可能带自己的工作目录，相对路径会指错地方。
+  // Upload attachments first (in order, so message paths map one-to-one to files);
+  // absolute paths are injected — the turn may carry its own cwd, relative paths would mispoint.
   let full = text;
   if (staged.length > 0) {
     const home = dom.home.textContent ?? "";
@@ -586,7 +586,7 @@ async function submit(): Promise<void> {
         lines.push(`（附件：${home}/${path}）`);
       }
     } catch (error: unknown) {
-      // 上传失败不算世界末日：暂存区留着，让人能重试或拿掉。
+      // An upload failure is not the end of the world: staging stays, so one can retry or drop.
       dom.staged.replaceChildren(failureOf(error));
       return;
     }
@@ -599,7 +599,7 @@ async function submit(): Promise<void> {
   await send(full);
 }
 
-/** 说一句，把这一轮的过程画出来。 */
+/** Say one thing, painting the course of this turn. */
 async function send(text: string): Promise<void> {
   setBusy(true);
 
@@ -614,14 +614,14 @@ async function send(text: string): Promise<void> {
   let streamed = "";
   let completed: TurnCompletedNotification | null = null;
   let firstDelta = true;
-  // 当前在跑的那张工具卡（串行循环里同时最多一张）与它的秒表。
+  // The tool card currently running (at most one in the serial loop) and its stopwatch.
   let currentCard: HTMLElement | null = null;
   let cardTimer: number | null = null;
   let cardStart = 0;
   showStatus("thinking", "思考中");
 
   try {
-    // 本轮工作目录（会话级 working-directory）：空串当没设。
+    // Working directory for this turn (session-level working-directory): empty string = unset.
     const turnCwd = dom.cwd.value.trim();
     for await (const notification of talk({
       sessionId: current,
@@ -644,7 +644,7 @@ async function send(text: string): Promise<void> {
           break;
 
         case "gateDecided":
-          // 门决定要不要翻记忆。看得到这一句，就明白「它为什么记得/没记得」。
+          // The gate decides whether to consult memory. This line shows "why it remembered / not".
           trace.append(
             chip(
               notification.decision.decision === "retrieve"
@@ -656,7 +656,7 @@ async function send(text: string): Promise<void> {
           break;
 
         case "approvalRequested": {
-          // 要执行许可：给了按钮，点了才动 —— **不点就是拒绝**（默认拒绝）。
+          // Asking for execution permission: buttons given, nothing moves until clicked — deny by default.
           const row = el("div", { class: "approval" });
           row.append(
             chip(`需要批准 · ${notification.tool}`, "gate"),
@@ -702,8 +702,8 @@ async function send(text: string): Promise<void> {
         }
 
         case "goalRound":
-          // 目标循环续了一轮：把「为什么还没结束」说出来，否则界面自己动了一轮
-          // 却没人知道为什么。
+          // The goal loop ran another round: say "why it hasn't ended yet", otherwise the UI
+          // moved a round on its own and nobody knows why.
           trace.append(
             chip(
               `目标 · 第 ${notification.round}/${notification.maxRounds} 轮 · ${notification.status} — ${notification.reason}`,
@@ -714,7 +714,7 @@ async function send(text: string): Promise<void> {
           break;
 
         case "retry":
-          // 重试从不静默：看到这一句就知道「刚才那几秒不是卡住」。
+          // Retries are never silent: this line shows "those seconds weren't a hang".
           trace.append(
             chip(
               `重试第 ${notification.attempt} 次（${notification.reason}，${formatMs(
@@ -726,8 +726,8 @@ async function send(text: string): Promise<void> {
           break;
 
         case "toolStarted": {
-          // 工具卡片：人话摘要 + 实时秒表，
-          // 不把 args 的 JSON 原样吐出来。
+          // Tool card: a plain-language summary + a live stopwatch,
+          // without spitting out the args JSON as-is.
           showStatus("working", notification.tool);
           const card = toolCard(notification);
           const timeNode = card.querySelector(".toolcard-time");
@@ -747,7 +747,7 @@ async function send(text: string): Promise<void> {
             cardTimer = null;
           }
           currentCard = null;
-          // 结束本身就是那根卡片的句点：状态上色 + 定格耗时。
+          // The end is the card's period: status coloring + frozen duration.
           const done = chip(
             `${notification.tool} ${notification.status === "ok" ? "好了" : "出错"}${
               notification.durationMs === null ? "" : ` · ${formatMs(notification.durationMs)}`
@@ -755,8 +755,8 @@ async function send(text: string): Promise<void> {
             "tool",
           );
           done.classList.add(notification.status === "ok" ? "done-ok" : "done-bad");
-          // 出错时把输出摘一句出来 —— 工具层的失败不中断 turn，
-          // 但人应该当场看到失败原因，而不是等最后的 Error。
+          // On error, lift one sentence of output — a tool-level failure doesn't abort the turn,
+          // but the failure reason should be visible now, not in the final Error.
           if (notification.status !== "ok" && notification.output !== "") {
             done.title = notification.output;
           }
@@ -768,7 +768,7 @@ async function send(text: string): Promise<void> {
         case "consolidationCompleted":
           if (notification.newFacts > 0) {
             trace.append(chip(`记住了 ${notification.newFacts} 条新事实`, "note"));
-            void refresh(); // 记忆面板立刻跟上，不用等下一次轮询
+            void refresh(); // The memory panel catches up now, no need to wait for the next poll
           }
           break;
 
@@ -802,15 +802,15 @@ async function send(text: string): Promise<void> {
   } catch (error) {
     trace.append(failureOf(error));
   } finally {
-    // 收尾放在 finally：中途出错也要把「正在写」的状态清掉，
-    // 否则那根闪动的光标会一直留在气泡上。
+    // Wrap-up lives in finally: even a mid-way error must clear the "writing" state,
+    // otherwise the blinking cursor would stay on the bubble forever.
     bubble.classList.remove("streaming");
     hideStatus();
     if (cardTimer !== null) window.clearInterval(cardTimer);
 
     if (completed !== null) {
-      // 用 `reply` 覆盖流式攒出来的字：增量可能缺（背压、断线），
-      // 而 reply 是 app-server 给的权威结果。
+      // Overwrite the streamed accumulation with `reply`: deltas may be missing (backpressure,
+      // disconnection), while reply is the authoritative result from app-server.
       bubble.textContent = completed.reply === "" ? "（这一轮没有回复）" : completed.reply;
       foot.textContent = turnFooter(completed);
     } else if (streamed !== "") {
@@ -821,16 +821,16 @@ async function send(text: string): Promise<void> {
 
     scrollToEnd();
     setBusy(false);
-    // 这一轮让会话的消息数、最后活跃时间都变了，顺手让面板跟上。
+    // This turn changed the session's message count and last-active time; refresh the panels.
     void refresh();
     dom.input.focus();
   }
 }
 
 /**
- * 切到某个会话：换名字、把历史拉回来、准备在那儿说话。
+ * Switch to a session: change the name, pull back the history, get ready to talk there.
  *
- * 正在流的时候不给切 —— 那一轮的字节还在往气泡里灌，换了会话就灌到别人家去了。
+ * No switching while streaming — that turn's bytes would otherwise pour into another session.
  */
 async function open(sessionId: string): Promise<void> {
   if (busy) return;
@@ -849,11 +849,11 @@ async function open(sessionId: string): Promise<void> {
 }
 
 /**
- * 拉一页历史画上去。
+ * Fetch one page of history and paint it.
  *
- * `cursor` 为空 = 换会话或首次打开，整屏换掉；给了 = 往上翻，接在最前面。
- * 这正是 `session/messages` 的用法：协议给的是**最新的在最前**（方便一页页
- * 往更早走），而屏幕上要正的（自下而上），所以在这儿翻一次。
+ * Empty `cursor` = switching sessions or first open, replace the whole screen; given = paging
+ * back, prepended at the front. This is how `session/messages` works: the protocol gives
+ * **newest first** (easy to page toward earlier), the screen needs it upright, so flip here.
  */
 async function loadHistory(sessionId: string, cursor: string | null): Promise<void> {
   const page = await fetchMessages(sessionId, cursor);
@@ -864,7 +864,7 @@ async function loadHistory(sessionId: string, cursor: string | null): Promise<vo
       ...(nodes.length === 0 ? [muted("这个会话还没说过话。说第一句就有了。")] : nodes),
     );
   } else {
-    // 接在最上面，并且**保持原来的滚动位置** —— 否则翻历史会把眼前那段弹走。
+    // Prepend at the top and **keep the original scroll position** — otherwise paging flings it.
     const fromBottom = dom.messages.scrollHeight - dom.messages.scrollTop;
     dom.messages.prepend(...nodes);
     dom.messages.scrollTop = dom.messages.scrollHeight - fromBottom;
@@ -874,7 +874,7 @@ async function loadHistory(sessionId: string, cursor: string | null): Promise<vo
   dom.older.hidden = olderCursor === null;
 }
 
-/** 往前翻一页：更早的话。 */
+/** Page back one screen: older messages. */
 async function older(): Promise<void> {
   if (busy || olderCursor === null) return;
 
@@ -882,7 +882,7 @@ async function older(): Promise<void> {
   try {
     await loadHistory(current, olderCursor);
   } catch (error) {
-    // 失败了就把这句话留在最上面，别让人以为「点了一下什么都没发生」。
+    // On failure, leave this line at the top; don't let "I clicked and nothing happened" happen.
     dom.messages.prepend(failureOf(error));
   } finally {
     dom.older.disabled = false;
@@ -901,8 +901,8 @@ function scrollToEnd(): void {
 
 function must<T extends HTMLElement = HTMLElement>(id: string): T {
   const node = document.getElementById(id);
-  // 找不到就当场炸掉。静默什么都不做，比报错难查得多 ——
-  // 而且这只可能是 index.html 和这里对不上了。
+  // Blow up on the spot when not found. Silently doing nothing is far harder to debug —
+  // and the only possible cause is index.html and this getting out of sync.
   if (node === null) throw new Error(`页面里没有 #${id}`);
   return node as T;
 }

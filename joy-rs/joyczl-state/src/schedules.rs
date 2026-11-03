@@ -1,22 +1,22 @@
-//! 调度状态（迁移 0012）：`joy schedule` 的去重、崩溃恢复与每作业投递
-//! 策略，全部落在 state.db 一张表里 —— 原先的 `schedules-state.json`
-//! 从此只做一次性导入的来源，不再是权威。
+//! Schedule state (migration 0012): `joy schedule`'s dedup, crash recovery and per-job
+//! delivery policy, all in one state.db table — the old `schedules-state.json` becomes
+//! only a one-time import source from now on, no longer authoritative.
 //!
-//! 模型（dispatch 先推进 next_run 防重放，joy 版）：
+//! The model (dispatch advances next_run first against replay; joy version):
 //!
 //! ```text
-//! tick 发现该触发 ──► claim(name, minute)      ← 先占坑（崩溃前已持久化）
-//!                    ──► fire() 执行
-//!                    ──► confirm(name, minute) ← 落定：last_fired = minute
+//! tick finds it due ──► claim(name, minute)      ← claim the slot first (persisted pre-crash)
+//!                    ──► fire() runs it
+//!                    ──► confirm(name, minute) ← settled: last_fired = minute
 //!
-//! 重启时发现 claimed_minute 非空 = 上次执行到一半进程没了：
-//!   catch_up=1 → 重跑一次（至少一次；晨报类宁可重不可漏）
-//!   catch_up=0 → 直接 confirm 放弃（至多一次；通知类宁可漏不可重）
+//! On restart, a non-empty claimed_minute = the process died mid-run:
+//!   catch_up=1 → rerun once (at-least-once; morning reports prefer repeat over miss)
+//!   catch_up=0 → confirm and give up (at-most-once; notifications prefer miss over repeat)
 //! ```
 
 use sqlx::SqlitePool;
 
-/// 一行调度状态。
+/// One schedule-state row.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct ScheduleRow {
     pub name: String,
@@ -26,7 +26,7 @@ pub struct ScheduleRow {
     pub delivery: String,
 }
 
-/// 调度状态访问器。Clone 便宜（一个连接池句柄），与 Jobs 同一条理由。
+/// Schedule state accessor. Clone is cheap (one pool handle), same reason as Jobs.
 #[derive(Clone)]
 pub struct Schedules {
     pool: SqlitePool,
@@ -37,8 +37,8 @@ impl Schedules {
         Self { pool }
     }
 
-    /// 登记一个声明过的任务：不存在就建，存在就按声明刷新策略字段
-    /// （catch_up/delivery 以**当前声明**为准），last_fired/claimed 保留。
+    /// Register a declared task: create if absent, else refresh policy fields per the
+    /// current declaration (catch_up/delivery follow the **current declaration**); history kept.
     pub async fn ensure(
         &self,
         name: &str,
@@ -58,7 +58,7 @@ impl Schedules {
         .map(|_| ())
     }
 
-    /// 上次落定的触发分钟（去重用）。
+    /// The last settled trigger minute (for dedup).
     pub async fn last_fired(&self, name: &str) -> Result<Option<String>, sqlx::Error> {
         let row: Option<(Option<String>,)> =
             sqlx::query_as("SELECT last_fired_minute FROM schedule_state WHERE name = ?")
@@ -68,7 +68,7 @@ impl Schedules {
         Ok(row.and_then(|(m,)| m))
     }
 
-    /// 未落定的占坑（重启恢复用）。有值 = 上次执行到一半进程没了。
+    /// The unconfirmed claim (for restart recovery). A value = the process died mid-run.
     pub async fn pending_claim(&self, name: &str) -> Result<Option<String>, sqlx::Error> {
         let row: Option<(Option<String>,)> =
             sqlx::query_as("SELECT claimed_minute FROM schedule_state WHERE name = ?")
@@ -78,8 +78,8 @@ impl Schedules {
         Ok(row.and_then(|(m,)| m))
     }
 
-    /// 占坑：dispatch 之前先持久化「我要跑这一分钟」。此时崩溃，重启后
-    /// pending_claim 非空 —— 重放被显式接管，而不是靠运气。
+    /// Claim: persist "I'm running this minute" before dispatch. A crash here leaves
+    /// pending_claim non-empty — the replay is explicitly taken over, not left to luck.
     pub async fn claim(&self, name: &str, minute: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE schedule_state SET claimed_minute = ?, \
@@ -92,8 +92,8 @@ impl Schedules {
         .map(|_| ())
     }
 
-    /// 落定：last_fired = minute，坑清空。成功与失败都走这里 —— 失败的
-    /// 作业也算「这一分钟已经处理过」，没有退避机制时不该每 20 秒重试。
+    /// Settle: last_fired = minute, claim cleared. Success and failure both come here —
+    /// a failed job also counts as "this minute handled"; no retry every 20s without backoff.
     pub async fn confirm(&self, name: &str, minute: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE schedule_state SET last_fired_minute = ?, claimed_minute = NULL, \
@@ -106,7 +106,7 @@ impl Schedules {
         .map(|_| ())
     }
 
-    /// 全部行的快照（驾驶舱的定时面板用）。按名字排，读失败由调用方兜底。
+    /// A snapshot of all rows (the dashboard's schedule panel). Sorted by name; the caller handles read failures.
     pub async fn list(&self) -> Result<Vec<ScheduleRow>, sqlx::Error> {
         sqlx::query_as(
             "SELECT name, last_fired_minute, claimed_minute, catch_up, delivery              FROM schedule_state ORDER BY name",
@@ -115,8 +115,8 @@ impl Schedules {
         .await
     }
 
-    /// 旧 JSON 的一次性导入：只搬 last_fired，不动策略字段。幂等 ——
-    /// DB 已有值时不再覆盖（调度器只在 last_fired 为空时才调它）。
+    /// One-time import from the old JSON: only last_fired moves, policy fields untouched. Idempotent —
+    /// never overwrites existing DB values (the scheduler only calls it when last_fired is empty).
     pub async fn import_legacy(&self, name: &str, minute: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE schedule_state SET last_fired_minute = ?, \
@@ -142,7 +142,7 @@ mod tests {
         (Schedules::new(pool), dir)
     }
 
-    /// ensure 建行、刷新策略但保留历史；claim → pending → confirm 全链路。
+    /// ensure creates rows, refreshes policy but keeps history; the full claim → pending → confirm chain.
     #[tokio::test]
     async fn ensure_claim_confirm_round_trip() {
         let (schedules, _dir) = db().await;
@@ -182,7 +182,7 @@ mod tests {
             Some("2026-10-30T08:00")
         );
 
-        // 再 ensure：策略刷新、历史保留。
+        // ensure again: policy refreshed, history kept.
         schedules
             .ensure("morning", false, "notify")
             .await
@@ -198,8 +198,8 @@ mod tests {
         assert_eq!(raw.2.as_deref(), Some("2026-10-30T08:00"), "历史不丢");
     }
 
-    /// confirm 同时也是「放弃」的出口：catch_up=0 的作业占坑后进程死了，
-    /// 重启 confirm 掉 —— 至多一次。
+    /// confirm doubles as the "abandon" exit: a catch_up=0 job claimed the slot, then the
+    /// process died; on restart confirm it — at-most-once.
     #[tokio::test]
     async fn confirm_doubles_as_the_abandon_exit() {
         let (schedules, _dir) = db().await;
@@ -211,7 +211,7 @@ mod tests {
             .claim("notify-job", "2026-10-30T09:00")
             .await
             .expect("占坑");
-        // 进程死了。重启：catch_up=0 → confirm 掉，不重跑。
+        // The process died. On restart: catch_up=0 → confirm it away, no rerun.
         schedules
             .confirm("notify-job", "2026-10-30T09:00")
             .await
@@ -231,7 +231,7 @@ mod tests {
         );
     }
 
-    /// list 读回全部行，按名字有序。
+    /// list reads back every row, sorted by name.
     #[tokio::test]
     async fn list_returns_every_row_sorted() {
         let (schedules, _dir) = db().await;
@@ -245,8 +245,8 @@ mod tests {
         assert_eq!(rows[1].delivery, "outbox");
     }
 
-    /// import_legacy 只搬历史；DB 已有值时（调用方保证不调，但语义上）
-    /// 它就是覆盖 —— 所以调度器端必须先查再导。
+    /// import_legacy only moves history; when the DB already has a value (the caller
+    /// promises not to call, but semantically) it overwrites — so the scheduler checks first.
     #[tokio::test]
     async fn legacy_import_moves_only_history() {
         let (schedules, _dir) = db().await;

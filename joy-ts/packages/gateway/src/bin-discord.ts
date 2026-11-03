@@ -17,16 +17,16 @@ const allow = (process.env["DISCORD_ALLOW"] ?? "")
   .filter((entry) => entry !== "");
 
 if (allow.length === 0) {
-  // 不设白名单是能用的，但那是「把这个 bot 敞给所有人」的意思 ——
-  // 而花的是你的模型额度。这种默认值必须自己说出来，不能等出事才发现。
+  // Usable without an allowlist, but that means "open this bot to everyone" — and it spends
+  // your model quota. Such a default must announce itself, not wait for an incident.
   console.error(
     "注意：没设 DISCORD_ALLOW，这个 bot 谁都能用，消耗的是你的模型额度。\n" +
       "      只给自己用的话，填你的数字 id 或 @登录名。",
   );
 }
 
-// 这一步不说，绝大多数人第一次跑都会卡在这儿，而且报的错
-// （「连接被关闭，代码 4013」）完全指不到真正的原因。
+// Without this notice, almost everyone gets stuck here on first run, and the error
+// ("connection closed, code 4013") points nowhere near the real cause.
 console.error(
   "提醒：Discord 默认不给 bot 消息正文。要去开发者门户 → Bot → Privileged Gateway Intents\n" +
     "      把 Message Content Intent 打开，否则这条连接会被直接掐掉（4013）。",
@@ -38,8 +38,8 @@ const adapter = new DiscordAdapter(
   async (conversation, text) => (await bridge.ask(conversation, text)).reply,
 );
 
-// Ctrl-C 是关这个进程的正常方式，不是异常退出：先把 WebSocket 关掉，
-// 再关 app-server 的 stdin —— 它会写完排着的帧再退。
+// Ctrl-C is the normal way to stop this process, not an abnormal exit: close the WebSocket first,
+// then app-server's stdin — it finishes writing queued frames and exits.
 const shutdown = (): void => {
   adapter.stop();
   bridge.close();

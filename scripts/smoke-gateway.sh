@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# TypeScript 网关的端到端冒烟测试：真的起一个 app-server，让网关问它一句。
+# End-to-end smoke test for the TS gateways: really start an app-server, let a gateway ask it.
 #
-# 网关的单测里，app-server 是个替身 —— 那能证明排队、通知归拢、切长消息这些
-# 逻辑对，但证明不了「@joy/client + stdio + app-server」这条真链路通。这个脚本
-# 就干这件事，尤其是网关最要紧的那个假设：会话 id 从平台身份**派生**出来
-# （`telegram:42`、`wechat:openid`、`lark:oc_…`），服务端得自己认它、自己建它。
-# 微信那条还顺带证明「真 HTTP 服务器 + 验签 + XML 回包」这半截也是通的；
-# 飞书那条顺带证明「私有二进制帧 + ACK 原样回显」这半截也是通的。
+# In the gateways' unit tests the app-server is a stand-in — that proves queuing, notification
+# folding and long-message splitting, but not the real "@joy/client + stdio + app-server" chain.
+# This script proves exactly that, above all the key assumption: session ids are **derived** from
+# platform identities (`telegram:42`, `wechat:openid`, `lark:oc_…`) the server must own itself.
+# The wechat section also proves the "real HTTP server + signature verify + XML reply" half;
+# the lark section proves the "private binary frames + ACK echoed verbatim" half.
 #
 #   ./scripts/smoke-gateway.sh
 #
-# 需要：cargo build 过、joy-ts 装过依赖（cd joy-ts && npm install）、python3。
+# Requires: a cargo build, joy-ts deps installed (cd joy-ts && npm install), python3.
 
 set -euo pipefail
 
@@ -29,8 +29,8 @@ fail() { echo "✗ $1" >&2; exit 1; }
 
 [[ -x "$BIN" ]] || fail "找不到 $BIN，先跑：cd joy-rs && cargo build"
 
-# 假的 SSE 端点：不用真 key 也能把「SSE → 完整答复」这条链走完。
-# 下面三条链各要问一句，所以要它服务三轮流式应答。
+# Fake SSE endpoint: completes the "SSE → full reply" chain without a real key.
+# The three chains below each ask once, so it must serve three streaming replies.
 python3 "$REPO/scripts/fake_sse_server.py" 3 >"$WORK/port" &
 FAKE_PID=$!
 for _ in $(seq 1 50); do
@@ -40,7 +40,7 @@ done
 PORT="$(head -n1 "$WORK/port" 2>/dev/null || true)"
 [[ -n "$PORT" ]] || fail "假 SSE 端点没起来"
 
-# 网关自己去找二进制，这里直接指过去，免得它从别处翻出来一个旧版本。
+# The gateway finds the binary itself; point it here so it doesn't dig up an old version.
 OUT="$WORK/out.json"
 JOY_BIN="$BIN" \
 JOY_HOME="$WORK/.joy" \
@@ -57,7 +57,7 @@ node --input-type=module -e '
 
 echo "  网关拿到：$(cat "$OUT")"
 
-# ---- 断言 ------------------------------------------------------------------
+# ---- Assertions ------------------------------------------------------------------
 grep -q '"sessionId":"telegram:42"' "$OUT" \
   || fail "派生的会话 id 没原样回来 —— 网关的「无状态」就靠它"
 grep -q '"reply":"你好，世界"' "$OUT" \
@@ -67,16 +67,16 @@ grep -q '"iterations":1' "$OUT" \
 grep -q '"model":"[^"]' "$OUT" \
   || fail "遥测里没有模型名 —— 用户会想知道到底谁答的"
 
-# 会话真的落了盘：服务端认下了这个派生的 id，自己建了它。
+# The session really hit disk: the server accepted this derived id and created it itself.
 [[ -f "$WORK/.joy/state.db" ]] || fail "state.db 没建在 .joy/ 下"
 
 echo "  ✓ 派生会话 + 真 stdio + 通知归拢 → 完整答复"
 
-# ---- 微信这条：真的 HTTP 服务器 ----------------------------------------------
+# ---- The wechat section: a real HTTP server ----------------------------------------------
 #
-# 上面那段证明的是「网关 → app-server」，跟传输是哪家无关；这一段补的是微信
-# 特有的那一半 —— 真的 HTTP 服务器、真的验签、真的 XML 解析与回包。微信要求
-# 公网地址，但**这一层不用**：在本机直接打它就是。
+# The section above proves "gateway → app-server", independent of transport; this one adds the
+# wechat-specific half — a real HTTP server, real signature verification, real XML parsing and
+# reply. WeChat wants a public address, but **this layer doesn't**: hit it on localhost directly.
 WX_PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
 WX_OUT="$WORK/wechat.json"
 WECHAT_TOKEN="smoke-token" \
@@ -116,7 +116,7 @@ node --input-type=module -e '
   const query = new URLSearchParams({ signature, timestamp, nonce });
   const base = "http://127.0.0.1:" + process.env.WECHAT_PORT + "/wechat";
 
-  // 服务器配置那一步：微信来验这个地址是不是你的。
+  // The server-configuration step: WeChat verifies this address is yours.
   let verify;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -168,13 +168,13 @@ grep -q 'ToUserName><!\[CDATA\[openid-smoke' "$WX_OUT" \
 
 echo "  ✓ 真 HTTP + 验签 + XML 解析 → 被动回复"
 
-# ---- 飞书这条：真的二进制帧 ------------------------------------------------
+# ---- The lark section: real binary frames ------------------------------------------------
 #
-# 上面两条证明「网关 → app-server」跟传输是哪家无关；这一段补飞书特有的那半截：
-# 拿 AppID/AppSecret 换一个带票据的 wss 地址、把**二进制帧**解成事件、先 ACK
-# 再回答、最后由 HTTP 把答复发出去。真飞书要一个已发布的企业应用，本地和 CI
-# 都拿不到，所以打桩的只有远端那两个地址（假 socket + 假 HTTP）——
-# 中间的编解码、ACK 回显、去重、会话派生、真 app-server 全是真跑的。
+# The two sections above prove "gateway → app-server", transport-agnostic; this one adds the
+# lark-specific half: trade AppID/AppSecret for a ticketed wss URL, decode **binary frames** into
+# events, ACK before answering, and send the reply out over HTTP. Real Lark needs a published
+# enterprise app, unavailable locally and in CI, so only the two remote addresses are stubbed
+# (fake socket + fake HTTP) — codec, ACK echo, dedup, session derivation, app-server all real.
 LARK_OUT="$WORK/lark.json"
 JOY_BIN="$BIN" \
 JOY_HOME="$WORK/.joy" \
@@ -193,7 +193,7 @@ node --input-type=module -e '
   const said = [];
   const sockets = [];
 
-  // 假的那根连接。它用**真的编解码**收发 —— 发出去的帧自己解不开就会当场炸。
+  // The fake connection. It sends/receives with the **real codec** — an undecodable frame blows up.
   const openSocket = () => {
     const socket = {
       sent: [],
@@ -218,7 +218,7 @@ node --input-type=module -e '
     json: async () => value, text: async () => JSON.stringify(value),
   });
 
-  // 假的飞书 HTTP 那一侧。四条路径就是这一家全部要说话的地方。
+  // The fake Lark HTTP side. These four paths are everything this adapter talks to.
   const fakeFetch = async (input, init) => {
     const url = String(input);
     if (url.endsWith("/callback/ws/endpoint")) {
@@ -256,7 +256,7 @@ node --input-type=module -e '
 
   const running = adapter.run();
 
-  // 等它连上，而且得等 onopen 真的挂上去 —— 第一帧是我们先发的。
+  // Wait for it to connect, and for onopen to be really attached — the first frame is ours.
   for (let i = 0; i < 400; i += 1) {
     if (sockets.length > 0 && sockets[0].onopen !== null) break;
     await sleep(10);
@@ -265,7 +265,7 @@ node --input-type=module -e '
   socket.onopen();
   for (let i = 0; i < 200 && socket.sent.length === 0; i += 1) await sleep(10);
 
-  // 一条单聊文本消息，编成真的 pbbp2 二进制帧推过去。
+  // A p2p text message, encoded as a real pbbp2 binary frame and pushed over.
   const body = JSON.stringify({
     schema: "2.0",
     header: { event_type: "im.message.receive_v1", event_id: "ev_smoke" },
@@ -283,7 +283,7 @@ node --input-type=module -e '
   socket.onmessage({
     data: encodeFrame({
       seqId: 0n,
-      logId: 9007199254740993n,  // 超过 2^53：回填错了就是那种平时看不出的错
+      logId: 9007199254740993n,  // beyond 2^53: a wrong backfill is the subtle kind of bug
       service: 1,
       method: 1,
       headers: [

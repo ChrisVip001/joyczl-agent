@@ -3,7 +3,7 @@ import type { Fact } from "./Fact";
 
 export type MemoryRememberResponse = {
   /**
-   * 写进去的完整 fact，带 id —— 前端可以直接插进列表，不用再查一次。
+   * The full fact as written, with id — the frontend can insert it directly, no re-query needed.
    */
   fact: Fact;
 };

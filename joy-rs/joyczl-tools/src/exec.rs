@@ -1,29 +1,29 @@
-//! `run_command` —— 让 Joy 能在这台机器上执行命令，但每一道门都看得见。
+//! `run_command` — lets Joy run commands on this machine, but every gate is visible.
 //!
-//! 这是全项目权限最高的一件事，所以它的形状是「默认关闭 + 三道闸门 +
-//! 操作系统级沙箱」：
+//! This is the highest-privilege thing in the project, so its shape is "off by default +
+//! three gates + an OS-level sandbox":
 //!
-//! 1. **硬拒名单**：灾难性的东西无论怎么配都不跑（`sudo`、`mkfs`、fork
-//!    炸弹……）。这一条不可配置 —— 一个能被配置关掉的保险丝不是保险丝。
-//! 2. **allowlist**：`JOY_EXEC_ALLOW` 里没有能匹配上的规则就不跑。空
-//!    allowlist = 什么都不许跑（默认拒绝，不是默认允许）。
-//! 3. **沙箱**：命令跑在 macOS `sandbox-exec` / Linux `bubblewrap` 里，
-//!    写权限被限制在工作目录与临时目录。**沙箱不可用就拒绝执行** ——
-//!    绝不「为了跑通」裸跑一条命令，那正是这个模块存在的理由。
+//! 1. **Hard-deny list**: catastrophic things never run no matter how it's configured
+//!    (`sudo`, `mkfs`, fork bombs…). Not configurable — a fuse config can switch off isn't a fuse.
+//! 2. **allowlist**: nothing runs unless a rule in `JOY_EXEC_ALLOW` matches. An empty
+//!    allowlist = nothing may run (deny by default, not allow by default).
+//! 3. **Sandbox**: the command runs inside macOS `sandbox-exec` / Linux `bubblewrap`,
+//!    writes limited to the working directory and temp dirs. **No sandbox, no run** —
+//!    never run a command bare "just to make it work"; that's why this module exists.
 //!
-//! 与工具层的其它成员一样：拒绝与失败都是**文本**，不是错误。拒绝原因要
-//! 说清楚（哪条规则挡的、怎么放开），模型才能向用户解释为什么没做。
+//! Like the rest of the tool layer: refusals and failures are **text**, not errors. A refusal
+//! must say why (which rule blocked it, how to relax it) so the model can explain to the user.
 //!
-//! ## 边界（如实写在这里，别让它悄悄扩大）
+//! ## Boundaries (written honestly here; don't let them quietly grow)
 //!
-//! * **默认断网**（`JOY_EXEC_NETWORK=1` 才联网）：沙箱层真的会断
-//!   （seatbelt 的 `(deny network*)` / bwrap 的 `--unshare-net`）。这是
-//!   行为变更：早先的版本只限制写路径，命令照样能联网。
-//! * 可写根除了工作目录与 home，还可以用 `JOY_EXEC_WRITABLE_ROOTS` 追加
-//!   （构建缓存是典型用例）。默认不追加 —— 开放的目录越少越好。
-//! * 硬拒名单是**子串匹配**：花哨的绕法抓不住。真正的防线是放行表与沙箱。
-//! * 没有交互式批准弹窗（第三道闸门用 allowlist 表达）。
-//! * 只在启动时读一次配置（`config/write` 改了要重启进程才生效）。
+//! * **Network off by default** (`JOY_EXEC_NETWORK=1` to allow): the sandbox really cuts it
+//!   (seatbelt's `(deny network*)` / bwrap's `--unshare-net`). A behavior change: earlier
+//!   versions only restricted write paths, and commands could still reach the network.
+//! * Writable roots beyond working dir and home can be appended via `JOY_EXEC_WRITABLE_ROOTS`
+//!   (build caches are the classic case). Nothing appended by default — fewer open dirs is better.
+//! * Hard-deny is **substring matching**: fancy evasions slip past; allowlist and sandbox are the real defense.
+//! * No interactive approval popup (the third gate is expressed by the allowlist).
+//! * Config is read once at startup (`config/write` changes need a process restart).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -35,37 +35,37 @@ use tokio::io::AsyncReadExt;
 
 use crate::{require_str, Tool, ToolCtx};
 
-/// 输出上限。超过就截断并**如实标注** —— 一条 `find /` 的输出能塞爆上下文，
-/// 而模型需要知道「这不是全部」。
+/// Output cap. Past it, truncate and **label honestly** — a `find /` can flood the context,
+/// and the model must know "this isn't everything".
 const MAX_OUTPUT_CHARS: usize = 8_000;
 
-/// 启动时定下的执行策略（来自 `JOY_EXEC*`）。
+/// The execution policy fixed at startup (from `JOY_EXEC*`).
 #[derive(Debug, Clone, Default)]
 pub struct ExecPolicy {
-    /// `JOY_EXEC_ALLOW` 的规则。空 = 什么都不许跑。
+    /// Rules from `JOY_EXEC_ALLOW`. Empty = nothing may run.
     pub allow: Vec<String>,
     pub timeout_secs: i64,
-    /// 沙箱里能不能联网（`JOY_EXEC_NETWORK`）。默认 **false**：一条被放行的
-    /// 命令默认不该拥有把数据送出去的能力。`cargo test` 这类要下载的命令
-    /// 得显式把开关打开。
+    /// Whether the sandbox may use the network (`JOY_EXEC_NETWORK`). Default **false**: an
+    /// allowed command shouldn't default to being able to send data out. Commands like
+    /// `cargo test` that download must turn the flag on explicitly.
     pub network: bool,
-    /// 放行表没匹配上时，允不允许**问一句**（`JOY_APPROVAL=on-request`）。
-    /// 默认 false = 直接拒绝（等于从前行为）。
+    /// When the allowlist doesn't match, may we **ask once** (`JOY_APPROVAL=on-request`)?
+    /// Default false = deny outright (same as the old behavior).
     pub approval: bool,
-    /// 等人回答的秒数（`JOY_APPROVAL_TIMEOUT`）。
+    /// Seconds to wait for a human answer (`JOY_APPROVAL_TIMEOUT`).
     pub approval_timeout_secs: i64,
-    /// 超长输出的落盘位置（`<home>/spill`）。`None` = 不落盘，只截断。
+    /// Where oversized output is spilled (`<home>/spill`). `None` = don't spill, just truncate.
     ///
-    /// 截断是必须的（一条 `find /` 能塞爆上下文），但**丢掉的东西是没了**。
-    /// 落一份原文件，模型与人都还能回查。
+    /// Truncation is required (a `find /` can flood the context), but **what's dropped is gone**.
+    /// Spilling the original keeps it reachable for model and human alike.
     pub spill_dir: Option<PathBuf>,
-    /// 额外的可写根（`JOY_EXEC_WRITABLE_ROOTS`）：工作目录与 home 之外的。
-    /// 构建缓存是典型用例 —— 没有它，`cargo build` 在沙箱里写不进 target/。
+    /// Extra writable roots (`JOY_EXEC_WRITABLE_ROOTS`): beyond working dir and home.
+    /// Build caches are the classic case — without it, `cargo build` can't write target/ in the sandbox.
     pub extra_roots: Vec<PathBuf>,
 }
 
-/// 永远不跑的图案。小写比较，子串匹配 —— 宁可漏掉一个花哨写法，
-/// 也不要做一套会误伤正常命令的正则。
+/// Patterns that never run. Lowercased comparison, substring match — better to miss a
+/// fancy evasion than to build a regex that hits normal commands.
 const HARD_DENY: &[&str] = &[
     "sudo ",
     "sudo\t",
@@ -76,7 +76,7 @@ const HARD_DENY: &[&str] = &[
     "shutdown",
     "reboot",
     "halt ",
-    ":(){", // fork 炸弹
+    ":(){", // fork bomb
     "chmod -r 777 /",
     "chmod 777 /",
     "chown -r /",
@@ -92,9 +92,9 @@ const HARD_DENY: &[&str] = &[
     "history -c",
 ];
 
-/// 「下载下来直接喂给 shell」的手写识别：`curl … | sh` 这类写法中间夹着
-/// URL，字面子串匹配不到 —— 而它正是最经典的一条「把陌生人的代码执行了」。
-/// 拆管道、看左边是不是下载器、右边是不是 shell。
+/// Hand-rolled detection of "download piped straight into a shell": `curl … | sh` has a URL
+/// in the middle, so literal substring matching can't see it — yet it's the classic "ran a
+/// stranger's code". Split the pipe; check downloader on the left, shell on the right.
 fn pipes_into_a_shell(command: &str) -> bool {
     let segments: Vec<&str> = command.split('|').map(str::trim).collect();
     segments.windows(2).any(|pair| {
@@ -107,10 +107,10 @@ fn pipes_into_a_shell(command: &str) -> bool {
     })
 }
 
-/// 「已经有人答应了」—— `PermissionRequest` hook 放行时用它替掉批准流程。
+/// "Someone already said yes" — replaces the approval flow when a `PermissionRequest` hook allows.
 ///
-/// 只在这一处用：钩子明确回了 `permissionDecision: allow`，那就是有人替用户拍了板，
-/// 不该再弹一次问题。
+/// Used in exactly one spot: the hook explicitly returned `permissionDecision: allow`, i.e.
+/// someone decided for the user — don't ask again.
 struct AlreadyApproved;
 
 impl crate::approval::ApprovalBroker for AlreadyApproved {
@@ -119,25 +119,25 @@ impl crate::approval::ApprovalBroker for AlreadyApproved {
     }
 }
 
-/// 闸门给出的三种结局。
+/// The three outcomes a gate can produce.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Gate {
-    /// 放行。
+    /// Let it through.
     Allow,
-    /// 拒绝。理由直接给模型读（以 `Error:` 前缀交出去）。
+    /// Deny. The reason goes straight to the model (handed over with an `Error:` prefix).
     Deny(String),
-    /// 放行表没匹配上，但开了 `JOY_APPROVAL=on-request`：问一句再决定。
+    /// No allowlist match, but `JOY_APPROVAL=on-request` is on: ask once, then decide.
     ///
-    /// **只有放行表这一关可以被问到。** 硬拒名单与沙箱在这之前就返回了，
-    /// 批准根本没有机会碰到它们 —— 一个能靠点「同意」绕过的保险丝不是保险丝。
+    /// **Only the allowlist gate may be asked about.** The hard-deny list and the sandbox
+    /// returned before this — approval never touches them; a fuse a click can bypass isn't a fuse.
     NeedsApproval { reason: String },
 }
 
-/// 命令该不该跑。三道闸门按顺序判，第一道拦下的说了算。
+/// Should the command run? Three gates in order; the first to stop it decides.
 pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
     let lower = command.to_lowercase();
 
-    // 闸门 1：硬拒。不可配置，也不可协商。
+    // Gate 1: hard-deny. Not configurable, not negotiable.
     if let Some(hit) = HARD_DENY.iter().find(|pattern| lower.contains(*pattern)) {
         return Gate::Deny(format!(
             "这条命令被硬拒名单挡下了（命中 '{hit}'）—— 这类命令无论怎么配都不会执行。"
@@ -151,7 +151,7 @@ pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
         );
     }
 
-    // 闸门 2：allowlist。空表 = 默认拒绝；`on-request` 时改成「问一句」。
+    // Gate 2: allowlist. Empty table = deny by default; with `on-request`, switch to "ask once".
     if policy.allow.is_empty() {
         let why = "执行工具没有放行任何命令。要允许一类命令，设 JOY_EXEC_ALLOW，\
                    例如 JOY_EXEC_ALLOW='cargo test,git status,ls *'。"
@@ -175,7 +175,7 @@ pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
         };
     }
 
-    // 闸门 3：沙箱。不可用就不跑 —— 这是本模块存在的理由，也不可协商。
+    // Gate 3: sandbox. Unavailable means no run — this module's reason to exist, not negotiable.
     if !sandbox_available() {
         return Gate::Deny(
             "这台机器上没有可用的沙箱（macOS 需要 sandbox-exec，Linux 需要 bubblewrap），\
@@ -186,8 +186,8 @@ pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
     Gate::Allow
 }
 
-/// 放行规则匹配：整串相等，或规则以 `*` 结尾时的前缀匹配；`*` 单独一条
-/// 表示「全部放行」（仍然过不了硬拒名单）。
+/// Allow-rule matching: exact string equality, or prefix match when the rule ends in `*`;
+/// a lone `*` means "allow everything" (it still can't pass the hard-deny list).
 fn matches_rule(rule: &str, command: &str) -> bool {
     let rule = rule.trim();
     if rule == "*" {
@@ -199,27 +199,27 @@ fn matches_rule(rule: &str, command: &str) -> bool {
     }
 }
 
-/// 沙箱现在能不能用。
+/// Is the sandbox usable right now?
 ///
-/// 「能用」是**测出来的**，不是查出来的：文件在那儿不等于它能跑起来。
-/// 这一条在 Linux 上尤其要紧 —— Ubuntu 24.04 默认用 AppArmor 限制了非特权
-/// 用户命名空间，`bwrap` 装在那儿也会以 "setting up uid map: Permission
-/// denied" 失败。要是只看「bwrap 在不在 PATH 里」就放行，命令会在沙箱**没
-/// 生效**的情况下跑起来，这正是本模块最不该发生的事。
+/// "Usable" is **tested**, not looked up: the file being there doesn't mean it runs.
+/// This matters most on Linux — Ubuntu 24.04 restricts unprivileged user namespaces with
+/// AppArmor by default, so `bwrap` installed there still fails with "setting up uid map:
+/// Permission denied". Allow by only checking "is bwrap in PATH" and the command runs with
+/// the sandbox **not in effect** — the worst thing this module could do.
 pub fn sandbox_available() -> bool {
     sandbox_backend().is_some()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Sandbox {
-    /// macOS：`sandbox-exec -p <profile> <shell> -c <command>`。
+    /// macOS: `sandbox-exec -p <profile> <shell> -c <command>`.
     Seatbelt,
-    /// Linux：`bwrap … <shell> -c <command>`。
+    /// Linux: `bwrap … <shell> -c <command>`.
     Bubblewrap,
 }
 
 fn sandbox_backend() -> Option<Sandbox> {
-    // 探测一次就够：结果缓存在进程生命周期里，省掉每条命令一次的 fork。
+    // One probe is enough: the result is cached for the process lifetime, saving a fork per command.
     static BACKEND: std::sync::OnceLock<Option<Sandbox>> = std::sync::OnceLock::new();
     *BACKEND.get_or_init(|| {
         if Path::new("/usr/bin/sandbox-exec").exists() {
@@ -232,7 +232,7 @@ fn sandbox_backend() -> Option<Sandbox> {
     })
 }
 
-/// 真的起一次 bubblewrap（`/bin/true`），看它能不能建起沙箱。
+/// Actually launch bubblewrap once (`/bin/true`) and see whether it can build a sandbox.
 fn bubblewrap_runs() -> bool {
     std::process::Command::new("bwrap")
         .args([
@@ -263,11 +263,11 @@ fn which(program: &str) -> bool {
         .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
 }
 
-/// 命令的写权限限制在 `writable` 这些根下（外加临时目录）。
+/// Keep the command's write access inside these `writable` roots (plus temp dirs).
 ///
-/// 根路径要**规范化**再写进沙箱规则：macOS 上 `/var/folders/…` 是
-/// `/private/var/folders/…` 的符号链接，seatbelt 认的是真实路径 —— 用前者
-/// 写规则，允许的目录反而写不进去。
+/// Roots must be **canonicalized** before going into sandbox rules: on macOS `/var/folders/…`
+/// is a symlink to `/private/var/folders/…`, and seatbelt wants real paths — rules written
+/// with the former silently fail to allow the directory.
 fn sandbox_command(
     backend: Sandbox,
     command: &str,
@@ -280,10 +280,10 @@ fn sandbox_command(
     cmd
 }
 
-/// 沙箱命令的 argv。
+/// The sandbox command's argv.
 ///
-/// 单独抽出来是为了**可测**：参数形状（尤其是「有没有断网」）不该只在真跑
-/// 起来的时候才被看见 —— 那种「测试」等于没测。
+/// Pulled out to be **testable**: the argument shape (especially "is the network cut")
+/// shouldn't only be visible when actually run — such a "test" tests nothing.
 pub(crate) fn sandbox_argv(
     backend: Sandbox,
     command: &str,
@@ -296,7 +296,7 @@ pub(crate) fn sandbox_argv(
         .collect();
     match backend {
         Sandbox::Seatbelt => {
-            // 先全禁写，再逐个开回 —— SBPL 里后面的规则覆盖前面的。
+            // Deny all writes first, then open roots one by one — in SBPL later rules win.
             let mut profile = String::from("(version 1)\n(allow default)\n(deny file-write*)\n");
             for root in &roots {
                 profile.push_str(&format!(
@@ -312,7 +312,7 @@ pub(crate) fn sandbox_argv(
                 std::env::temp_dir().display()
             ));
             if !network {
-                // seatbelt 的默认是「什么都可以」，所以断网要显式拒绝。
+                // seatbelt's default is "allow everything", so cutting the network needs an explicit deny.
                 profile.push_str("(deny network*)\n");
             }
             vec![
@@ -325,7 +325,7 @@ pub(crate) fn sandbox_argv(
             ]
         }
         Sandbox::Bubblewrap => {
-            // 根只读挂载，工作目录与 /tmp 可写。
+            // Root mounted read-only; working dir and /tmp writable.
             let mut args = vec![
                 "--ro-bind".to_string(),
                 "/".to_string(),
@@ -345,11 +345,11 @@ pub(crate) fn sandbox_argv(
                 args.push(root.display().to_string());
             }
             if !network {
-                // 不给网络命名空间：连不上任何东西（比防火墙规则更硬 ——
-                // 它不依赖内核的规则匹配）。
+                // No network namespace: nothing is reachable (harder than firewall rules —
+                // it doesn't depend on kernel rule matching).
                 args.push("--unshare-net".to_string());
             }
-            // `--` 之后才是要跑的：与探测那一次保持同一个形状。
+            // Only after `--` comes what to run: same shape as the probe run.
             args.push("--".to_string());
             args.push("/bin/sh".to_string());
             args.push("-c".to_string());
@@ -361,10 +361,10 @@ pub(crate) fn sandbox_argv(
     }
 }
 
-/// 闸门 + 批准。`Ok(())` = 可以跑；`Err(理由)` = 不跑（理由给模型读）。
+/// Gate + approval. `Ok(())` = may run; `Err(reason)` = don't (reason is model-readable).
 ///
-/// **前台执行与后台作业共用这一处**：一条后台命令若能绕过批准，那批准就形同虚设
-/// —— 而「先放后台再慢慢跑」正是绕过它最自然的方式。
+/// **Foreground and background jobs share this spot**: a background command that could
+/// bypass approval makes it theater — "background it, run at leisure" is the natural bypass.
 pub async fn pass_gate(
     command: &str,
     policy: &ExecPolicy,
@@ -374,8 +374,8 @@ pub async fn pass_gate(
         Gate::Deny(why) => Err(why),
         Gate::Allow => Ok(()),
         Gate::NeedsApproval { reason } => {
-            // 没人能问、问了没人答、答得太晚 —— 都是拒绝。放行只有一种来源：
-            // 一个明确的「可以」。
+            // Nobody to ask, no answer, answered too late — all denials. Approval has one source:
+            // an explicit "yes".
             let Some(broker) = approval else {
                 return Err(format!(
                     "{reason}\n（也没人在问你：JOY_APPROVAL=on-request 时，从终端或 \
@@ -397,9 +397,9 @@ pub async fn pass_gate(
     }
 }
 
-/// 把策略落成一条**可以直接 spawn** 的命令：沙箱参数、可写根合并、断网开关都在
-/// 这一处。前台执行与后台作业共用 —— 两条路径各写一遍沙箱参数，早晚会有一条忘了
-/// 加 `--unshare-net`。
+/// Turn the policy into a command that can be **spawned directly**: sandbox args, writable-root
+/// merge, and the network switch all in one spot, shared by foreground and background jobs —
+/// write the sandbox args twice and one path will sooner or later forget `--unshare-net`.
 pub fn spawn_sandboxed(
     command: &str,
     policy: &ExecPolicy,
@@ -420,12 +420,12 @@ pub fn spawn_sandboxed(
         .map_err(|e| format!("命令起不来：{e}"))
 }
 
-/// 执行一条命令。**永不返回 Err** —— 拒绝、超时、非零退出码都是文本。
+/// Run a command. **Never returns Err** — refusals, timeouts, non-zero exits are all text.
 ///
-/// `writable` 是调用方**动态**决定的那些根（工作目录、home）；
-/// `policy.extra_roots`（配置来的）在这里一起并进去 —— 合并放在 execute 内部，
-/// 是为了让「策略里写了什么」在任何调用路径上都成立：散在调用方去记得合并，
-/// 就会有一条路径静默忽略配置。
+/// `writable` holds the roots the caller decides **dynamically** (working dir, home);
+/// `policy.extra_roots` (from config) is merged in here — merging inside execute keeps
+/// "what the policy says" true on every call path: scatter the merge across callers and
+/// one path will silently ignore the config.
 pub async fn execute(
     command: &str,
     policy: &ExecPolicy,
@@ -444,8 +444,8 @@ pub async fn execute(
     let mut stdout = child.stdout.take().expect("stdout 是 piped");
     let mut stderr = child.stderr.take().expect("stderr 是 piped");
 
-    // 读与等在同一个超时预算里：超时后 kill_on_drop 收尾。两个管道并发读
-    // —— 先读完 stdout 再读 stderr 会在 stderr 塞满管道时互相锁死。
+    // Read and wait share one timeout budget; on timeout, kill_on_drop cleans up. The two
+    // pipes are read concurrently — stdout-then-stderr deadlocks when stderr fills the pipe.
     let collected = tokio::time::timeout(timeout, async {
         let mut out = String::new();
         let mut err = String::new();
@@ -477,9 +477,9 @@ pub async fn execute(
         combined.push_str("\n--- stderr ---\n");
         combined.push_str(&err);
     }
-    // 超长就换成「放得下的桩」：完整原文落盘、上下文里留头尾各一半的**完整行**。
-    // 落盘失败不影响返回值 —— 一次写不进磁盘不该让命令本身的输出也拿不到。
-    // 实现与轮内工具结果预算共用一处（`crate::spill`）。
+    // Too long → swap in a "fitting stub": spill the full original, keep head/tail **whole lines**
+    // in context. A failed spill doesn't change the return value — a failed write shouldn't
+    // cost the command's own output. Implementation shared with the in-turn budget (`crate::spill`).
     match crate::spill::stub(
         policy.spill_dir.as_deref(),
         &combined,
@@ -491,14 +491,14 @@ pub async fn execute(
     }
 }
 
-/// 清掉 `spill/` 里超过 `max_age_days` 天的文件。启动时跑一次。
+/// Clean files older than `max_age_days` from `spill/`. Runs once at startup.
 ///
-/// 只按时间清，不做配额（见 docs/limitations.md）：一次性的清理比一个
-/// 猜不准的容量上限更可预测。清不掉也不报错 —— 这是打扫，不是功能。
+/// Time-based only, no quota (see docs/limitations.md): a one-shot sweep is more predictable
+/// than a capacity guess. Failures don't error — this is housekeeping, not a feature.
 pub fn prune_spill(home: &Path, max_age_days: u64) {
     let spill = home.join("spill");
     let Ok(days) = std::fs::read_dir(&spill) else {
-        return; // 没有 spill 目录是常态
+        return; // no spill dir is the norm
     };
     let cutoff =
         std::time::SystemTime::now() - std::time::Duration::from_secs(max_age_days * 24 * 60 * 60);
@@ -513,7 +513,7 @@ pub fn prune_spill(home: &Path, max_age_days: u64) {
                     file.metadata()
                         .and_then(|meta| meta.modified())
                         .map(|modified| modified > cutoff)
-                        .unwrap_or(true) // 读不出时间就当它还新，别误删
+                        .unwrap_or(true) // unreadable time counts as fresh; don't misdelete
                 })
             })
             .unwrap_or(true);
@@ -523,8 +523,8 @@ pub fn prune_spill(home: &Path, max_age_days: u64) {
     }
 }
 
-/// 注册进工具表的 `run_command`。只有 `JOY_EXEC=1` 时才会被注册 ——
-/// 没开的时候模型连这个工具都看不见。
+/// The `run_command` registered into the tool table. Only registered when `JOY_EXEC=1` —
+/// when it's off, the model can't even see this tool.
 pub fn run_command(policy: ExecPolicy) -> Tool {
     let policy = Arc::new(policy);
     Tool {
@@ -555,8 +555,8 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     .get("background")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                // 可写的根：解析链 args.cwd > ctx.cwd（本轮工作目录）> 进程当前目录，
-                // 再加 home（Joy 自己的状态如 outbox 就住那儿）。
+                // Writable roots: resolve chain args.cwd > ctx.cwd (this turn's working dir) >
+                // process cwd, plus home (Joy's own state, like outbox, lives there).
                 let cwd = args
                     .get("cwd")
                     .and_then(Value::as_str)
@@ -570,8 +570,8 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                 }
                 writable.push(ctx.home.clone());
 
-                // PermissionRequest：在**问人之前**给钩子一次表态的机会 —— 它可以
-                // 替人拍板「行」（于是不打扰用户），也可以直接拒绝。
+                // PermissionRequest: give the hook a say **before asking the human** — it can
+                // approve on the user's behalf (no interruption), or refuse outright.
                 let mut approval = ctx.approval.clone();
                 if let Some(hooks) = &ctx.hooks {
                     let outcome = hooks
@@ -597,8 +597,8 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                 }
 
                 if background {
-                    // 后台也走同一道闸门：跳过它，「先放后台再慢慢跑」就成了
-                    // 绕过批准最自然的方式。
+                    // Background goes through the same gate: skip it and "background it, run at
+                    // leisure" becomes the most natural way around approval.
                     if let Err(why) = pass_gate(&command, &policy, approval.as_deref()).await {
                         return Ok(format!("Error: {why}"));
                     }
@@ -621,8 +621,8 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     );
                 }
 
-                // `JOY_EXEC_WRITABLE_ROOTS` 由 execute 自己并进来（策略在
-                // 任何调用路径上都生效，不靠调用方记得合并）。
+                // `JOY_EXEC_WRITABLE_ROOTS` is merged by execute itself (the policy holds on
+                // every call path; it doesn't rely on callers remembering to merge).
                 Ok(execute(&command, &policy, &writable, approval.as_deref()).await)
             })
         }),

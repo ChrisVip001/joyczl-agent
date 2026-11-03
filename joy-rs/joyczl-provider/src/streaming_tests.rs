@@ -1,6 +1,6 @@
-//! 流式的端到端测试：起一个本地假 HTTP 服务喂 SSE，
-//! 让真的 HTTP 客户端去连 —— 解析、传输、回调这条链一起验证。
-//! 比喂字节流给 `data_lines` 更接近真实情况，而且不需要任何 API key。
+//! End-to-end streaming tests: spin up a local fake HTTP server feeding SSE and let a
+//! real HTTP client connect — validating the parse, transport, and callback chain together.
+//! Closer to reality than feeding bytes to `data_lines`, and needs no API key at all.
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -9,15 +9,15 @@ use serde_json::json;
 
 use crate::{Provider, StopReason};
 
-/// 起一个只应答一次的服务，返回它的地址。
-/// 应答体由调用方给 —— 同一个服务可以喂 anthropic 或 openai 两种格式。
+/// Start a server that answers once, returning its address.
+/// The caller supplies the body — the same server feeds anthropic or openai wire formats.
 fn spawn_sse_server(body: String) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定端口");
     let addr = listener.local_addr().expect("地址").to_string();
     std::thread::spawn(move || {
         let (mut socket, _) = listener.accept().expect("接受连接");
         let mut buf = [0u8; 4096];
-        let _ = socket.read(&mut buf); // 读到请求头就够，不必解析
+        let _ = socket.read(&mut buf); // reading the request head is enough; no need to parse
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
@@ -132,7 +132,7 @@ async fn openai_stream_yields_deltas_over_a_real_socket() {
 
 #[test]
 fn thought_signature_round_trips_through_the_openai_wire() {
-    // Gemini 思考模型的签名：这轮带回来，下轮必须原样送回去，否则 400。
+    // Gemini thinking models' signature: returned this turn, must go back verbatim or 400.
     let body = json!({
         "choices": [{"message": {
             "content": null,
@@ -154,7 +154,7 @@ fn thought_signature_round_trips_through_the_openai_wire() {
         .expect("tool 调用应当带上 extra_content");
     assert_eq!(extra.get("thought_signature"), Some(&json!("sig-abc")));
 
-    // 下一条消息里，签名要出现在发出去的 extra_content 上。
+    // In the next message, the signature must appear on the outgoing extra_content.
     let request = crate::CreateRequest {
         model: "gemini-3.5-flash".to_string(),
         system: None,

@@ -3,7 +3,7 @@ import type { SettingsView } from "./SettingsView";
 
 export type ConfigWriteResponse = {
   /**
-   * 写入后的完整配置，便于前端直接替换本地缓存。
+   * The full config after writing, so the frontend can replace its local cache outright.
    */
   config: SettingsView;
 };

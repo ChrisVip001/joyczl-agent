@@ -3,7 +3,7 @@
 export type TextDeltaNotification = {
   turnId: string;
   /**
-   * 流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。
+   * A streaming text delta. Present only when `turn/start` passed `stream: true`.
    */
   delta: string;
 };

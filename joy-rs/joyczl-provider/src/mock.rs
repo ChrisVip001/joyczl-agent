@@ -1,7 +1,7 @@
-//! 脚本化的假 provider。
+//! A scripted fake provider.
 //!
-//! loop 和检索门的测试全靠它：不用起 HTTP 服务、不用真 key，就能精确控制
-//! 模型每一轮说什么。这也是把「模型调用」收敛到一个 trait 后白拿的东西。
+//! Tests for loop and the retrieval gate rely on it: no HTTP server, no real key, yet
+//! precise control over the model's every turn — free fallout from one trait for model calls.
 
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -14,19 +14,19 @@ use crate::{
     Usage,
 };
 
-/// 队列里的一项：可以是应答，也可以是一次**失败** ——
-/// 「上下文溢出 → 压缩 → 重试」这类路径必须能脚本化。
+/// One item in the queue: either a response or a **failure** — paths like "context
+/// overflow → compact → retry" must be scriptable.
 pub type MockOutcome = Result<CreateResponse, ProviderError>;
 
 pub struct Mock {
-    /// 队列里的应答按序弹出；空了就报错 —— 这样「模型说的话比测试预期的多」
-    /// 会立刻暴露，而不是悄悄沿用上一条。
+    /// Queued responses pop in order; empty means an error — "the model said more than the
+    /// test expected" then surfaces immediately instead of silently reusing the last entry.
     responses: Mutex<VecDeque<MockOutcome>>,
-    /// 收到的请求，供断言用（比如确认 system 和 tools 真的传进去了）。
+    /// Received requests, for assertions (e.g. confirming system and tools really arrived).
     pub received: Mutex<Vec<CreateRequest>>,
-    /// true = `stream()` 会把文本拆成小块逐个回调，用来测流式路径。
+    /// true = `stream()` calls back with text split into small chunks, to test streaming.
     deltas: bool,
-    /// 每次 stream() 被调用时记一笔 —— 测试用它断言「真的走了流式」。
+    /// A mark every time stream() is called — tests assert "streaming really happened" with it.
     pub streamed: Mutex<Vec<bool>>,
 }
 
@@ -35,7 +35,7 @@ impl Mock {
         Self::with_outcomes(responses.into_iter().map(Ok).collect())
     }
 
-    /// 手工排「成功 or 失败」的队列。
+    /// Hand-build a queue of "success or failure".
     pub fn with_outcomes(outcomes: Vec<MockOutcome>) -> Self {
         Self {
             responses: Mutex::new(outcomes.into()),
@@ -45,7 +45,7 @@ impl Mock {
         }
     }
 
-    /// 同 `new`，但走流式路径（文本拆块回调）。
+    /// Same as `new`, but takes the streaming path (chunked text callbacks).
     pub fn streaming(responses: Vec<CreateResponse>) -> Self {
         Self {
             deltas: true,
@@ -53,7 +53,7 @@ impl Mock {
         }
     }
 
-    /// 一次「上下文超出窗口」的失败 —— provider 真的会这么报。
+    /// A "context exceeds window" failure — real providers do report it this way.
     pub fn context_overflow() -> MockOutcome {
         Err(ProviderError::ContextOverflow {
             status: 400,
@@ -70,7 +70,7 @@ impl Mock {
             .unwrap_or_else(|| Err(ProviderError::Api("mock 的应答用完了".to_string())))
     }
 
-    /// 一条纯文本应答，最常用的形状。
+    /// A plain-text response, the most common shape.
     pub fn text(text: &str) -> CreateResponse {
         CreateResponse {
             stop_reason: StopReason::EndTurn,
@@ -84,7 +84,7 @@ impl Mock {
         }
     }
 
-    /// 一次工具调用。
+    /// One tool call.
     pub fn tool_use(id: &str, name: &str, input: Value) -> CreateResponse {
         CreateResponse {
             stop_reason: StopReason::ToolUse,
@@ -126,9 +126,9 @@ impl Provider for Mock {
         };
         if self.deltas {
             if let Some(text) = text {
-                // 两字一切，块间小睡：跟真 SSE 一样有 await 点且给消费方
-                // 留出调度余量，turn/interrupt 的取消令牌才能确定性地在
-                // 流中途插进来。
+                // Two chars per chunk, small sleeps between: await points like real SSE and
+                // scheduling headroom for the consumer, so turn/interrupt cancellation tokens
+                // can deterministically cut into the stream mid-flight.
                 return Box::pin(async move {
                     for chunk in split_chunks(&text, 2) {
                         on_text(&chunk);

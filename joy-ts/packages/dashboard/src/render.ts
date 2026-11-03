@@ -1,7 +1,7 @@
-// 把数据画成 DOM 的那些函数。
+// The functions that paint data into DOM.
 //
-// 纯函数居多：给它数据，还你一个节点。这样 main.ts 只管「什么时候重画」，
-// 不管「长什么样」—— 页面变丑的时候只需要看这一个文件。
+// Mostly pure functions: give data, get back a node. main.ts only manages "when to repaint",
+// not "what it looks like" — when the page gets ugly, look at this one file.
 
 import type {
   ApprovalLogEntry,
@@ -22,10 +22,10 @@ import type {
 type Attrs = Record<string, string | number | boolean | undefined>;
 
 /**
- * 建一个元素。
+ * Build an element.
  *
- * 文本一律走 `textContent`：模型说的话、记忆里的内容、文件路径都是外部输入，
- * 没有理由让它们有机会变成 HTML。`innerHTML` 在这个页面里没有用武之地。
+ * Text always goes through `textContent`: what the model says, memory contents, file paths are
+ * all external input, with no reason to ever become HTML. `innerHTML` has no use in this page.
  */
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -43,7 +43,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-/** 概览面板：现在是什么状态。`onPick` 是点了某个会话之后要做的事（切过去）。 */
+/** Overview panel: the current state. `onPick` is what happens after a session is clicked (switch). */
 export function renderOverview(
   data: DashboardData,
   session: string,
@@ -109,7 +109,7 @@ export function renderOverview(
   return fragment;
 }
 
-/** 记忆面板：它记得什么。 */
+/** Memory panel: what it remembers. */
 export function renderMemory(data: DashboardData): DocumentFragment {
   const fragment = document.createDocumentFragment();
 
@@ -134,12 +134,12 @@ export function renderMemory(data: DashboardData): DocumentFragment {
   return fragment;
 }
 
-/** 一条通知说过的话（gate / 工具 / 图），做成一个小胶囊。 */
+/** What a notification said (gate / tool / graph), as a small capsule. */
 export function chip(text: string, kind: "gate" | "tool" | "graph" | "note" = "note"): HTMLElement {
   return el("span", { class: `chip ${kind}`, text });
 }
 
-/** 错误：红色的那一条。协议里的码也留着 —— 查日志的时候有用。 */
+/** Error: the red line. Protocol codes are kept too — useful when checking logs. */
 export function failure(error: { code: number; message: string }): HTMLElement {
   return el(
     "div",
@@ -160,7 +160,7 @@ export function failureOf(error: unknown): HTMLElement {
   return failure({ code: 0, message: String(error) });
 }
 
-/** 一轮结束时的那行小字：用哪个模型、花多久、多少 token。 */
+/** The small line when a turn ends: which model, how long, how many tokens. */
 export function turnFooter(turn: TurnCompletedNotification): string {
   const parts = [
     turn.meta.model,
@@ -169,16 +169,16 @@ export function turnFooter(turn: TurnCompletedNotification): string {
   ];
   if (turn.usage !== null && turn.usage !== undefined) parts.push(formatUsage(turn.usage));
   if (turn.meta.tools.length > 0) parts.push(`${turn.meta.tools.length} 次工具`);
-  // 路由原因只在真的发生了选择/回落时才说话（fixed 模式与选中 active 时是空）。
+  // Route reason only speaks when a choice/fallback actually happened (empty in fixed/active).
   if (turn.meta.routeReason) parts.push(`路由 ${turn.meta.routeReason}`);
   return parts.join(" · ");
 }
 
 /**
- * 历史里的一条消息。
+ * One message from history.
  *
- * 刻意画成跟**实时那一路**同一个样子（同样的 class、同样的布局）：刷新之后
- * 那句话不该看起来像换了个客户端 —— 它们本来就是同一场对话的两个来源。
+ * Deliberately painted identical to the **live stream** (same classes, same layout): after a
+ * refresh a message shouldn't look like a different client — they're two sources of one talk.
  */
 export function messageRow(message: Message): HTMLElement {
   const bubble = el("div", { class: "bubble", text: message.content });
@@ -187,9 +187,9 @@ export function messageRow(message: Message): HTMLElement {
     return el("div", { class: "msg me" }, bubble);
   }
 
-  // 遥测是唯一能还原「当时怎么想的」的东西，所以它值得被画出来 ——
-  // 但它是**一轮的摘要**，不是逐条回放：实时视图里每次工具调用会飘两个胶囊
-  // （开始、结束），这里一个工具只留一个。
+  // Telemetry is the only thing that can reconstruct "what it was thinking then", so it's worth
+  // painting — but it's a **turn summary**, not a per-item replay: in the live view each tool
+  // call floats two capsules (start, end); here one tool keeps one.
   const meta = message.meta;
   const trace = el(
     "div",
@@ -206,7 +206,7 @@ export function messageRow(message: Message): HTMLElement {
   );
 }
 
-/** 落库的遥测 → 跟实时视图长得一样的胶囊。 */
+/** Persisted telemetry → capsules identical to the live view. */
 function metaChips(meta: TurnMeta): HTMLElement[] {
   const chips: HTMLElement[] = [];
 
@@ -230,10 +230,10 @@ function metaChips(meta: TurnMeta): HTMLElement[] {
 }
 
 /**
- * 历史里那行小字。
+ * The small line in history.
  *
- * **没有 token 数**：usage 只走过 `turnCompleted`，从来没进库 —— 与其在这儿
- * 猜一个数字，不如只写库里真有的（模型、迭代、耗时、什么时候说的）。
+ * **No token counts**: usage only passed through `turnCompleted` and never entered the store —
+ * rather than guess a number, write only what the store truly has (model, iterations, timing).
  */
 function historyFooter(message: Message): string {
   const parts = [formatWhen(message.at)];
@@ -244,13 +244,13 @@ function historyFooter(message: Message): string {
   return parts.join(" · ");
 }
 
-// --- 小零件 ---------------------------------------------------------------
+// --- Small parts ---------------------------------------------------------------
 
 function section(title: string, body: Node): HTMLElement {
   return el("div", { class: "block" }, el("h3", { text: title }), body);
 }
 
-/** 「这儿什么都没有」的那句话。 */
+/** The "there's nothing here" line. */
 export function muted(text: string): HTMLElement {
   return el("p", { class: "muted", text });
 }
@@ -275,11 +275,11 @@ function row(label: string, value: string): [HTMLElement, HTMLElement] {
 }
 
 /**
- * 一行会话。**可以点** —— 点了就切过去。
+ * One session row. **Clickable** — click to switch to it.
  *
- * 里层是 `<button>` 而不是往 `<li>` 上挂 click：一个能点、能有 hover 的东西
- * 本来就该是按钮，键盘和读屏也才认它（`<div>` + click 两样都没有）。
- * 内容是 `<span>` 而不是 `<div>`：按钮里只允许放行内元素。
+ * The inner element is a `<button>` rather than a click on `<li>`: something clickable and
+ * hoverable should be a button; only then keyboard and screen readers recognize it (`<div>` +
+ * click has neither). The content is a `<span>` not a `<div>`: buttons allow inline elements.
  */
 function sessionRow(
   item: SessionSummary,
@@ -323,9 +323,9 @@ function episodeRow(episode: Episode): HTMLElement {
   );
 }
 
-// --- 格式化 ---------------------------------------------------------------
+// --- Formatting ---------------------------------------------------------------
 
-/** ISO 时间 → 「刚刚 / 12 分钟前 / 昨天 09:31 / 8月3日」。 */
+/** ISO time → "just now / 12 minutes ago / yesterday 09:31 / Aug 3". */
 export function formatWhen(iso: string | null | undefined): string {
   if (iso === null || iso === undefined || iso === "") return "—";
   const at = new Date(iso);
@@ -338,7 +338,7 @@ export function formatWhen(iso: string | null | undefined): string {
   return `${at.getMonth() + 1} 月 ${at.getDate()} 日`;
 }
 
-/** 页头那枚时间戳：数据是什么时候的。 */
+/** The header timestamp: when the data is from. */
 export function formatStamp(iso: string): string {
   const at = new Date(iso);
   return Number.isNaN(at.getTime()) ? iso : `${clock(at)} 更新`;
@@ -356,12 +356,12 @@ function clock(at: Date): string {
   return at.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-// --- 新面板（用量 / 审批 / 定时）与工具卡片 ---------------------------------
+// --- New panels (usage / approvals / schedules) and tool cards ---------------------------------
 
-/** 用量面板：总数 + per-model 聚合。只记账不强制 —— 这里是账本，不是配额。 */
+/** Usage panel: totals + per-model aggregation. Bookkeeping only — a ledger, not a quota. */
 export function renderUsage(data: UsageSummaryResponse): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  // 生成类型里 i64 是 bigint —— 展示层一律 Number() 落回 number。
+  // In generated types i64 is bigint — the display layer always falls back to number via Number().
   fragment.append(
     numbers([
       ["轮次", Number(data.turns)],
@@ -378,7 +378,7 @@ export function renderUsage(data: UsageSummaryResponse): DocumentFragment {
         : el(
             "ul",
             { class: "list" },
-            // 相对条宽的分母：全部模型里最大的输入量。
+            // Denominator for relative bar widths: the largest input across all models.
             ...data.byModel.map((row) => usageRow(row, maxInput(data.byModel))),
           ),
     ),
@@ -386,14 +386,14 @@ export function renderUsage(data: UsageSummaryResponse): DocumentFragment {
   return fragment;
 }
 
-/** 相对条宽的分母：全部模型里最大的输入量（至少 1，避免除零）。 */
+/** Denominator for relative bar widths: the largest input across models (at least 1, no div0). */
 function maxInput(rows: UsageByModel[]): number {
   return Math.max(...rows.map((row) => Number(row.inputTokens)), 1);
 }
 
 function usageRow(row: UsageByModel, maxInput: number): HTMLElement {
-  // 条形长度按「该模型输入占最大者比例」——没有总量刻度，只有相对大小，
-  // 这正是人眼要的：谁在吃 token 一眼可见。
+  // Bar length follows "that model's input vs the largest" — no total scale, only relative size,
+  // which is what the eye wants: who's eating tokens is visible at a glance.
   return el(
     "li",
     { class: "item" },
@@ -432,7 +432,7 @@ const OUTCOME_KIND: Record<string, string> = {
   voided: "",
 };
 
-/** 审批日志面板：谁问过、结果如何。hub 管理员回答「谁批准了 rm -rf」用。 */
+/** Approval log panel: who asked, what happened. For a hub admin answering "who approved rm -rf". */
 export function renderApprovals(entries: ApprovalLogEntry[]): DocumentFragment {
   const fragment = document.createDocumentFragment();
   fragment.append(
@@ -462,7 +462,7 @@ function approvalRow(entry: ApprovalLogEntry): HTMLElement {
   );
 }
 
-/** 定时面板：每个任务的策略、上次触发、有没有中断没落定的坑。 */
+/** Schedules panel: each job's policy, last trigger, and any interrupted unsettled claim. */
 export function renderSchedules(jobs: ScheduleStateRow[]): DocumentFragment {
   const fragment = document.createDocumentFragment();
   fragment.append(
@@ -490,7 +490,7 @@ function scheduleRow(job: ScheduleStateRow): HTMLElement {
       text: `上次触发：${job.lastFiredMinute ?? "还没跑过"}`,
     }),
   ];
-  // 有坑没落定 = 上次执行中断 —— 这是这个面板最该亮出来的一行。
+  // An unsettled claim = the last run was interrupted — the line this panel must highlight.
   if (job.claimedMinute !== null && job.claimedMinute !== undefined) {
     children.push(
       el("div", {
@@ -502,10 +502,10 @@ function scheduleRow(job: ScheduleStateRow): HTMLElement {
   return el("li", { class: "item" }, ...children);
 }
 
-// --- 工具卡片注册表 ----------------------
+// --- Tool card registry ----------------------
 //
-// 每个工具从 `args` 里提取一句**人话摘要**，而不是把 JSON 原样吐出来。
-// 注册表就是一个对象字面量 —— 新工具加一行，没有兜底抽象。
+// Each tool extracts a **plain-language summary** from `args` instead of spitting out JSON.
+// The registry is just an object literal — a new tool adds a line, no catch-all abstraction.
 
 type ToolArgs = Record<string, unknown>;
 
@@ -517,7 +517,7 @@ function argString(args: ToolArgs, ...keys: string[]): string {
   return "";
 }
 
-/** 工具名 → 「这一步在干什么」的一句摘要。 */
+/** Tool name → a one-line summary of "what this step is doing". */
 const TOOL_SUMMARY: Record<string, (args: ToolArgs) => string> = {
   run_command: (args) => argString(args, "command"),
   read_file: (args) => argString(args, "path"),
@@ -536,7 +536,7 @@ const TOOL_SUMMARY: Record<string, (args: ToolArgs) => string> = {
   },
 };
 
-/** 工具启动时画一张卡片：图标语义的标签 + 摘要 + 实时秒表（可动的部分由 main 接管）。 */
+/** Paint a card when a tool starts: icon-semantic label + summary + live stopwatch (main moves it). */
 export function toolCard(notification: ToolStartedNotification): HTMLElement {
   const args =
     typeof notification.args === "object" && notification.args !== null
@@ -554,7 +554,7 @@ export function toolCard(notification: ToolStartedNotification): HTMLElement {
   return el("div", { class: "toolcard" }, ...children);
 }
 
-/** 卡片里的秒表文字。`start` 是这张卡创建的时刻。 */
+/** The stopwatch text in a card. `start` is the moment this card was created. */
 export function elapsedSince(start: number): string {
   return formatMs(Date.now() - start);
 }

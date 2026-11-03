@@ -1,50 +1,50 @@
-//! `<home>/models.json` —— 多套「厂商 + 模型 + 凭据」配置，随手切换。
+//! `<home>/models.json` — multiple "vendor + model + credential" profiles, switchable at will.
 //!
-//! 与 `settings.json` 的分工：**那一份是运行参数**（轮数、token、超时、闸门），
-//! **这一份是用哪家的哪个模型、拿什么 key**。后者要能被用户在界面上改，而且
-//! 凭据优先交给系统钥匙串 —— 所以单独一个文件、单独一套协议方法。
+//! Division of labor with `settings.json`: **that one holds runtime parameters** (rounds,
+//! tokens, timeouts, gates), **this one holds which vendor's model, with which key** — it
+//! must be UI-editable, credentials prefer the keychain: hence a separate file and methods.
 //!
-//! 三件事在实现里是纪律，不是可选优化：
+//! Three things are discipline in this implementation, not optional optimizations:
 //!
-//! * **凭据默认不落明文**：macOS 走 Keychain（`security`）、Linux 走
-//!   `secret-tool`，都失败才退回 `<home>/secrets.json`（0600）。Windows 的
-//!   凭据管理器存得进、读不回明文，所以直接走文件 —— 写进 limitations。
-//! * **测试绝不碰真钥匙串**：`SecretStore::memory()` / `file_only()` 让单测
-//!   在临时目录里跑，不弹系统授权框、不写用户钥匙串。
-//! * **profile 只是「配置」**：套不套到当前会话由 `model/use` 决定；文件本身
-//!   改了不影响正在跑的那一轮。
+//! * **Credentials never default to plaintext on disk**: macOS uses the Keychain (`security`),
+//!   Linux uses `secret-tool`; only if both fail fall back to `<home>/secrets.json` (0600).
+//!   Windows' credential manager can store but not read back plaintext — noted in limitations.
+//! * **Tests never touch the real keychain**: `SecretStore::memory()` / `file_only()`
+//!   let unit tests run in a temp dir, without system auth prompts or keychain writes.
+//! * **A profile is just "config"**: whether it applies to the current session is decided
+//!   by `model/use`; editing the file does not affect the turn already running.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// 钥匙串里的 service 名（三端共用）。
+/// Service name in the keychain (shared by all three platforms).
 pub const SERVICE: &str = "joyczl";
 
-/// 一套模型配置。
+/// One model profile.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelProfile {
-    /// 用户起的短名（`ds`、`公司-openai`…），切换时就用它。
+    /// Short name chosen by the user (`ds`, `company-openai`...); used when switching.
     pub id: String,
-    /// `joyczl-provider` 的 provider id（12 家之一，或 `custom` 配 base_url）。
+    /// Provider id of `joyczl-provider` (one of the 12, or `custom` with base_url).
     pub provider: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub model: Option<String>,
-    /// 便宜模型：检索门、consolidation、目标判断器用它。不给就用 provider 默认。
+    /// Cheap model: for the retrieval gate, consolidation, and the goal judge; provider default if absent.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub small_model: Option<String>,
-    /// 自建/代理端点。留空用 provider 自己的。
+    /// Self-hosted/proxied endpoint. Empty = the provider's own.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub base_url: Option<String>,
-    /// 凭据从哪来：`env:VAR` / `keychain` / `file`；`None` = 这家不用 key
-    /// （ollama、LM Studio）。**这里只存指针，不存 key 本身。**
+    /// Where credentials come from: `env:VAR` / `keychain` / `file`; `None` = this vendor
+    /// needs no key (ollama, LM Studio). **Only a pointer is stored here, never the key itself.**
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key_source: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelsFile {
-    /// 当前生效的 profile id。
+    /// id of the currently active profile.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub active: Option<String>,
     #[serde(default)]
@@ -75,12 +75,12 @@ pub fn find<'a>(models: &'a ModelsFile, id: &str) -> Option<&'a ModelProfile> {
 }
 
 pub fn active_profile(models: &ModelsFile) -> Option<&ModelProfile> {
-    // active 指向的 id 被删了就当没有 —— 不静默留一个悬空指针。
+    // If the id `active` points to was deleted, treat as absent — no dangling pointer.
     models.active.as_deref().and_then(|id| find(models, id))
 }
 
-/// 写入（或覆盖同名）一套配置。**没给 key 就保留原 key_source** ——
-/// 「切换」「改模型」不该逼用户重发一次密钥。
+/// Write (or overwrite by same id) one profile. **No key given keeps the original key_source** —
+/// "switching" or "changing models" must not force the user to re-enter the key.
 pub fn upsert(models: &mut ModelsFile, incoming: ModelProfile) {
     match models.profiles.iter_mut().find(|p| p.id == incoming.id) {
         Some(existing) => {
@@ -106,8 +106,8 @@ pub fn remove(models: &mut ModelsFile, id: &str) -> bool {
     models.profiles.len() != before
 }
 
-/// 把 active profile 的**配置**套进 Settings（凭据另取，见 `apply_active`）。
-/// 不动 `settings.json`：那是运行参数的文件，模型配置有自己的家。
+/// Apply the active profile's **config** into Settings (credentials fetched separately, see
+/// `apply_active`). Leaves `settings.json` alone: that file holds runtime parameters.
 pub fn apply_active(
     models: &ModelsFile,
     home: &Path,
@@ -120,8 +120,8 @@ pub fn apply_active(
     apply_profile(profile, home, store, settings);
 }
 
-/// 把**任意一套** profile 套进 Settings（路由按档位选模型时用 —— 与 apply_active
-/// 共用同一条取 key 的路径）。
+/// Apply **any** profile into Settings (used when routing picks models by tier — shares
+/// the same key-fetching path as apply_active).
 pub fn apply_profile(
     profile: &ModelProfile,
     home: &Path,
@@ -135,8 +135,8 @@ pub fn apply_profile(
     settings.api_key = resolve_key(profile, home, store);
 }
 
-/// 按 `key_source` 取真正的 key。`env:` 直接读环境变量（**不复制进文件**），
-/// `keychain`/`file` 走 `SecretStore`，没有就 None（本地模型）。
+/// Fetch the real key per `key_source`. `env:` reads the env var directly (**never copied
+/// into files**); `keychain`/`file` go through `SecretStore`; absent = None (local models).
 pub fn resolve_key(profile: &ModelProfile, home: &Path, store: &mut SecretStore) -> Option<String> {
     let source = profile.key_source.as_deref()?;
     match source.strip_prefix("env:") {
@@ -145,12 +145,12 @@ pub fn resolve_key(profile: &ModelProfile, home: &Path, store: &mut SecretStore)
     }
 }
 
-/// 凭据放哪儿。`Auto` 是默认：能用系统钥匙串就用，用不了退文件。
+/// Where credentials live. `Auto` is the default: use the system keychain when possible, else file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecretBackend {
     Auto,
     File,
-    /// 只活在进程内存里：测试用，也供「就是不落盘」的用户显式选。
+    /// Lives only in process memory: for tests, and for users explicitly choosing "no disk".
     Memory,
 }
 
@@ -185,14 +185,14 @@ impl SecretStore {
         self.backend
     }
 
-    /// 换后端。**只给测试与「就是不落钥匙串」的场景**：默认 `Auto`，单测要
-    /// 钉成 `File`（临时目录）或 `Memory`，绝不能在 CI 里弹系统授权框。
+    /// Switch backend. **Only for tests and "never touch the keychain" scenarios**: the default
+    /// is `Auto`; unit tests must pin `File` (temp dir) or `Memory` — no system auth prompts in CI.
     pub fn set_backend(&mut self, backend: SecretBackend) {
         self.backend = backend;
     }
 
-    /// 存一个 key，返回**实际落在哪**（`keychain` / `file` / `memory`）——
-    /// 界面与日志要如实告诉用户，不能让用户以为进了钥匙串其实是明文文件。
+    /// Store a key, returning **where it actually landed** (`keychain` / `file` / `memory`) —
+    /// UI and logs must report the truth: never imply keychain when it is a plaintext file.
     pub fn put(
         &mut self,
         home: &Path,
@@ -241,7 +241,7 @@ impl SecretStore {
     }
 }
 
-// ---- 文件兜底：`<home>/secrets.json`，0600 -----------------------------------
+// ---- File fallback: `<home>/secrets.json`, 0600 ----------------------------------------------
 
 fn read_secrets(home: &Path) -> HashMap<String, String> {
     std::fs::read_to_string(secrets_path(home))
@@ -253,7 +253,7 @@ fn read_secrets(home: &Path) -> HashMap<String, String> {
 fn write_secrets(home: &Path, secrets: &HashMap<String, String>) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(secrets).map_err(|e| e.to_string())?;
     std::fs::write(secrets_path(home), raw).map_err(|e| e.to_string())?;
-    // 明文兜底，权限能收紧就收紧（Windows 没有 0600 这一说 —— 写进 limitations）。
+    // Plaintext fallback; tighten permissions when possible (Windows has no 0600 — in limitations).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -281,13 +281,13 @@ fn remove_file_secret(home: &Path, account: &str) -> Result<(), String> {
     write_secrets(home, &all)
 }
 
-// ---- 系统钥匙串：macOS `security` / Linux `secret-tool` ----------------------
+// ---- System keychain: macOS `security` / Linux `secret-tool` ---------------------------------
 
-/// 跑一个钥匙串命令，**带超时**。
+/// Run a keychain command, **with a timeout**.
 ///
-/// `security` / `secret-tool` 在无人值守的环境里可能弹框或干等（CI、远程
-/// 会话、没有 GUI 的 ssh）。一次凭据操作把整个 app-server 冻住是不能接受的 ——
-/// 超时就当失败，走文件兜底。stdout 非空才算真拿到东西。
+/// `security` / `secret-tool` may pop dialogs or hang in unattended environments (CI,
+/// remote sessions, ssh without GUI). Freezing the app-server on one credential operation
+/// is unacceptable — timeout = failure, fall back to file. Non-empty stdout = real success.
 fn run_limited(command: &mut std::process::Command, stdin_secret: Option<&str>) -> Option<String> {
     use std::io::Write;
     use std::process::Stdio;
@@ -333,11 +333,11 @@ fn run_limited(command: &mut std::process::Command, stdin_secret: Option<&str>) 
     }
 }
 
-/// 钥匙串命令的等待上限。
+/// Wait cap for keychain commands.
 const KEYCHAIN_TIMEOUT_SECS: u64 = 5;
 
-/// macOS：`security add-generic-password -U -s joyczl -a <account> -w <key>`。
-/// Linux：`secret-tool store` 从 stdin 读（**不进 argv** —— argv 对所有进程可见）。
+/// macOS: `security add-generic-password -U -s joyczl -a <account> -w <key>`.
+/// Linux: `secret-tool store` reads from stdin (**never argv** — argv is visible to all).
 fn keychain_put(account: &str, secret: &str) -> bool {
     if cfg!(target_os = "macos") {
         return run_limited(
@@ -356,7 +356,7 @@ fn keychain_put(account: &str, secret: &str) -> bool {
         .is_some();
     }
     if cfg!(target_os = "linux") {
-        // stdin 传值：**不进 argv** —— argv 对同机所有进程可见。
+        // stdin carries the value: **never argv** — argv is visible to every process on the machine.
         return run_limited(
             std::process::Command::new("secret-tool").args([
                 "store",
@@ -371,7 +371,7 @@ fn keychain_put(account: &str, secret: &str) -> bool {
         )
         .is_some();
     }
-    // Windows 的凭据管理器存得进、读不回明文 —— 直接走文件兜底。
+    // Windows' credential manager stores but cannot read back plaintext — use the file fallback.
     false
 }
 
@@ -442,7 +442,7 @@ mod models_tests {
         }
     }
 
-    /// 内存后端：**不碰系统钥匙串、不落盘** —— CI 里绝不能弹授权框。
+    /// Memory backend: **never touches the system keychain or disk** — CI must never see auth prompts.
     #[test]
     fn the_memory_backend_never_touches_the_disk() {
         let dir = tempfile::tempdir().expect("临时目录");
@@ -455,7 +455,7 @@ mod models_tests {
         );
     }
 
-    /// 文件兜底：能取回，且（Unix）权限收紧到 0600。
+    /// File fallback: stores and reads back, with (Unix) permissions tightened to 0600.
     #[test]
     fn the_file_backend_stores_and_reads_back() {
         let dir = tempfile::tempdir().expect("临时目录");
@@ -478,7 +478,7 @@ mod models_tests {
         }
     }
 
-    /// 覆盖同名配置时**保留原 key_source** —— 改模型不该逼用户重发密钥。
+    /// Overwriting a same-id profile **keeps its key_source** — no forced key re-entry.
     #[test]
     fn upserting_keeps_the_existing_key_pointer() {
         let mut models = ModelsFile::default();
@@ -508,7 +508,7 @@ mod models_tests {
         );
     }
 
-    /// 切换与删除：active 跟得上，删掉的 active 不留悬空指针。
+    /// Switching and removing: active stays consistent; removing it leaves no dangling pointer.
     #[test]
     fn switching_and_removing_keep_active_consistent() {
         let mut models = ModelsFile::default();
@@ -532,7 +532,7 @@ mod models_tests {
         assert!(!remove(&mut models, "不存在"));
     }
 
-    /// 套进 Settings：provider/model/base_url 到位，key 从凭据后端取。
+    /// Applying into Settings: provider/model/base_url in place, key from the credential backend.
     #[test]
     fn applying_the_active_profile_fills_settings_including_the_key() {
         let dir = tempfile::tempdir().expect("临时目录");
@@ -563,7 +563,7 @@ mod models_tests {
         assert_eq!(settings.api_key.as_deref(), Some("sk-应用"));
     }
 
-    /// `env:` 源直接读环境变量，**不复制进任何文件**。
+    /// An `env:` source reads the environment directly, **never copied into any file**.
     #[test]
     fn an_env_key_source_is_read_from_the_environment() {
         let dir = tempfile::tempdir().expect("临时目录");
@@ -593,7 +593,7 @@ mod models_tests {
         std::env::remove_var(var);
     }
 
-    /// 没有 active 时不动 Settings —— 文件里没有配置 ≠ 清空当前配置。
+    /// No active profile leaves Settings alone — no config in the file ≠ clearing the config.
     #[test]
     fn no_active_profile_leaves_settings_alone() {
         let dir = tempfile::tempdir().expect("临时目录");
@@ -610,7 +610,7 @@ mod models_tests {
         assert_eq!(settings.provider, "ollama");
     }
 
-    /// 读写往返：文件里只有配置与凭据**指针**，没有 key 本身。
+    /// Read/write round trip: the file holds only config and credential **pointers**, never keys.
     #[test]
     fn the_file_round_trips_and_never_contains_the_key() {
         let dir = tempfile::tempdir().expect("临时目录");

@@ -1,81 +1,81 @@
 import { JoyClient, JoyError, METHODS, StdioTransport } from "@joy/client";
 import type { ServerNotification } from "@joy/client";
 
-/** 一轮说完之后留下来的东西。 */
+/** What a completed turn leaves behind. */
 export interface TurnOutcome {
-  /** Joy 那边的会话 id —— 就是 `conversation` 本身，见 `sessionIdFor`。 */
+  /** Joy's session id — it is `conversation` itself; see `sessionIdFor`. */
   sessionId: string;
   reply: string;
-  /** 这轮实际用了哪些工具，按调用顺序，重复的算多次。 */
+  /** Tools actually used this turn, in call order; repeats count. */
   tools: string[];
-  /** 真正答话的模型。被 graph 判成 quick 时那是小模型 —— 如实带出来。 */
+  /** The model that really answered. When graph routes to quick that's the small one — as-is. */
   model: string;
   iterations: number;
 }
 
-/** 一轮进行中的动静。适配器可以拿它去显示「正在输入…」。 */
+/** Movement while a turn runs. Adapters can use it to show "typing…". */
 export interface ProgressNote {
   conversation: string;
   text: string;
 }
 
 /**
- * 适配器跟 Joy 之间就这一个接口：来一条消息，回一句话。
+ * The single interface between an adapter and Joy: one message in, one reply out.
  *
- * 收成一个函数而不是直接吃 `JoyBridge`，是为了适配器能独立被测 ——
- * 长轮询、WebSocket 心跳、切长消息、白名单这些跟 Joy 一点关系都没有。
+ * A function rather than the `JoyBridge` itself, so adapters can be tested independently —
+ * long polling, WebSocket heartbeats, message splitting, allowlists have nothing to do with Joy.
  *
- * 它跟 `ProgressNote` 一样属于**平台无关**的那一半，所以放在这儿，
- * 而不是某个平台的适配器里 —— 否则 Discord 得从 Telegram 那个文件里
- * 导入自己的接口。
+ * Like `ProgressNote`, it belongs to the **platform-agnostic** half, so it lives here rather
+ * than in one platform's adapter — otherwise Discord would import its own interface from the
+ * Telegram file.
  */
 export type Responder = (conversation: string, text: string) => Promise<string>;
 
 export interface JoyBridgeOptions {
-  /** `joy` 二进制路径。不传就按客户端那套顺序找。 */
+  /** `joy` binary path. When absent, found via the client's usual order. */
   command?: string;
   args?: string[];
   cwd?: string;
-  /** 透给 app-server 的环境变量（`JOY_HOME`、各家 API key……）。 */
+  /** Environment passed through to app-server (`JOY_HOME`, the vendors' API keys…). */
   env?: NodeJS.ProcessEnv;
   /**
-   * 已经连好的客户端。不给就自己起一个 app-server。
+   * An already-connected client. When absent, an app-server is started here.
    *
-   * 这个缝是留给测试的：排队、通知归拢、失败后清残骸这几件事全是纯逻辑，
-   * 不该为了测它们去真的起一个进程、配一个模型、等一次网络。
+   * This seam exists for tests: queuing, notification folding, clearing wreckage after failure
+   * are pure logic — proving them shouldn't need a real process, a model, or a network trip.
    */
   client?: JoyClient;
-  /** 服务端的人话与本地杂音。默认打到 stderr。 */
+  /** The server's human words and local noise. Defaults to stderr. */
   onLog?: (text: string) => void;
-  /** 一轮里的进度。默认丢掉。 */
+  /** Progress within a turn. Dropped by default. */
   onProgress?: (note: ProgressNote) => void;
 }
 
 /**
- * 会话 id 从平台身份直接派出来。
+ * Session ids derive directly from platform identities.
  *
- * 网关本来是要「记住谁在用哪个会话」的 —— 一张表、一个文件、一次冷启动之后
- * 全部失效，外加一条永远没人测的迁移路径。这里不要那张表：
- * `telegram:12345` 既是这位用户，也是那个会话。
+ * A gateway would otherwise "remember who uses which session" — a table, a file, all invalid
+ * after one cold start, plus a migration path nobody ever tests. No table here:
+ * `telegram:12345` is both this user and that session.
  *
- * 于是网关是**无状态**的：重启的代价是零，多开一个进程也不会把同一个人
- * 劈成两段对话。真要换会话，让用户点一下「重新开始」，换个后缀就是。
+ * The gateway is therefore **stateless**: restart costs nothing, another process doesn't split a
+ * person into two talks. To really change sessions, the user taps "restart" and a suffix changes.
  */
 export function sessionIdFor(conversation: string): string {
   return conversation;
 }
 
 /**
- * 把一轮里发生的事翻译成给人看的话。
+ * Translate what happened in a turn into words for humans.
  *
- * 只挑真的值得打扰用户的那几件。工具调用成功是常态，不用报；失败要报，
- * 因为下一句解释通常就跟它有关。
+ * Only the few things really worth interrupting the user for. Successful tool calls are normal —
+ * unreported; failures are reported, because the next explanation usually relates to them.
  *
- * 这里只有认得出 `turnId` 的通知 —— 播报之前得先知道该播给谁。
- * 所以 `consolidationCompleted`（提炼完一批事实）不在其中：它确实是在一轮里
- * 发的，但**不带 `turnId`**（见 protocol/v2.rs），两段对话同时在飞时无从判断
- * 该报给谁。宁可少说一句，也不要让人在甲的聊天框里读到乙的记忆动态。
- * 想让这句回来，得先给那个通知补上 `turnId`。
+ * Only notifications carrying a recognizable `turnId` appear here — before announcing anything
+ * you must know whom to announce to. So `consolidationCompleted` (a batch of facts distilled) is
+ * absent: it is sent during a turn but **carries no `turnId`** (see protocol/v2.rs), so with two
+ * conversations in flight there's no telling whom to tell. Say less rather than let someone read
+ * Alice's memory updates in Bob's chat; bringing it back means adding `turnId` to that notification.
  */
 function progressText(notification: ServerNotification): string | null {
   switch (notification.type) {
@@ -91,10 +91,10 @@ function progressText(notification: ServerNotification): string | null {
 }
 
 /**
- * 把错误翻成一句能直接发给用户的话。
+ * Translate an error into one sentence that can go straight to the user.
  *
- * `JoyError` 带 code 就是为了这里：**「模型没配好」和「这功能还没做」对用户
- * 是两件事**，前者他能自己解决，后者只能等。混成一句「出错了」等于让他白折腾。
+ * `JoyError` carries a code precisely for this: **"model not configured" and "feature not built"
+ * are two things to a user** — one they fix themselves, the other they wait out. Don't merge them.
  */
 export function explain(error: unknown): string {
   if (error instanceof JoyError) {
@@ -114,14 +114,14 @@ export function explain(error: unknown): string {
 
 interface InFlight {
   conversation: string;
-  /** 派生出来的会话 id。也是 `turnStarted` 反查「这一轮是谁的」的唯一线索。 */
+  /** The derived session id. Also the only clue `turnStarted` gives for "whose turn is this". */
   sessionId: string;
   tools: string[];
-  /** 这一轮的 id。`turnStarted` 之前无从得知，所以是可空的。 */
+  /** This turn's id. Unknowable before `turnStarted`, hence nullable. */
   turnId: string | null;
 }
 
-/** 收好的一轮答复，等着被自己的 `turn/start` 应答取走。 */
+/** A completed reply, waiting to be picked up by its own `turn/start` response. */
 interface Completed {
   reply: string;
   model: string;
@@ -129,42 +129,42 @@ interface Completed {
 }
 
 /**
- * 一条通知说的是哪一轮。
+ * Which turn a notification belongs to.
  *
- * 绝大多数通知都带 `turnId`；`error` 不带 —— 它可能是协议层面的错误
- * （解析失败、方法不存在），跟某一轮没关系。
+ * Almost all notifications carry `turnId`; `error` doesn't — it may be a protocol-level error
+ * (parse failure, unknown method), unrelated to any turn.
  */
 function turnIdOf(notification: ServerNotification): string | null {
   return "turnId" in notification ? notification.turnId : null;
 }
 
 /**
- * 一个 app-server，服务很多人。
+ * One app-server, serving many people.
  *
- * 为什么不是「一个人一个进程」：state.db 只允许一个进程写，多开就是抢锁。
- * 所以网关这边把并发挡在门外 —— 每个平台用户一条队列，队列之间也不用抢，
- * 因为服务端那条 stdio 循环本来就是一件一件做的（见 stdio.rs）。
+ * Why not "one process per person": state.db allows a single writer; more processes fight over
+ * the lock. So the gateway keeps concurrency outside — one queue per platform user, and queues
+ * don't compete either, because the server's stdio loop is serial anyway (see stdio.rs).
  */
 export class JoyBridge {
   readonly #client: JoyClient;
   readonly #onProgress: (note: ProgressNote) => void;
 
-  /** 每段对话一条尾巴：上一条消息处理完了，下一条才开始。 */
+  /** One tail per conversation: the next message starts only after the previous one finishes. */
   readonly #tails = new Map<string, Promise<void>>();
 
   /**
-   * 在飞的轮次，按 `turnId` 索引。
+   * Turns in flight, indexed by `turnId`.
    *
-   * 不能只留「当前这一轮」这一个槽位：服务端的 stdio 循环虽然一件一件地做，
-   * 但**不同对话的两轮可以同时在飞** —— 甲那轮还在跑的时候，乙的请求已经写出去了。
-   * 通知只带 `turnId` 不带会话，单个槽位会让乙的轮次把甲的通知认成自己的。
+   * A single "current turn" slot won't do: the server's stdio loop is serial, but **two turns of
+   * different conversations can be in flight at once** — while Alice's runs, Bob's request already
+   * went out. Notifications carry only `turnId`; one slot would let Bob's turn claim Alice's.
    */
   readonly #inFlight = new Map<string, InFlight>();
 
-  /** 已发出 `turn/start`、还没等到 `turnStarted` 的轮次，按会话索引 —— 这会儿还不知道 turnId。 */
+  /** Turns past `turn/start`, awaiting `turnStarted`, by session — turnId still unknown here. */
   readonly #awaitingTurnId = new Map<string, InFlight>();
 
-  /** 收好的答复，同样按 `turnId`。 */
+  /** Completed replies, likewise keyed by `turnId`. */
   readonly #completed = new Map<string, Completed>();
 
   constructor(options: JoyBridgeOptions = {}) {
@@ -189,30 +189,30 @@ export class JoyBridge {
   }
 
   /**
-   * 问一句，拿回一句。
+   * One question in, one reply out.
    *
-   * 同一段对话上的两次调用**一定**一前一后 —— 用户连发两条消息时，两条各自
-   * 跑一轮完整 loop 会互相踩上下文，回来还会颠倒顺序。排队是这里唯一负责的事。
+   * Two calls on the same conversation **always** run back to back — two messages fired quickly,
+   * each running a full loop, would stomp context and return out of order. Queuing is the only job.
    */
   ask(conversation: string, text: string): Promise<TurnOutcome> {
     const previous = this.#tails.get(conversation) ?? Promise.resolve();
     const turn = previous.then(() => this.#runTurn(conversation, text));
 
-    // 尾巴只用来排队，不承载错误 —— 上一轮失败了不该把下一轮也拖下去。
+    // The tail only queues; it carries no errors — a failed turn must not drag the next down.
     const tail = turn.then(
       () => {},
       () => {},
     );
     this.#tails.set(conversation, tail);
     void tail.then(() => {
-      // 对话不聊了就把队列格子还回去，不然它会一直长。
+      // Give the queue slot back once the conversation goes quiet, or it grows forever.
       if (this.#tails.get(conversation) === tail) this.#tails.delete(conversation);
     });
 
     return turn;
   }
 
-  /** 关掉 app-server。它会先把排着的帧写完再退。 */
+  /** Close app-server. It finishes writing queued frames before exiting. */
   close(): void {
     this.#client.close();
   }
@@ -228,8 +228,8 @@ export class JoyBridge {
     this.#awaitingTurnId.set(sessionId, current);
 
     try {
-      // `stream: false`：聊天平台要的是一句完整的话，不是逐字抖动。
-      // （`turnCompleted.reply` 就是它，不用自己拿 delta 拼。）
+      // `stream: false`: chat platforms want one complete sentence, not per-character jitter.
+      // (`turnCompleted.reply` is exactly that; no need to assemble deltas by hand.)
       const { turnId } = await this.#client.request(METHODS.TURN_START, {
         sessionId,
         message: text,
@@ -251,14 +251,14 @@ export class JoyBridge {
         iterations: completed.iterations,
       };
     } finally {
-      // 成了还是败了都要清：`run_turn` 可能在发完 `turnStarted` 之后才失败
-      // （模型中途报错之类），那时通知串断在半路。留着的半截会被后来的一轮
-      // 捡到，或者永远占着内存。
+      // Clear on success or failure: `run_turn` may fail after `turnStarted` went out (a
+      // mid-turn model error), leaving the notification stream broken halfway. The leftovers
+      // would be picked up by a later turn, or occupy memory forever.
       this.#forget(current);
     }
   }
 
-  /** 一轮收场：把它留在几张表里的痕迹全抹掉。 */
+  /** Turn wrap-up: erase every trace it left in the tables. */
   #forget(current: InFlight): void {
     this.#awaitingTurnId.delete(current.sessionId);
     if (current.turnId === null) return;
@@ -268,7 +268,7 @@ export class JoyBridge {
 
   #handleNotification(notification: ServerNotification): void {
     if (notification.type === "turnStarted") {
-      // 到这一刻才知道这一轮叫什么名字，于是它从「按会话等」挪进「按 turnId 找」。
+      // Only now do we learn this turn's name, so it moves from "waiting by session" to "found by turnId".
       const waiting = this.#awaitingTurnId.get(notification.sessionId);
       if (waiting === undefined) return;
       waiting.turnId = notification.turnId;
@@ -279,7 +279,7 @@ export class JoyBridge {
     const turnId = turnIdOf(notification);
     if (turnId === null) return;
     const current = this.#inFlight.get(turnId);
-    // 不认识这个 turnId：可能是替身/上一轮收场之后姗姗来迟的尾巴，丢掉。
+    // Unknown turnId: likely a late tail arriving after a stand-in/previous turn ended — drop it.
     if (current === undefined) return;
 
     const note = progressText(notification);

@@ -1,4 +1,4 @@
-//! 待办清单在**一轮里的位置**：它被注入 system prompt，所以压缩、滑窗都冲不掉。
+//! The todo list's **place within a turn**: it is injected into the system prompt, so compaction and sliding windows cannot wash it away.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::{EventSink, Server};
 
-/// 同一个 server 跑两轮：清单是**会话级**的，必须落在 server 上而不是某一轮里。
+/// Run two turns on the same server: the board is **session-level**, so it must live on the server, not in any one turn.
 async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, String, String) {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path().to_path_buf();
@@ -20,7 +20,7 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
     let _ = dir.keep();
 
     let mock = Arc::new(Mock::new(vec![
-        // 第一轮：检索门 → 写清单 → 收尾
+        // First turn: retrieval gate → write the board → wind down
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "todo"}"#),
         Mock::tool_use(
             "call-1",
@@ -31,7 +31,7 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
             ]}),
         ),
         Mock::text("清单记下了。"),
-        // 第二轮：检索门 → 收尾
+        // Second turn: retrieval gate → wind down
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "todo"}"#),
         Mock::text("接着干。"),
     ]));
@@ -82,8 +82,8 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
         }
     }
 
-    // 最后一次请求就是第二轮的循环调用（前面那些是检索门之类的短请求）——
-    // 不看固定下标，免得「门算不算一次请求」一变，测试就假红。
+    // The last request is the second turn's loop call (the earlier ones are short requests like the gate) —
+    // no fixed index, so the test does not go falsely red when "does the gate count as a request" changes.
     let requests = mock.received.lock().unwrap();
     if let Some(last) = requests.last() {
         system_second = last.system.clone().unwrap_or_default();
@@ -93,7 +93,7 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
     (mock, tools_first, system_second)
 }
 
-/// 清单写完之后**下一轮就看得到**，而且是注入的（不靠历史）。
+/// The board is **visible on the very next turn** after being written, and it is injected (not via history).
 #[tokio::test]
 async fn a_todo_list_is_injected_into_the_next_turn() {
     let (_mock, tool_output, system) = run_twice("列一下要做的事", "接着来").await;
@@ -110,7 +110,7 @@ async fn a_todo_list_is_injected_into_the_next_turn() {
     assert!(system.contains("pending: 改文档"), "{system}");
 }
 
-/// 没写过清单的会话不该多出那一段（空标题比没有更糟：它会让人以为清单是空的）。
+/// A session that never wrote a board gets no section (an empty header is worse than none: it would suggest the board is empty).
 #[tokio::test]
 async fn a_session_without_a_list_gets_no_section() {
     let dir = tempfile::tempdir().expect("临时目录");

@@ -1,6 +1,6 @@
-//! `fetch_url` 的行为边界。网络相关用例全部打**本机** HTTP 服务器
-//! （`allow_private=true` 才允许连 127.0.0.1，工具本体永远过 SSRF 检查），
-//! 不打真实外网 —— CI 不能依赖外面的世界。
+//! Behavior edges of `fetch_url`. Network cases all hit a **local** HTTP server
+//! (only `allow_private=true` may reach 127.0.0.1; the tool itself always passes SSRF checks),
+//! never the real internet — CI cannot depend on the outside world.
 
 use super::web::{check_url, execute_fetch, fetch_url, html_to_text, is_disallowed_ip};
 use crate::{ToolCtx, ToolRegistry};
@@ -12,7 +12,7 @@ async fn ctx() -> ToolCtx {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm
+    let _ = dir.keep(); // sqlite still writes -wal/-shm
     ToolCtx {
         cwd: None,
         approval: None,
@@ -27,21 +27,21 @@ async fn ctx() -> ToolCtx {
     }
 }
 
-// ---- 纯函数 ----------------------------------------------------------------
+// ---- Pure functions ---------------------------------------------------------
 
-/// 内网/保留地址全拒绝，公网放行 —— 这张表就是护栏本身。
+/// Private/reserved addresses are all refused, public ones pass — this table is the guardrail itself.
 #[test]
 fn disallowed_ips_cover_loopback_private_and_metadata() {
     for bad in [
         "127.0.0.1",       // loopback
-        "10.1.2.3",        // 内网
-        "172.16.0.9",      // 内网
-        "192.168.1.1",     // 内网
-        "169.254.169.254", // 云 metadata 端点（link-local）
-        "0.0.0.0",         // 未指定
-        "192.0.2.7",       // 文档段
+        "10.1.2.3",        // private
+        "172.16.0.9",      // private
+        "192.168.1.1",     // private
+        "169.254.169.254", // cloud metadata endpoint (link-local)
+        "0.0.0.0",         // unspecified
+        "192.0.2.7",       // documentation range
         "::1",             // v6 loopback
-        "fe80::1",         // v6 链路本地
+        "fe80::1",         // v6 link-local
         "fd00::1",         // v6 ULA
     ] {
         let ip: std::net::IpAddr = bad.parse().unwrap();
@@ -53,7 +53,7 @@ fn disallowed_ips_cover_loopback_private_and_metadata() {
     }
 }
 
-/// 非 http(s) 一律拒绝 —— file:// 是最自然的越界尝试。
+/// Non-http(s) is refused outright — file:// is the most natural overreach attempt.
 #[tokio::test]
 async fn non_http_schemes_are_refused() {
     let url = reqwest::Url::parse("file:///etc/passwd").unwrap();
@@ -61,7 +61,7 @@ async fn non_http_schemes_are_refused() {
     assert!(err.contains("只支持 http/https"), "{err}");
 }
 
-/// HTML → 纯文本：script/style 整段消失、实体解码、块级标签换行、空白折叠。
+/// HTML → plain text: script/style vanish whole, entities decode, block tags break lines, whitespace collapses.
 #[test]
 fn html_to_text_strips_scripts_and_decodes_entities() {
     let html = "<html><head><title>标题</title><style>body{color:red}</style></head>\
@@ -75,8 +75,8 @@ fn html_to_text_strips_scripts_and_decodes_entities() {
     assert!(!text.contains("evil"), "script 正文不该留下：{text}");
     assert!(!text.contains("color:red"), "style 正文不该留下：{text}");
     assert!(!text.contains("hidden"), "注释不该留下：{text}");
-    // 折叠的判据：没有连续空行、没有纯空白的行 —— 块级元素之间留一个
-    // 空行是合理的排版，排版垃圾（连续空行、缩进海）才是要消灭的。
+    // The collapse criteria: no consecutive blank lines, no whitespace-only lines — one
+    // blank line between block elements is fine typography; layout garbage is the target.
     let lines: Vec<&str> = text.lines().collect();
     for pair in lines.windows(2) {
         assert!(
@@ -90,15 +90,15 @@ fn html_to_text_strips_scripts_and_decodes_entities() {
     );
 }
 
-/// 未知实体原样保留 —— 不猜。
+/// Unknown entities are kept as-is — no guessing.
 #[test]
 fn unknown_entities_pass_through() {
     assert!(html_to_text("<p>A &notanentity; B</p>").contains("&notanentity;"));
 }
 
-// ---- 本机 HTTP 服务器 -------------------------------------------------------
+// ---- Local HTTP server ------------------------------------------------------
 
-/// 起一个一次性 HTTP 服务器，返回 base URL。路由：path → (status, content-type, body, extra)。
+/// Starts a one-shot HTTP server, returns the base URL. Routing: path → (status, content-type, body, extra).
 fn spawn_server(routes: Vec<(&'static str, u16, &'static str, String, &'static str)>) -> String {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本机端口");
@@ -135,7 +135,7 @@ fn spawn_server(routes: Vec<(&'static str, u16, &'static str, String, &'static s
     format!("http://127.0.0.1:{port}")
 }
 
-/// 快乐路径：302 跟到最终页、HTML 转文本、外站声明头在前、script 不见。
+/// Happy path: follow the 302 to the final page, HTML to text, off-site banner first, no script.
 #[tokio::test]
 async fn follows_redirects_and_wraps_the_body_as_external_data() {
     let base = spawn_server(vec![
@@ -162,19 +162,19 @@ async fn follows_redirects_and_wraps_the_body_as_external_data() {
     assert!(!out.contains("alert"), "script 不该留下：{out}");
 }
 
-/// 每一跳都重新过 SSRF：重定向到内网地址，在第 2 跳被拦下。
+/// Every hop re-runs SSRF: a redirect to a private address is caught on hop 2.
 #[tokio::test]
 async fn a_redirect_to_a_private_target_is_refused() {
-    // allow_private 放行第一跳（本机），但重定向目标是 10.0.0.1 ——
-    // 就算 allow_private 也过不去？不：allow_private 会整个跳过检查。
-    // 所以这条测试用「默认姿势」抓本机不可行 —— 改为断言 check_url
-    // 对内网字面量直接拒绝（工具本体的行为由 eval 的 loopback 用例钉住）。
+    // allow_private lets hop 1 (localhost) through, but the redirect target is 10.0.0.1 —
+    // would even allow_private get through? No: allow_private skips the whole check.
+    // So catching localhost with the default posture isn't feasible this way — instead assert
+    // check_url rejects the private literal directly (the tool's behavior is pinned by the loopback case).
     let url = reqwest::Url::parse("http://10.0.0.1/x").unwrap();
     let err = check_url(&url, false).await.unwrap_err().to_string();
     assert!(err.contains("内网/保留地址"), "{err}");
 }
 
-/// 重定向死循环：到跳数上限就停，报错说明。
+/// Redirect loop: stops at the hop cap, with an explanatory error.
 #[tokio::test]
 async fn redirect_loops_stop_at_the_cap() {
     let base = spawn_server(vec![(
@@ -191,7 +191,7 @@ async fn redirect_loops_stop_at_the_cap() {
     assert!(err.contains("重定向超过"), "{err}");
 }
 
-/// HTTP 错误如实报状态码。
+/// HTTP errors report the status code honestly.
 #[tokio::test]
 async fn http_errors_are_honest() {
     let base = spawn_server(vec![("/gone", 404, "text/plain", "没了".into(), "")]);
@@ -202,7 +202,7 @@ async fn http_errors_are_honest() {
     assert!(err.contains("404"), "{err}");
 }
 
-/// 正文字符封顶：50k 处截断并提示，不静默。
+/// Body char cap: truncated at 50k with a notice, never silently.
 #[tokio::test]
 async fn the_output_is_capped_with_an_honest_marker() {
     let base = spawn_server(vec![("/long", 200, "text/plain", "字".repeat(60_000), "")]);
@@ -215,9 +215,9 @@ async fn the_output_is_capped_with_an_honest_marker() {
     );
 }
 
-// ---- 工具表集成 -------------------------------------------------------------
+// ---- Tool-registry integration ----------------------------------------------
 
-/// 默认工具表里有 fetch_url，且它**永远**过 SSRF 检查（127.0.0.1 直接拒）。
+/// fetch_url is in the default table, and it **always** passes SSRF checks (127.0.0.1 refused outright).
 #[tokio::test]
 async fn the_tool_refuses_loopback_without_the_test_knob() {
     let mut registry = ToolRegistry::new();

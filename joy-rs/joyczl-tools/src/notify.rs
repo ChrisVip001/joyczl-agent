@@ -1,25 +1,25 @@
-//! 通知器（M3a）：把「需要人看的事」推出进程。
+//! Notifier (M3a): pushes "things a human should see" out of the process.
 //!
-//! 四类事件：**审批请求**（人在屏幕外，Slack 上点不了但能知道该回来看了）、
-//! **作业收尾**（7x24 的后台命令跑完了/死了）、**目标终局**（satisfied/
-//! impossible/round-limit/blocked 都算 —— 自主循环停了就该让人知道）。
-//! 全部是**旁路**：发送失败只往 stderr 说一声，绝不拦 turn —— 与用量台账
-//! （M2d）同一条失败姿态。
+//! Event kinds: **approval requests** (the human is off-screen — they can't click Slack
+//! but should know to come back), **job completion** (a 7x24 background command finished
+//! or died), **goal endings** (satisfied/impossible/round-limit/blocked — the loop
+//! stopped, a human should know). All are **side channels**: a failed send only notes
+//! to stderr, never blocks a turn — same failure posture as the usage ledger (M2d).
 //!
-//! 接入纪律与 `ApprovalBroker`/`JobRegistry` 相同：工具层只见 trait，实现
-//! 在 app-server 装配（Slack webhook）。
+//! Integration discipline is the same as `ApprovalBroker`/`JobRegistry`: the tool layer
+//! sees only the trait; the implementation is wired in app-server (Slack webhook).
 //!
-//! 出站目标：URL 来自 `<home>/notify.json`（管理员配置）。**刻意不做**
-//! `fetch_url` 那套 SSRF 护栏 —— 那是防「模型指哪打哪」的；这里的 URL 是
-//! 管理员亲手配的，指向内网自建端点（ntfy/Gotify）是合法用法，不是攻击面。
-//!
-//! 开关：`JOY_NOTIFY=1`（默认关）—— 往外部服务发数据是用户亲手按下的决定，
-//! 与 `JOY_HOOKS`/`JOY_DELEGATE` 同一条哲学。
+//! Egress target: the URL comes from `<home>/notify.json` (admin-configured). **Deliberately
+//! no** `fetch_url`-style SSRF guardrails — those guard against "the model points, we
+//! fetch"; here the URL is hand-configured by the admin, and pointing at an intranet
+//! self-hosted endpoint (ntfy/Gotify) is legitimate use, not an attack surface.
+//! Switch: `JOY_NOTIFY=1` (off by default) — external sends are a user-pressed decision,
+//! same philosophy as `JOY_HOOKS`/`JOY_DELEGATE`.
 
 use std::path::Path;
 use std::sync::Arc;
 
-/// 需要人看的事。
+/// Things a human should see.
 #[derive(Debug, Clone)]
 pub enum NotifyEvent {
     ApprovalRequested {
@@ -47,7 +47,7 @@ pub enum NotifyEvent {
 }
 
 impl NotifyEvent {
-    /// 一句人话 —— Slack 消息的正文。
+    /// One human-readable sentence — the body of the Slack message.
     pub fn message(&self) -> String {
         match self {
             NotifyEvent::ApprovalRequested {
@@ -81,12 +81,12 @@ impl NotifyEvent {
     }
 }
 
-/// 通知器。实现**必须**不阻塞调用方（fire-and-forget）、失败只往 stderr 说。
+/// Notifier. The implementation **must not** block the caller (fire-and-forget); on failure, note to stderr.
 pub trait Notifier: Send + Sync {
     fn notify(&self, event: NotifyEvent);
 }
 
-/// Slack incoming webhook（也兼容收 `{"text": …}` JSON 的自建端点）。
+/// Slack incoming webhook (also compatible with self-hosted endpoints taking `{"text": …}` JSON).
 pub struct Slack {
     url: String,
     client: reqwest::Client,
@@ -106,7 +106,7 @@ impl Notifier for Slack {
         let text = event.message();
         let url = self.url.clone();
         let client = self.client.clone();
-        // 起一个独立 task：调用方（turn 循环、作业收尾）不等网络。
+        // Spawn a standalone task: the caller (turn loop, job completion) doesn't wait on the network.
         tokio::spawn(async move {
             let result = client
                 .post(&url)
@@ -125,10 +125,10 @@ impl Notifier for Slack {
     }
 }
 
-/// `<home>/notify.json`：`{ "slack": "https://hooks.slack.com/services/…" }`。
-/// 与 `mcp.json`/`hooks.json`/`schedules.json` 同一约定：一个 home 一份，
-/// hub 模式下天然按用户隔离。文件不在、`JOY_NOTIFY` 没开、字段空 —— 都等于
-/// 没有通知器（返回 None，静默，因为「没配」是常态不是错误）。
+/// `<home>/notify.json`: `{ "slack": "https://hooks.slack.com/services/…" }`.
+/// Same convention as `mcp.json`/`hooks.json`/`schedules.json`: one file per home,
+/// naturally per-user in hub mode. File missing, `JOY_NOTIFY` off, field empty — all
+/// mean no notifier (return None, silently: "not configured" is the norm, not an error).
 pub fn load(home: &Path, enabled: bool) -> Option<Arc<dyn Notifier>> {
     if !enabled {
         return None;

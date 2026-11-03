@@ -1,11 +1,11 @@
-//! create_event / list_events —— 日历工具。
+//! create_event / list_events — calendar tools.
 //!
-//! 事件落在哪儿，输出里必须写清楚 —— 模型会把这段话转述给用户，
-//! 所以 Joy 永远不会虚报「已同步到云端」：
-//!   永远     state.db（确定性评测断言的位置）+ calendar.ics（可导入文件）
-//!   opt-in   Apple Calendar（`JOY_APPLE_CALENDAR=1`，经 AppleScript）
-//!   未实现   Google Calendar —— Joy 还没有 OAuth 连接流程，设了开关也只会
-//!            如实说没同步。诚实的「没做」好过撒谎的「做了」。
+//! Where an event lands must be spelled out in the output — the model relays this to the
+//! user, so Joy can never falsely claim "synced to the cloud":
+//!   always    state.db (where deterministic test assertions look) + calendar.ics (importable)
+//!   opt-in    Apple Calendar (`JOY_APPLE_CALENDAR=1`, via AppleScript)
+//!   not impl  Google Calendar — Joy has no OAuth connect flow yet; the flag would only
+//!             honestly say "not synced". An honest "not done" beats a lying "done".
 
 use std::path::Path;
 use std::sync::Arc;
@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 
 use crate::{opt_u32, require_str, Tool, ToolCtx};
 
-/// 把 calendar.ics 追加一个最小 VEVENT。ISO 的 `2026-07-14T09:00` 变成
-/// ICS 的紧凑形式 `20260714T090000`。
+/// Append a minimal VEVENT to calendar.ics. ISO's `2026-07-14T09:00` becomes ICS's
+/// compact form `20260714T090000`.
 fn write_ics(
     home: &Path,
     title: &str,
@@ -25,7 +25,7 @@ fn write_ics(
     attendees: &str,
 ) -> std::io::Result<()> {
     let dt = |s: &str| {
-        // 分钟精度（16 字符，如 2026-07-14T09:00）补上秒位。
+        // Minute precision (16 chars, e.g. 2026-07-14T09:00) gets the seconds appended.
         let mut compact = s.replace(['-', ':'], "");
         if s.chars().count() == 16 {
             compact.push_str("00");
@@ -49,9 +49,9 @@ fn parse_iso(value: &str) -> Option<NaiveDateTime> {
     NaiveDateTime::parse_from_str(&value[..value.len().min(16)], "%Y-%m-%dT%H:%M").ok()
 }
 
-/// Apple Calendar 的 AppleScript 日期要从 ISO 的**各部分**拼 —— 永远不喂
-/// 格式化好的日期串（解析依赖系统 locale，是经典翻车点）。先把日设成 1
-/// 再设月/年，避开「31 号设成 30 天的月份会滚到下个月」的溢出。
+/// Apple Calendar's AppleScript date must be assembled from ISO's **parts** — never feed
+/// a preformatted date string (parsing depends on system locale, a classic failure point).
+/// Set the day to 1 first, then month/year, avoiding the "day 31 rolls into next month" overflow.
 fn applescript_date(var: &str, at: NaiveDateTime) -> String {
     format!(
         "set {var} to current date\nset day of {var} to 1\n\
@@ -68,8 +68,8 @@ fn applescript_date(var: &str, at: NaiveDateTime) -> String {
 
 const APPLE_CALENDAR_NAME: &str = "Joy";
 
-/// 写进 Calendar.app（专用的 "Joy" 日历，首次使用时创建）。macOS 弹权限框
-/// 会让 osascript 超时 —— 那时如实告诉用户：事件已在本地，批了再建一遍。
+/// Writes into Calendar.app (a dedicated "Joy" calendar, created on first use). macOS's
+/// permission dialog can time osascript out — then say honestly: it's local; approve and retry.
 async fn sync_to_apple_calendar(title: &str, start: &str, end: &str, notes: &str) -> String {
     if !cfg!(target_os = "macos") {
         return "Apple Calendar 同步跳过（不是 macOS）。".to_string();
@@ -77,7 +77,7 @@ async fn sync_to_apple_calendar(title: &str, start: &str, end: &str, notes: &str
     let (Some(start_at), Some(end_at)) = (parse_iso(start), parse_iso(end)) else {
         return "Apple Calendar 同步失败（时间格式解析不了）—— 事件仍在本地日历。".to_string();
     };
-    // AppleScript 字符串里的引号必须清掉，双引号换成单引号即可。
+    // Quotes inside the AppleScript string must be stripped; double quotes become single ones.
     let safe = |s: &str| s.replace('\\', "").replace('"', "'");
     let script = format!(
         "{start}{end}\
@@ -167,7 +167,7 @@ pub fn create_event() -> Tool {
                     .trim()
                     .to_string();
 
-                // 防御：模型有时会发半截调用。给一条能改的提示，而不是裸错误。
+                // Defense: models sometimes send half a call. Give an actionable hint, not a bare error.
                 let Some(start_at) = parse_iso(&start) else {
                     return Ok(
                         "create_event 至少需要 title 和 start（ISO 8601，如 2026-07-14T09:00）。\
@@ -175,7 +175,7 @@ pub fn create_event() -> Tool {
                             .to_string(),
                     );
                 };
-                // 统一到分钟精度：2026-07-11T17:00:00 → 2026-07-11T17:00。
+                // Normalize to minute precision: 2026-07-11T17:00:00 → 2026-07-11T17:00.
                 let start = start_at.format("%Y-%m-%dT%H:%M").to_string();
                 let end = match args.get("end").and_then(Value::as_str) {
                     Some(e) if !e.trim().is_empty() => match parse_iso(e.trim()) {
@@ -191,7 +191,7 @@ pub fn create_event() -> Tool {
                         .to_string(),
                 };
 
-                // add 的幂等性在 SQL 层：同标题 + 同开始时间只会有一条。
+                // add's idempotency lives in the SQL layer: same title + same start yields one row.
                 let stored = ctx
                     .calendar
                     .add(&title, &start, &end, &attendees, &notes)

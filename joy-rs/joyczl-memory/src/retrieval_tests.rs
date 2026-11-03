@@ -1,8 +1,8 @@
-//! 融合那部分的测试：余弦、RRF 的名次合并、以及「开关关着时与从前完全一样」。
+//! Fusion tests: cosine, RRF rank merge, and "flag off behaves exactly as before".
 //!
-//! 网络那一侧（真的去调 embedding 服务）不在这里测 —— 它失败开放的契约
-//! 由 `search_hybrid` 的 embedder 参数与 eprintln 保证，而真正的 HTTP
-//! 只在配了 embedding 模型时才发生。
+//! The network side (actually calling the embedding service) isn't tested here — its
+//! fail-open contract is guaranteed by `search_hybrid`'s embedder parameter and the
+//! eprintln; real HTTP only happens when an embedding model is configured.
 
 use joyczl_state::FactRow;
 
@@ -24,7 +24,7 @@ fn cosine_is_the_cosine() {
     assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
     assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
     assert!((cosine(&[1.0, 1.0], &[1.0, 1.0]) - 1.0).abs() < 1e-6);
-    // 退化输入当作无关，而不是报错或 NaN。
+    // Degenerate inputs count as unrelated, not errors or NaN.
     assert_eq!(cosine(&[1.0], &[1.0, 2.0]), 0.0);
     assert_eq!(cosine(&[], &[]), 0.0);
     assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
@@ -32,7 +32,7 @@ fn cosine_is_the_cosine() {
 
 #[test]
 fn rrf_favours_documents_both_legs_agree_on() {
-    // 2 号两条腿都命中；1 号只有关键词，3 号只有向量。
+    // #2 hits both legs; #1 keyword only, #3 vector only.
     let keyword = vec![row(1, "a"), row(2, "b")];
     let semantic = vec![row(2, "b"), row(3, "c")];
 
@@ -45,14 +45,14 @@ fn rrf_favours_documents_both_legs_agree_on() {
 
 #[test]
 fn rrf_is_stable_across_runs() {
-    // 同分时按 id 升序：同一个查询每次都得到同样的顺序。
+    // Ties break by ascending id: the same query always yields the same order.
     let keyword = vec![row(7, "x")];
     let semantic = vec![row(3, "y")];
     let first: Vec<i64> = rrf_fuse(&keyword, &semantic).iter().map(|r| r.id).collect();
     let second: Vec<i64> = rrf_fuse(&keyword, &semantic).iter().map(|r| r.id).collect();
     assert_eq!(first, second);
 
-    // 只有一条腿时，也是那条腿自己的顺序。
+    // With one leg only, that leg's own order stands.
     let only_keyword = rrf_fuse(&keyword, &[]);
     assert_eq!(only_keyword[0].id, 7);
 }
@@ -63,7 +63,7 @@ async fn without_an_embedder_retrieval_is_exactly_keyword() {
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     let facts = joyczl_state::Facts::new(pool);
 
     facts

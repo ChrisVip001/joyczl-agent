@@ -1,5 +1,5 @@
-//! 子代理的两条加固，端到端跑一遍：
-//! 结构化结果（校验 + 一次重试 + 回落）与「报告是转述」的包装。
+//! The subagent's two hardening measures, run end to end:
+//! structured results (validation + one retry + fallback) and the "the report is a retelling" wrapping.
 
 use std::sync::Arc;
 
@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::{run_turn, EventSink, Frame};
 
-/// 装配一个开了子代理的 Server，装上 scripted 模型。
+/// Assemble a Server with the subagent enabled, fitted with the scripted model.
 async fn server_with(
     responses: Vec<joyczl_provider::CreateResponse>,
 ) -> (crate::Server, tempfile::TempDir) {
@@ -34,7 +34,7 @@ async fn server_with(
     (server, dir)
 }
 
-/// 跑一轮，返回（工具输出, 最终回复）。
+/// Run one turn, returning (tool output, final reply).
 async fn collect(server: &crate::Server, message: &str) -> (String, String) {
     let (sink, mut rx) = EventSink::channel();
     run_turn(
@@ -69,9 +69,9 @@ async fn collect(server: &crate::Server, message: &str) -> (String, String) {
 #[tokio::test]
 async fn a_structured_result_is_validated_and_retried_once() {
     let (server, _dir) = server_with(vec![
-        // 检索门
+        // Retrieval gate
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "delegate"}"#),
-        // 父轮：派活，并要结构化结论
+        // Parent turn: delegate the task and ask for a structured conclusion
         Mock::tool_use(
             "call-1",
             "delegate_task",
@@ -84,11 +84,11 @@ async fn a_structured_result_is_validated_and_retried_once() {
                 }
             }),
         ),
-        // 子代理第一次：散文（不合规）
+        // Subagent first attempt: prose (non-compliant)
         Mock::text("我觉得是四吧。"),
-        // 子代理第二次（带报错重试）：合规 JSON
+        // Subagent second attempt (retry with the error attached): compliant JSON
         Mock::text(r#"{"answer": 4}"#),
-        // 父轮收尾
+        // Parent turn wind-down
         Mock::text("子代理说答案是 4。"),
     ])
     .await;
@@ -126,8 +126,8 @@ async fn a_structured_result_falls_back_to_prose_after_two_failures() {
                 }
             }),
         ),
-        Mock::text("四。"),     // 第一次：不是 JSON
-        Mock::text("还是四。"), // 第二次：仍不合规
+        Mock::text("四。"),     // First attempt: not JSON
+        Mock::text("还是四。"), // Second attempt: still non-compliant
         Mock::text("它说是四。"),
     ])
     .await;

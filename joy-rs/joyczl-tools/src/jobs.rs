@@ -1,37 +1,37 @@
-//! 后台作业：长命令不该占着整轮对话。
+//! Background jobs: a long command shouldn't hold a whole conversation turn.
 //!
-//! 一条 `cargo test` 要跑三分钟。前台 `run_command` 会把这三分种**堵在回合里**——
-//! 用户看着一个不动的界面，上下文里也没有任何别的东西产生。后台作业把这两件事
-//! 分开：命令在一个独立进程里跑，输出进一个有界的环，模型想看了就来读一截。
+//! A `cargo test` takes three minutes. Foreground `run_command` would **block the turn**:
+//! a frozen UI, and nothing else entering the context. Background jobs split the two: the
+//! command runs in its own process, output goes into a bounded ring the model reads on demand.
 //!
-//! 三条规矩：
+//! Three rules:
 //!
-//! * **授权靠 owner 围栏，不靠 id 保密**：job id 是可预测
-//!   的短字符串，但只有**起它的那个会话**能读、能停。别的会话拿到 id 也没用。
-//! * **输出是有界的环**：溢出丢最旧的字节，读的时候**如实说丢了多少**，而不是
-//!   报错。一个跑飞的命令不该把内存吃光，也不该让「读一次」变成失败。
-//! * **闸门与前台同一条**：后台命令照样过 vet 与批准（见 exec.rs 的 `pass_gate`）
-//!   —— 「先放后台再慢慢跑」正是绕过批准最自然的方式。
+//! * **Authorization via the owner fence, not id secrecy**: a job id is a predictable short
+//!   string, but only **the spawning session** can read or stop it; another session gets nothing.
+//! * **Output is a bounded ring**: overflow drops the oldest bytes; reads **honestly report
+//!   how much was lost** instead of erroring — a runaway command must not eat memory or fail reads.
+//! * **Same gate as foreground**: background commands still pass vet and approval (exec.rs's
+//!   `pass_gate`) — "background it and run at leisure" is the most natural way to bypass approval.
 //!
-//! 生命周期：作业随 Joy 进程生死。进程没了，子进程也收（`kill_on_drop`），所以
-//! 「重启后继续」这件事在这里没有意义 —— 它不是守卫进程，是这一趟的助手。
+//! Lifecycle: jobs live and die with the Joy process; children are reaped (`kill_on_drop`),
+//! so "resume after restart" is meaningless here — not a daemon, just this run's helper.
 
 use serde_json::{json, Value};
 
 use crate::Tool;
 
-/// job 的 id（可预测的短字符串，见模块文档）。
+/// A job's id (a predictable short string; see module docs).
 pub type JobId = String;
 
-/// 读一截输出。
+/// A read of output.
 #[derive(Debug, Clone)]
 pub struct JobRead {
-    /// 从 `cursor` 开始的新输出。
+    /// New output starting from `cursor`.
     pub text: String,
-    /// 下次该传进来的位置。
+    /// Where to resume next time.
     pub cursor: u64,
     pub running: bool,
-    /// 环溢出过：`dropped` 说的那些字节已经读不到了。
+    /// The ring overflowed: the bytes `dropped` mentions are gone.
     pub lossy: bool,
     pub dropped: u64,
     pub exit_code: Option<i32>,
@@ -46,20 +46,20 @@ pub struct JobSummary {
     pub bytes: u64,
 }
 
-/// 后台作业的宿主能力。工具层只知道这个 trait，实现（进程 + 环 + 落盘）在
-/// app-server —— 与 `SubagentRunner`、`ApprovalBroker` 同一条注入纪律。
+/// The host capability for background jobs. The tool layer knows only this trait; the
+/// implementation (process + ring + spill) lives in app-server — same discipline as `SubagentRunner`.
 pub type JobFut<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
 
 pub trait JobRegistry: Send + Sync {
-    /// 起一个作业。`owner` 是会话名（授权围栏）；`cwd` 与前台 `run_command`
-    /// 的 `cwd` 同义（沙箱的可写根从它算起）。
+    /// Spawn a job. `owner` is the session name (the authorization fence); `cwd` means the
+    /// same as foreground `run_command`'s `cwd` (writable roots are computed from it).
     fn spawn(
         &self,
         owner: &str,
         command: &str,
         cwd: Option<String>,
     ) -> JobFut<Result<JobId, String>>;
-    /// 读一截。`wait` 为真时有界地等一会儿（等出结果或等到上限）。
+    /// Read a slice. With `wait` true, wait a bounded while (until a result or the cap).
     fn output(
         &self,
         owner: &str,
@@ -67,18 +67,18 @@ pub trait JobRegistry: Send + Sync {
         cursor: u64,
         wait: bool,
     ) -> JobFut<Result<JobRead, String>>;
-    /// 停掉它。返回「本来还在跑吗」。
+    /// Stop it. Returns "was it still running".
     fn kill(&self, owner: &str, id: &JobId) -> JobFut<Result<bool, String>>;
-    /// 这个会话自己的作业（别人的不列）。
+    /// This session's own jobs (nobody else's).
     fn list(&self, owner: &str) -> Vec<JobSummary>;
 }
 
-/// 没有作业宿主时给模型的答复（默认情况下后台能力是关的）。
+/// The answer to the model when no job host is present (background is off by default).
 fn no_registry() -> String {
     "Error: 这台机器上没有开启后台作业（它跟着 run_command 一起开关：JOY_EXEC=1）。".to_string()
 }
 
-/// `job_output`：读一截输出。读完要接着读就带上上次给的 `cursor`。
+/// `job_output`: read a slice of output. To continue reading, pass back the `cursor` you got.
 pub fn job_output(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     Tool {
         name: "job_output".to_string(),
@@ -118,7 +118,7 @@ pub fn job_output(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     }
 }
 
-/// `job_list`：这个会话起了哪些作业。
+/// `job_list`: which jobs this session spawned.
 pub fn job_list(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     Tool {
         name: "job_list".to_string(),
@@ -153,7 +153,7 @@ pub fn job_list(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     }
 }
 
-/// `job_kill`：停掉它。
+/// `job_kill`: stop it.
 pub fn job_kill(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     Tool {
         name: "job_kill".to_string(),
@@ -182,7 +182,7 @@ pub fn job_kill(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     }
 }
 
-/// 把一截输出渲染成给模型看的文本。
+/// Render a slice of output into text for the model.
 fn render(read: &JobRead) -> String {
     let mut out = String::new();
     if read.lossy {

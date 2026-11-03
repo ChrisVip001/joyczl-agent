@@ -1,7 +1,7 @@
-//! gate 与 consolidation 的测试。
+//! Tests for gate and consolidation.
 //!
-//! 全部用 joyczl_provider::mock::Mock —— 模型说什么完全由测试决定，
-//! 所以「失败开放」这类约定可以被精确断言。
+//! All use joyczl_provider::mock::Mock — what the model says is fully test-decided,
+//! so conventions like "fail-open" can be asserted exactly.
 
 use joyczl_provider::mock::Mock;
 use joyczl_provider::ProviderError;
@@ -17,7 +17,7 @@ async fn stores() -> (Facts, Episodes, Chat) {
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     (
         Facts::new(pool.clone()),
         Episodes::new(pool.clone()),
@@ -77,7 +77,7 @@ async fn gate_fails_open_on_model_error() {
 
 #[tokio::test]
 async fn gate_fails_open_when_model_only_thinks() {
-    // 推理模型有时只输出思考、没有 JSON —— 不是错误，但也没答案。
+    // Reasoning models sometimes emit only thinking, no JSON — not an error, but no answer.
     let mock = Mock::new(vec![Mock::text("让我想想……这是一个关于日程的问题。")]);
     let d = should_retrieve(&mock, "small", "我什么时候和阿明开会").await;
     assert!(d.retrieve);
@@ -86,7 +86,7 @@ async fn gate_fails_open_when_model_only_thinks() {
 
 #[tokio::test]
 async fn gate_tolerates_prose_around_the_json() {
-    // 推理模型常在 JSON 前后加说明。
+    // Reasoning models often add prose around the JSON.
     let mock = Mock::new(vec![Mock::text(
         "好的，判断如下：\n{\"retrieve\": true, \"query\": \"alex\", \"reason\": \"person\"}\n以上。",
     )]);
@@ -102,7 +102,7 @@ fn extract_json_picks_the_braces() {
         Some("{\"a\":1}")
     );
     assert_eq!(extract_json("没有括号"), None);
-    // 嵌套取最外层
+    // nested: take the outermost
     assert_eq!(
         extract_json("{\"a\":{\"b\":2}}").as_deref(),
         Some("{\"a\":{\"b\":2}}")
@@ -198,7 +198,7 @@ async fn consolidation_distills_facts_and_marks_rows() {
     assert_eq!(eps.len(), 1);
 }
 
-/// 提炼出来的临时陈述不落库，真事实照落 —— 两者在同一个应答里也要分得清。
+/// Distilled temporary statements don't persist; real facts do — told apart within one reply.
 #[tokio::test]
 async fn consolidation_drops_temporary_statements_but_keeps_facts() {
     let (facts, episodes, chat) = stores().await;
@@ -240,24 +240,24 @@ async fn consolidation_failure_keeps_the_log() {
         .unwrap();
     }
 
-    // 模型回了一段没有 JSON 的话。
+    // The model replied with prose containing no JSON.
     let mock = Mock::new(vec![Mock::text("我觉得这段对话没什么值得记的。")]);
     let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 6)
         .await
         .unwrap();
     assert_eq!(written, 0);
-    // 失败之后**退避**：这批行还在（一行都不丢），但已经排到未来，所以
-    // 「马上再试一次」捞不到它们 —— 同一批坏行不该每轮都被重试一遍。
+    // After failure, **backoff**: the rows remain (none lost) but are scheduled for
+    // the future, so an immediate retry finds nothing — bad rows must not retry each turn.
     assert_eq!(
         chat.unconsolidated().await.unwrap().len(),
         0,
         "失败过的行要退避，不能立刻又捞出来"
     );
-    // 行本身留在库里，没有被标记成已提炼。
+    // The rows stay in the store, not marked consolidated.
     let log = chat.session_history("default").await.unwrap();
     assert_eq!(log.len(), 6, "日志一行都不能丢");
 
-    // 空的 subject / content 也不该写进去。
+    // Empty subject / content must not be written either.
     let mock = Mock::new(vec![Mock::text(
         r#"{"facts": [{"subject": "", "content": "x"}, {"subject": "a", "content": ""}]}"#,
     )]);
@@ -270,7 +270,7 @@ async fn consolidation_failure_keeps_the_log() {
 
 #[tokio::test]
 async fn gate_prompt_carries_the_message() {
-    // 门的关键是「把用户消息带给模型」—— 忘了拼进去的话，门只会瞎判。
+    // The gate's key is "pass the user message to the model" — forget it and the gate guesses blindly.
     let mock = Mock::new(vec![Mock::text(
         r#"{"retrieve": true, "query": "q", "reason": "r"}"#,
     )]);
@@ -279,23 +279,23 @@ async fn gate_prompt_carries_the_message() {
     assert!(sent.contains("阿明喜欢什么"), "用户消息没进 prompt：{sent}");
 }
 
-// ---- consolidation 的临时陈述过滤 -------------------------------------------
+// ---- consolidation's temporary-statement filter ---------------------------------------------
 
 #[test]
 fn temporary_statements_are_kept_out_of_long_term_memory() {
     use super::consolidation::temporary_marker;
-    // 中英两种标记都认。
+    // Both Chinese and English markers are recognized.
     assert!(temporary_marker("这次会话先用这个方案").is_some());
     assert!(temporary_marker("We will use this path for now").is_some());
     assert!(temporary_marker("暂时把会议挪到下午").is_some());
-    // 真事实不该误伤。
+    // Real facts must not be caught in the filter.
     assert!(temporary_marker("Alex 喜欢早上的会议").is_none());
     assert!(temporary_marker("The release is on October 15").is_none());
-    // 大小写不敏感。
+    // Case-insensitive.
     assert!(temporary_marker("FOR NOW keep it simple").is_some());
 }
 
-// ---- skills：策略元数据与显式引用 --------------------------------------------
+// ---- skills: policy metadata and explicit references ------------------------------------------
 
 #[test]
 fn a_skill_can_opt_out_of_implicit_invocation_and_be_summoned_by_name() {
@@ -310,7 +310,7 @@ fn a_skill_can_opt_out_of_implicit_invocation_and_be_summoned_by_name() {
     .unwrap();
 
     let mut loader = SkillLoader::new(SkillLoader::dirs_for(&home));
-    // 关键词明明重合（quarterly / roadmap / review）：隐式触发仍然不碰它。
+    // Keywords clearly overlap (quarterly / roadmap / review): implicit triggering still leaves it alone.
     let implicit = loader.hits("help me plan the quarterly roadmap review");
     assert!(
         implicit.section.is_empty(),
@@ -318,7 +318,7 @@ fn a_skill_can_opt_out_of_implicit_invocation_and_be_summoned_by_name() {
         implicit.section
     );
 
-    // 显式引用（`$名字`）强制载入正文，并且把引用本身从消息里剥掉。
+    // An explicit reference (`$name`) force-loads the body and strips the reference from the message.
     let explicit = loader.hits("$weekly-review 帮我看看这周");
     assert!(
         explicit.section.contains("只走显式引用。"),
@@ -367,7 +367,7 @@ fn a_skill_with_a_missing_dependency_does_not_fire_implicitly() {
         hits.section
     );
 
-    // 缺哪个要说出来（启动时打一行日志用的就是这个）。
+    // Say which one is missing (the startup log line uses exactly this).
     let dangling = loader.dangling_dependencies();
     assert_eq!(dangling.len(), 1);
     assert_eq!(dangling[0].0, "deploy");
@@ -396,10 +396,10 @@ fn skill_frontmatter_must_carry_name_and_description() {
     assert!(skill.description.contains("Monday brief"));
     assert!(skill.body.starts_with("1. Pull"), "{:?}", skill.body);
 
-    // 没有 frontmatter / 缺字段都不算技能。
+    // No frontmatter / missing fields → not a skill.
     assert!(parse_skill_text("没有 frontmatter 的普通 markdown").is_none());
     assert!(parse_skill_text("---\nname: x\n---\nbody").is_none());
-    // 引号包起来的值也认。
+    // Quoted values are accepted too.
     let skill = parse_skill_text("---\nname: 'a'\ndescription: \"b\"\n---\nx\n").unwrap();
     assert_eq!(
         (skill.name.as_str(), skill.description.as_str()),
@@ -416,13 +416,13 @@ fn trigger_is_transparent_keyword_overlap() {
 
     let mut loader = SkillLoader::new(vec![skills]);
 
-    // 「weekly」「review」「brief」三个词重合 —— 远超 2 的门槛。
+    // "weekly" "review" "brief" all overlap — far past the threshold of 2.
     let hit = loader
         .hits("help me do the weekly review of my inbox")
         .section;
     assert!(hit.contains("Pull last week's episodes"), "{hit}");
 
-    // 不相关的消息：一个正文都进不来（渐进披露的全部意义）。
+    // An unrelated message: not one body gets in (the whole point of progressive disclosure).
     let miss = loader.hits("2+2 等于几").section;
     assert!(miss.is_empty(), "不该触发：{miss}");
 }
@@ -434,7 +434,7 @@ fn a_skill_created_mid_session_is_live_next_match() {
     let mut loader = SkillLoader::new(vec![skills.clone()]);
     assert!(loader.hits("plan the quarterly roadmap").section.is_empty());
 
-    // 会话中途写进来一个技能（create_skill 干的事）。
+    // A skill written mid-session (what create_skill does).
     std::fs::create_dir_all(skills.join("roadmap-planning")).unwrap();
     std::fs::write(
         skills.join("roadmap-planning").join("SKILL.md"),
@@ -469,20 +469,20 @@ async fn memory_mirror_lands_as_markdown() {
     assert!(text.contains("state.db"), "要说清事实来源在哪儿：{text}");
 }
 
-// ---- 并发：认领（claim）---------------------------------------------------
+// ---- concurrency: claim ---------------------------------------------------------------------
 
-/// 两个并发 turn 同时判定「到期」：**只有一个赢家**，小模型只被调用一次。
+/// Two concurrent turns both decide "due": **one winner only**, the small model called once.
 ///
-/// 认领之前这里是 read-then-act（读一批 → 慢慢提炼 → 再标记）：两边都看到
-/// 「够了」，于是同一批日志被提炼两遍 —— 白烧一次模型调用。现在输的那个拿到
-/// 空列表，**连模型都不调**。
+/// Before claiming this was read-then-act (read a batch → distill at leisure → mark):
+/// both sides saw "enough", so the same log was distilled twice — one wasted model
+/// call. Now the loser gets an empty list and **never calls the model**.
 ///
-/// 这条测试同时钉住两件事：事实只写一份（`written` 加起来是 1），以及模型
-/// 只被叫了一次（`received` 的长度）—— 后者才是这次改动的目的。
+/// This test pins two things: facts written once (`written` sums to 1), and the model
+/// called once (the length of `received`) — the latter is what this change was for.
 #[tokio::test]
 async fn two_concurrent_consolidations_only_run_the_model_once() {
     let (facts, episodes, chat) = stores().await;
-    // 攒够一轮（`every_n = 1` → 需要 2 行 = 一轮 user/assistant）。
+    // One turn accrued (`every_n = 1` → needs 2 rows = one user/assistant turn).
     chat.append_exchange("alex 喜欢早上的会议", "记下了", "default", "cli", None)
         .await
         .unwrap();
@@ -507,15 +507,15 @@ async fn two_concurrent_consolidations_only_run_the_model_once() {
     );
 }
 
-/// 认领之后提炼失败：认领要**还回去**（`consolidated` 回到 0），日志不能停在
-/// 「已提炼」却什么都没写进去 —— 那是真的丢数据。
+/// Distillation fails after claiming: the claim must be **returned** (`consolidated`
+/// back to 0); the log must not sit at "consolidated" with nothing written — real loss.
 #[tokio::test]
 async fn a_failed_consolidation_releases_its_claim() {
     let dir = tempfile::tempdir().expect("临时目录");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm
+    let _ = dir.keep(); // sqlite still writes -wal/-shm
     let facts = Facts::new(pool.clone());
     let episodes = Episodes::new(pool.clone());
     let chat = Chat::new(pool.clone());
@@ -523,15 +523,15 @@ async fn a_failed_consolidation_releases_its_claim() {
         .await
         .unwrap();
 
-    // 模型直接挂掉 —— 三条失败路径之一（另两个是没 JSON、JSON 不合法）。
+    // The model just dies — one of three failure paths (the others: no JSON, invalid JSON).
     let mock = Mock::with_outcomes(vec![Err(ProviderError::Api("模型挂了".to_string()))]);
     let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1)
         .await
         .unwrap();
     assert_eq!(written, 0, "没写进任何事实");
 
-    // 认领被还回去了：两行的标志位回到 0。`consolidation_next_at` 同时被推到
-    // 1 分钟后，所以 `unconsolidated()` 此刻是空的 —— 标志位才是判据。
+    // The claim was returned: both rows' flags are back to 0. `consolidation_next_at`
+    // is also pushed 1 minute out, so `unconsolidated()` is empty now — the flag decides.
     let still_pending: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM chat_log WHERE consolidated = 0")
             .fetch_one(&pool)
@@ -545,11 +545,12 @@ async fn a_failed_consolidation_releases_its_claim() {
     );
 }
 
-/// 仓库自带的示例技能（`skills/video-transcription/SKILL.md`）能被解析器接受，
-/// 且关键纪律写进了正文：先转成文字、不假装看过、字幕是外部内容。
+/// The repo's bundled example skill (`skills/video-transcription/SKILL.md`) passes the
+/// parser, and its key disciplines are in the body: transcribe to text first, never
+/// pretend to have watched, subtitles are external content.
 ///
-/// 这条测试同时是 SKILL.md 格式的活文档 —— 改坏 frontmatter（比如少了
-/// description）会让它红。
+/// This test is also living documentation of the SKILL.md format — breaking the
+/// frontmatter (say, dropping description) turns it red.
 #[test]
 fn the_bundled_video_skill_parses_and_carries_the_discipline() {
     let path = concat!(
@@ -578,9 +579,9 @@ fn the_bundled_video_skill_parses_and_carries_the_discipline() {
     }
 }
 
-/// Windows 上编辑的技能文件是 CRLF —— 解析器必须容忍。CI 的 Windows job
-/// 实测抓到过：git 在 Windows checkout 出 CRLF，硬匹配 LF 前缀让技能整个
-/// 解析失败。
+/// Skill files edited on Windows are CRLF — the parser must tolerate them. A CI
+/// Windows job caught this in practice: git checks out CRLF on Windows, and hard-
+/// matching LF prefixes made the whole skill fail to parse.
 #[test]
 fn a_crlf_skill_file_still_parses() {
     let text = "---

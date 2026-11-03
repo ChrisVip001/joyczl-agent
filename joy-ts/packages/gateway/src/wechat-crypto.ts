@@ -6,43 +6,43 @@ import {
 } from "node:crypto";
 
 /**
- * 微信消息的加解密与签名。
+ * WeChat message encryption, decryption, and signatures.
  *
- * 单独一个文件、而且全是纯函数，因为它是最不能「差不多就行」的一段：
- * 差一个字节微信那头就是静默不理你 —— 它不会回一句「你补齐错了」，
- * 只会超时，或者报一句什么信息都没有的错。所以这里不掺 HTTP、不掺业务，
- * 一进一出，测起来不用起服务器。
+ * A separate file of pure functions, because this is the least tolerant of "close enough":
+ * one byte off and WeChat silently ignores you — it never says "your padding is wrong", it just
+ * times out or errors with no information. So no HTTP, no business logic in here: one input,
+ * one output, testable without starting a server.
  */
 
 /**
- * 微信的补齐按 **32 字节** 一块，不是 AES 自带的 16。
+ * WeChat pads in **32-byte** blocks, not AES's built-in 16.
  *
- * 这条最容易被「标准 PKCS#7」带偏：密文照样能解出来、内容也对，只是末尾
- * 多几个或少几个字节 —— 而微信看到的结果就是「验签不过」。
+ * This is the easiest one to get led astray by "standard PKCS#7": the ciphertext still decrypts,
+ * the content is right, just a few bytes off at the tail — and what WeChat sees is "signature check failed".
  */
 const BLOCK = 32;
 
 /**
- * 签名：`SHA1(按字典序排序后直接拼接)`。
+ * Signature: `SHA1(sorted lexicographically, concatenated directly)`.
  *
- * 入站明文用 `signature`，入站加密用 `msg_signature`（多带一个 `Encrypt`），
- * 回包用 `MsgSignature` —— 同一条规矩，只是排序的元素不同，所以只写一份，
- * 由调用方决定传几个。
+ * Inbound plaintext uses `signature`, inbound encrypted uses `msg_signature` (plus an `Encrypt`),
+ * the reply uses `MsgSignature` — the same rule with different elements to sort, so it's written
+ * once and callers decide how many parts to pass.
  */
 export function signatureOf(...parts: string[]): string {
   return createHash("sha1").update([...parts].sort().join("")).digest("hex");
 }
 
-/** `EncodingAESKey`（43 位）→ 32 字节的 `AESKey`。 */
+/** `EncodingAESKey` (43 chars) → the 32-byte `AESKey`. */
 export function aesKeyOf(encodingAesKey: string): Buffer {
   const key = Buffer.from(`${encodingAesKey}=`, "base64");
   if (key.length !== 32) {
-    // `Buffer.from` 遇到不合法的 base64 是**默默丢掉**而不是报错，所以长度
-    // 检查是唯一的防线。位数差得远的时候症状会一路飘到「验签不过」，而这里
-    // 是唯一说得出原因的地方。
+    // `Buffer.from` **silently drops** invalid base64 instead of erroring, so the length check
+    // is the only line of defense. When the length is far off, the symptom drifts all the way to
+    // "signature check failed", and this is the only place that can name a cause.
     //
-    // 但它管不全：少一位的 42 个字符也能解出 32 字节（40 个给 30，多出的 3 个
-    // 给 2），那种错只能等解密之后那条 appid 校验兜住。
+    // But it doesn't catch everything: a 42-char (one short) input also yields 32 bytes (40 give
+    // 30, the extra 3 give 2) — that error can only be caught by the appid check after decryption.
     throw new Error(
       `EncodingAESKey 解出来是 ${key.length} 字节，应该是 32 —— 多半是复制的时候没弄干净（它应该是 43 个字符）。`,
     );
@@ -55,18 +55,18 @@ export interface WeChatCryptoOptions {
   appId: string;
 }
 
-/** 按微信的规矩补齐到 32 的整数倍（正好整除时补满一整块）。 */
+/** Pad to a multiple of 32 per WeChat's rule (a full block even when already aligned). */
 function pad(data: Buffer): Buffer {
   const size = BLOCK - (data.length % BLOCK);
   return Buffer.concat([data, Buffer.alloc(size, size)]);
 }
 
 /**
- * 加密成微信要的那串 Base64。
+ * Encrypt into the Base64 string WeChat expects.
  *
- * 明文结构是 `random(16) + msg_len(4, 网络序) + msg + appid`：那 16 字节
- * 随机数是微信要求的（同样的回复不能每次都密文一样），长度字段是**网络序**，
- * 后面的 appid 是给收方校验「这条确实是发给我的」用的。
+ * Plaintext layout: `random(16) + msg_len(4, network order) + msg + appid`. The 16 random bytes
+ * are WeChat's requirement (the same reply must not encrypt identically every time), the length
+ * field is **network order**, and the trailing appid lets the receiver verify "this was for me".
  */
 export function encryptMessage(
   message: string,
@@ -82,16 +82,16 @@ export function encryptMessage(
     Buffer.concat([head, body, Buffer.from(options.appId, "utf8")]),
   );
   const cipher = createCipheriv("aes-256-cbc", key, key.subarray(0, 16));
-  // 自己补齐了，就别让 node 再按 16 字节补一遍 —— 那会多出一整块，
-  // 微信那边就成了「解密出来尾巴上有垃圾」。
+  // We padded ourselves; don't let node pad again in 16-byte blocks — that adds a whole block
+  // and WeChat sees "garbage at the end of the decrypted output".
   cipher.setAutoPadding(false);
   return Buffer.concat([cipher.update(full), cipher.final()]).toString("base64");
 }
 
 /**
- * 解回来。**末尾的 appid 是要校验的**，不是解出来就完事 —— 校验这一步
- * 是「这条消息确实发给这个公众号」的唯一证据，跳过它等于把密钥对不对
- * 这件事交给运气。
+ * Decrypt back. **The trailing appid must be verified** — decrypting isn't the end. That check
+ * is the only evidence "this message was really sent to this account"; skipping it leaves the
+ * question "is the key right" to luck.
  */
 export function decryptMessage(
   encrypted: string,
@@ -106,7 +106,7 @@ export function decryptMessage(
     decipher.final(),
   ]);
 
-  // 补齐的字节数就写在最后一个字节上。
+  // The pad length is written in the last byte itself.
   const size = plain.readUInt8(plain.length - 1);
   const full = plain.subarray(0, plain.length - size);
   const length = full.readUInt32BE(16);

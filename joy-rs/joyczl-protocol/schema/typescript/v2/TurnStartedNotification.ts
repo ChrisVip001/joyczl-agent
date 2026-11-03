@@ -5,7 +5,7 @@ export type TurnStartedNotification = {
   sessionId: string;
   userMessage: string;
   /**
-   * ISO 8601，毫秒精度。
+   * ISO 8601, millisecond precision.
    */
   ts: string;
 };

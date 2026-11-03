@@ -4,13 +4,13 @@ export type TurnStartParams = {
   sessionId?: string | null;
   message: string;
   /**
-   * 是否逐 token 推送 `textDelta`。dashboard 开着，脚本调用关着。
+   * Whether to stream `textDelta` token by token. On for the dashboard, off for scripts.
    */
   stream?: boolean | null;
   /**
-   * 本轮的工作目录（逐轮覆盖语义）：
-   * 必须是已存在的绝对路径（fail-closed 准入）；exec 的相对命令与
-   * read_file/list_dir 的相对路径都按它解析。缺省 = 进程 cwd（旧行为）。
+   * Working directory for this turn (per-turn override semantics):
+   * must be an existing absolute path (fail-closed admission); relative exec commands
+   * and relative read_file/list_dir paths resolve against it. Default = process cwd (old behavior).
    */
   cwd?: string | null;
 };

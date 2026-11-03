@@ -1,15 +1,15 @@
-//! app-server 的客户端：起一个子进程，走 stdio 上的换行分隔 JSON-RPC。
+//! Client of the app-server: spawn a subprocess, speak newline-delimited JSON-RPC over stdio.
 //!
-//! 这一层刻意做得很薄 —— 协议本身已经说清了一切，客户端只剩下三件事：
+//! This layer is deliberately thin — the protocol says it all; the client has three jobs:
 //!
-//!   1. 给每条请求配一个 id，把「等待应答的人」记在表里；
-//!   2. 读 stdout 的每一行，是应答就交给等在表里的那个人，
-//!      是通知就播给它该去的地方（驾驶舱的 SSE）；
-//!   3. 进程走了就把表里所有人叫醒，别让他们等到 HTTP 超时。
+//!   1. Give each request an id and record "who is waiting for the answer" in a table;
+//!   2. Read every line of stdout: hand answers to whoever waits in the table, and
+//!      broadcast notifications where they belong (the dashboard's SSE);
+//!   3. When the process dies, wake everyone in the table; don't let them wait for timeouts.
 //!
-//! **失败一律原样传回去**：`ErrorObject` 是 app-server 说的话，这里不加工。
-//! 「模型还没配好：缺 API key，往 .env 里加…」这种句子，换成一句
-//! 「dashboard 请求失败」就把唯一有用的信息扔了。
+//! **Failures are passed back verbatim**: the `ErrorObject` is what app-server said; no
+//! rewording here. A sentence like "model not configured: missing API key, add it to .env…"
+//! carries the only useful information; "dashboard request failed" would throw it away.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,25 +28,25 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::process::{Child, Command};
 use tokio::sync::{broadcast, oneshot, Mutex as AsyncMutex};
 
-/// 还没被读走的通知最多攒多少条。一小时的对话也够用；真满了说明订阅者
-/// （某个卡住的浏览器标签页）已经不看了，那时丢掉旧的通知是对的。
+/// How many not-yet-consumed notifications may pile up. Enough for an hour-long chat; if
+/// it truly fills, a subscriber (some stuck browser tab) has stopped looking — drop old ones.
 const EVENT_BUFFER: usize = 256;
 
-/// 读 stdout 的循环和发请求的一方共享的东西。
+/// What the stdout read loop and the request senders share.
 ///
-/// `Mutex`（std 的、不是 tokio 的）：这两处都只是插一下 / 取一下，没有
-/// await 夹在中间，用异步锁反而会把「同一时刻只有一个 writer」这件事变复杂。
+/// `Mutex` (std's, not tokio's): both sides only insert / take, with no await in between;
+/// an async lock would only complicate "one writer at a time".
 struct Shared {
     pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<Value, ErrorObject>>>>,
     events: broadcast::Sender<ServerNotification>,
 }
 
-/// 一个跑着的 app-server，外加跟它说话的两根管子。
+/// A running app-server, plus the two pipes for talking to it.
 pub struct AppServer {
-    /// 子进程。测试里是 `None` —— 那时两条管子接的是内存里的假服务端。
+    /// Child process. `None` in tests — the pipes then connect to an in-memory fake server.
     ///
-    /// 字段留着不只是为了 drop 时杀进程：`kill_on_drop` 是给
-    /// `joy dashboard` 按 Ctrl-C 之后不留孤儿进程用的。
+    /// The field stays not only to kill the process on drop: `kill_on_drop` is so that
+    /// Ctrl-C on `joy dashboard` leaves no orphan processes behind.
     _process: Option<Child>,
     stdin: AsyncMutex<Box<dyn AsyncWrite + Unpin + Send>>,
     shared: Arc<Shared>,
@@ -54,24 +54,24 @@ pub struct AppServer {
 }
 
 impl AppServer {
-    /// 起一个 app-server 子进程。
+    /// Spawn an app-server subprocess.
     ///
-    /// 二进制是 `joy` 自己（`current_exe()`）：`joy dashboard` 和
-    /// `joy app-server` 本来就是同一个可执行文件的子命令，fork 自己比去
-    /// PATH 里找一个同名二进制可靠 —— 后者可能是另一个版本，甚至不存在。
+    /// The binary is `joy` itself (`current_exe()`): `joy dashboard` and `joy app-server`
+    /// are subcommands of the same executable; forking yourself is more reliable than
+    /// searching PATH for a same-named binary — that one may be another version, or absent.
     pub fn spawn(home: &Path) -> Result<Self> {
         let exe = std::env::current_exe().context("拿不到自己的可执行文件路径")?;
         let mut command = Command::new(exe);
         command
             .arg("app-server")
-            // JOY_HOME 显式传下去：驾驶舱页面上写着「记忆在哪」，
-            // 子进程必须读同一份，否则页面显示的是另一个 home 的记忆 ——
-            // 「我的记忆怎么没了」这种问题最难查。
+            // JOY_HOME is passed down explicitly: the dashboard page shows "where memory
+            // is", and the child must read the same copy, or the page shows another home's
+            // memory — "where did my memory go" is the hardest class of bug to trace.
             .env("JOY_HOME", home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // 子进程的日志直接落到我们的 stderr。stdout 是协议通道，
-            // 一行日志混进去就是一帧读不懂的 JSON。
+            // The child's logs go straight to our stderr. stdout is the protocol channel;
+            // one log line mixed in would be a frame of unreadable JSON.
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
 
@@ -81,7 +81,7 @@ impl AppServer {
         Ok(Self::attach(Some(child), stdout, stdin))
     }
 
-    /// 接上两条管子。真实路径和测试路径的区别只有「有没有子进程」。
+    /// Attach the two pipes. Real and test paths differ only in "is there a child process".
     fn attach(
         process: Option<Child>,
         reader: impl AsyncRead + Unpin + Send + 'static,
@@ -100,7 +100,7 @@ impl AppServer {
         }
     }
 
-    /// 发一条请求，等它的应答。
+    /// Send a request and wait for its answer.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, ErrorObject> {
         let id = RequestId::Number(self.next_id.fetch_add(1, Ordering::Relaxed));
         let (tx, rx) = oneshot::channel();
@@ -117,19 +117,19 @@ impl AppServer {
         line.push('\n');
 
         if let Err(error) = self.write(line.as_bytes()).await {
-            // 没写出去就撤掉那一行，否则它会一直挂在表里等一个永远不来的应答。
+            // If the write failed, remove the entry, or it waits forever for an absent answer.
             self.pending().remove(&id);
             return Err(transport(&format!("往 app-server 写请求失败：{error}")));
         }
 
         match rx.await {
             Ok(result) => result,
-            // 发送端没了，只有一种可能：读循环在叫醒我之前就退出了（连接断了）。
+            // Sender gone: only one possibility — the read loop exited before waking me (lost link).
             Err(_) => Err(transport("app-server 走了，没等到应答")),
         }
     }
 
-    /// 同 `call`，但把应答解成具体类型。
+    /// Same as `call`, but deserializes the answer into a concrete type.
     pub async fn request<T: DeserializeOwned>(
         &self,
         method: &str,
@@ -139,11 +139,11 @@ impl AppServer {
         serde_json::from_value(value).map_err(|e| internal(format!("{method} 的应答看不懂：{e}")))
     }
 
-    /// 订阅服务端推送。每个浏览器连接订一次。
+    /// Subscribe to server pushes. Each browser connection subscribes once.
     ///
-    /// 必须在**发请求之前**调用：`turn/start` 的应答要等整轮跑完，
-    /// 而 `textDelta` 是随发生随发的 —— 先发请求再订阅，最早的几个增量
-    /// 就会落在「还没人听」的空当里，页面上表现为「开头少了几个字」。
+    /// Must be called **before sending the request**: the `turn/start` answer waits for
+    /// the whole turn, while `textDelta` is sent as it happens — subscribing after the
+    /// request drops the first deltas into "nobody listening", showing as missing words.
     pub fn subscribe(&self) -> broadcast::Receiver<ServerNotification> {
         self.shared.events.subscribe()
     }
@@ -162,7 +162,7 @@ impl AppServer {
     }
 }
 
-/// 读 stdout：一行一帧，直到子进程关掉 stdout（它走了）。
+/// Read stdout: one line per frame, until the child closes stdout (it's gone).
 async fn read_loop<R: AsyncRead + Unpin>(shared: Arc<Shared>, reader: R) {
     let mut lines = BufReader::new(reader).lines();
     loop {
@@ -176,8 +176,8 @@ async fn read_loop<R: AsyncRead + Unpin>(shared: Arc<Shared>, reader: R) {
         }
     }
 
-    // 叫醒所有还在等的人。不这么做的话，他们各自要等到自己的超时，
-    // 而调用方看到的是「驾驶舱卡住了」，不是「app-server 挂了」。
+    // Wake everyone still waiting. Otherwise each waits out its own timeout, and the
+    // caller sees "the dashboard is stuck", not "app-server died".
     let waiting: Vec<_> = shared
         .pending
         .lock()
@@ -190,7 +190,7 @@ async fn read_loop<R: AsyncRead + Unpin>(shared: Arc<Shared>, reader: R) {
     }
 }
 
-/// 收下一行。应答交给等的人，通知播出去，读不懂的记一句接着读。
+/// Take a line. Answers go to the waiter, notifications broadcast, garbage logs and move on.
 fn accept(shared: &Shared, line: &str) {
     if line.is_empty() {
         return;
@@ -198,21 +198,21 @@ fn accept(shared: &Shared, line: &str) {
     let value: Value = match serde_json::from_str(line) {
         Ok(value) => value,
         Err(error) => {
-            // 一行读不懂不该让整条连接断掉：否则一个编码 bug 在外面的表现
-            // 是「什么都没发生」，比报错难查得多。
+            // One unreadable line must not kill the connection: otherwise a decoding bug
+            // shows outside as "nothing happened", far harder to trace than an error.
             eprintln!("(joy) app-server 送来一行读不懂的东西：{error}");
             return;
         }
     };
 
     if value.get("method").is_some() {
-        // stdout 上只有 `turn/notification` 这一种方法，参数就是那一帧通知。
+        // stdout carries only `turn/notification`; the params are the notification frame.
         let params = serde_json::from_value::<JsonRpcNotification>(value)
             .ok()
             .and_then(|envelope| envelope.params);
         if let Some(params) = params {
             match serde_json::from_value::<ServerNotification>(params) {
-                // 没人在听的时候 send 会返回 Err（驾驶舱没开页面），这不是错。
+                // With no listener, send returns Err (dashboard page closed) — not an error.
                 Ok(notification) => {
                     let _ = shared.events.send(notification);
                 }
@@ -244,8 +244,8 @@ fn accept(shared: &Shared, line: &str) {
                     let _ = tx.send(Err(error.error));
                 }
             }
-            // id 为 null：请求本身就是坏 JSON，没有人在等。但它确实出了事，
-            // 所以照样播出去，而不是悄悄吞掉。
+            // id null: the request itself was bad JSON; nobody is waiting. But something
+            // did go wrong, so broadcast it instead of swallowing it silently.
             None => {
                 let _ = shared.events.send(crate::as_notification(error.error));
             }

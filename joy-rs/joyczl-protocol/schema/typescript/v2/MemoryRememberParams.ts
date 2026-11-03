@@ -4,8 +4,8 @@ export type MemoryRememberParams = {
   subject: string;
   content: string;
   /**
-   * 不给就是 `user`（用户直接说的）。consolidation 从对话里提炼时传
-   * `consolidation`，这样前端能区分「你告诉它的」和「它自己总结的」。
+   * Defaults to `user` (said directly by the user). Consolidation passes
+   * `consolidation` when distilling from conversations, so the frontend can tell "you told it" from "it summarized itself".
    */
   source?: string | null;
 };

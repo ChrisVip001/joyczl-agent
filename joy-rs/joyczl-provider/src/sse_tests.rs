@@ -1,4 +1,4 @@
-//! SSE 解析的测试。不联网 —— 直接喂构造好的字节流。
+//! Tests for SSE parsing. No network — constructed byte streams are fed directly.
 
 use bytes::Bytes;
 use futures_util::{stream, StreamExt};
@@ -39,7 +39,7 @@ async fn yields_each_data_payload() {
 
 #[tokio::test]
 async fn handles_payloads_split_across_chunks() {
-    // TCP 不保证按事件切分 —— 一个 JSON 可能被切成好几段。
+    // TCP does not split on event boundaries — one JSON may be cut into several pieces.
     let out = data_lines(bytes_stream(vec![
         "event: x\ndata: {\"a\":",
         "1}\ndata: {\"b\":2}\n\ndata: [DONE]",
@@ -64,7 +64,7 @@ async fn handles_payloads_split_across_chunks() {
 #[tokio::test]
 async fn handles_crlf_and_missing_trailing_blank_line() {
     let out = data_lines(bytes_stream(vec![
-        "data: {\"a\":1}\r\n\r\ndata: {\"b\":2}\r\n", // 最后没有空行
+        "data: {\"a\":1}\r\n\r\ndata: {\"b\":2}\r\n", // no trailing blank line
     ]))
     .collect::<Vec<_>>()
     .await

@@ -1,4 +1,4 @@
-//! 工具的测试：不联网，真的开临时库，验证行为和输出文案。
+//! Tool tests: no network, real temp databases, verifying behavior and output wording.
 
 use std::sync::Arc;
 
@@ -6,15 +6,15 @@ use serde_json::json;
 
 use crate::{handlers, Tool, ToolCtx, ToolRegistry};
 
-/// 开一个临时 state.db，返回可直接用的 ctx。home 也在临时目录里 ——
-/// calendar.ics / outbox 的测试需要真的写文件。
+/// Opens a temp state.db and returns a ready-to-use ctx. home is also a temp dir —
+/// the calendar.ics / outbox tests need real file writes.
 async fn ctx() -> ToolCtx {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     ToolCtx {
         cwd: None,
         approval: None,
@@ -65,7 +65,7 @@ async fn save_note_then_search_memory_round_trips() {
             json!({"subject": "alex", "content": "喜欢早上的会议"}),
         )
         .await;
-    // 输出必须说明东西落在哪儿 —— 模型要照着转述，不能虚报。
+    // The output must say where things landed — the model relays it and must not overclaim.
     assert!(out.contains("state.db"), "输出没说落点：{out}");
     assert!(out.contains("alex"), "输出没复述内容：{out}");
 
@@ -104,7 +104,7 @@ async fn current_time_gives_a_usable_answer() {
     let out = registry
         .execute(ctx().await, "current_time", json!({}))
         .await;
-    // 星期与 UTC 偏移都在 —— 模型解析「明天上午」需要它们。
+    // Weekday and UTC offset are both there — parsing "tomorrow morning" needs them.
     assert!(out.contains("UTC"), "没有时区：{out}");
     assert!(
         out.contains("星期") || out.chars().any(|c| c.is_ascii_alphabetic()),
@@ -121,7 +121,7 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
     assert!(out.starts_with("Error:"), "未知工具：{out}");
     assert!(out.contains("save_note"), "应当列出可用的工具：{out}");
 
-    // 缺参数
+    // Missing argument
     let out = registry
         .execute(ctx.clone(), "save_note", json!({"subject": "alex"}))
         .await;
@@ -130,8 +130,8 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         "缺参数：{out}"
     );
 
-    // 类型不对：现在由参数 schema 先挡下（比 handler 里的手写检查更早、
-    // 也更具体 —— 报错里带字段路径）
+    // Wrong type: now caught first by the argument schema (earlier and more specific
+    // than the hand-written check in the handler — the error carries the field path)
     let out = registry
         .execute(
             ctx.clone(),
@@ -144,7 +144,7 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         "类型错：{out}"
     );
 
-    // 空字符串
+    // Empty string
     let out = registry
         .execute(
             ctx.clone(),
@@ -184,7 +184,7 @@ async fn search_memory_with_junk_query_does_not_error() {
             .await;
         assert!(out.contains("没有关于"), "{junk:?} → {out}");
     }
-    // 空串是参数错误 —— 同样是文本，不是崩溃。
+    // An empty string is an argument error — still text, not a crash.
     let out = registry
         .execute(ctx.clone(), "search_memory", json!({"query": ""}))
         .await;
@@ -194,8 +194,8 @@ async fn search_memory_with_junk_query_does_not_error() {
     );
 }
 
-/// create_event：写库 + 写 ICS + 如实交代落点。幂等靠第二次调用验证 ——
-/// 同标题同开始时间的事件绝不重复。
+/// create_event: write db + write ICS + state where it landed honestly. Idempotency is
+/// verified by a second call — same title and start time must never duplicate.
 #[tokio::test]
 async fn create_event_lands_in_db_and_ics_and_is_idempotent() {
     let registry = handlers::build_default();
@@ -210,7 +210,7 @@ async fn create_event_lands_in_db_and_ics_and_is_idempotent() {
         .await;
     assert!(out.contains("已创建"), "{out}");
     assert!(out.contains("本地日历"), "输出要说明落点：{out}");
-    // 没给 end 默认 +1 小时。
+    // No end given defaults to +1 hour.
     assert!(out.contains("2026-07-14T10:00"), "默认结束时间：{out}");
 
     let ics = std::fs::read_to_string(ctx.home.join("calendar.ics")).expect("ics 文件");
@@ -218,7 +218,7 @@ async fn create_event_lands_in_db_and_ics_and_is_idempotent() {
     assert!(ics.contains("DTSTART:20260714T090000"), "{ics}");
     assert!(ics.ends_with("END:VCALENDAR\n"), "VCALENDAR 要闭合：{ics}");
 
-    // 再来一遍：带秒的时间戳也归一到分钟精度 → 幂等命中。
+    // Run it again: a timestamp with seconds also normalizes to minute precision → idempotent hit.
     let out = registry
         .execute(
             ctx.clone(),
@@ -228,14 +228,14 @@ async fn create_event_lands_in_db_and_ics_and_is_idempotent() {
         .await;
     assert!(out.contains("已经存在"), "第二次应当报幂等：{out}");
 
-    // 数据库里也只有一条。
+    // And only one row in the database.
     let rows = ctx.calendar.list(None, None, 100).await.expect("查库");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].end, "2026-07-14T10:00");
 }
 
-/// list_events：读得回来，且空结果要说明查过**哪个**日历 ——
-/// 「你日历上没安排」只有在说清楚查了哪儿时才是诚实的。
+/// list_events: reads back, and an empty result must say **which** calendar was searched —
+/// "nothing on your calendar" is only honest when it says where it looked.
 #[tokio::test]
 async fn list_events_reports_what_it_checked_when_empty() {
     let registry = handlers::build_default();
@@ -264,7 +264,7 @@ async fn list_events_reports_what_it_checked_when_empty() {
     assert!(out.contains("牙医"), "区间内的事件要列出来：{out}");
     assert!(out.contains("与 阿明"), "参与者要带上：{out}");
 
-    // 区间外的不出现。
+    // Out-of-range entries don't appear.
     let out = registry
         .execute(
             ctx.clone(),
@@ -275,7 +275,7 @@ async fn list_events_reports_what_it_checked_when_empty() {
     assert!(out.contains("没有找到事件"), "区间外不该出现：{out}");
 }
 
-/// send_message 只写 outbox 草稿，绝不发送 —— 输出里必须把这句话说满。
+/// send_message only writes an outbox draft, never sends — the output must say so in full.
 #[tokio::test]
 async fn send_message_writes_a_draft_and_never_sends() {
     let registry = handlers::build_default();
@@ -303,7 +303,7 @@ async fn send_message_writes_a_draft_and_never_sends() {
     );
 }
 
-/// manage_memory：按编号改与删，编号不存在就如实说。
+/// manage_memory: edit and delete by id; a missing id is reported honestly.
 #[tokio::test]
 async fn manage_memory_updates_and_deletes_by_id() {
     let registry = handlers::build_default();
@@ -350,8 +350,8 @@ async fn manage_memory_updates_and_deletes_by_id() {
         .await;
     assert!(out.contains("没有编号"), "删第二次要如实说：{out}");
 
-    // 不认识的 action 也是文本，不是错误 —— 现在由 schema 的 enum 先挡下
-    // （handler 里那条兜底分支只在 schema 编译失败时才会走到）。
+    // An unknown action is text too, not an error — now caught first by the schema's enum
+    // (the handler's fallback branch only runs if schema compilation failed).
     let out = registry
         .execute(
             ctx.clone(),
@@ -362,8 +362,8 @@ async fn manage_memory_updates_and_deletes_by_id() {
     assert!(out.starts_with("Error:") && out.contains("action"), "{out}");
 }
 
-/// create_skill：合法 slug 落盘成 SKILL.md，非法名字和重名都被拒 ——
-/// 绝不悄悄覆盖已有技能。
+/// create_skill: a valid slug lands as SKILL.md; bad names and duplicates are refused —
+/// never quietly overwrite an existing skill.
 #[tokio::test]
 async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
     let registry = handlers::build_default();
@@ -390,10 +390,10 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
     )
     .expect("SKILL.md");
     assert!(skill.starts_with("---\nname: weekly-review\n"), "{skill}");
-    // 写完必须能被 loader 解析 —— 两边共用同一套校验。
+    // What's written must parse in the loader — both sides share one validation.
     assert!(joyczl_memory::skills::parse_skill_text(&skill).is_some());
 
-    // 重名拒绝。
+    // Duplicate names are refused.
     let out = registry
         .execute(
             ctx.clone(),
@@ -403,7 +403,7 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
         .await;
     assert!(out.contains("已有"), "{out}");
 
-    // 非法 slug（会变成路径的东西）拒绝。
+    // Invalid slugs (things that would become paths) are refused.
     let out = registry
         .execute(
             ctx.clone(),
@@ -423,10 +423,10 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
     );
 }
 
-// ---- 参数 schema 校验 --------------------------------------------------------
+// ---- Argument schema validation ----------------------------------------------
 
-/// 类型不对：**handler 根本不该被调用**（否则会留下半个副作用），
-/// 报错要指名道姓说是哪个字段。
+/// Wrong type: **the handler must not be called at all** (otherwise half a side effect remains),
+/// and the error must name the exact field.
 #[tokio::test]
 async fn a_wrong_typed_argument_is_caught_before_the_handler_runs() {
     let registry = handlers::build_default();
@@ -461,8 +461,8 @@ async fn a_missing_required_argument_is_caught_by_the_schema() {
     assert!(out.contains("content"), "缺的那个字段要出现在报错里：{out}");
 }
 
-/// 远端（MCP）可能报上来一个坏 schema。那种工具**跳过校验照常执行** ——
-/// 一个 schema 写坏了不该让工具直接不可用。
+/// A remote (MCP) server may report a broken schema. Such tools **skip validation and run** —
+/// a broken schema must not make a tool unusable.
 #[tokio::test]
 async fn a_tool_with_a_broken_schema_still_runs() {
     let mut registry = ToolRegistry::new();
@@ -481,7 +481,7 @@ async fn a_tool_with_a_broken_schema_still_runs() {
     assert_eq!(out, "真的跑了", "坏 schema 不该拦住执行：{out}");
 }
 
-/// 合规的参数照样通到 handler（校验不能误伤正常调用）。
+/// Valid arguments still reach the handler (validation must not hit normal calls).
 #[tokio::test]
 async fn valid_arguments_pass_the_schema() {
     let registry = handlers::build_default();
@@ -496,10 +496,10 @@ async fn valid_arguments_pass_the_schema() {
     assert!(out.contains("已记住"), "{out}");
 }
 
-/// 同名工具**不覆盖**：一个名字只能有一个实现。
+/// Same-name tools **never overwrite**: one name, one implementation.
 ///
-/// 这条守的是「不知道是谁在执行」这类意外：MCP 服务器、技能、内建工具都可能撞名，
-/// 而悄悄换掉一个实现比少一个工具危险得多。
+/// This guards against "unknown executor" accidents: MCP servers, skills, and built-ins can
+/// all collide, and quietly swapping an implementation is far worse than one tool fewer.
 #[tokio::test]
 async fn a_duplicate_tool_name_does_not_replace_the_first() {
     use std::sync::Arc;
@@ -541,7 +541,7 @@ async fn a_duplicate_tool_name_does_not_replace_the_first() {
     assert_eq!(out, "第一个", "先到的保留，后到的被拒");
 }
 
-/// 工具级钩子接在**唯一收口**上：PreToolUse 能拦下一次调用，PostToolUse 能改结果。
+/// Tool-level hooks hang on the **single choke point**: PreToolUse can stop a call, PostToolUse can rewrite the result.
 #[cfg(unix)]
 #[tokio::test]
 async fn tool_hooks_block_before_and_rewrite_after() {
@@ -577,7 +577,7 @@ async fn tool_hooks_block_before_and_rewrite_after() {
     assert_eq!(rewritten, "被钩子改写过了");
 }
 
-/// 一个回固定文本的工具（钩子测试用）。
+/// A tool that returns fixed text (for hook tests).
 #[cfg(unix)]
 fn tool(name: &str, answer: &str) -> super::Tool {
     use std::sync::Arc;

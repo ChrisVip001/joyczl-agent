@@ -1,8 +1,8 @@
-//! 只测一件事：**哪些通知属于这一轮**。
+//! Tests one thing only: **which notifications belong to this turn**.
 //!
-//! 广播是给所有订阅者的，app-server 又是一个进程跑所有人的会话 ——
-//! 网关那边另一个会话跑起来的时候，它的 `textDelta` 也会流到驾驶舱这条
-//! 连接上。过滤错了的表现是「回复里混进别人的字」，所以这里把它钉住。
+//! The broadcast reaches all subscribers, and app-server runs everyone's sessions in one
+//! process — when another session starts on the gateway, its `textDelta` also flows onto
+//! the dashboard's connection. A wrong filter mixes someone else's words in; pin it here.
 
 use serde_json::json;
 
@@ -32,36 +32,36 @@ fn 第一帧靠会话认_之后的帧靠轮次认() {
     let opened = started("s1", "t1");
     assert_eq!(belongs(&opened, "s1", None).as_deref(), Some("t1"));
 
-    // 认下这一轮之后，同 id 的都放行。
+    // Once this turn is claimed, everything with the same id passes.
     assert_eq!(
         belongs(&delta("t1"), "s1", Some("t1")).as_deref(),
         Some("t1")
     );
-    // 另一个轮次的丢掉 —— 即使会话 id 一样（并发跑两轮时会出现）。
+    // Another turn's frame is dropped — even with the same session id (happens when two run concurrently).
     assert_eq!(belongs(&delta("t2"), "s1", Some("t1")), None);
 }
 
 #[test]
 fn 别的会话的通知不会混进来() {
     assert_eq!(belongs(&started("s2", "t9"), "s1", None), None);
-    // 还没认下自己那一轮之前，什么都不转发。
+    // Before this turn is claimed, nothing is forwarded.
     assert_eq!(belongs(&delta("t9"), "s1", None), None);
 }
 
 #[test]
 fn 没有轮次id的通知_认下之后照常转发() {
-    // consolidationCompleted 和 graph* 不带 turnId：它们跟会话同属一轮。
+    // consolidationCompleted and graph* carry no turnId: they belong to the session's turn.
     let consolidation = note(json!({"type": "consolidationCompleted", "newFacts": 2}));
     assert_eq!(
         belongs(&consolidation, "s1", Some("t1")).as_deref(),
         Some("t1")
     );
-    // 但没认下之前，它们同样无处可去。
+    // But before anything is claimed, they likewise have nowhere to go.
     assert_eq!(belongs(&consolidation, "s1", None), None);
 }
 
-/// 扩展名白名单：只放行 1-8 位字母数字；双扩展只看最后一段；路径形状、
-/// 汉字、超长一律不放 —— 白名单之外的都落 `bin`（不报错，文件照样能传）。
+/// Extension whitelist: only 1-8 alphanumerics pass; double extensions look at the last
+/// segment; path shapes, CJK and overlong all rejected — the rest falls to `bin` (no error).
 #[test]
 fn upload_extension_whitelist_is_strict() {
     use super::safe_extension;
@@ -83,8 +83,8 @@ fn upload_extension_whitelist_is_strict() {
     assert_eq!(safe_extension("a.0123456789").as_deref(), None, "超过 8 位");
 }
 
-/// 目录浏览：只列子目录、按名排序、藏掉点开头与构建噪音；相对路径与
-/// 不存在的路径给出能照着做的话。
+/// Directory browsing: lists only subdirectories, sorted by name, hides dot-prefixed and
+/// build noise; relative and nonexistent paths get an actionable message.
 #[test]
 fn fs_browsing_lists_only_directories_and_hides_noise() {
     use super::list_dirs;
@@ -113,8 +113,8 @@ fn fs_browsing_lists_only_directories_and_hides_noise() {
     assert!(list_dirs("/不存在/的/目录/joy", false).is_err());
 }
 
-/// 隐藏目录开关：默认藏点开头，开了才露；
-/// 构建噪音无论如何都不露。
+/// Hidden-directory switch: dot-prefixed hidden by default, shown only when asked;
+/// build noise never shows.
 #[test]
 fn hidden_directories_show_only_when_asked() {
     use super::list_dirs;
@@ -135,9 +135,9 @@ fn hidden_directories_show_only_when_asked() {
     assert!(!names.contains(&"node_modules"), "构建噪音永远不露");
 }
 
-/// 新建文件夹：合格名字建得出来；路径形状
-/// （分隔符、..、点开头）、超长、重名、坏父目录都挡下 —— 用户输入
-/// 进不了路径形状，与 upload 的扩展名白名单同一条纪律。
+/// New folder: valid names can be created; path shapes (separators, .., dot prefix),
+/// overlong names, duplicates and bad parents are all blocked — user input never enters
+/// the path shape, same discipline as upload's extension whitelist.
 #[test]
 fn folder_creation_rejects_path_shapes() {
     use super::create_subdir;

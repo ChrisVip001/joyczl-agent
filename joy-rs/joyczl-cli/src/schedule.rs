@@ -1,37 +1,37 @@
-//! `joy schedule` —— 声明式定时任务，常驻进程。
+//! `joy schedule` — declarative scheduled jobs, a resident process.
 //!
-//! 两条声明来源，同一套语义：
+//! Two declaration sources, one shared semantics:
 //!
-//! * **技能**：SKILL.md 的 frontmatter 里加一行 `schedule: 0 8 * * 1-5`。
-//!   技能本来就是「怎么做事」，加一行时间就成了「每周一早上八点这么做」——
-//!   定时任务不需要另立一套格式。
-//! * **`<home>/schedules.json`**：一次性列几条不适合写进技能的活。
+//! * **Skills**: add a line `schedule: 0 8 * * 1-5` to the SKILL.md frontmatter.
+//!   A skill already says "how to do things"; adding a time makes it "do this
+//!   every weekday at 8am" — scheduled jobs need no separate format.
+//! * **`<home>/schedules.json`**: list a few one-off jobs that don't fit a skill.
 //!
-//! 触发时按**同一个会话跑一轮**（`schedule:<名字>`），所以每次执行都带着
-//! 上一次的上下文与滚动摘要；结果写进 `<home>/outbox/`，不往聊天里塞 ——
-//! 定时任务产出的是可以慢慢读的文件，不是打扰。
+//! On trigger it runs **one turn in the same session** (`schedule:<name>`), so each
+//! execution carries the previous context and rolling summary; results go into
+//! `<home>/outbox/`, not into chat — scheduled output is a file to read at leisure.
 //!
-//! 每分钟最多触发一次（`last_fired` 记到分钟），任务串行执行：同一分钟的
-//! 多条任务依次跑，不会同时把模型打爆。不开这个进程也完全可用 ——
-//! 用系统 cron 调 `joy gather` 是等价的轻量姿势。
+//! At most one trigger per minute (`last_fired` records to the minute); jobs run
+//! serially: same-minute tasks run one by one, never hammering the model at once.
+//! The process is optional — driving `joy gather` via system cron is equivalent.
 //!
-//! cron 是**手写的五字段匹配**（分 时 日 月 周），支持 `*`、`*/步长`、
-//! `a-b` 区间、`a,b` 列表 —— 覆盖个人任务的全部需要，不为一个字段引依赖。
+//! cron is a **hand-written five-field matcher** (min hour day month weekday),
+//! supporting `*`, `*/step`, `a-b` ranges, `a,b` lists — no dependency for one field.
 //!
-//! 状态与崩溃恢复（M4b，dispatch 先推进 next_run）：
-//! 调度状态在 state.db 的 `schedule_state` 表（原 schedules-state.json 只做
-//! 一次性导入的来源，不再是权威）。触发前先 `claim` 占坑再执行，落定后
-//! `confirm` —— 崩溃在两者之间，重启时按每作业的 `catch_up` 字段决定：
-//! `catch_up=1`（晨报类）重跑一次 —— 至少一次；`catch_up=0`（通知类）
-//! 直接放弃 —— 至多一次。**按作业类型给字段，不做全局二选一**。
+//! State and crash recovery (M4b: dispatch advances next_run first): schedule
+//! state lives in state.db's `schedule_state` table (old schedules-state.json is
+//! only a one-time import source now, no longer authoritative). Before firing,
+//! `claim` the slot, then execute; after settling, `confirm` — a crash in between
+//! is decided on restart by each job's `catch_up`: `catch_up=1` (report class)
+//! re-runs once — at-least-once; `catch_up=0` (notify class) drops — at-most-once.
 //!
-//! 每作业还有 `delivery`：`outbox`（默认，写文件）| `notify`（文件 +
-//! 通知器，人不在屏幕前也该知道）| `quiet`（只落日志，高频任务不刷盘）。
-//! 空回答（或模型答 `NO_REPLY`）跳过投递 —— 没内容的产出不值得打扰。
+//! Each job also has `delivery`: `outbox` (default, writes a file) | `notify` (file
+//! plus notifier, for people away from the screen) | `quiet` (log only, so high-
+//! frequency jobs don't spam the disk); empty replies (or `NO_REPLY`) skip delivery.
 //!
-//! 停机期间的错过：启动时回看自上次触发以来的分钟，**补跑最新一次**
-//! （停了三天也只补一次，不补一串，回看封顶七天）。错过的
-//! 不静默吞掉。
+//! Missed while down: at startup, look back over the minutes since the last fire
+//! and **re-run only the latest one** (three days down still catches up once, not
+//! a chain; lookback capped at seven days). Missed fires are not silently swallowed.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -42,14 +42,14 @@ use chrono::{Datelike, Local, NaiveDateTime, Timelike};
 use joyczl_app_server::{run_turn, EventSink, Frame, Server};
 use joyczl_protocol::{RequestId, ServerNotification, TurnStartParams};
 
-/// 产出往哪送。
+/// Where output is delivered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivery {
-    /// 写 `<home>/outbox/`（默认 —— 定时任务的产出是可以慢慢读的文件）。
+    /// Writes `<home>/outbox/` (default — scheduled output is a file read at leisure).
     Outbox,
-    /// 写文件 **并** 推通知器（Slack/ntfy）—— 屏幕外也知道跑完了。
+    /// Writes the file **and** pushes a notifier (Slack/ntfy) — off-screen too.
     Notify,
-    /// 只落日志：高频任务（每 15 分钟盯一次 CI）不该刷出一堆文件。
+    /// Logs only: high-frequency jobs (watching CI every 15 min) shouldn't spray files.
     Quiet,
 }
 
@@ -67,26 +67,26 @@ impl Delivery {
     }
 }
 
-/// 一条定时任务。
+/// One scheduled job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     pub name: String,
-    /// 五字段 cron：`分 时 日 月 周`。
+    /// Five-field cron: `min hour day month weekday`.
     pub cron: String,
-    /// 触发时发给 Joy 的那句话。
+    /// The prompt sent to Joy when it fires.
     pub prompt: String,
-    /// 错过/中断后要不要补跑。默认 true（至少一次 —— 晨报类宁可重不可漏）。
+    /// Catch up after a miss/interruption? Default true (at-least-once — reports prefer no loss).
     pub catch_up: bool,
-    /// 产出投递方式。默认 Outbox。
+    /// How output is delivered. Defaults to Outbox.
     pub delivery: Delivery,
 }
 
-/// 从技能与 `schedules.json` 收集任务。读不出来的条目跳过并警告 ——
-/// 一条写坏的声明不该让整个调度器起不来。
+/// Collects jobs from skills and `schedules.json`. Unreadable entries are skipped
+/// with a warning — one broken declaration must not keep the scheduler from starting.
 pub fn load_jobs(home: &Path) -> Vec<Job> {
     let mut jobs = Vec::new();
 
-    // 技能里的 schedule 行。
+    // The schedule line inside skills.
     for skill in joyczl_memory::skills::loaded_skills(home) {
         if let Some(cron) = skill.schedule {
             jobs.push(Job {
@@ -147,7 +147,7 @@ pub fn load_jobs(home: &Path) -> Vec<Job> {
     jobs
 }
 
-/// 五字段 cron 匹配（分 时 日 月 周；周 = 0..=6，周日是 0，也认 7）。
+/// Five-field cron match (min hour day month weekday; Sunday is 0, also accepts 7).
 pub fn cron_matches(cron: &str, at: NaiveDateTime) -> bool {
     let fields: Vec<&str> = cron.split_whitespace().collect();
     if fields.len() != 5 {
@@ -165,7 +165,7 @@ fn field_matches(field: &str, value: u32, min: u32, max: u32) -> bool {
     if field == "*" {
         return true;
     }
-    // 列表：任何一段命中就算。
+    // List: any segment hit counts.
     field.split(',').any(|part| {
         let part = part.trim();
         if let Some(step) = part.strip_prefix("*/") {
@@ -180,7 +180,7 @@ fn field_matches(field: &str, value: u32, min: u32, max: u32) -> bool {
                 _ => false,
             };
         }
-        // 单个数字。周日的 7 归一成 0。
+        // Single number. Sunday's 7 normalizes to 0.
         match part.parse::<u32>() {
             Ok(n) => {
                 let n = if min == 0 && max == 6 && n == 7 { 0 } else { n };
@@ -191,8 +191,8 @@ fn field_matches(field: &str, value: u32, min: u32, max: u32) -> bool {
     })
 }
 
-/// 这一分钟该触发哪些任务。`fired` 记「任务 → 上次触发的分钟」，
-/// 同一个任务同一分钟只会被交出来一次。
+/// Which jobs should fire this minute. `fired` maps "job → minute last fired";
+/// the same job is handed out only once per minute.
 pub fn due_now<'a>(
     jobs: &'a [Job],
     at: NaiveDateTime,
@@ -205,8 +205,8 @@ pub fn due_now<'a>(
         .collect()
 }
 
-/// 旧状态文件（M4b 之前的权威，现在的**一次性导入来源**）。读坏了就当
-/// 没有 —— 它本来也只承载去重信息。
+/// The legacy state file (authoritative before M4b, now a **one-time import
+/// source**). If it fails to parse, treat it as absent — it only ever held dedup info.
 fn load_legacy_state(home: &Path) -> HashMap<String, String> {
     std::fs::read_to_string(home.join("schedules-state.json"))
         .ok()
@@ -214,9 +214,9 @@ fn load_legacy_state(home: &Path) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-/// 一次 run 的账本行（JSONL）。outbox 是产出（quiet 时连产出都没有），
-/// 这本账回答
-/// 「跑过哪些、各自结局」—— 巡检、排障、算频率都从这一处来。
+/// One ledger line per run (JSONL). The outbox is output (quiet has no output
+/// at all); this ledger answers
+/// "what ran and how each ended" — inspection, debugging, and frequency math.
 fn run_log_line(
     name: &str,
     minute: &str,
@@ -237,8 +237,8 @@ fn run_log_line(
     record.to_string()
 }
 
-/// 往 `<home>/schedule-runs.jsonl` 追加一行。旁路：写失败只往 stderr 说
-/// 一声 —— 账本坏了不该把一次成功执行变成错误。
+/// Appends one line to `<home>/schedule-runs.jsonl`. Side path: a write failure
+/// only reports to stderr — a broken ledger must not turn a success into an error.
 fn append_run_log(home: &Path, line: &str) {
     use std::io::Write as _;
     let path = home.join("schedule-runs.jsonl");
@@ -256,8 +256,8 @@ fn append_run_log(home: &Path, line: &str) {
     }
 }
 
-/// 自 `from` 到 `to`（含两端，按分钟扫）有没有错过的触发点。返回**最后**
-/// 那个错过点 —— 停机三天只补一次，不补一串。
+/// Whether a trigger was missed from `from` to `to` (inclusive, per-minute scan).
+/// Returns the **last** missed point — down three days, catch up once, not a chain.
 pub fn last_missed(job: &Job, from: NaiveDateTime, to: NaiveDateTime) -> Option<NaiveDateTime> {
     let mut latest = None;
     let mut t = from;
@@ -271,8 +271,8 @@ pub fn last_missed(job: &Job, from: NaiveDateTime, to: NaiveDateTime) -> Option<
     latest
 }
 
-/// 常驻循环：每 20 秒看一眼现在该不该触发。技能改动每次 tick 重新扫，
-/// 等于热加载。
+/// Resident loop: every 20 seconds, check whether anything should fire. Skill
+/// changes are rescanned each tick — effectively hot reload.
 pub async fn run(server: Server) -> Result<()> {
     let home = server.settings().home.clone();
     let schedules = joyczl_state::Schedules::new(server.state_pool());
@@ -292,7 +292,7 @@ pub async fn run(server: Server) -> Result<()> {
         }
     }
 
-    // 登记 + 一次性导入 + 崩溃恢复 + 补跑，全在起跑线前做完。
+    // Registration + one-time import + crash recovery + catch-up, all before the start.
     let now0 = Local::now().naive_local();
     for job in load_jobs(&home) {
         let delivery = match job.delivery {
@@ -308,7 +308,7 @@ pub async fn run(server: Server) -> Result<()> {
             continue;
         }
 
-        // 一次性导入：DB 没历史而旧 JSON 有 —— 搬一行进来，JSON 从此不再被读。
+        // One-time import: DB has no history but the old JSON does — move the row in; never re-read.
         if schedules
             .last_fired(&job.name)
             .await
@@ -326,7 +326,7 @@ pub async fn run(server: Server) -> Result<()> {
             }
         }
 
-        // 崩溃恢复：claimed 未 confirm = 上次执行到一半进程没了。
+        // Crash recovery: claimed but unconfirmed = the process died mid-run last time.
         if let Ok(Some(claimed)) = schedules.pending_claim(&job.name).await {
             if job.catch_up {
                 eprintln!(
@@ -357,7 +357,7 @@ pub async fn run(server: Server) -> Result<()> {
             continue;
         }
 
-        // 常规补跑：上次落定之后错过的最新触发点。
+        // Regular catch-up: the latest trigger missed since the last confirm.
         if let Some(last) = schedules
             .last_fired(&job.name)
             .await
@@ -366,7 +366,7 @@ pub async fn run(server: Server) -> Result<()> {
             .and_then(|text| NaiveDateTime::parse_from_str(&text, "%Y-%m-%dT%H:%M").ok())
         {
             fired.insert(job.name.clone(), last.format("%Y-%m-%dT%H:%M").to_string());
-            // 回看窗口封顶七天：再早的错过没有补的价值，也无谓地扫上百万分钟。
+            // Lookback capped at seven days: older misses aren't worth a million-minute scan.
             let from = (last + chrono::TimeDelta::try_minutes(1).expect("一分钟总是合法"))
                 .max(now0 - chrono::TimeDelta::try_days(7).expect("七天总是合法"));
             if let Some(missed) = last_missed(&job, from, now0) {
@@ -399,24 +399,24 @@ pub async fn run(server: Server) -> Result<()> {
         let jobs = load_jobs(&home);
         for job in due_now(&jobs, at, &fired) {
             let minute = at.format("%Y-%m-%dT%H:%M").to_string();
-            // dispatch 先占坑再执行：崩溃在两者之间时，重启的恢复逻辑
-            // 显式接管（补跑或放弃），而不是靠运气不重放。
+            // dispatch claims the slot before executing: a crash in between is handled by
+            // the restart recovery logic explicitly (catch up or give up), not by luck.
             let _ = schedules.claim(&job.name, &minute).await;
             fired.insert(job.name.clone(), minute.clone());
-            // 串行执行：同一分钟的其它任务等它跑完。定时任务打爆模型
-            // 不是「快」，是没人读得过来。
+            // Serial execution: other jobs in the same minute wait for it to finish.
+            // Hammering the model with scheduled jobs isn't "fast" — nobody can read it.
             if let Err(e) = fire(&server, job, at).await {
                 eprintln!("(joy) 任务 '{}' 执行失败：{e}", job.name);
             }
-            // 成功失败都落定：没有退避机制，不该每 20 秒重试一次失败任务。
+            // Confirm on both success and failure: no backoff exists, so failures mustn't retry every 20s.
             let _ = schedules.confirm(&job.name, &minute).await;
         }
         tokio::time::sleep(Duration::from_secs(20)).await;
     }
 }
 
-/// 跑一轮并把结果写进 outbox。会话按任务名分开 —— 每次执行带着同一个
-/// 任务的历史与滚动摘要，任务之间互不串味。
+/// Runs one turn and writes the result to the outbox. Sessions are split by job
+/// name — each execution carries that job's history and rolling summary.
 async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
     eprintln!("(joy) 触发任务 '{}'（{}）", job.name, job.cron);
     let (sink, mut rx) = EventSink::channel();
@@ -424,7 +424,7 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         session_id: Some(format!("schedule:{}", job.name)),
         message: job.prompt.clone(),
         stream: Some(true),
-        // 定时任务不设工作目录：跑在 home 语义下最稳（脚本自己用绝对路径）。
+        // No working directory for scheduled jobs: home semantics is safest (scripts use absolute paths).
         cwd: None,
     };
     let server_for_turn = server.clone();
@@ -439,8 +439,8 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
             break;
         }
     }
-    // turn 的三种结局（完成/turn 报错/任务崩）都过这本账 —— error 也是
-    // 账本的一等公民，巡检时它正是要找的那行。
+    // All three turn outcomes (completed / turn error / job crash) go through this
+    // ledger — error is a first-class citizen; it's exactly the line inspection seeks.
     let home = server.settings().home;
     let minute_text = at.format("%Y-%m-%dT%H:%M").to_string();
     let turn_result = match task.await {
@@ -456,8 +456,8 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         anyhow::bail!("任务 '{}' 没跑通：{why}", job.name);
     }
 
-    // 空回答（或模型按约定答 NO_REPLY）不值得投递 —— 写一个空文件、推一条
-    // 空通知都是打扰。账本记一行就够。
+    // An empty reply (or the model answering NO_REPLY by convention) isn't worth
+    // delivering — an empty file or empty push is an interruption. One ledger line is enough.
     let trimmed = reply.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("no_reply") {
         eprintln!("(joy) 任务 '{}' 完成，但没有产出内容，跳过投递", job.name);
@@ -499,7 +499,7 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         );
     }
 
-    // notify 投递：屏幕外的人也该知道 —— 旁路，没配通知器或发送失败都不拦。
+    // Notify delivery: off-screen people should know — side path; missing notifier or send failure never blocks.
     if job.delivery == Delivery::Notify {
         if let Some(notifier) = server.notifier() {
             notifier.notify(joyczl_tools::notify::NotifyEvent::ScheduleRan {
@@ -510,8 +510,8 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         }
     }
 
-    // 产出落账：delivered 只指「写了 outbox 文件」（quiet 是有产出不落盘，
-    // 与 empty 的没产出是两回事）。
+    // Output accounting: delivered only means "wrote the outbox file" (quiet has
+    // output but doesn't write it — different from empty, which has no output).
     append_run_log(
         &home,
         &run_log_line(

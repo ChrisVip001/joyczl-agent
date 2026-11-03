@@ -1,7 +1,7 @@
-//! 目标循环：设/清、判断器的三态校验、以及「没达成 → 再跑一轮 → 达成」的闭环。
+//! The goal loop: set/clear, the judge's three-state validation, and the closed loop of "not met → one more round → met".
 //!
-//! 判断器与主循环共用同一个模型（测试里都是 Mock），所以脚本队列就是**真实调用
-//! 顺序**：门 → 主答复 → 判断 → 门 → 主答复 → 判断。
+//! The judge and the main loop share the same model (a Mock in tests), so the scripted queue is the
+//! **real call order**: gate → main reply → judge → gate → main reply → judge.
 
 use std::sync::Arc;
 
@@ -40,7 +40,7 @@ async fn server(mock: Arc<Mock>, goal_max_rounds: i32) -> (Server, tempfile::Tem
     (server, dir)
 }
 
-/// 设、清、记轮次、盖终止态。
+/// Set, clear, count rounds, stamp a terminal state.
 #[tokio::test]
 async fn setting_and_clearing_a_goal() {
     let (server, _dir) = server(Arc::new(Mock::new(Vec::new())), 5).await;
@@ -56,17 +56,17 @@ async fn setting_and_clearing_a_goal() {
     assert_eq!(crate::goal::bump(goals, "s1"), 1);
     assert_eq!(crate::goal::bump(goals, "s1"), 2, "轮次跨 turn 累计");
 
-    // 终止态之后循环不再自己跑（但记录还在 —— 人能看见它为什么停）。
+    // After a terminal state the loop no longer runs on its own (but the record stays — a human can see why it stopped).
     crate::goal::finish(goals, "s1", "round-limit");
     assert!(crate::goal::active(goals, "s1").is_none(), "停了就不活跃");
     assert!(crate::goal::read(goals, "s1").is_some(), "但没被清掉");
 
-    // 空条件 = 清除。
+    // An empty condition = clear.
     assert!(crate::goal::set(goals, "s1", Some("   ")).is_none());
     assert!(crate::goal::read(goals, "s1").is_none());
 }
 
-/// `ok` 与 `impossible` 同时为真 = 判断器没想清楚 → 当作没达成（并说出这件事）。
+/// `ok` and `impossible` both true = a muddled judge → counts as not done (and says so).
 #[tokio::test]
 async fn a_self_contradicting_judgement_counts_as_not_done() {
     let mock = Arc::new(Mock::new(vec![Mock::text(
@@ -80,7 +80,7 @@ async fn a_self_contradicting_judgement_counts_as_not_done() {
     assert!(judgement.reason.contains("自相矛盾"), "{judgement:?}");
 }
 
-/// 判断器没给 JSON：报错（调用方据此停续轮并保住目标），而不是当成达成。
+/// The judge gives no JSON: an error (the caller stops continuing and keeps the goal), not a fake success.
 #[tokio::test]
 async fn a_judge_that_does_not_answer_json_is_an_error() {
     let mock = Arc::new(Mock::new(vec![Mock::text("我觉得差不多了吧")]));
@@ -89,15 +89,15 @@ async fn a_judge_that_does_not_answer_json_is_an_error() {
     assert!(outcome.is_err(), "没 JSON 就该是错误：{outcome:?}");
 }
 
-/// 闭环：没达成 → 续一轮 → 达成。`TurnMeta` 与通知都要如实反映。
+/// The closed loop: not met → one more round → met. `TurnMeta` and notifications must reflect it honestly.
 #[tokio::test]
 async fn the_loop_continues_until_the_judge_is_satisfied() {
     let mock = Arc::new(Mock::new(vec![
-        // 第一轮：门 → 主答复 → 判断（没达成）
+        // First round: gate → main reply → judge (not met)
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "goal"}"#),
         Mock::text("我先做了一半。"),
         Mock::text(r#"{"ok": false, "impossible": false, "reason": "测试还有两条红"}"#),
-        // 第二轮：门 → 主答复 → 判断（达成）
+        // Second round: gate → main reply → judge (met)
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "goal"}"#),
         Mock::text("两条都修好了。"),
         Mock::text(r#"{"ok": true, "impossible": false, "reason": "全绿了"}"#),
@@ -150,7 +150,7 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
     assert_eq!(meta.goal_rounds, 2, "{meta:?}");
     assert!(reply.contains("修好了"), "最终答复是第二轮的：{reply}");
 
-    // 判断器看到的是**理由**当成用户消息接着跑（同一会话的历史里能查到）。
+    // The judge's **reason** is fed back as the user message and the turn continues (findable in the same session's history).
     let requests = mock.received.lock().unwrap();
     assert!(
         requests
@@ -165,7 +165,7 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
     );
 }
 
-/// 到了上限还没达成：如实置 `round-limit`，不伪装完成。
+/// Cap reached without success: honestly stamped `round-limit`, no faked completion.
 #[tokio::test]
 async fn running_out_of_rounds_is_reported_honestly() {
     let mock = Arc::new(Mock::new(vec![

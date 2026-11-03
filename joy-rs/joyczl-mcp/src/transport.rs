@@ -1,14 +1,14 @@
-//! 两条传输，一个请求接口。
+//! Two transports, one request interface.
 //!
-//! stdio：客户端把服务器当本地子进程起起来，一行一个 JSON-RPC 消息。
-//! Streamable HTTP：服务器已经在别处跑着，POST 过去。
+//! stdio: the client spawns the server as a local subprocess, one JSON-RPC message per line.
+//! Streamable HTTP: the server is already running elsewhere; POST to it.
 //!
-//! 两条路都只做一件事：把 `request(method, params)` 变成 `result`。
-//! 剩下的（谁连得上、工具叫什么）在上层。
+//! Both paths do one thing: turn `request(method, params)` into `result`.
+//! The rest (who connects, what tools are called) lives above.
 //!
-//! 会话是**独占**的：一次请求发出去，读到匹配的那个应答为止。所以每条连接
-//! 外面套一把 Mutex（见 `lib.rs`）—— 并发调用排队，而不是互相吃掉对方的
-//! 应答。
+//! A session is **exclusive**: a request goes out and we read until the matching answer.
+//! So every connection is wrapped in a Mutex (see `lib.rs`) — concurrent calls queue
+//! instead of eating each other's answers.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -18,28 +18,28 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-/// MCP 协议版本。服务器可以回它自己支持的版本；不支持的话也会照常回话，
-/// 我们只用 `tools` 这一项能力，版本差异影响不到它。
+/// MCP protocol version. The server may answer with its own supported version; if not it
+/// still answers — we only use the `tools` capability, which version differences don't touch.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub const CLIENT_NAME: &str = "joy";
 
-/// 一次请求的上限。工具调用也在内 —— 一个卡住的服务器不该拖住一整轮对话。
+/// Per-request cap. Tool calls included — a stuck server must not stall a whole turn.
 pub const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 服务器报上来的一个工具。
+/// One tool reported by the server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ToolMeta {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// 线上字段是 `inputSchema`；SDK 2.x 的 Python 端口叫 `input_schema`，
-    /// 两种写法都收，省得因为一个下划线连不上。
+    /// The wire field is `inputSchema`; the SDK 2.x Python port calls it `input_schema`.
+    /// Accept both spellings, so a single underscore cannot break the connection.
     #[serde(default, rename = "inputSchema", alias = "input_schema")]
     pub input_schema: Option<Value>,
 }
 
 impl ToolMeta {
-    /// 给模型看的 schema：服务器没给就退化成「没有参数的对象」。
+    /// Schema for the model: if the server gave none, degrade to "an object with no parameters".
     pub fn schema(&self) -> Value {
         match &self.input_schema {
             Some(Value::Object(_)) => self.input_schema.clone().unwrap(),
@@ -48,10 +48,10 @@ impl ToolMeta {
     }
 }
 
-/// 一行一个 JSON-RPC 消息的会话。
+/// A session speaking one JSON-RPC message per line.
 ///
-/// 泛型是为了测试能拿 `tokio::io::duplex` 当管子用 —— 于是「协议对不对」
-/// 这件事不需要起一个真的子进程就能测。
+/// The generics exist so tests can use `tokio::io::duplex` as the pipe — "is the protocol
+/// right" can then be tested without spawning a real subprocess.
 pub struct StdioSession<R, W> {
     reader: BufReader<R>,
     writer: W,
@@ -110,17 +110,17 @@ where
                 continue;
             }
             let Ok(message) = serde_json::from_str::<Value>(trimmed) else {
-                // 服务器往 stdout 打了一行不是 JSON 的东西（某些库会这样）。
-                // 跳过它，而不是把整条连接判死。
+                // The server printed a non-JSON line to stdout (some libraries do that).
+                // Skip it rather than condemning the whole connection.
                 continue;
             };
             if message.get("id").and_then(Value::as_u64) != Some(id) {
-                // 我们的应答之前可能有别的消息：通知，或者服务器反过来发起的
-                // 请求（elicitation / sampling）。
+                // Before our answer there may be other messages: notifications, or requests
+                // initiated by the server itself (elicitation / sampling).
                 //
-                // 反向请求**不能装作没看见**：服务器会一直等一个永远不来的
-                // 回答（有些实现就此挂住）。回一个明确的「不支持」，它至少
-                // 知道这边不会答。完整支持没做 —— 见 docs/limitations.md。
+                // Reverse requests **cannot be ignored**: the server would wait forever for an
+                // answer that never comes (some hang right there). An explicit "unsupported"
+                // at least says this side won't answer. Full support not done — see docs/limitations.md.
                 if let (Some(method), Some(their_id)) = (
                     message.get("method").and_then(Value::as_str),
                     message.get("id").cloned(),
@@ -143,15 +143,15 @@ where
     }
 }
 
-/// 握手、列工具、调工具这三件事两条传输一模一样，所以它们写在 trait 上，
-/// 两种帧各自只负责「怎么把一条消息送出去、拿回来」。
+/// Handshake, list tools and call tools are identical across both transports, so they live
+/// on the trait; each framing only handles "how to get one message out and back".
 ///
-/// 方法名带 `rpc_` 前缀是为了跟两个结构体自己的 `request` / `notify` 区分开
-/// —— 那对方法是照具体类型写的，不想要重名的解析规则来添乱。
+/// Method names carry the `rpc_` prefix to separate them from the two structs' own
+/// `request` / `notify` — those target concrete types; no same-named parsing rules.
 ///
-/// `async_fn_in_trait` 这条 lint 针对的是「把 trait 交给别人实现」，而这里
-/// 只有本文件里那两个实现，也从没把它当 `dyn` 用，所以不需要给 Future 补
-/// `Send` 约束。
+/// The `async_fn_in_trait` lint targets "handing a trait to others to implement"; here
+/// only the two implementations in this file exist and it is never used as `dyn`, so the
+/// Future needs no `Send` bound.
 #[allow(async_fn_in_trait)]
 pub trait Rpc {
     async fn rpc_request(&mut self, method: &str, params: Value) -> Result<Value, String>;
@@ -182,7 +182,7 @@ impl Rpc for HttpSession {
     }
 }
 
-/// 握手：报上自己是谁、拿到服务器的能力，然后告诉它「我准备好了」。
+/// Handshake: announce who we are, get the server's capabilities, then say "we're ready".
 pub async fn initialize(session: &mut impl Rpc) -> Result<Value, String> {
     let result = session
         .rpc_request(
@@ -206,7 +206,7 @@ pub async fn list_tools(session: &mut impl Rpc) -> Result<Vec<ToolMeta>, String>
     serde_json::from_value(tools).map_err(|e| format!("工具列表读不懂：{e}"))
 }
 
-/// 调一次工具，返回给模型读的文本。
+/// Call a tool once, returning the text for the model to read.
 pub async fn call_tool(session: &mut impl Rpc, tool: &str, args: Value) -> Result<String, String> {
     let result = session
         .rpc_request("tools/call", json!({"name": tool, "arguments": args}))
@@ -259,7 +259,7 @@ where
     }
 }
 
-/// 从一条 JSON-RPC 消息里取出 `result`，或者把 `error` 变成错误。
+/// Take `result` out of a JSON-RPC message, or turn `error` into an error.
 fn unwrap_message(message: &Value) -> Result<Value, String> {
     if let Some(error) = message.get("error") {
         if !error.is_null() {
@@ -274,12 +274,12 @@ fn unwrap_message(message: &Value) -> Result<Value, String> {
     Ok(message.get("result").cloned().unwrap_or(Value::Null))
 }
 
-/// Streamable HTTP 会话。老的 HTTP+SSE 传输已废弃，这里有意不支持。
+/// Streamable HTTP session. The old HTTP+SSE transport is deprecated; unsupported on purpose.
 pub struct HttpSession {
     client: reqwest::Client,
     url: String,
     token: Option<String>,
-    /// 服务器在 initialize 的应答里给的；之后每个请求都要带回去。
+    /// Given by the server in the initialize answer; every later request must carry it back.
     session_id: Option<String>,
     next_id: u64,
 }
@@ -300,7 +300,7 @@ impl HttpSession {
             .client
             .post(&self.url)
             .header("content-type", "application/json")
-            // 两条都报上：服务器可以按 JSON 回，也可以开一条 SSE 流。
+            // Announce both: the server may answer as JSON or open an SSE stream.
             .header("accept", "application/json, text/event-stream")
             .json(&body);
         if let Some(token) = &self.token {
@@ -337,7 +337,7 @@ impl HttpSession {
             .post(json!({"jsonrpc": "2.0", "method": method, "params": params}))
             .await?;
         if status == 202 || text.trim().is_empty() {
-            return Ok(()); // 通知的应答就是「收到了」
+            return Ok(()); // a notification's answer is just "received"
         }
         if !(200..300).contains(&status) {
             return Err(format!("HTTP {status}：{}", first_line(&text)));
@@ -352,8 +352,8 @@ impl HttpSession {
             .post(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
             .await?;
         if !(200..300).contains(&status) {
-            // 这里多说一句状态码：通用 SDK 常把 401 和 500 都糊成
-            // 一句「服务器返回了错误」，而人最想知道的恰恰是哪一个。
+            // Say the status code out loud: generic SDKs often blur 401 and 500 into one
+            // "the server returned an error", when that is exactly what people want to know.
             return Err(format!("HTTP {status}：{}", first_line(&text)));
         }
         if content_type.contains("text/event-stream") {
@@ -389,7 +389,7 @@ impl HttpSession {
     }
 }
 
-/// 从一条 SSE 流里找出 `id` 对应的那条消息。
+/// Find the message matching `id` inside an SSE stream.
 fn find_in_stream(text: &str, id: u64) -> Option<Value> {
     for line in text.lines() {
         let Some(data) = line.strip_prefix("data:") else {
@@ -405,30 +405,30 @@ fn find_in_stream(text: &str, id: u64) -> Option<Value> {
     None
 }
 
-/// 服务器报错时，回话可能是一整页 HTML。日志里只配放第一行。
+/// On server errors the body can be a whole page of HTML. Only the first line fits in a log.
 fn first_line(text: &str) -> String {
     let line = text.lines().next().unwrap_or("").trim();
     line.chars().take(200).collect()
 }
 
-/// 一条已经连上的传输。
+/// A transport that is already connected.
 pub enum Transport {
     Stdio(Box<StdioTransport>),
     Http(HttpSession),
 }
 
-/// stdio 那一路的两个把手：管道会话 + 子进程本身。
+/// The two handles of the stdio path: the pipe session + the subprocess itself.
 ///
-/// 装进 `Box` 里 —— 它比 `HttpSession` 大一个数量级，留在枚举变体里会让
-/// 每个 `Transport` 都按最大变体的尺寸占地方。
+/// Boxed — it is an order of magnitude larger than `HttpSession`; left in the enum variant
+/// every `Transport` would occupy the largest variant's size.
 pub struct StdioTransport {
     session: StdioSession<ChildStdout, ChildStdin>,
-    /// 子进程的把手，只为了活着（kill_on_drop 让它在被丢掉时一起走）。
+    /// The subprocess handle, only to keep it alive (kill_on_drop takes it away on drop).
     _child: Child,
 }
 
 impl Transport {
-    /// 按配置起一条传输。**还没**握手 —— 握手是 [`Transport::initialize`]。
+    /// Start a transport from config. **Not yet** handshaken — that is [`Transport::initialize`].
     pub async fn connect(spec: &crate::config::Transport) -> Result<Transport, String> {
         match spec {
             crate::config::Transport::Stdio { command, args, env } => {
@@ -437,11 +437,11 @@ impl Transport {
                     .args(args)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
-                    // 服务器的日志走我们的 stderr：stdout 是协议通道，stderr 是日志。
+                    // The server's logs go to our stderr: stdout is the protocol, stderr is logs.
                     .stderr(Stdio::inherit())
                     .kill_on_drop(true);
                 if let Some(env) = env {
-                    // 设了 env 就是**替换**，不是追加。
+                    // Setting env means **replace**, not append.
                     child.env_clear();
                     child.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
                 }
@@ -489,7 +489,7 @@ impl Transport {
         }
     }
 
-    /// 调一次工具，返回给模型读的文本。
+    /// Call a tool once, returning the text for the model to read.
     pub async fn call_tool(&mut self, tool: &str, args: Value) -> Result<String, String> {
         match self {
             Transport::Stdio(stdio) => stdio.session.call_tool(tool, args).await,

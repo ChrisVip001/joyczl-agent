@@ -1,8 +1,8 @@
-//! `mcp.json` 的读法，以及「这份配置到底想说什么」的判定。
+//! How `mcp.json` is read, and judging "what this config actually means".
 //!
-//! 配置里有两类事会当场被拒，理由是同一条：**同时写了两种说法，就等于没说**。
-//! 哪条优先是猜的，而猜错的表现是「连上了但用的是另一种传输」这种最难查的
-//! 故障，所以宁可拒掉。
+//! Two kinds of things in the config are rejected on the spot, same reason: **writing both
+//! spellings means saying nothing**. Which wins is a guess; guessing wrong shows up as
+//! "connected but on the other transport" — the hardest fault to trace, so we reject.
 //!
 //! ```json
 //! {"servers": [
@@ -12,17 +12,17 @@
 //! ]}
 //! ```
 //!
-//! `auth_env` 里放的是**环境变量的名字**，不是凭证本身 —— mcp.json 是会被
-//! 人粘进 bug report 的文件，里面躺一个 bearer token 就等于泄露。变量的值
-//! 会作为 `Authorization: Bearer <值>` 发出去。
+//! `auth_env` holds the **name of an environment variable**, not the credential itself —
+//! mcp.json gets pasted into bug reports; a bearer token in it is a leak. The variable's
+//! value is sent as `Authorization: Bearer <value>`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Deserialize;
 
-/// 一个服务器条目。字段都可选 —— 「必填」这件事由 [`resolve`] 按形状判断，
-/// 这样报出来的错是「你两种都写了」，而不是 serde 的「缺字段」。
+/// One server entry. All fields optional — "required" is judged by shape in [`resolve`],
+/// so the error reads "you wrote both", not serde's "missing field".
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ServerSpec {
     pub name: String,
@@ -54,27 +54,27 @@ impl Config {
     }
 }
 
-/// 一个服务器条目解出来的连法。传输由配置的**形状**决定，而不是一个
-/// `transport` 字段 —— 要么给本地命令，要么给远程 url。
+/// The connection decoded from one entry. The transport is decided by the config's **shape**,
+/// not a `transport` field — either a local command or a remote url.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Transport {
     Stdio {
         command: String,
         args: Vec<String>,
-        /// `Some` 表示**只给这些变量**（设了 env 就是替换，
-        /// 不是追加），`None` 表示继承当前进程的环境。
+        /// `Some` means **only these variables** (env set = replace, not append);
+        /// `None` means inherit the current process environment.
         env: Option<BTreeMap<String, String>>,
     },
     Http {
         url: String,
-        /// 已经解析出来的 bearer 值（不是变量名）。
+        /// The decoded bearer value (not the variable name).
         token: Option<String>,
     },
 }
 
-/// 把一条配置解析成连法，或者说明它哪里不对。
+/// Decode one config entry into a connection, or explain what is wrong with it.
 ///
-/// `lookup_env` 传进来而不是直接读进程环境，是为了这条判定能被纯函数地测试。
+/// `lookup_env` is passed in instead of reading the process env, so this is pure-function testable.
 pub fn resolve(
     spec: &ServerSpec,
     lookup_env: &dyn Fn(&str) -> Option<String>,
@@ -102,12 +102,12 @@ pub fn resolve(
     if !auth_env.is_empty() && use_oauth {
         return Err("同时写了 'auth_env' 和 'oauth' —— 只能挑一种".to_string());
     }
-    // `oauth: true` 的服务器在这里长成「匿名 Http」：真正的 bearer 由上层
-    //（lib.rs）从 mcp-auth 的 token 库里取 —— 没登录过的话，那边的报错
-    // 会告诉人去跑 `joy mcp login`。见 oauth.rs。
+    // A server with `oauth: true` is built here as an "anonymous Http": the real bearer is
+    // fetched by the layer above (lib.rs) from mcp-auth's token store — if never logged in,
+    // that side's error tells you to run `joy mcp login`. See oauth.rs.
     if !auth_env.is_empty() {
-        // 不匿名连上去：那样服务器回 401，工具就静静地不见了，读起来
-        // 像是「服务器挂了」，而不是「你没导出那个变量」。
+        // Do not connect anonymously: the server would return 401 and the tools would
+        // quietly vanish, reading like "server down" instead of "you did not export it".
         let token = lookup_env(auth_env)
             .filter(|t| !t.is_empty())
             .ok_or_else(|| format!("{auth_env} 没有值（mcp.json 里的 'auth_env' 指的是它）"))?;
@@ -122,10 +122,10 @@ pub fn resolve(
     })
 }
 
-/// 远端服务器连不上时，告诉人**能自己查**的那一件事。
+/// When a remote server cannot be reached, tell the person the one thing **they can check themselves**.
 ///
-/// 这条提示只对 `auth_env` 那条路有意义：oauth 服务器走的是
-/// `mcp-auth/` 里的 token，报错时已经各自说明了。
+/// This hint only makes sense for the `auth_env` path: oauth servers use tokens from
+/// `mcp-auth/`, and their errors already explain themselves.
 pub fn auth_hint(transport: &Transport) -> Option<String> {
     match transport {
         Transport::Http { url, token: None } => Some(format!(
@@ -135,22 +135,22 @@ pub fn auth_hint(transport: &Transport) -> Option<String> {
     }
 }
 
-/// `<server>_<tool>`，压到模型厂商肯收的形状。
+/// `<server>_<tool>`, squeezed into a shape model vendors accept.
 ///
-/// 工具名到了 Anthropic / OpenAI 那里要过 `^[a-zA-Z0-9_-]{1,64}$`；MCP 本身
-/// 没有这个限制，而且点号分隔是常见写法（不少服务器发的是 `memory.remember`
-/// 这种），于是「一个完全合法的 MCP 服务器」会让请求在模型看到任何东西之前
-/// 就被拒掉。
+/// Tool names hitting Anthropic / OpenAI must pass `^[a-zA-Z0-9_-]{1,64}$`; MCP itself has
+/// no such limit, and dot separators are common (many servers send `memory.remember`-style
+/// names), so "a perfectly legal MCP server" would get the request rejected before the
+/// model sees anything.
 ///
-/// 只改模型读到的那个名字。回给服务器的仍是原名，所以改名不可能弄坏派发。
-/// 同 [`model_safe_name`]，但保证在 `taken` 里**唯一**。
+/// Only the name the model reads changes; the original still goes back to the server, so
+/// renaming cannot break dispatch. Same as [`model_safe_name`], but **unique** in `taken`.
 ///
-/// 为什么需要：`{server}_{tool}` 会塌 —— 服务器 `a` 的工具 `b_c` 与服务器 `a_b`
-/// 的工具 `c` 都变成 `a_b_c`。两个服务器各报一个同名工具是现实里会发生的事，而
-/// 「谁覆盖谁」取决于注册顺序，那是最难查的一类问题。重名时加 `_2`、`_3`……
+/// Why needed: `{server}_{tool}` collapses — server `a`'s tool `b_c` and server `a_b`'s
+/// tool `c` both become `a_b_c`. Two servers reporting a same-named tool happens; "who
+/// overwrites whom" depends on registration order — the hardest bug class. Suffix `_2`, `_3`…
 ///
-/// 返回 `(最终名字, 是否改过)`：**改过就要说出来** —— 这个名字模型和用户都会看到，
-/// 悄悄改掉等于让人对着一份对不上的工具名排查。
+/// Returns `(final name, whether renamed)`: **a rename must be announced** — model and user
+/// both see this name; a silent rename means debugging against a mismatched tool list.
 pub fn model_safe_name_unique(
     server: &str,
     tool: &str,
@@ -169,7 +169,7 @@ pub fn model_safe_name_unique(
     unreachable!("序号总能找到空位")
 }
 
-/// 加后缀并守住 64 字符上限：**保头**（服务器前缀在头上，区分度最高）。
+/// Add a suffix under the 64-char cap: **keep the head** (the server prefix distinguishes best).
 fn with_suffix(base: &str, n: u32) -> String {
     let suffix = format!("_{n}");
     let keep = 64usize.saturating_sub(suffix.len());
@@ -191,6 +191,6 @@ pub fn model_safe_name(server: &str, tool: &str) -> String {
     if safe.len() <= 64 {
         return safe;
     }
-    // 保尾巴：区分度在工具自己的名字里，服务器前缀是读者损失得起的那部分。
+    // Keep the tail: distinctiveness is in the tool's own name; the server prefix is the affordable loss.
     safe[safe.len() - 64..].trim_start_matches('_').to_string()
 }

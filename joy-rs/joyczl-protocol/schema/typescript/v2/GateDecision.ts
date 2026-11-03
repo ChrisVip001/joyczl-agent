@@ -4,11 +4,11 @@ import type { GateDecisionKind } from "./GateDecisionKind";
 export type GateDecision = {
   decision: GateDecisionKind;
   /**
-   * 门给的理由（≤5 个词的那种）。失败开放时带上原因，便于排查。
+   * The gate's reason (the ≤5-word kind). Present on fail-open so it can be debugged.
    */
   reason: string;
   /**
-   * 判定为 retrieve 时的检索词；skip 时为 null。
+   * The search query when the verdict is retrieve; null when skipping.
    */
   query: string | null;
 };

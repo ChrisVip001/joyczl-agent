@@ -1,22 +1,22 @@
-//! trace / usage 落盘 —— LLM-Ops 的账本。
+//! trace / usage persistence — the LLM-Ops ledgers.
 //!
-//! 两本账：
+//! Two ledgers:
 //!
-//!   * `<home>/traces/<日期>.jsonl`  每轮一行：用户说了什么、怎么答的、
-//!     门和图怎么走的、花了多少 token。**始终开启** —— 没有配置开关，
-//!     观测不是可选项。
-//!   * `<home>/usage.jsonl`          永续账本：每轮一行 provider / model /
-//!     token 数。追加永不改写。
+//!   * `<home>/traces/<date>.jsonl`  one line per turn: what the user said, how it was answered,
+//!     how the gate and graph went, how many tokens were spent. **Always on** — there is no config
+//!     switch; observability is not optional.
+//!   * `<home>/usage.jsonl`          the perpetual ledger: one line per turn of provider / model /
+//!     token counts. Append-only, never rewritten.
 //!
-//! 两条都是 append-only 单行写入。写失败只往 stderr 喊一声 ——
-//! 账本坏了不该连累对话，但也不能悄悄闭嘴。
+//! Both are append-only single-line writes. A write failure only shouts to stderr —
+//! a broken ledger must not drag the conversation down, but it must not go silent either.
 
 use std::io::Write;
 use std::path::Path;
 
 use chrono::Local;
 
-/// 追加一行 JSON。目录不存在就建；写失败往 stderr 报，不 panic。
+/// Append one JSON line. Create the directory if missing; report write failures to stderr, never panic.
 fn append_jsonl(path: &Path, line: &str) {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
@@ -38,8 +38,8 @@ fn append_jsonl(path: &Path, line: &str) {
     }
 }
 
-/// 一轮的完整 trace。`meta` 是协议里的 TurnMeta（门/图/工具/模型都在里面），
-/// 外面再包上本轮的输入输出 —— 排查「它当时为什么这么答」靠这一行就够。
+/// The full trace of one turn. `meta` is the protocol's TurnMeta (gate/graph/tools/model all inside),
+/// wrapped with this turn's input and output — that one line is enough to trace "why it answered that way then".
 pub fn record_turn(home: &Path, record: &serde_json::Value) {
     let date = Local::now().format("%Y-%m-%d");
     append_jsonl(
@@ -48,7 +48,7 @@ pub fn record_turn(home: &Path, record: &serde_json::Value) {
     );
 }
 
-/// 一轮的 token 用量入账。账本按轮记：provider / model / tokens / 迭代数。
+/// Book one turn's token usage. The ledger records per turn: provider / model / tokens / iterations.
 pub fn record_usage(home: &Path, record: &serde_json::Value) {
     append_jsonl(&home.join("usage.jsonl"), &record.to_string());
 }
@@ -82,7 +82,7 @@ mod trace_tests {
 
     #[test]
     fn a_bad_home_warns_instead_of_panicking() {
-        // home 指向一个文件：目录建不出来，但调用方照常往下走。
+        // home points at a file: the directory cannot be created, but the caller proceeds as usual.
         let dir = tempfile::tempdir().expect("临时目录");
         let blocker = dir.path().join("blocker");
         std::fs::write(&blocker, "not a directory").unwrap();

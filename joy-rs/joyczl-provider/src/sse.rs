@@ -1,26 +1,26 @@
-//! SSE 的最小解析：只关心 `data:` 行。
+//! Minimal SSE parsing: only `data:` lines matter.
 //!
-//! Anthropic 和 OpenAI 的流式应答都是同一种外壳：
+//! Anthropic and OpenAI streaming answers share the same envelope:
 //!
 //! ```text
 //! event: content_block_delta
 //! data: {"type":"content_block_delta",...}
-//! (空行)
+//! (blank line)
 //! ```
 //!
-//! 事件名和结构两家完全不同，但「每行一个 data: 载荷」是一样的，
-//! 所以解析到这一层为止，剩下的交给各自的实现。
+//! Event names and structures differ completely, but "one data: payload per line" is the
+//! same — parsing stops at this layer; the rest belongs to each implementation.
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 
 use crate::ProviderError;
 
-/// 把 HTTP 字节流变成一行行 `data:` 载荷。
+/// Turn the HTTP byte stream into one `data:` payload per item.
 ///
-/// `event:` 行、注释、空行都被丢掉 —— 事件边界对调用方没有意义，
-/// 它要的只是逐条 JSON。OpenAI 的 `data: [DONE]` 也原样交出去，
-/// 由调用方判断。
+/// `event:` lines, comments, and blank lines are dropped — event boundaries mean nothing
+/// to the caller, which wants JSON items one by one. OpenAI's `data: [DONE]` is passed
+/// through verbatim too; the caller decides.
 pub fn data_lines<S>(bytes: S) -> impl Stream<Item = Result<String, ProviderError>>
 where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
@@ -29,7 +29,7 @@ where
         (bytes, String::new(), false),
         |(mut stream, mut buffer, mut eof)| async move {
             loop {
-                // 缓冲里还有整行 → 逐行取。
+                // A whole line is still in the buffer → take it line by line.
                 if let Some(pos) = buffer.find('\n') {
                     let line: String = buffer.drain(..=pos).collect();
                     let line = line.trim_end_matches(['\n', '\r']);
@@ -44,7 +44,7 @@ where
                 }
 
                 if eof {
-                    // 某些实现在最后一个事件后不带空行 —— 把残留交出去。
+                    // Some implementations omit the blank line after the last event — flush the rest.
                     if let Some(payload) = buffer.strip_prefix("data:") {
                         let payload = payload.trim().to_string();
                         return Some((Ok(payload), (stream, String::new(), eof)));

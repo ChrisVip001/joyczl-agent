@@ -4,7 +4,7 @@ export type ToolStartedNotification = {
   turnId: string;
   tool: string;
   /**
-   * 模型给的参数，结构随工具而定。
+   * The model-supplied arguments; structure depends on the tool.
    */
   args: unknown;
 };

@@ -1,29 +1,29 @@
-//! 按任务档位自动选模型（任务档位抽象：
-//! "You don't pick the model, the task does."）。
+//! Auto-select the model by task tier (the task-tier abstraction:
+//! "You don't pick the model, the task does.").
 //!
-//! 路由是**服务端策略**，不是模型的能力 —— 与 `/model` 同一条人类授权边界：
-//! 模型没有换模型的工具，用户 pin（active profile）永远优先。`fixed` 模式
-//! （默认，路由文件不存在也是它）下这个模块整个是透明的。
+//! Routing is a **server-side policy**, not a model capability — the same human-authorization
+//! boundary as `/model`: the model has no tool to change models, and the user's pin (active profile)
+//! always wins. In `fixed` mode (the default, also when the routes file is absent) this whole module is transparent.
 
 use joyczl_config::routes::{load_routes, RouteFile, RouteMode};
 use joyczl_provider::{tokens, Resolved};
 
 use crate::Server;
 
-/// 模糊带下界：低于它的消息显然是 chat（问一句、派个活），不值得为它
-/// 花一次分类调用；高于半窗口的已被 L0 直接判成 reasoning。分类只发生在
-/// 这条带里 —— 不分类就是纯规则，这个分类器是可选项里的可选项。
+/// Lower bound of the fuzzy band: below it, a message is obviously chat (a quick question, a small
+/// errand) and not worth a classify call; above half the window, L0 already rules reasoning directly.
+/// Classification happens only inside this band — without it, pure rules; this classifier is an optional extra.
 const CLASSIFY_MIN_TOKENS: usize = 2_000;
 
-/// 这条估算量落在「L0 拿不准」的模糊带里吗？
+/// Does this estimate fall in the fuzzy band where "L0 is unsure"?
 pub(crate) fn needs_classify(estimated_tokens: usize, chat_window: u32) -> bool {
     let half = (chat_window as u64 / 2).max(1) as usize;
     estimated_tokens >= CLASSIFY_MIN_TOKENS && estimated_tokens < half
 }
 
-/// 解析分类器的回答。**fail-open**：含糊、多余的话、没提到 reasoning ——
-/// 一律当 chat。误判成 chat 的代价是多走一轮普通模型，误判成 reasoning
-/// 的代价是白花贵模型的钱，所以偏向保守。
+/// Parse the classifier's reply. **fail-open**: vague, extra words, no mention of reasoning —
+/// all treated as chat. Misjudging as chat costs one extra round of the ordinary model; misjudging as
+/// reasoning wastes money on the expensive model, so bias conservative.
 pub(crate) fn parse_tier_reply(text: &str) -> Option<&'static str> {
     let first = text.trim().to_lowercase();
     if first.is_empty() {
@@ -36,8 +36,8 @@ pub(crate) fn parse_tier_reply(text: &str) -> Option<&'static str> {
     }
 }
 
-/// token 估算超过 chat 档窗口的一半 → 换 reasoning 档。
-/// 阈值跟着 chat 档自己的上下文窗口走（self-tuning），不设新旋钮。
+/// Token estimate over half the chat tier's window → switch to the reasoning tier.
+/// The threshold follows the chat tier's own context window (self-tuning); no new knob.
 pub(crate) fn pick_tier(estimated_tokens: usize, chat_window: u32) -> &'static str {
     let half = (chat_window as u64 / 2).max(1) as usize;
     if estimated_tokens >= half {
@@ -47,9 +47,9 @@ pub(crate) fn pick_tier(estimated_tokens: usize, chat_window: u32) -> &'static s
     }
 }
 
-/// 档位 → profile id 的缺省链（表缺项时逐级回落，最后一跳是 active）：
-/// `reasoning` → `chat` → active；`fast` → `chat` → active；`chat` → active。
-/// 表里引用了已删除的 profile 由 `resolved_profile` 回落 —— 这里只管查表。
+/// Tier → profile id fallback chain (missing table entries fall through level by level; the last hop is active):
+/// `reasoning` → `chat` → active; `fast` → `chat` → active; `chat` → active.
+/// A deleted profile referenced by the table falls back in `resolved_profile` — this only looks up the table.
 pub(crate) fn profile_for_tier(
     routes: &RouteFile,
     tier: &str,
@@ -67,8 +67,8 @@ pub(crate) fn profile_for_tier(
     }
 }
 
-/// L1 分类器（与 gate/judge 同一条便宜模型模式）：无工具、只看消息、
-/// 回一个词。任何失败都返回 None（调用方保持 L0 结论）。
+/// The L1 classifier (the same cheap-model pattern as gate/judge): no tools, reads only the message,
+/// replies with one word. Any failure returns None (the caller keeps the L0 conclusion).
 async fn classify_tier(cheap: &Resolved, message: &str) -> Option<String> {
     use joyczl_provider::{ContentBlock, CreateRequest, Message};
 
@@ -102,17 +102,17 @@ async fn classify_tier(cheap: &Resolved, message: &str) -> Option<String> {
 }
 
 impl Server {
-    /// 每轮一次：决定这一轮用哪套模型。`base` 是 active profile 的解析结果 ——
-    /// fixed 模式、选中同一套、或任何失败，都原样返回它（失败开放，
-    /// 绝不因路由炸掉一轮；回落原因进 `route_reason`，不静默）。
+    /// Run once per turn: decide which profile this turn uses. `base` is the active profile's resolution —
+    /// in fixed mode, when the same profile is selected, or on any failure, it is returned as-is
+    /// (fail-open; routing must never blow up a turn; the fallback reason goes into `route_reason`, unhidden).
     pub(crate) async fn resolved_for_turn(
         &self,
         base: Resolved,
         message: &str,
     ) -> (Resolved, Option<String>) {
         let routes = load_routes(&self.settings().home);
-        // JOY_MODEL_ROUTE 环境变量可**强制**指定模式（auto/fixed）—— 无人值守
-        // 与 CI 里改不了 home 文件；文件里的值是它的缺省。
+        // The JOY_MODEL_ROUTE env var can **force** the mode (auto/fixed) — unattended runs
+        // and CI cannot edit the home files; the file's value is its default.
         let mode = match std::env::var("JOY_MODEL_ROUTE").as_deref() {
             Ok("auto") => RouteMode::Auto,
             Ok("fixed") => RouteMode::Fixed,
@@ -128,8 +128,8 @@ impl Server {
         let estimated = tokens::estimate_text(message);
         let window = base.context_window();
         let mut tier: String = pick_tier(estimated, window).to_string();
-        // L1：模糊带里问一次便宜模型（active 的 small_model，永远存在）。
-        // 失败/含糊 fail-open 回 L0 的结论 —— 路由绝不能成为新的故障点。
+        // L1: ask a cheap model once inside the fuzzy band (active's small_model, always present).
+        // Failure/vagueness fail-opens back to the L0 conclusion — routing must never become a new failure point.
         if needs_classify(estimated, window) {
             if let Some(said) = classify_tier(&base, message).await {
                 tier = said;
@@ -142,7 +142,7 @@ impl Server {
             );
         };
         if active_id.as_deref() == Some(profile_id.as_str()) {
-            // 选中的就是 active —— 无需 reason，turn 页脚保持干净。
+            // The selected one is already active — no reason needed; the turn footer stays clean.
             return (base, None);
         }
         match self.resolved_profile(&profile_id) {
@@ -151,8 +151,8 @@ impl Server {
         }
     }
 
-    /// 按档位解析具体 profile。每个 profile 只解析一次 —— provider client
-    /// 连着连接池，每轮重建太浪费；profile 被改/删时整表作废（见 `reapply`）。
+    /// Resolve the concrete profile for a tier. Each profile is resolved once — the provider client
+    /// holds the connection pool; rebuilding it every turn is wasteful; when a profile is edited/deleted the whole table is invalidated (see `reapply`).
     fn resolved_profile(&self, profile_id: &str) -> Result<Resolved, String> {
         if let Some(hit) = self
             .route_cache

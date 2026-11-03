@@ -7,7 +7,7 @@ import { DiscordAdapter } from "../src/discord.ts";
 import type { DiscordSocket, DiscordSocketFactory } from "../src/discord.ts";
 import type { Responder } from "../src/bridge.ts";
 
-/** 假的网关连接。真收发帧，只是帧不过网络。 */
+/** A fake gateway connection. Frames really go back and forth; they just never touch a network. */
 class FakeSocket implements DiscordSocket {
   readonly sent: Array<Record<string, unknown>> = [];
   closed = false;
@@ -26,12 +26,12 @@ class FakeSocket implements DiscordSocket {
     this.onclose?.();
   }
 
-  /** 服务端推一帧过来。 */
+  /** The server pushes one frame in. */
   push(frame: Record<string, unknown>): void {
     this.onmessage?.({ data: JSON.stringify(frame) });
   }
 
-  /** 发出去的操作码为 `op` 的帧。 */
+/** Frames sent with opcode `op`. */
   frames(op: number): Array<Record<string, unknown>> {
     return this.sent.filter((frame) => frame["op"] === op);
   }
@@ -46,7 +46,7 @@ class FakeGateway {
     return socket;
   };
 
-  /** 最近那条连接。 */
+  /** The latest connection. */
   get latest(): FakeSocket {
     const socket = this.sockets.at(-1);
     assert.ok(socket !== undefined, "还没有连过");
@@ -61,15 +61,15 @@ interface SentCall {
   agent: string | undefined;
 }
 
-/** 假的 Discord REST。请求的形状跟真的一样。 */
+/** A fake Discord REST. Requests have the same shape as real ones. */
 class FakeDiscord {
   readonly calls: SentCall[] = [];
-  /** 真发出去的正文（排好队的那几次不算）。 */
+  /** The bodies really sent (scripted responses don't count). */
   readonly sent: string[] = [];
 
   readonly #scripted: Array<{ status: number; body?: unknown }> = [];
 
-  /** 排一个应答，按次取；取完之后一律 200。 */
+  /** Queue one response, consumed in order; once exhausted, always 200. */
   script(response: { status: number; body?: unknown }): void {
     this.#scripted.push(response);
   }
@@ -78,7 +78,7 @@ class FakeDiscord {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    // 先让出事件循环再回答：真网络每次都得等一个往返，替身照做才忠实。
+    // Yield the event loop before answering: a real network always waits a round trip; a faithful double does too.
     await new Promise((resolve) => setImmediate(resolve));
 
     const body = JSON.parse(String(init?.body ?? "{}")) as { content: string };
@@ -106,12 +106,12 @@ function reply(status: number, value: unknown): Response {
   } as unknown as Response;
 }
 
-/** 连接的开场：HELLO 说心跳多久一次。 */
+/** The connection's opening: HELLO says how often to heartbeat. */
 function hello(socket: FakeSocket, heartbeatMs = 60_000): void {
   socket.push({ op: 10, d: { heartbeat_interval: heartbeatMs } });
 }
 
-/** 自己是谁。@ 的判定要用它。 */
+/** Who we are. Needed for @-mention detection. */
 function ready(socket: FakeSocket, self = { id: "9", username: "joy" }): void {
   socket.push({ op: 0, s: 1, t: "READY", d: { user: self } });
 }
@@ -161,7 +161,7 @@ function setup(
   return { adapter, gateway, discord };
 }
 
-/** 等 `done()` 成立，然后停掉连接并等它真的收尾。 */
+/** Wait for `done()`, then stop the connection and await its real shutdown. */
 async function stopWhen(
   adapter: DiscordAdapter,
   running: Promise<void>,
@@ -177,7 +177,7 @@ async function stopWhen(
   await running;
 }
 
-// ---- 连上 ------------------------------------------------------------------
+// ---- Connecting ------------------------------------------------------------------
 
 test("连上之后：报上身份，而且该开的事件位一位不少", async () => {
   const { adapter, gateway } = setup();
@@ -191,8 +191,8 @@ test("连上之后：报上身份，而且该开的事件位一位不少", async
   const payload = identify[0]!["d"] as Record<string, unknown>;
   assert.equal(payload["token"], "test-token");
 
-  // 少一位就收不到该收的东西。MESSAGE_CONTENT 尤其 —— 它是特权位，
-  // 开发门户里没打开的话这条连接会被直接掐掉（4013）。
+  // One bit short and the matching events never arrive. MESSAGE_CONTENT especially — it's a
+  // privileged bit; without the portal toggle the connection is cut outright (4013).
   const intents = payload["intents"] as number;
   for (const [name, bit] of [
     ["GUILDS", 0],
@@ -218,7 +218,7 @@ test("心跳按 HELLO 给的间隔发，带上最近一次的序号", async () =
 
   await stopWhen(adapter, running, () => socket.frames(1).length > 0, "心跳");
 
-  // 序号得跟着最新那帧走：一直是 null 的话，服务端会当这条连接什么都没收到过。
+  // The sequence must track the latest frame: always null, and the server thinks nothing was ever received.
   assert.equal(socket.frames(1)[0]!["d"], 2);
 });
 
@@ -240,7 +240,7 @@ test("连都连不上（比如网络不通）：留个痕，退避之后再来",
   const running = adapter.run();
   const first = gateway.latest;
 
-  // Node 底下连接失败只报这一下，不一定再给 close —— 真机上验过。
+  // Under Node a failed connect reports only this, not necessarily a close — verified on real machines.
   first.onerror?.();
 
   const deadline = Date.now() + 5000;
@@ -255,7 +255,7 @@ test("连都连不上（比如网络不通）：留个痕，退避之后再来",
   assert.ok(logs.some((line) => line.includes("连不上")));
 });
 
-// ---- 收消息 ----------------------------------------------------------------
+// ---- Receiving messages ----------------------------------------------------------------
 
 test("私聊来一条文字：按频道去问 Joy，把答复发回那个频道", async () => {
   const asked: Array<[string, string]> = [];
@@ -273,7 +273,7 @@ test("私聊来一条文字：按频道去问 Joy，把答复发回那个频道"
 
   await stopWhen(adapter, running, () => discord.sent.length > 0, "答复");
 
-  // 会话按**频道**分：私聊一个频道一段对话，服务器里同一频道的人共用一段。
+  // Sessions split by **channel**: one conversation per DM channel; a server channel shares one.
   assert.deepEqual(asked, [["discord:555", "你好"]]);
   assert.deepEqual(discord.sent, ["你也好"]);
 });
@@ -291,7 +291,7 @@ test("发消息：带上 bot 身份，以及 Discord 要求的 User-Agent", asyn
   const call = discord.calls[0]!;
   assert.equal(call.channel, "555");
   assert.equal(call.auth, "Bot test-token");
-  // 这个头缺了或者格式写错，会被挡在 Cloudflare 那一层 —— 报错还看不出原因。
+  // Missing or malformed, this header stops you at Cloudflare — with an error that hides the cause.
   assert.match(call.agent ?? "", /^DiscordBot \(.+\)$/);
 });
 
@@ -327,9 +327,9 @@ test("频道里没叫就不接话；叫了才接，而且那个标记要摘掉",
   const socket = gateway.latest;
   hello(socket);
   ready(socket);
-  // 频道里的闲聊，没叫它
+  // Channel chatter, not calling it
   message(socket, { guild_id: "1", content: "今天天气不错" });
-  // 叫了它
+  // Calling it
   message(socket, { guild_id: "1", content: "<@9> 记一下", mentions: [{ id: "9" }] });
 
   await stopWhen(adapter, running, () => asked.length > 0, "问 Joy");
@@ -412,7 +412,7 @@ test("Joy 那边出错：把原因说出来，而不是默不作声", async () =
 
   await stopWhen(adapter, running, () => discord.sent.length > 0, "回话");
 
-  // 用户在聊天框里没有任何别的线索，所以得说清是哪一类问题。
+  // The chat box offers the user no other clue, so the problem class must be stated.
   assert.match(discord.sent[0]!, /模型那边没接上/);
   assert.match(discord.sent[0]!, /joy config/);
 });
@@ -430,8 +430,8 @@ test("回话发不出去（比如被踢出频道）：只留个痕，网关不�
   ready(socket);
   message(socket);
 
-  // `await running` 能走完，就说明那个拒绝被兜住了 —— 没兜住的话
-  // 整个进程会因为一次未捕获的拒绝直接退出。
+  // `await running` completing means the rejection was caught — uncaught, the whole process
+  // would exit on one unhandled rejection.
   await stopWhen(
     adapter,
     running,
@@ -445,7 +445,7 @@ test("回话发不出去（比如被踢出频道）：只留个痕，网关不�
   );
 });
 
-// ---- 发出去 ----------------------------------------------------------------
+// ---- Sending out ----------------------------------------------------------------
 
 test("回答太长：切成几条发，每条都在上限以内", async () => {
   const line = "这一行特意写长一点，好让总长度确实超过一条消息的上限，看看会不会被硬切。";
@@ -491,7 +491,7 @@ test("连接断了：歇一下自己连回来，而且是重新握手", async ()
   hello(first);
   ready(first);
 
-  // 服务端让它下来的 —— Discord 会定期这么做，这不是故障。
+  // The server took it down on purpose — Discord does this periodically; it's not a fault.
   first.close();
 
   const deadline = Date.now() + 5000;
@@ -502,8 +502,8 @@ test("连接断了：歇一下自己连回来，而且是重新握手", async ()
 
   const second = gateway.latest;
   hello(second);
-  // 重新握手，不是 RESUME —— 断的那几秒里说的话就是丢了。这是没实现 RESUME
-  // 的代价，钉在这儿，免得以后被当成 bug 查半天。
+  // A fresh handshake, not RESUME — messages spoken during the drop are just lost. That's the
+  // cost of not implementing RESUME, pinned here so it isn't chased as a bug for hours later.
   assert.equal(second.frames(2).length, 1, "重连得以 IDENTIFY 开场");
 
   adapter.stop();

@@ -1,10 +1,10 @@
-//! 护栏的判据与替换规则。全是纯函数，不需要模型也不需要库。
+//! The guard's criteria and replacement rules. All pure functions — no model, no store needed.
 
 use serde_json::json;
 
 use super::guard::{for_model, reminder, GuardVerdict, StallGuard};
 
-/// 观察一次调用，返回判定。
+/// Observe one call, return the verdict.
 fn feed(guard: &mut StallGuard, name: &str, args: serde_json::Value, output: &str) -> GuardVerdict {
     guard.observe(name, &args, output)
 }
@@ -27,7 +27,7 @@ fn three_identical_calls_in_a_row_trip_the_guard() {
     assert_eq!(guard.hits(), 1);
     assert!(guard.last_note().is_some());
 
-    // 参数变了就不算同一个调用。
+    // Different args means not the same call.
     let mut guard = StallGuard::new();
     for i in 0..3 {
         feed(&mut guard, "save_note", json!({"subject": i}), "已记住");
@@ -37,7 +37,7 @@ fn three_identical_calls_in_a_row_trip_the_guard() {
 
 #[test]
 fn an_alternating_batch_is_caught_even_though_it_never_repeats_consecutively() {
-    // A,B,A,B —— 每次交替都会把「连续相同」的计数重置，所以必须单独判。
+    // A,B,A,B — every alternation resets the "consecutive identical" count, so it needs its own check.
     let mut guard = StallGuard::new();
     let a = json!({"q": "a"});
     let b = json!({"q": "b"});
@@ -48,7 +48,7 @@ fn an_alternating_batch_is_caught_even_though_it_never_repeats_consecutively() {
     let verdict = feed(&mut guard, "search_memory", b.clone(), "结果 B");
     assert_eq!(verdict, GuardVerdict::Cyclic { period: 2 });
 
-    // 三拍子的循环同样要抓到。
+    // A three-beat cycle must be caught too.
     let mut guard = StallGuard::new();
     for _ in 0..2 {
         feed(&mut guard, "t", json!({"i": 1}), "r1");
@@ -60,7 +60,7 @@ fn an_alternating_batch_is_caught_even_though_it_never_repeats_consecutively() {
 
 #[test]
 fn pure_repetition_is_not_reported_as_a_cycle() {
-    // 同一次调用重复两遍：既不满足「连续 3 次」，也不该被报成「周期 2 的循环」。
+    // One call repeated twice: neither "3 in a row", nor should it be reported as a "period-2 cycle".
     let mut guard = StallGuard::new();
     let args = json!({"x": 1});
     feed(&mut guard, "t", args.clone(), "同一结果");
@@ -74,19 +74,19 @@ fn only_long_repeated_results_are_replaced_by_a_stub() {
     let long = "x".repeat(600);
     let args = json!({"path": "/tmp/a"});
 
-    // 第 1 次命中（times=3）时短结果原样保留 —— 桩比原文还长。
+    // On the first hit (times=3) the short result is kept as-is — the stub would be longer.
     let repeated = GuardVerdict::Repeated { times: 3 };
     let text = for_model(short, "read", &args, &repeated);
     assert!(text.contains(short), "短结果不该被换掉：{text}");
     assert!(text.contains("[guard]"), "但提醒要加上：{text}");
 
-    // 长结果从第 2 次重复起换桩，桩里留着参数预览。
+    // Long results are stubbed from the 2nd repeat on, with an args preview in the stub.
     let twice = GuardVerdict::Repeated { times: 2 };
     let text = for_model(&long, "read", &args, &twice);
     assert!(text.contains("第 2 次相同调用"), "{text}");
     assert!(text.contains("/tmp/a"), "桩里要有参数预览：{text}");
     assert!(!text.contains("xxxx"), "长正文该被省略：{text}");
-    // 第 1 次重复（times=1）还不换桩：可能是正常的两次调用。
+    // The 1st repeat (times=1) is not stubbed yet: two calls can be perfectly normal.
     let text = for_model(&long, "read", &args, &GuardVerdict::Repeated { times: 1 });
     assert!(text.contains("xxxx"), "第一次重复仍给全文：{}", text.len());
 }

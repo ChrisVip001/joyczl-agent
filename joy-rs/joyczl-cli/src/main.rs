@@ -1,9 +1,10 @@
-//! `joy` —— 命令行入口。
+//! `joy` — command-line entry point.
 //!
-//! `joy` 裸跑进入终端对话（进程内直接持有 app-server 的 Server）；
-//! `joy app-server` 启动那个唯一持有 state.db 的进程，从 stdin 读 JSON-RPC、
-//! 往 stdout 写应答；`joy dashboard` 起网页驾驶舱，它**也是** app-server 的
-//! 客户端（自己 fork 一个出来说话），只是把协议翻译成了 HTTP + SSE。
+//! Bare `joy` runs the terminal conversation (holding the app-server's Server
+//! in-process); `joy app-server` starts the sole process that owns state.db,
+//! reading JSON-RPC from stdin and writing responses to stdout; `joy dashboard`
+//! starts the web cockpit, also an app-server client (it forks one to talk to),
+//! just translating the protocol into HTTP + SSE.
 
 mod gather;
 mod mcp_cmd;
@@ -44,9 +45,9 @@ Joy — 本地优先的个人助手
     JOY_GH_REPO       gather 的 github scan 用的仓库（owner/repo）
 ";
 
-/// 状态目录。默认放在当前工作目录下，而不是 ~/.joy ——
-/// 「你的记忆就是一个能打开的文件」这句话得成立：站在哪个项目里，
-/// 记忆就在哪个项目旁边。
+/// State directory. Defaults to under the current working directory rather than
+/// ~/.joy — "your memory is a file you can open" must hold true: whichever
+/// project you stand in, memory lives next to that project.
 fn home() -> PathBuf {
     std::env::var_os("JOY_HOME")
         .map(PathBuf::from)
@@ -70,7 +71,7 @@ async fn main() -> Result<()> {
         }
         Some("eval") | Some("judge") => {
             let mut args: Vec<String> = std::env::args().skip(2).collect();
-            // 不给路径就用仓库约定：evals/deterministic/ 与 evals/judge/。
+            // No path given: fall back to repo convention evals/deterministic/ and evals/judge/.
             if args.is_empty() {
                 let default = if command.as_deref() == Some("eval") {
                     "evals/deterministic"
@@ -90,11 +91,11 @@ async fn main() -> Result<()> {
         }
         Some("hub") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
-            // joy hub adduser <名字> --root <目录>
+            // joy hub adduser <name> --root <dir>
             if args.first().map(String::as_str) == Some("adduser") {
                 return hub_adduser(&args[1..]);
             }
-            // joy hub --root <目录>
+            // joy hub --root <dir>
             let root = hub_root(&args)?;
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
@@ -108,14 +109,15 @@ async fn main() -> Result<()> {
             .await
         }
         Some("app-server") => {
-            // JOY_HOME 优先于环境里的 JOY_HOME —— 显式传参赢过环境变量，
-            // 这样 `JOY_HOME=/tmp/x joy app-server` 和脚本里的行为可预期。
+            // JOY_HOME here takes precedence over the env's JOY_HOME — explicit args
+            // win over the env var, so `JOY_HOME=/tmp/x joy app-server` is predictable.
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
             settings.ensure_home()?;
-            // 守护锁：常驻进程的内存态（审批/目标/作业）只有一份才有意义，
-            // 两个 app-server 写同一个 state.db 是事故。REPL/驾驶舱不拿锁 ——
-            // 它们是另一条路（REPL 进程内自持，见模块头注释）。
+            // Daemon lock: the resident process's in-memory state (approvals/goals/
+            // jobs) only makes sense as one copy — two app-servers writing the same
+            // state.db is an incident. REPL/cockpit don't lock (they're another path,
+            // REPL holds its own in-process, see module header comment).
             let _daemon =
                 joyczl_app_server::lock::acquire(&settings.home).map_err(|e| anyhow::anyhow!(e))?;
             let server = joyczl_app_server::open(&settings).await?;
@@ -145,9 +147,10 @@ async fn main() -> Result<()> {
         Some("dashboard") => {
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
-            // 这里不 ensure_home：驾驶舱可以比 app-server 先起来，
-            // 目录由子进程建 —— 顺序反过来会先建出一个空目录，
-            // 反而看不出「状态目录在哪儿」这件事其实是 app-server 决定的。
+            // No ensure_home here: the cockpit may start before app-server, and the
+            // directory is created by the child process — reversed order would create
+            // an empty dir first, obscuring that app-server really decides where the
+            // state directory lives.
             joyczl_ops::serve(settings).await
         }
         Some("--version") | Some("-V") => {
@@ -158,7 +161,7 @@ async fn main() -> Result<()> {
             anyhow::bail!("未知子命令 '{other}'\n\n{USAGE}");
         }
         None => {
-            // 终端对话：进程内装配 Server，REPL 跑同一个 run_turn。
+            // Terminal conversation: assemble Server in-process, REPL runs the same run_turn.
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
             settings.ensure_home()?;
@@ -168,7 +171,7 @@ async fn main() -> Result<()> {
     }
 }
 
-/// `joy hub` 的 `--root` 参数（不给就用 JOY_HUB_ROOT，再不给就报错）。
+/// `--root` argument of `joy hub` (falls back to JOY_HUB_ROOT, then errors).
 fn hub_root(args: &[String]) -> anyhow::Result<String> {
     for (i, arg) in args.iter().enumerate() {
         if arg == "--root" {
@@ -183,8 +186,8 @@ fn hub_root(args: &[String]) -> anyhow::Result<String> {
     })
 }
 
-/// `joy hub adduser <名字> --root <目录>`：生成 token，写进 users.json（0600）。
-/// token 只打印这一次 —— 账本里存的就是它，丢了就删掉重加。
+/// `joy hub adduser <name> --root <dir>`: generates a token, writes it into
+/// users.json (0600). The token is printed only once — the ledger stores it.
 fn hub_adduser(args: &[String]) -> anyhow::Result<()> {
     let Some(name) = args.first() else {
         anyhow::bail!("用法：joy hub adduser <名字> --root <目录>");

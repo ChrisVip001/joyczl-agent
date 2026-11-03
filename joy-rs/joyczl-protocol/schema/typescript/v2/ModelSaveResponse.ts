@@ -3,17 +3,17 @@
 export type ModelSaveResponse = {
   id: string;
   /**
-   * 这套现在是当前生效的吗。
+   * Whether this profile is currently active.
    */
   active: boolean;
   activeId: string | null;
   /**
-   * 凭据**实际**落在哪：`keychain` / `file` / `env:VAR` / `memory` / `none`。
-   * 兜底成明文文件时也要如实说 —— 不能让用户以为进了钥匙串。
+   * Where the credential **actually** landed: `keychain` / `file` / `env:VAR` / `memory` / `none`.
+   * Fall back to a plaintext file and say so honestly — never let the user assume the keychain.
    */
   keyStoredIn: string;
   /**
-   * 切换后的当前模型（`provider / model`），没配好就是 null。
+   * The current model after switching (`provider / model`); null when not fully configured.
    */
   current: string | null;
 };

@@ -5,11 +5,11 @@ export type GraphNodeEndedNotification = {
   node: string;
   ms: number;
   /**
-   * 该节点写回了哪些 state key。
+   * Which state keys the node wrote back.
    */
   keys: Array<string>;
   /**
-   * 节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。
+   * Error text when the node throws; errors are logged, never rethrown, and the run still finishes normally.
    */
   error: string | null;
 };

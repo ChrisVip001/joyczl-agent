@@ -1,10 +1,10 @@
-//! 钩子的契约：装载、匹配、阻断、改写、超时两分法、信任哈希。
+//! Hook contracts: loading, matching, blocking, rewriting, the timeout dichotomy, trusted hash.
 //!
-//! 需要真起子进程的用例标了 `#[cfg(unix)]`：钩子跑的是 shell 命令，Windows 上
-//! 那是另一套东西（见 `docs/limitations.md`），不该假装它在两种平台上一样。
+//! Cases needing real subprocesses are marked `#[cfg(unix)]`: hooks run shell commands, which
+//! on Windows are a different beast (see `docs/limitations.md`); don't pretend platforms are alike.
 
 use super::hooks::Hooks;
-// 需要真起子进程的用例是 unix-only 的（见上面的模块注释），它们才用得上这两个。
+// The subprocess-needing cases are unix-only (see the module comment above); only they use these two.
 #[cfg(unix)]
 use super::hooks::HookEvent;
 #[cfg(unix)]
@@ -14,7 +14,7 @@ fn write_hooks(dir: &std::path::Path, body: &str) {
     std::fs::write(dir.join("hooks.json"), body).expect("写 hooks.json");
 }
 
-// ---- 装载（不需要子进程）--------------------------------------------------
+// ---- Loading (no subprocess needed) -----------------------------------------
 
 #[test]
 fn a_missing_file_means_no_hooks() {
@@ -71,7 +71,7 @@ fn no_entries_means_no_hooks_at_all() {
     assert!(Hooks::load(dir.path(), None).is_none());
 }
 
-// ---- 行为（要被子进程真跑一遍）--------------------------------------------
+// ---- Behavior (subprocesses actually run) -----------------------------------
 
 #[cfg(unix)]
 fn hooks_with(dir: &std::path::Path, body: &str) -> Hooks {
@@ -79,7 +79,7 @@ fn hooks_with(dir: &std::path::Path, body: &str) -> Hooks {
     Hooks::load(dir, None).expect("装载")
 }
 
-/// exit 2 是唯一靠退出码阻断的方式，理由从 stderr 来。
+/// exit 2 is the only block-via-exit-code; the reason comes from stderr.
 #[cfg(unix)]
 #[tokio::test]
 async fn exit_two_blocks_and_carries_the_reason() {
@@ -97,7 +97,7 @@ async fn exit_two_blocks_and_carries_the_reason() {
     assert_eq!(outcome.blocked.as_deref(), Some("这条不许跑"));
 }
 
-/// exit 1 是**非阻塞**错误：动作照常，但要在旁注里留下痕迹。
+/// exit 1 is a **non-blocking** error: the action proceeds, but an aside must record it.
 #[cfg(unix)]
 #[tokio::test]
 async fn exit_one_is_an_error_but_not_a_block() {
@@ -119,7 +119,7 @@ async fn exit_one_is_an_error_but_not_a_block() {
     );
 }
 
-/// 决策 JSON：阻断、改写入参、改写结果、补上下文。
+/// Decision JSON: block, rewrite input, rewrite output, add context.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_decision_json_can_block_rewrite_and_add_context() {
@@ -155,7 +155,7 @@ async fn a_decision_json_can_block_rewrite_and_add_context() {
         .contains("CONTRIBUTING.md"));
 }
 
-/// `permissionDecision: allow` → 有人替用户拍板了。
+/// `permissionDecision: allow` → someone decided for the user.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_permission_decision_of_allow_counts_as_consent() {
@@ -175,12 +175,12 @@ async fn a_permission_decision_of_allow_counts_as_consent() {
     assert!(outcome.blocked.is_none());
 }
 
-/// 超时的两分法：策略事件 fail-closed，观察事件 fail-open。
+/// The timeout dichotomy: policy events fail-closed, observation events fail-open.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timeout_blocks_policy_events_but_not_observers() {
     let dir = tempfile::tempdir().expect("临时目录");
-    // 1 秒超时 + 睡 3 秒：必超时。
+    // 1s timeout + sleep 3s: must time out.
     let body = r#"{ "hooks": {
          "PreToolUse": [ { "timeout": 1, "command": "sh", "args": ["-c", "cat >/dev/null; sleep 3"] } ],
          "PostToolUse": [ { "timeout": 1, "command": "sh", "args": ["-c", "cat >/dev/null; sleep 3"] } ]
@@ -204,12 +204,12 @@ async fn a_timeout_blocks_policy_events_but_not_observers() {
     );
 }
 
-/// 匹配器：`*` 全中、`a|b` 任一、其余整串相等（不做正则）。
+/// Matchers: `*` hits all, `a|b` any, otherwise exact equality (no regex).
 #[cfg(unix)]
 #[tokio::test]
 async fn matchers_pick_which_calls_the_hook_sees() {
     let dir = tempfile::tempdir().expect("临时目录");
-    // 命中就往 stdout 写一段纯文本 —— 观察事件的 stdout 会变成旁注。
+    // On a hit, write plain text to stdout — an observation event's stdout becomes an aside.
     let hooks = hooks_with(
         dir.path(),
         r#"{ "hooks": { "PostToolUse": [
@@ -228,7 +228,7 @@ async fn matchers_pick_which_calls_the_hook_sees() {
     assert!(miss.note.is_none(), "没匹配就不该跑");
 }
 
-/// 运行中改掉 hooks.json：**不执行**并说明原因（对齐 trusted_hash）。
+/// hooks.json changed at runtime: **don't run** and say why (aligned with trusted_hash).
 #[cfg(unix)]
 #[tokio::test]
 async fn a_file_changed_while_running_is_not_executed() {
@@ -244,7 +244,7 @@ async fn a_file_changed_while_running_is_not_executed() {
         ),
     );
 
-    // 改掉文件（模拟别的进程写了它）。
+    // Change the file (simulating another process writing it).
     write_hooks(
         dir.path(),
         r#"{ "hooks": { "PostToolUse": [ { "command": "sh", "args": ["-c", "cat >/dev/null; echo 新内容"] } ] } }"#,

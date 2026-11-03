@@ -1,23 +1,23 @@
-//! THE LOOP —— observe → reason → act → repeat。这个文件就是全部技巧。
+//! THE LOOP — observe → reason → act → repeat. This file is the whole trick.
 //!
-//! 每个 agent 框架，剥到底都是这个循环加更多间接层：
+//! Every agent framework, stripped to the bone, is this loop plus more indirection:
 //!
 //! ```text
 //! while not done:
 //!     response = llm(messages, tools)     # reason
-//!     if response 想调工具:
+//!     if response wants tools:
 //!         results = run(tool_calls)       # act
 //!         messages += results             # observe
 //!     else:
-//!         done                            # 回复人类
+//!         done                            # reply to the human
 //! ```
 //!
-//! 两个护栏（出口条件）：
-//!   1. 模型不再要工具   → 一轮自然结束
-//!   2. 到达 max_iterations → 硬停，绝不空转
+//! Two guardrails (exit conditions):
+//!   1. the model stops requesting tools → the turn ends naturally
+//!   2. `max_iterations` reached → hard stop, never spin idle
 //!
-//! observer 是一个枚举事件而不是 `(kind, dict)` —— 字段有了类型，
-//! 拼错 key 编译期就报错。
+//! The observer is an enum of events, not a `(kind, dict)` — fields have types,
+//! so a misspelled key is a compile-time error.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -43,11 +43,11 @@ mod guard_tests;
 #[path = "budget_tests.rs"]
 mod budget_tests;
 
-/// 一轮 turn 的打断开关。`turn/interrupt` 在别的任务里把它拨下去，
-/// loop 在下一个安全点（模型调用、工具执行的途中以 select 竞速）收兵。
+/// The turn's interrupt switch. `turn/interrupt` flips it down from another task;
+/// the loop stands down at the next safe point (model call, or tool execution racing a select).
 ///
-/// 不用 tokio_util 的 CancellationToken：一个原子位加一个 Notify 就够了，
-/// 不值得为一根旗杆拉进一整个依赖。
+/// No tokio_util CancellationToken: one atomic bit plus a Notify is enough — not worth
+/// pulling in a whole dependency for one flagpole.
 #[derive(Debug, Default)]
 pub struct Interrupt {
     cancelled: std::sync::atomic::AtomicBool,
@@ -59,7 +59,7 @@ impl Interrupt {
         Arc::new(Self::default())
     }
 
-    /// 拨下开关。已经取消时再拨是幂等的。
+    /// Flip the switch down. Flipping it again after cancel is idempotent.
     pub fn cancel(&self) {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -70,7 +70,7 @@ impl Interrupt {
         self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// 取消的那一刻返回。没取消就挂起等通知。
+    /// Returns at the moment of cancellation. Suspends waiting for the notify otherwise.
     pub async fn wait(&self) {
         while !self.is_cancelled() {
             let notified = self.notify.notified();
@@ -82,21 +82,21 @@ impl Interrupt {
     }
 }
 
-/// loop 往外发的事件。gateway 拿它画界面，trace 拿它落盘 ——
-/// 两者都不需要被接进 loop 的逻辑里。
+/// Events the loop sends out. The gateway renders them, trace persists them —
+/// neither needs to be wired into the loop's logic.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoopEvent {
-    /// 一次模型调用完成。
+    /// One model call completed.
     Llm {
         iteration: i32,
         stop_reason: StopReason,
         usage: Usage,
     },
-    /// 流式文本的一个增量。只在传了 `on_text` 时出现。
+    /// One delta of streamed text. Only appears when `on_text` is passed.
     Text { delta: String },
-    /// 一次工具**开始**执行（结果还没出来 —— ToolCompleted 事件在后面）。
+    /// One tool **started** (result not out yet — the Tool event comes later).
     ToolStart { name: String, args: Value },
-    /// 一次工具执行完成（output 就是模型会看到的那段文本）。
+    /// One tool finished (output is exactly the text the model will see).
     Tool {
         name: String,
         args: Value,
@@ -104,8 +104,8 @@ pub enum LoopEvent {
     },
 }
 
-/// 观察者：每个 loop 事件都会经过它。用 Arc 而不是引用，
-/// 是为了能和 `on_text` 一起被搬进 'static 的闭包里。
+/// Observer: every loop event passes through it. Arc instead of a reference,
+/// so it can be moved together with `on_text` into a 'static closure.
 pub type Observer = Arc<dyn Fn(LoopEvent) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,8 +116,8 @@ pub struct ToolOutcome {
 }
 
 impl ToolOutcome {
-    /// 输出以 "Error:" 开头 = 这次调用失败了。
-    /// 这就是「错误作为文本」约定在报告侧的另一半。
+    /// Output starting with "Error:" means this call failed.
+    /// This is the reporting side of the "errors as text" convention.
     pub fn ok(&self) -> bool {
         !self.output.starts_with("Error:")
     }
@@ -125,25 +125,25 @@ impl ToolOutcome {
 
 #[derive(Debug, Clone)]
 pub struct LoopResult {
-    /// 模型对用户说的话。
+    /// What the model says to the user.
     pub reply: String,
     pub tool_calls: Vec<ToolOutcome>,
     pub iterations: i32,
-    /// 整轮的 token 用量（每次 LLM 调用累加）。
+    /// Token usage for the whole turn (summed over every LLM call).
     pub usage: Usage,
-    /// 完整的工作记忆 —— assistant 的想法、工具调用、工具结果全在里面，
-    /// trace 要的就是这个。
+    /// The full working memory — assistant thoughts, tool calls, tool results all in here;
+    /// exactly what trace wants.
     pub messages: Vec<Message>,
-    /// 被 `turn/interrupt` 打断时为 true：reply 里是打断前已经吐出的文本，
-    /// 不保证完整。
+    /// True when interrupted by `turn/interrupt`: reply holds text already streamed before
+    /// the interrupt, not guaranteed complete.
     pub interrupted: bool,
-    /// 这一轮里循环护栏的账（命中几次、最后说了什么）。
+    /// This turn's loop-guard tally (hit count, last note).
     pub guard: GuardReport,
-    /// 最后一次请求的**本地估算**输入 token 数（0 = 还没发过请求）。
-    /// 只用来与 provider 回报的 `usage` 配对，做下一轮的校准 —— 它本身不是账。
+    /// The **locally estimated** input tokens of the last request (0 = none sent yet).
+    /// Only paired with the provider-reported `usage` to calibrate the next turn — not the ledger.
     pub estimated_input_tokens: usize,
-    /// 最后一次调用的**实测**输入 token（provider 回报的 prefill）。
-    /// 与 `estimated_input_tokens` 是同一个请求的两个数字：相除就是估算的偏差。
+    /// The **measured** input tokens of the last call (provider-reported prefill).
+    /// Two numbers for the same request as `estimated_input_tokens`: dividing gives the error.
     pub observed_input_tokens: usize,
 }
 
@@ -151,22 +151,22 @@ pub struct Turn<'a> {
     pub client: &'a dyn Provider,
     pub model: &'a str,
     pub system: String,
-    /// 之前几轮的历史（滑窗截过的）。函数内部会把这条新消息追加在末尾。
+    /// History from previous turns (sliding-window trimmed). The new message is appended at the end.
     pub history: Vec<Message>,
     pub user_message: String,
     pub tools: &'a ToolRegistry,
     pub ctx: ToolCtx,
     pub max_iterations: i32,
     pub max_tokens: i32,
-    /// 轮内工具结果的预算（默认关；见 `budget.rs`）。
+    /// Budget for intra-turn tool results (off by default; see `budget.rs`).
     pub tool_result_budget: ToolResultBudget,
-    /// 每个事件都会经过它 —— gateway 拿它画界面，trace 拿它落盘。
-    /// 用 Arc 而不是引用，是为了能和 `on_text` 一起被搬进 'static 闭包。
+    /// Every event passes through it — the gateway renders, trace persists.
+    /// Arc instead of a reference, so it can move with `on_text` into a 'static closure.
     pub observer: Option<Arc<dyn Fn(LoopEvent) + Send + Sync>>,
-    /// 传了就走流式：模型每吐一段文本就回调一次。
-    /// 没传也能跑 —— provider 会退回非流式。
+    /// Pass it for streaming: one callback per text chunk the model emits.
+    /// Runs fine without it — the provider falls back to non-streaming.
     pub on_text: Option<TextSink>,
-    /// 传了就支持打断：每个模型调用和工具执行都跟「取消」竞速。
+    /// Pass it to support interrupts: each model call and tool execution races "cancel".
     pub interrupt: Option<Arc<Interrupt>>,
 }
 
@@ -177,16 +177,16 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
 
     let mut tool_calls: Vec<ToolOutcome> = Vec::new();
     let mut usage = Usage::default();
-    // 落盘目录：`ToolCtx` 已经有 home，不用再穿一层参数。
+    // Spill directory: `ToolCtx` already carries home, no extra parameter to thread through.
     let spill_dir = turn.ctx.home.join("spill");
-    // 最后一次请求的本地估算 + 实测（给 app-server 做「用实测校准估算」）。
+    // Last request's local estimate + measured value (app-server calibrates estimate with measured).
     let mut last_estimate = 0usize;
     let mut last_observed = 0usize;
-    // 本轮内的循环检测（跨轮的重复由 app-server 的 fold_tool_activity 负责）。
+    // Within-turn loop detection (cross-turn repetition is app-server's fold_tool_activity's job).
     let mut guard = StallGuard::new();
 
-    // 流式期间模型吐出的全部文本。被打断时，这就是 reply 里能救回来的部分 ——
-    // 断在句中间的半句话，也比一句"没了"诚实。
+    // All text the model streams during this turn. On interrupt, this is the part of the reply
+    // that can be rescued — half a sentence cut mid-way is more honest than a flat "gone".
     let streamed: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let record: TextSink = {
         let streamed = streamed.clone();
@@ -199,7 +199,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
     };
 
     for iteration in 1..=turn.max_iterations.max(1) {
-        // ---- 打断检查：取消令牌已拨下就不发起新的模型调用，立刻收兵。
+        // ---- Interrupt check: token already flipped down means no new model call; stand down now.
         if turn
             .interrupt
             .as_ref()
@@ -217,11 +217,11 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             }));
         }
 
-        // ---- 轮内工具结果预算：组装请求前把太大的结果换成桩。
+        // ---- Intra-turn tool-result budget: stub oversized results before assembling the request.
         //
-        // 放在这里而不是工具执行完之后：换桩只该影响**发给模型的文本**，
-        // 而每一轮都可能又攒了几条结果，所以在请求前统一过一遍最省心
-        // （函数本身幂等，已是桩的直接跳过）。
+        // Placed here rather than after tool execution: stubbing should only affect the **text
+        // sent to the model**, and every turn may accumulate more results, so one sweep before
+        // the request is simplest (the function is idempotent; existing stubs are skipped).
         budget::trim_tool_results(
             &mut messages,
             Some(&spill_dir),
@@ -229,10 +229,10 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             &turn.ctx.session_id,
         );
 
-        // ---- reason：带着当前工作记忆调一次模型
+        // ---- reason: call the model once with the current working memory
         let schemas = turn.tools.schemas();
-        // 估算 = 消息 + system + 工具声明。与 provider 回报的 usage 配对，
-        // 用来校准下一轮的预算（估歪了只会让压缩早/晚发生，不会算错账）。
+        // Estimate = messages + system + tool schemas. Paired with the provider-reported usage
+        // to calibrate the next turn's budget (a skewed estimate only shifts compaction earlier/later).
         last_estimate = joyczl_provider::tokens::estimate_messages(&messages)
             + joyczl_provider::tokens::estimate_text(&turn.system)
             + joyczl_provider::tokens::estimate_tools(&schemas);
@@ -244,9 +244,9 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             max_tokens: turn.max_tokens,
         };
 
-        // 有流式出口就走流式：文本增量既转发给 on_text（界面），也作为
-        // Text 事件给 observer（trace），再抄一份进 streamed（打断时的遗言）。
-        // 没有流式出口就退回一次性调用 —— 后面的逻辑完全一样。
+        // With a streaming sink, go streaming: text deltas go both to on_text (UI) and as Text
+        // events to the observer (trace), plus a copy into streamed (last words on interrupt).
+        // Without a streaming sink, fall back to a one-shot call — the rest is identical.
         let fut = match (turn.on_text.clone(), notify.clone()) {
             (Some(sink), Some(observer)) => {
                 let (record, streamed_sink) = (record.clone(), sink.clone());
@@ -280,8 +280,8 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             (None, None) => turn.client.create(request),
         };
 
-        // 模型调用与「取消」竞速：谁先到算谁的。输掉的那次调用 future 被
-        // 丢弃，HTTP 连接随之关闭 —— 不会在后台继续烧 token。
+        // The model call races "cancel": whoever arrives first wins. The losing future is
+        // dropped and its HTTP connection closed — no tokens burned in the background.
         let response = match turn.interrupt.as_ref() {
             Some(cancel) => {
                 tokio::select! {
@@ -314,7 +314,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             });
         }
 
-        // assistant 的这轮（文本和/或工具请求）进入工作记忆
+        // This turn's assistant message (text and/or tool requests) enters working memory
         messages.push(Message {
             role: Role::Assistant,
             content: response.content.clone(),
@@ -322,7 +322,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
 
         let uses = response.tool_uses();
 
-        // ---- 护栏 1：不再要工具 → 模型在跟人说话
+        // ---- Guardrail 1: no tools requested → the model is talking to the human
         if uses.is_empty() {
             return Ok(LoopResult {
                 reply: response.text(),
@@ -337,10 +337,10 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             });
         }
 
-        // ---- act：逐个执行请求的工具；observe：把结果喂回去
+        // ---- act: run each requested tool; observe: feed the results back
         let mut results = Vec::new();
         for (id, name, input) in uses {
-            // 工具开始执行。先于结果发出 —— 客户端才能画出"正在调用 X"。
+            // Tool starting. Sent before the result — so the client can render "calling X".
             if let Some(notify) = &notify {
                 notify(LoopEvent::ToolStart {
                     name: name.to_string(),
@@ -349,8 +349,8 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             }
 
             let started = Instant::now();
-            // 工具执行同样与「取消」竞速：跑一半的工具 future 被丢弃，
-            // 它拉起的子进程/连接由各自的 Drop 收尾。
+            // Tool execution also races "cancel": a half-run tool future is dropped, and its
+            // child processes/connections are cleaned up by their own Drop impls.
             let output = match turn.interrupt.as_ref() {
                 Some(cancel) if cancel.is_cancelled() => {
                     return Ok(interrupted_result(Scene {
@@ -402,8 +402,8 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 output: output.clone(),
                 duration_ms,
             });
-            // 护栏过一眼：命中就换桩 + 追加提醒。**只改喂回模型的文本** ——
-            // tool_calls 与 Tool 事件里留的都是真结果。
+            // The guard takes a look: on a hit, stub + append a reminder. **Only the fed-back
+            // text changes** — tool_calls and Tool events keep the real result.
             let verdict = guard.observe(name, input, &output);
             let for_model = guard::for_model(&output, name, input, &verdict);
             results.push(ContentBlock::ToolResult {
@@ -417,7 +417,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         });
     }
 
-    // ---- 护栏 2：迭代次数用完了
+    // ---- Guardrail 2: iterations exhausted
     Ok(LoopResult {
         reply: "（我还没做完就到了迭代上限——试试把请求拆小一点。）".to_string(),
         tool_calls,
@@ -431,10 +431,10 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
     })
 }
 
-/// 打断时的收兵结果：reply 是已经流出来的文本（没有就一句话说明），
-/// `interrupted: true` 让上层如实落库，而不是把半截话当成完整回答。
-/// 收兵现场。打断与「迭代上限」都从这里拼 `LoopResult` —— 参数超过七八个之后，
-/// 一个结构体比一长串实参好读，也少一次「又加了一个字段、四处调用都得改」。
+/// The stand-down result on interrupt: reply is text already streamed (or one explanatory line),
+/// and `interrupted: true` lets the caller persist it honestly, not pass off half an answer.
+/// The stand-down scene. Both interrupt and "iteration cap" assemble `LoopResult` here — past
+/// seven or eight params, a struct reads better, and adding a field no longer breaks four sites.
 struct Scene {
     streamed: Arc<Mutex<String>>,
     tool_calls: Vec<ToolOutcome>,
@@ -476,7 +476,7 @@ fn interrupted_result(scene: Scene) -> LoopResult {
     }
 }
 
-/// 空的 observer，调用方不需要事件时省得写闭包。
+/// An empty observer, saving callers a closure when they need no events.
 pub fn noop_observer(_: LoopEvent) {}
 
 #[cfg(test)]

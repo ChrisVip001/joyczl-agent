@@ -2,7 +2,7 @@
 
 export type TurnInterruptResponse = {
   /**
-   * false = 这一轮已经跑完了，没打断到什么。
+   * false = this turn already finished; nothing was interrupted.
    */
   interrupted: boolean;
 };

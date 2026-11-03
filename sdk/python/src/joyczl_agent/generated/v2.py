@@ -17,7 +17,7 @@ class ApprovalLogEntry(BaseModel):
     argsPreview: str
     decidedAt: str
     outcome: Annotated[
-        str, Field(description='approved / denied / timeout / voided 四态之一。')
+        str, Field(description='One of approved / denied / timeout / voided.')
     ]
     reason: str
     requestId: str
@@ -31,21 +31,36 @@ class ApprovalLogParams(RootModel[None]):
 
 class ApprovalLogResponse(BaseModel):
     entries: Annotated[
-        list[ApprovalLogEntry], Field(description='新的在前，服务端封顶 100 条。')
+        list[ApprovalLogEntry],
+        Field(description='Newest first, capped at 100 entries by the server.'),
     ]
 
 
 class ApprovalRequestedNotification(BaseModel):
     argsPreview: Annotated[
-        str, Field(description='给人看的动作预览：命令原文，或参数摘要。')
+        str,
+        Field(
+            description='Human-facing action preview: the raw command or an args summary.'
+        ),
     ]
-    expiresInMs: Annotated[int, Field(description='多少毫秒内没人回答就按拒绝算。')]
-    reason: Annotated[str, Field(description='为什么没被放行规则直接放行。')]
+    expiresInMs: Annotated[
+        int, Field(description='How many milliseconds of silence count as a denial.')
+    ]
+    reason: Annotated[
+        str,
+        Field(description='Why the allow rules did not let it through automatically.'),
+    ]
     requestId: Annotated[
-        str, Field(description='这一轮内的请求号，回答时要原样带回来。')
+        str,
+        Field(
+            description='Request id within this turn; echo it back verbatim when answering.'
+        ),
     ]
     tool: Annotated[
-        str, Field(description='想执行什么（工具名，目前只有 `run_command`）。')
+        str,
+        Field(
+            description='What wants to run (tool name; currently only `run_command`).'
+        ),
     ]
     turnId: str
 
@@ -55,7 +70,7 @@ class ApprovalRespondParams(BaseModel):
     remember: Annotated[
         bool | None,
         Field(
-            description='记住这个决定：把这条命令本身写进 `<home>/settings.json` 的放行表 （不加通配 —— 用户批准的是这条命令，不是这一类）。'
+            description='Remember this decision: write the command itself into the allowlist in `<home>/settings.json` (no wildcards — the user approved this command, not this kind).'
         ),
     ] = False
     requestId: str
@@ -66,27 +81,30 @@ class ApprovalRespondResponse(BaseModel):
     accepted: Annotated[
         bool,
         Field(
-            description='这个请求还在等人回答吗？太晚送达（已超时或那一轮已经结束）时为 false —— 客户端据此知道「我的回答没人听」，而不是以为批准生效了。'
+            description='Is this request still awaiting an answer? False when the reply arrives too late (timed out, or the turn already ended) — the client learns nobody heard its answer.'
         ),
     ]
 
 
 class ConfigReadParams(BaseModel):
     keys: Annotated[
-        list[str] | None, Field(description='只取这几个 key；不给就全量返回。')
+        list[str] | None,
+        Field(description='Fetch only these keys; absent = return everything.'),
     ] = None
 
 
 class ConsolidationCompletedNotification(BaseModel):
     newFacts: Annotated[
         int,
-        Field(description='这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。'),
+        Field(
+            description='How many new facts this batch distilled; 0 means not due yet or nothing surfaced.'
+        ),
     ]
 
 
 class Episode(BaseModel):
     createdAt: str | None = None
-    happenedAt: Annotated[str, Field(description='ISO 8601 日期。')]
+    happenedAt: Annotated[str, Field(description='ISO 8601 date.')]
     id: int
     summary: str
 
@@ -110,13 +128,13 @@ class Fact(BaseModel):
     kind: Annotated[
         str,
         Field(
-            description='这条事实**关于什么**：`user` / `feedback` / `project` / `reference` / `fact`（兜底）。分类不出来的都落在 `fact`。'
+            description='What this fact is **about**: `user` / `feedback` / `project` / `reference` / `fact` (fallback). Anything that resists classification lands on `fact`.'
         ),
     ]
     source: Annotated[
         str,
         Field(
-            description='`user`（直接告诉它的）或 `consolidation`（从对话里提炼的）。'
+            description='`user` (told directly) or `consolidation` (distilled from conversations).'
         ),
     ]
     subject: str
@@ -129,12 +147,14 @@ class GateDecisionKind(str, Enum):
 
 class GoalRoundNotification(BaseModel):
     maxRounds: int
-    reason: Annotated[str, Field(description='判断器给的理由（或出口的原因）。')]
-    round: Annotated[int, Field(description='第几轮（从 1 开始）。')]
+    reason: Annotated[
+        str, Field(description="The judge's reason (or the reason for exiting).")
+    ]
+    round: Annotated[int, Field(description='Which round (starting at 1).')]
     status: Annotated[
         str,
         Field(
-            description='`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。'
+            description='`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`.'
         ),
     ]
     turnId: str
@@ -143,16 +163,20 @@ class GoalRoundNotification(BaseModel):
 class GoalSetParams(BaseModel):
     condition: Annotated[
         str | None,
-        Field(description='目标条件（自然语言，比如「让测试全绿」）。空/不传 = 清除。'),
+        Field(
+            description='The goal condition (natural language, e.g. "make the tests green"). Empty/absent = clear.'
+        ),
     ] = None
     sessionId: str
 
 
 class GoalSetResponse(BaseModel):
-    active: Annotated[bool, Field(description='现在有活跃目标吗。')]
+    active: Annotated[bool, Field(description='Whether a goal is currently active.')]
     condition: str | None = None
     maxRounds: int
-    roundsUsed: Annotated[int | None, Field(description='这个目标已经续了几轮。')] = 0
+    roundsUsed: Annotated[
+        int | None, Field(description='How many rounds this goal has already consumed.')
+    ] = 0
 
 
 class GraphEndedNotification(BaseModel):
@@ -167,10 +191,12 @@ class GraphNodeEndedNotification(BaseModel):
     error: Annotated[
         str | None,
         Field(
-            description='节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。'
+            description='Error text when the node throws; errors are logged, never rethrown, and the run still finishes normally.'
         ),
     ] = None
-    keys: Annotated[list[str], Field(description='该节点写回了哪些 state key。')]
+    keys: Annotated[
+        list[str], Field(description='Which state keys the node wrote back.')
+    ]
     ms: int
     node: str
     workflow: str
@@ -179,7 +205,10 @@ class GraphNodeEndedNotification(BaseModel):
 class GraphNodeStartedNotification(BaseModel):
     node: str
     visit: Annotated[
-        int, Field(description='第几次进入该节点（>1 只可能出现在有意设计的环里）。')
+        int,
+        Field(
+            description='Which visit to this node this is (>1 only happens in deliberately designed loops).'
+        ),
     ]
     workflow: str
 
@@ -206,7 +235,10 @@ class MemoryForgetParams(BaseModel):
 
 class MemoryForgetResponse(BaseModel):
     removed: Annotated[
-        int, Field(description='实际删掉多少条。0 表示本来就没有这个主题的记忆。')
+        int,
+        Field(
+            description='How many were actually deleted. 0 means there was no memory of this subject to begin with.'
+        ),
     ]
 
 
@@ -234,7 +266,7 @@ class MemoryRememberParams(BaseModel):
     source: Annotated[
         str | None,
         Field(
-            description='不给就是 `user`（用户直接说的）。consolidation 从对话里提炼时传 `consolidation`，这样前端能区分「你告诉它的」和「它自己总结的」。'
+            description='Defaults to `user` (said directly by the user). Consolidation passes `consolidation` when distilling from conversations, so the frontend can tell "you told it" from "it summarized itself".'
         ),
     ] = None
     subject: str
@@ -244,7 +276,7 @@ class MemoryRememberResponse(BaseModel):
     fact: Annotated[
         Fact,
         Field(
-            description='写进去的完整 fact，带 id —— 前端可以直接插进列表，不用再查一次。'
+            description='The full fact as written, with id — the frontend can insert it directly, no re-query needed.'
         ),
     ]
 
@@ -282,17 +314,21 @@ class ModelListResponse(BaseModel):
 
 
 class ModelProfileView(BaseModel):
-    active: Annotated[bool, Field(description='这套现在是当前生效的吗。')]
+    active: Annotated[
+        bool, Field(description='Whether this profile is currently active.')
+    ]
     baseUrl: str | None = None
     id: str
     keySource: Annotated[
         str | None,
         Field(
-            description='凭据的位置：`keychain` / `file` / `env:VAR` / `memory` / 无（本地模型）。 **只是指针，不是密钥本身** —— 界面拿它如实显示「你的 key 存在哪」。'
+            description='Where the credential lives: `keychain` / `file` / `env:VAR` / `memory` / none (local model). **A pointer, not the key itself** — the UI uses it to honestly show "where your key is stored".'
         ),
     ] = None
     model: str | None = None
-    provider: Annotated[str, Field(description='`joyczl-provider` 的 provider id。')]
+    provider: Annotated[
+        str, Field(description='The provider id in `joyczl-provider` terms.')
+    ]
     smallModel: str | None = None
 
 
@@ -300,7 +336,7 @@ class ModelProfilesParams(RootModel[None]):
     root: Annotated[
         None,
         Field(
-            description='`model/profiles` 的应答：已配置的多套模型 + 当前那套。',
+            description='Response to `model/profiles`: all configured model profiles + the active one.',
             title='ModelProfilesParams',
         ),
     ]
@@ -308,7 +344,8 @@ class ModelProfilesParams(RootModel[None]):
 
 class ModelProfilesResponse(BaseModel):
     activeId: Annotated[
-        str | None, Field(description='当前生效的 id（没配就是 null）。')
+        str | None,
+        Field(description='The currently active id (null when nothing is configured).'),
     ] = None
     profiles: list[ModelProfileView]
 
@@ -319,7 +356,10 @@ class ModelRemoveParams(BaseModel):
 
 class ModelRemoveResponse(BaseModel):
     activeId: Annotated[
-        str | None, Field(description='删的是当前那套时，active 会跟着清空。')
+        str | None,
+        Field(
+            description='When the active profile is removed, active is cleared along with it.'
+        ),
     ] = None
     removed: bool
 
@@ -327,19 +367,23 @@ class ModelRemoveResponse(BaseModel):
 class ModelSaveParams(BaseModel):
     apiKey: Annotated[
         str | None,
-        Field(description='密钥本身。不给 = 保持原样（改模型、切换都不用重发）。'),
+        Field(
+            description='The key itself. Absent = keep as-is (changing models or switching never requires re-sending).'
+        ),
     ] = None
     baseUrl: str | None = None
     id: str
     keyEnv: Annotated[
         str | None,
         Field(
-            description='用环境变量里的 key（写 `DEEPSEEK_API_KEY` 这样的变量名）：Joy 只读它， 不复制进任何文件。'
+            description='Use a key from an environment variable (pass a name like `DEEPSEEK_API_KEY`): Joy only reads it and never copies it into any file.'
         ),
     ] = None
     makeActive: Annotated[
         bool | None,
-        Field(description='存完就设为当前（默认 true —— 第一次配置时这是最顺手的）。'),
+        Field(
+            description='Make it active right after saving (default true — the smoothest on first setup).'
+        ),
     ] = None
     model: str | None = None
     provider: str | None = None
@@ -347,17 +391,21 @@ class ModelSaveParams(BaseModel):
 
 
 class ModelSaveResponse(BaseModel):
-    active: Annotated[bool, Field(description='这套现在是当前生效的吗。')]
+    active: Annotated[
+        bool, Field(description='Whether this profile is currently active.')
+    ]
     activeId: str | None = None
     current: Annotated[
         str | None,
-        Field(description='切换后的当前模型（`provider / model`），没配好就是 null。'),
+        Field(
+            description='The current model after switching (`provider / model`); null when not fully configured.'
+        ),
     ] = None
     id: str
     keyStoredIn: Annotated[
         str,
         Field(
-            description='凭据**实际**落在哪：`keychain` / `file` / `env:VAR` / `memory` / `none`。 兜底成明文文件时也要如实说 —— 不能让用户以为进了钥匙串。'
+            description='Where the credential **actually** landed: `keychain` / `file` / `env:VAR` / `memory` / `none`. Fall back to a plaintext file and say so honestly — never let the user assume the keychain.'
         ),
     ]
 
@@ -366,17 +414,17 @@ class RequestId(RootModel[int | str]):
     root: Annotated[
         int | str,
         Field(
-            description='请求 id：JSON-RPC 允许数字或字符串。\n\n数字这一支是 `i32` 而不是 `u64`：`u64` 会被 ts-rs 映射成 TypeScript 的 `bigint`，而 `JSON.parse` 出来的是 `number` —— 客户端拿到 `1` 却被告知类型是 `bigint`，这是那种不报错、只在运行时对不上的 bug。跨语言边界只用 `i32`， 跟 v2.rs 的规矩是同一条。',
+            description='Request id: JSON-RPC allows a number or a string.\n\nThe number arm is `i32`, not `u64`: ts-rs maps `u64` to TypeScript `bigint`, while `JSON.parse` yields `number` — the client receives `1` typed as `bigint`: the kind of bug that never errors but only fails at runtime. Only `i32` crosses language boundaries — the same rule as v2.rs.',
             title='RequestId',
         ),
     ]
 
 
 class RetryNotification(BaseModel):
-    attempt: Annotated[int, Field(description='第几次重试（从 1 开始）。')]
-    delayMs: Annotated[int, Field(description='等了多久。')]
+    attempt: Annotated[int, Field(description='Which retry attempt (starting at 1).')]
+    delayMs: Annotated[int, Field(description='How long it waited.')]
     reason: Annotated[
-        str, Field(description='为什么重试（`HTTP 429` / `网络错误：…`）。')
+        str, Field(description='Why it is retrying (`HTTP 429` / `network error: …`).')
     ]
     turnId: str
 
@@ -387,22 +435,30 @@ class ScheduleListParams(RootModel[None]):
 
 class ScheduleStateRow(BaseModel):
     catchUp: Annotated[
-        bool, Field(description='true = 至少一次（补跑），false = 至多一次（放弃）。')
+        bool,
+        Field(
+            description='true = at-least-once (re-run), false = at-most-once (give up).'
+        ),
     ]
     claimedMinute: Annotated[
         str | None,
-        Field(description='非空 = 上次执行中断，等重启按 catch_up 决定补跑或放弃。'),
+        Field(
+            description='Non-null = the last run was interrupted; on restart catch_up decides whether to re-run or give up.'
+        ),
     ] = None
-    delivery: Annotated[str, Field(description='outbox / notify / quiet。')]
+    delivery: Annotated[str, Field(description='outbox / notify / quiet.')]
     lastFiredMinute: Annotated[
-        str | None, Field(description='上次落定的触发分钟（去重锚点）；没跑过为 null。')
+        str | None,
+        Field(
+            description='The last settled trigger minute (the dedup anchor); null if it never ran.'
+        ),
     ] = None
     name: str
 
 
 class ServerNotification1(BaseModel):
     sessionId: str
-    ts: Annotated[str, Field(description='ISO 8601，毫秒精度。')]
+    ts: Annotated[str, Field(description='ISO 8601, millisecond precision.')]
     turnId: str
     type: Literal['turnStarted']
     userMessage: str
@@ -412,7 +468,7 @@ class ServerNotification2(BaseModel):
     delta: Annotated[
         str,
         Field(
-            description='流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。'
+            description='A streaming text delta. Present only when `turn/start` passed `stream: true`.'
         ),
     ]
     turnId: str
@@ -420,10 +476,10 @@ class ServerNotification2(BaseModel):
 
 
 class ServerNotification4(BaseModel):
-    attempt: Annotated[int, Field(description='第几次重试（从 1 开始）。')]
-    delayMs: Annotated[int, Field(description='等了多久。')]
+    attempt: Annotated[int, Field(description='Which retry attempt (starting at 1).')]
+    delayMs: Annotated[int, Field(description='How long it waited.')]
     reason: Annotated[
-        str, Field(description='为什么重试（`HTTP 429` / `网络错误：…`）。')
+        str, Field(description='Why it is retrying (`HTTP 429` / `network error: …`).')
     ]
     turnId: str
     type: Literal['retry']
@@ -431,15 +487,29 @@ class ServerNotification4(BaseModel):
 
 class ServerNotification5(BaseModel):
     argsPreview: Annotated[
-        str, Field(description='给人看的动作预览：命令原文，或参数摘要。')
+        str,
+        Field(
+            description='Human-facing action preview: the raw command or an args summary.'
+        ),
     ]
-    expiresInMs: Annotated[int, Field(description='多少毫秒内没人回答就按拒绝算。')]
-    reason: Annotated[str, Field(description='为什么没被放行规则直接放行。')]
+    expiresInMs: Annotated[
+        int, Field(description='How many milliseconds of silence count as a denial.')
+    ]
+    reason: Annotated[
+        str,
+        Field(description='Why the allow rules did not let it through automatically.'),
+    ]
     requestId: Annotated[
-        str, Field(description='这一轮内的请求号，回答时要原样带回来。')
+        str,
+        Field(
+            description='Request id within this turn; echo it back verbatim when answering.'
+        ),
     ]
     tool: Annotated[
-        str, Field(description='想执行什么（工具名，目前只有 `run_command`）。')
+        str,
+        Field(
+            description='What wants to run (tool name; currently only `run_command`).'
+        ),
     ]
     turnId: str
     type: Literal['approvalRequested']
@@ -447,12 +517,14 @@ class ServerNotification5(BaseModel):
 
 class ServerNotification6(BaseModel):
     maxRounds: int
-    reason: Annotated[str, Field(description='判断器给的理由（或出口的原因）。')]
-    round: Annotated[int, Field(description='第几轮（从 1 开始）。')]
+    reason: Annotated[
+        str, Field(description="The judge's reason (or the reason for exiting).")
+    ]
+    round: Annotated[int, Field(description='Which round (starting at 1).')]
     status: Annotated[
         str,
         Field(
-            description='`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。'
+            description='`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`.'
         ),
     ]
     turnId: str
@@ -460,7 +532,12 @@ class ServerNotification6(BaseModel):
 
 
 class ServerNotification7(BaseModel):
-    args: Annotated[Any, Field(description='模型给的参数，结构随工具而定。')]
+    args: Annotated[
+        Any,
+        Field(
+            description='The model-supplied arguments; structure depends on the tool.'
+        ),
+    ]
     tool: str
     turnId: str
     type: Literal['toolStarted']
@@ -469,7 +546,9 @@ class ServerNotification7(BaseModel):
 class ServerNotification9(BaseModel):
     newFacts: Annotated[
         int,
-        Field(description='这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。'),
+        Field(
+            description='How many new facts this batch distilled; 0 means not due yet or nothing surfaced.'
+        ),
     ]
     type: Literal['consolidationCompleted']
 
@@ -484,7 +563,10 @@ class ServerNotification11(BaseModel):
     node: str
     type: Literal['graphNodeStarted']
     visit: Annotated[
-        int, Field(description='第几次进入该节点（>1 只可能出现在有意设计的环里）。')
+        int,
+        Field(
+            description='Which visit to this node this is (>1 only happens in deliberately designed loops).'
+        ),
     ]
     workflow: str
 
@@ -493,10 +575,12 @@ class ServerNotification12(BaseModel):
     error: Annotated[
         str | None,
         Field(
-            description='节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。'
+            description='Error text when the node throws; errors are logged, never rethrown, and the run still finishes normally.'
         ),
     ] = None
-    keys: Annotated[list[str], Field(description='该节点写回了哪些 state key。')]
+    keys: Annotated[
+        list[str], Field(description='Which state keys the node wrote back.')
+    ]
     ms: int
     node: str
     type: Literal['graphNodeEnded']
@@ -528,7 +612,7 @@ class SessionMessagesParams(BaseModel):
     cursor: Annotated[
         str | None,
         Field(
-            description='只取比这条消息**更早**的（往上翻旧账）。不给就是最新的那一页。'
+            description='Fetch only messages **older** than this one (paging back through history). Absent = the newest page.'
         ),
     ] = None
     limit: Annotated[int | None, Field(ge=0)] = None
@@ -536,7 +620,9 @@ class SessionMessagesParams(BaseModel):
 
 
 class SessionNewParams(BaseModel):
-    sessionId: Annotated[str | None, Field(description='不给就由服务端生成。')] = None
+    sessionId: Annotated[
+        str | None, Field(description='Generated by the server when absent.')
+    ] = None
 
 
 class SessionNewResponse(BaseModel):
@@ -548,7 +634,12 @@ class SessionSummary(BaseModel):
     lastAt: str | None = None
     messages: int
     startedAt: str | None = None
-    title: Annotated[str, Field(description='会话标题 = 第一条用户消息的前 60 个字。')]
+    title: Annotated[
+        str,
+        Field(
+            description='Session title = the first 60 characters of the first user message.'
+        ),
+    ]
 
 
 class SettingsPatch(BaseModel):
@@ -557,7 +648,7 @@ class SettingsPatch(BaseModel):
     execAllow: Annotated[
         list[str] | None,
         Field(
-            description='放行表（`JOY_EXEC_ALLOW`）的整表替换 —— 「记住这条命令」写的就是它。'
+            description='Whole-table replacement of the allowlist (`JOY_EXEC_ALLOW`) — what "remember this command" writes.'
         ),
     ] = None
     experimental: bool | None = None
@@ -576,7 +667,10 @@ class SettingsView(BaseModel):
     googleCalendar: bool
     graphWorkflows: bool
     historyTurns: Annotated[
-        int, Field(description='工作记忆滑窗：只把最近 N 轮塞进 prompt。')
+        int,
+        Field(
+            description='Working-memory sliding window: only the last N turns go into the prompt.'
+        ),
     ]
     home: str
     maxIterations: int
@@ -591,7 +685,7 @@ class TextDeltaNotification(BaseModel):
     delta: Annotated[
         str,
         Field(
-            description='流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。'
+            description='A streaming text delta. Present only when `turn/start` passed `stream: true`.'
         ),
     ]
     turnId: str
@@ -603,7 +697,12 @@ class TokenUsage(BaseModel):
 
 
 class ToolStartedNotification(BaseModel):
-    args: Annotated[Any, Field(description='模型给的参数，结构随工具而定。')]
+    args: Annotated[
+        Any,
+        Field(
+            description='The model-supplied arguments; structure depends on the tool.'
+        ),
+    ]
     tool: str
     turnId: str
 
@@ -619,7 +718,10 @@ class TurnInterruptParams(BaseModel):
 
 class TurnInterruptResponse(BaseModel):
     interrupted: Annotated[
-        bool, Field(description='false = 这一轮已经跑完了，没打断到什么。')
+        bool,
+        Field(
+            description='false = this turn already finished; nothing was interrupted.'
+        ),
     ]
 
 
@@ -627,7 +729,7 @@ class TurnStartParams(BaseModel):
     cwd: Annotated[
         str | None,
         Field(
-            description='本轮的工作目录（逐轮覆盖语义）： 必须是已存在的绝对路径（fail-closed 准入）；exec 的相对命令与 read_file/list_dir 的相对路径都按它解析。缺省 = 进程 cwd（旧行为）。'
+            description='Working directory for this turn (per-turn override semantics): must be an existing absolute path (fail-closed admission); relative exec commands and relative read_file/list_dir paths resolve against it. Default = process cwd (old behavior).'
         ),
     ] = None
     message: str
@@ -635,7 +737,7 @@ class TurnStartParams(BaseModel):
     stream: Annotated[
         bool | None,
         Field(
-            description='是否逐 token 推送 `textDelta`。dashboard 开着，脚本调用关着。'
+            description='Whether to stream `textDelta` token by token. On for the dashboard, off for scripts.'
         ),
     ] = None
 
@@ -646,7 +748,7 @@ class TurnStartResponse(BaseModel):
 
 class TurnStartedNotification(BaseModel):
     sessionId: str
-    ts: Annotated[str, Field(description='ISO 8601，毫秒精度。')]
+    ts: Annotated[str, Field(description='ISO 8601, millisecond precision.')]
     turnId: str
     userMessage: str
 
@@ -680,7 +782,10 @@ class ConfigWriteParams(BaseModel):
 
 class ConfigWriteResponse(BaseModel):
     config: Annotated[
-        SettingsView, Field(description='写入后的完整配置，便于前端直接替换本地缓存。')
+        SettingsView,
+        Field(
+            description='The full config after writing, so the frontend can replace its local cache outright.'
+        ),
     ]
 
 
@@ -689,7 +794,10 @@ class DashboardData(BaseModel):
     episodes: list[Episode]
     facts: list[Fact]
     generatedAt: Annotated[
-        str, Field(description='ISO 8601，毫秒精度。页面上显示「数据是什么时候的」。')
+        str,
+        Field(
+            description='ISO 8601, millisecond precision. The page shows "when is this data from".'
+        ),
     ]
     sessions: list[SessionSummary]
 
@@ -697,18 +805,24 @@ class DashboardData(BaseModel):
 class GateDecision(BaseModel):
     decision: GateDecisionKind
     query: Annotated[
-        str | None, Field(description='判定为 retrieve 时的检索词；skip 时为 null。')
+        str | None,
+        Field(
+            description='The search query when the verdict is retrieve; null when skipping.'
+        ),
     ] = None
     reason: Annotated[
         str,
         Field(
-            description='门给的理由（≤5 个词的那种）。失败开放时带上原因，便于排查。'
+            description="The gate's reason (the ≤5-word kind). Present on fail-open so it can be debugged."
         ),
     ]
 
 
 class GraphInfo(BaseModel):
-    path: Annotated[list[str], Field(description='实际走过的节点名，顺序即执行顺序。')]
+    path: Annotated[
+        list[str],
+        Field(description='The node names actually traversed, in execution order.'),
+    ]
     reason: str
     route: GraphRouteKind
     workflow: str
@@ -718,7 +832,9 @@ class JsonRpcError(BaseModel):
     error: ErrorObject
     id: Annotated[
         RequestId | None,
-        Field(description='解析不了 id 时（比如请求本身就是坏 JSON）为 null。'),
+        Field(
+            description='null when the id cannot be parsed (e.g. the request itself is bad JSON).'
+        ),
     ] = None
     jsonrpc: str
 
@@ -729,7 +845,7 @@ class JsonRpcRequest(BaseModel):
     method: Annotated[
         str,
         Field(
-            description='形如 `turn/start`、`<resource>/<method>`，resource 用单数。'
+            description='Shaped like `turn/start`, `<resource>/<method>`, resource in singular.'
         ),
     ]
     params: Any | None = None
@@ -741,7 +857,7 @@ class JsonRpcResponse(BaseModel):
     result: Annotated[
         Any,
         Field(
-            description='具体结构由 method 决定，解码方按 `*Response` 类型自行 narrow。'
+            description='The concrete shape depends on method; decoders narrow it to the matching `*Response` type themselves.'
         ),
     ]
 
@@ -749,7 +865,9 @@ class JsonRpcResponse(BaseModel):
 class ScheduleListResponse(BaseModel):
     jobs: Annotated[
         list[ScheduleStateRow],
-        Field(description='按名字排序的全部任务；一个都没登记过为空数组。'),
+        Field(
+            description='All jobs sorted by name; an empty array when none was ever registered.'
+        ),
     ]
 
 
@@ -764,7 +882,7 @@ class ServerNotification8(BaseModel):
     output: Annotated[
         str,
         Field(
-            description='工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。'
+            description='The text the tool returned to the model. Failure details live here too — the turn is not aborted.'
         ),
     ]
     status: ToolStatus
@@ -789,7 +907,7 @@ class ToolCompletedNotification(BaseModel):
     output: Annotated[
         str,
         Field(
-            description='工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。'
+            description='The text the tool returned to the model. Failure details live here too — the turn is not aborted.'
         ),
     ]
     status: ToolStatus
@@ -800,33 +918,36 @@ class ToolCompletedNotification(BaseModel):
 class TurnMeta(BaseModel):
     gate: GateDecision | None = None
     goalRounds: Annotated[
-        int | None, Field(description='这个目标到这一轮为止续了几轮。没设目标就是 0。')
+        int | None,
+        Field(
+            description='How many rounds this goal has consumed up to this turn. 0 when no goal is set.'
+        ),
     ] = 0
     goalStatus: Annotated[
         str | None,
         Field(
-            description='目标循环的出口（`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`）。没设目标就是 `None`。'
+            description="The goal loop's exit (`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`). `None` when no goal is set."
         ),
     ] = None
-    graph: Annotated[GraphInfo | None, Field(description='graph 没介入时为 null。')] = (
-        None
-    )
+    graph: Annotated[
+        GraphInfo | None, Field(description='Null when no graph was involved.')
+    ] = None
     guardHits: Annotated[
         int | None,
         Field(
-            description='循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。'
+            description="How many times the loop guard fired this turn (0 = the model never got stuck repeating/alternating tool calls). Zero is normal; non-zero means part of this turn's budget went to spinning in place."
         ),
     ] = 0
     guardNote: Annotated[
         str | None,
         Field(
-            description='命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。'
+            description='What the guard told the model when it fired (a human-readable explanation; null otherwise).'
         ),
     ] = None
     interrupted: Annotated[
         bool | None,
         Field(
-            description='这一轮被 `turn/interrupt` 打断时为 true。 旧库里的 meta 没有这个字段 —— `#[serde(default)]` 让它们照常解析。'
+            description='True when this turn was cut short by `turn/interrupt`. Older metas in the DB lack this field — `#[serde(default)]` lets them parse as before.'
         ),
     ] = False
     iterations: int
@@ -834,25 +955,27 @@ class TurnMeta(BaseModel):
     model: Annotated[
         str,
         Field(
-            description='真正回答这一轮的模型：被 graph 判成 quick 时是小模型，如实记录。'
+            description='The model that actually answered this turn: the small model when the graph routed quick, recorded as-is.'
         ),
     ]
     provider: str
     retries: Annotated[
         int | None,
-        Field(description='这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。'),
+        Field(
+            description='How many provider retries happened this turn (rate limits / transient faults). Zero is the norm.'
+        ),
     ] = 0
     routeReason: Annotated[
         str | None,
         Field(
-            description='这轮的模型是怎么选的（路由，见 route.rs）：`auto:reasoning → ds-r1` / `fallback: …`。fixed 模式与「选中的就是 active」时是 `None` —— 页脚保持干净，只有真的发生了选择/回落才说话。'
+            description="How this turn's model was chosen (routing, see route.rs): `auto:reasoning → ds-r1` or `fallback: …`. `None` in fixed mode and when the chosen one is already active — the footer stays quiet and only speaks when a choice/fallback actually happened."
         ),
     ] = None
     tools: list[ToolCallRecord]
     usage: Annotated[
         TokenUsage | None,
         Field(
-            description='这一轮的 token 用量。只走过 `turnCompleted`、没进库的历史缺陷 已经补上：现在它随 meta 一起落进 chat_log，重看历史也看得到花了多少。'
+            description='Token usage for this turn. The historical flaw of only reaching `turnCompleted` without being persisted is fixed: it now lands in chat_log with the meta, so past turns show their cost too.'
         ),
     ] = None
 
@@ -865,23 +988,26 @@ class GateDecidedNotification(BaseModel):
 class JsonRpcMessage(RootModel[JsonRpcResponse | JsonRpcError]):
     root: Annotated[
         JsonRpcResponse | JsonRpcError,
-        Field(description='服务端回的任意一帧：应答或错误。', title='JsonRpcMessage'),
+        Field(
+            description='Any frame the server sends back: a response or an error.',
+            title='JsonRpcMessage',
+        ),
     ]
 
 
 class Message(BaseModel):
-    at: Annotated[str, Field(description='ISO 8601（UTC）。写进来的时刻。')]
+    at: Annotated[str, Field(description='ISO 8601 (UTC). When it was written.')]
     content: str
     id: Annotated[
         int,
         Field(
-            description='chat_log 的行号。**也是游标**：`session/messages` 的 cursor 就是它。 用行号而不是时间戳：同一轮的两行是同一秒写进去的，时间戳分不出先后。'
+            description="The chat_log row number. **Also the cursor**: it is `session/messages`' cursor. Row numbers over timestamps: both rows of one turn are written in the same second, so timestamps cannot order them."
         ),
     ]
     meta: Annotated[
         TurnMeta | None,
         Field(
-            description='这一轮的遥测（检索门 / 工具 / 迭代 / 模型 / usage），**只有 assistant 行上有**。'
+            description="This turn's telemetry (gate / tools / iterations / model / usage), **present only on assistant rows**."
         ),
     ] = None
     role: MessageRole
@@ -932,7 +1058,7 @@ class ServerNotification(
         | ServerNotification14
         | ServerNotification15,
         Field(
-            description='一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。',
+            description='The full stream of events for one turn.\n\n`type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated union. **No failure here should crash the client**: this only describes "what happened".',
             title='ServerNotification',
         ),
     ]
@@ -942,7 +1068,9 @@ class SessionMessagesResponse(BaseModel):
     data: list[Message]
     nextCursor: Annotated[
         str | None,
-        Field(description='还有更早的才给：把它当下一次的 cursor。null = 到底了。'),
+        Field(
+            description='Present only when older messages exist: pass it as the next cursor. null = the end.'
+        ),
     ] = None
 
 

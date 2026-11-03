@@ -1,8 +1,8 @@
-//! Anthropic Messages API 的原生实现。
+//! Native implementation of the Anthropic Messages API.
 //!
-//! 因为 loop 的方言就是 Anthropic 的形状，这里几乎不用转换：
-//! `Message` / `ContentBlock` 的 serde 标注（`tag = "type"` + snake_case）
-//! 让它们序列化出来就是线上的样子。
+//! Because loop's dialect is exactly Anthropic's shape, almost no conversion happens here:
+//! the serde annotations on `Message` / `ContentBlock` (`tag = "type"` + snake_case)
+//! make them serialize into exactly the wire form.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -17,14 +17,14 @@ use crate::{
 };
 
 const DEFAULT_BASE: &str = "https://api.anthropic.com";
-/// 固定版本号，不追新 —— 升级 API 版本是有行为的变更，该是显式的一次提交。
+/// Pinned version, not chasing new — an API version bump is a behavior change, hence explicit.
 const API_VERSION: &str = "2023-06-01";
 
 pub struct Client {
     http: HttpClient,
     base_url: String,
     api_key: String,
-    /// 限流/临时故障时最多重试几次（`JOY_LLM_RETRIES`）。
+    /// Max retries on rate limits / transient faults (`JOY_LLM_RETRIES`).
     max_retries: u32,
 }
 
@@ -44,7 +44,7 @@ impl Client {
         }
     }
 
-    /// 发一次请求（限流/临时故障会退避重试），返回**还没读 body** 的应答。
+    /// Send one request (retrying on rate limits / transient faults); returns the unread-body response.
     async fn send(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
         let url = format!("{}/v1/messages", self.base_url);
         crate::retry::with_retries(self.max_retries, || async {
@@ -60,7 +60,7 @@ impl Client {
         .await
     }
 
-    /// 一次性调用用的包装。
+    /// Wrapper for one-shot calls.
     async fn post(&self, body: &Value) -> Result<String, ProviderError> {
         let response = self.send(body).await?;
         response.text().await.map_err(ProviderError::from)
@@ -98,7 +98,7 @@ impl Client {
         if let Some(system) = &request.system {
             body["system"] = json!(system);
         }
-        // 空的 tools 数组有些端点会拒绝，所以干脆不发这个键。
+        // Some endpoints reject an empty tools array, so the key is simply omitted.
         if !request.tools.is_empty() {
             body["tools"] = json!(request.tools);
         }
@@ -110,8 +110,8 @@ impl Client {
         parse_message(&value)
     }
 
-    /// SSE 流式。文本一到就回调，工具调用的参数是分片来的
-    /// （`input_json_delta` 的 `partial_json`），按 index 攒齐后再一起解析。
+    /// SSE streaming. Text is called back as it arrives; tool-call arguments arrive in
+    /// fragments (`partial_json` of `input_json_delta`), accumulated by index and parsed together.
     async fn stream_inner(
         &self,
         request: CreateRequest,
@@ -130,10 +130,10 @@ impl Client {
             body["tools"] = json!(request.tools);
         }
 
-        // 重试只覆盖「拿到应答」这一步；开始读流之后断开就不再重发。
+        // Retries only cover "getting the response"; once the stream starts, a drop is not resent.
         let response = self.send(&body).await?;
 
-        // index → (id, name, 到目前为止攒到的参数 JSON)
+        // index → (id, name, argument JSON accumulated so far)
         let mut tools: BTreeMap<i64, (String, String, String)> = BTreeMap::new();
         let mut text = String::new();
         let mut usage = Usage::default();
@@ -193,7 +193,7 @@ impl Client {
                                 );
                             }
                         }
-                        // thinking_delta 等先忽略 —— 思考块不该进上下文。
+                        // thinking_delta etc. ignored for now — thinking blocks must not enter context.
                         _ => {}
                     }
                 }
@@ -211,7 +211,7 @@ impl Client {
                     }
                 }
                 Some("error") => return Err(ProviderError::Api(value.to_string())),
-                // ping / message_stop / content_block_stop 都不用管
+                // ping / message_stop / content_block_stop need no handling
                 _ => {}
             }
         }
@@ -238,8 +238,8 @@ impl Client {
     }
 }
 
-/// 从 Anthropic 的应答体里取出 loop 需要的三样：内容块、停因、用量。
-/// 拆成独立函数以便单测 —— 不用为它起一个真的 HTTP 服务。
+/// Extract the three things loop needs from an Anthropic response body: content blocks,
+/// stop reason, usage. Split into its own function for unit testing — no real HTTP server.
 pub fn parse_message(value: &Value) -> Result<CreateResponse, ProviderError> {
     let content: Vec<ContentBlock> =
         serde_json::from_value(value.get("content").cloned().unwrap_or(Value::Null))

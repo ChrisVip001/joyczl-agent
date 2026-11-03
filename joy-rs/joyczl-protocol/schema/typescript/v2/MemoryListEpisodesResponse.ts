@@ -2,8 +2,8 @@
 import type { Episode } from "./Episode";
 
 /**
- * 情景记忆的列表。**没有 cursor**：`Episodes::recent` 只按时间倒序取最近 N 条，
- * 存储层没有偏移量的概念。与其编一个用不了的游标，不如诚实地返回 null。
+ * The episode list. **No cursor**: `Episodes::recent` only fetches the most recent N by
+ * time desc — storage has no notion of offset. Rather than invent an unusable cursor, it honestly returns null.
  */
 export type MemoryListEpisodesResponse = {
   data: Array<Episode>;

@@ -5,7 +5,7 @@ export type JsonRpcRequest = {
   jsonrpc: string;
   id: RequestId;
   /**
-   * 形如 `turn/start`、`<resource>/<method>`，resource 用单数。
+   * Shaped like `turn/start`, `<resource>/<method>`, resource in singular.
    */
   method: string;
   params?: unknown;

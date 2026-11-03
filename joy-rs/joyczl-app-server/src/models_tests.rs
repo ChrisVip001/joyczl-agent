@@ -1,7 +1,7 @@
-//! `models.rs` 的纯逻辑：视图、provider 校验、当前标签。
+//! Pure logic of `models.rs`: views, provider validation, the current label.
 //!
-//! 需要 `Server` 的那部分（存/切/删）靠 `joyczl-config` 的 models 单测 +
-//! 冒烟覆盖 —— 这里只钉住不依赖进程状态的三件事。
+//! The part that needs `Server` (save/switch/remove) is covered by joyczl-config's models unit tests
+//! plus smoke coverage — this file only pins the three things that do not depend on process state.
 
 use super::*;
 
@@ -16,8 +16,8 @@ fn profile(id: &str, provider: &str, key: Option<&str>) -> cfg::ModelProfile {
     }
 }
 
-/// 视图里只有**凭据指针**，没有密钥本身 —— 界面要显示「key 存在哪」，
-/// 不该把 key 端给浏览器。
+/// The view carries only the **credential pointer**, never the key itself — the UI shows "where the key
+/// is stored" and must not hand the key to the browser.
 #[test]
 fn views_carry_the_key_pointer_but_never_the_secret() {
     let mut file = cfg::ModelsFile::default();
@@ -38,7 +38,7 @@ fn views_carry_the_key_pointer_but_never_the_secret() {
     assert!(!serialized.contains("sk-"), "视图不该带密钥：{serialized}");
 }
 
-/// provider 校验：表内的放行；表外的要有 base_url，否则报出可用的清单。
+/// Provider validation: in-table ids pass; out-of-table ones need a base_url, otherwise the error lists what is available.
 #[test]
 fn provider_validation_accepts_known_ids_and_self_hosted_endpoints() {
     let known = joyczl_provider::PROVIDERS.first().expect("表里至少一家").id;
@@ -48,11 +48,11 @@ fn provider_validation_accepts_known_ids_and_self_hosted_endpoints() {
     assert!(err.contains("不认识的 provider"), "{err}");
     assert!(err.contains(known), "报错该列出可用的：{err}");
 
-    // 自建端点：provider 只决定用哪种 wire 格式。
+    // Self-hosted endpoint: the provider only decides which wire format is used.
     assert!(validate_provider("不存在的厂", Some("http://localhost:8000/v1")).is_ok());
 }
 
-/// 「当前是哪个模型」的一句话：有模型就带上，没有就只说厂商。
+/// The "which model is current" one-liner: with a model it names both, without it only the vendor.
 #[test]
 fn the_current_label_names_provider_and_model() {
     let mut settings = joyczl_config::Settings {
@@ -74,7 +74,7 @@ fn the_current_label_names_provider_and_model() {
     assert_eq!(current_label(&empty), None);
 }
 
-// ---- 端到端：真的存、真的切、真的删（临时 home，不碰系统钥匙串） ------------
+// ---- End to end: really save, really switch, really remove (temp home, never touching the system keychain) ------------
 
 async fn server() -> (Server, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -90,8 +90,8 @@ async fn server() -> (Server, tempfile::TempDir) {
         },
     )
     .await;
-    // 钉成文件后端：单测绝不碰系统钥匙串（macOS 的 security 会弹框，CI 里
-    // 会直接挂住）。临时目录就是这次的「兜底文件」所在地。
+    // Pin to the file backend: unit tests never touch the system keychain (macOS security would pop a
+    // dialog and CI would hang). The temp dir is where this run's "fallback file" lives.
     server
         .secrets
         .lock()
@@ -113,7 +113,7 @@ fn save(id: &str, provider: &str, model: Option<&str>) -> ModelSaveParams {
     }
 }
 
-/// 存两套 → 切换 → 删一套：active 一路跟得上，文件里没有密钥。
+/// Save two profiles → switch → remove one: active follows all the way, and the file holds no key.
 #[tokio::test]
 async fn saving_switching_and_removing_end_to_end() {
     let (server, dir) = server().await;
@@ -133,7 +133,7 @@ async fn saving_switching_and_removing_end_to_end() {
     assert_eq!(list.profiles.len(), 2);
     assert!(list.profiles.iter().all(|p| p.key_source.is_some()));
 
-    // 只带 id + make_active = 切换，不用重发密钥。
+    // Only id + make_active = switch, no need to re-send the key.
     let switched = server
         .model_save(ModelSaveParams {
             provider: None,
@@ -147,7 +147,7 @@ async fn saving_switching_and_removing_end_to_end() {
         Some("ds"),
         "切回去了"
     );
-    // 切换没把配置洗掉：provider/model 还是原来那套。
+    // The switch did not wash the config away: provider/model are still the original ones.
     let back = server.model_profiles();
     let ds = back
         .profiles
@@ -157,20 +157,20 @@ async fn saving_switching_and_removing_end_to_end() {
     assert_eq!(ds.provider, "deepseek");
     assert_eq!(ds.model.as_deref(), Some("deepseek-chat"));
 
-    // 删掉当前那套：active 跟着清空，不留悬空指针。
+    // Removing the current profile: active is cleared along with it, no dangling pointer.
     let removed = server.model_remove(ModelRemoveParams {
         id: "ds".to_string(),
     });
     assert!(removed.removed);
     assert!(removed.active_id.is_none());
 
-    // 落盘的文件里只有配置与指针，没有密钥本身。
+    // The persisted file holds only config and pointers, never the key itself.
     let raw = std::fs::read_to_string(dir.path().join("models.json")).expect("models.json");
     assert!(!raw.contains("sk-"), "文件里不该有密钥：{raw}");
     assert!(raw.contains("env:JOY_TEST_KEY"), "凭据指针该在：{raw}");
 }
 
-/// 不认识的 provider 直接拒绝，并把可用的清单报出来 —— 不是一句「参数不对」。
+/// An unknown provider is refused outright, with the list of available ones — not a bare "invalid params".
 #[tokio::test]
 async fn an_unknown_provider_is_refused_with_the_list() {
     let (server, _dir) = server().await;
@@ -188,7 +188,7 @@ async fn an_unknown_provider_is_refused_with_the_list() {
     );
 }
 
-/// 第一次配置不给 provider 也不行（切换时才可以省）。
+/// The first-time config also fails without a provider (it may be omitted only when switching).
 #[tokio::test]
 async fn a_new_profile_needs_a_provider() {
     let (server, _dir) = server().await;

@@ -1,16 +1,16 @@
-//! `joy gather` —— 晨报，把 gather 图接到这台机器上。
+//! `joy gather` — the morning report, wiring the gather graph to this machine.
 //!
-//! 每一路的绑定：
+//! Per-leg bindings:
 //!
-//!   * github：`gh` CLI 自己问（不是模型问），有 `JOY_GH_REPO` 就查，没有就诚实地说这一路没配。
-//!   * web：search_web 工具当**库**调 —— JOY_* 工具开关管的是「模型能不能搜」，这里是本家的代码在问，不走开关。
-//!   * calendar：复用 triage 的 calendar.ics 读取 ——「今天有什么」只有一个解析器，两张图才不会打架。
-//!   * memory：直接查 facts，**不过检索门** —— 门要花一次小模型调用去判断要不要查记忆，而晨报早就知道答案是「要」。
-//!   * synthesize：唯一的模型调用，**无 tools** —— 只提议、绝不行动的结构保证。
-//!   * draft：outbox 里的一个 markdown 文件，人去读。
+//!   * github: `gh` CLI asks directly (not the model); `JOY_GH_REPO` set → query, else admits.
+//!   * web: search_web is called as a **library** — first-party code, JOY_* toggles don't apply.
+//!   * calendar: reuses triage's calendar.ics reader — one parser, two graphs never disagree.
+//!   * memory: facts queried directly, **no retrieval gate** — the answer (yes) is known.
+//!   * synthesize: the only model call, **no tools** — propose-only, never act, by design.
+//!   * draft: a markdown file in the outbox, for a human to read.
 //!
-//! 每个 scan 的失败都翻译成诚实文字（图那层的包装负责），CLI 只管把最终
-//! state 里有什么念出来。
+//! Each scan's failure is translated into honest text (the graph layer's wrapper
+//! handles that); the CLI just reads out what the final state contains.
 
 use std::sync::Arc;
 
@@ -28,7 +28,7 @@ use serde_json::json;
 
 const DEFAULT_TOPICS: &str = "AI agent harness loop memory eval";
 
-/// 跑一趟晨报并打印。唯一的写是 outbox 里的草稿文件。
+/// Runs one morning report and prints it. The only write is the outbox draft file.
 pub async fn run(server: &Server) -> Result<()> {
     println!("gathering — github、web、calendar、memory 一起问……");
 
@@ -42,7 +42,7 @@ pub async fn run(server: &Server) -> Result<()> {
             let home = home.clone();
             Box::pin(async move {
                 let text = todays_events(&home);
-                // "(no calendar)" / "(nothing today)" 都是「没有」。
+                // "(no calendar)" / "(nothing today)" both mean "nothing".
                 let count = if text.starts_with('(') {
                     0
                 } else {
@@ -53,7 +53,7 @@ pub async fn run(server: &Server) -> Result<()> {
         })
     };
 
-    // 直接查 facts，不过检索门 —— 晨报早知道答案就是「要」。
+    // Queries facts directly, bypassing the retrieval gate — the answer is already "yes".
     let mem_rows = Arc::new(
         server
             .facts()
@@ -134,8 +134,8 @@ pub async fn run(server: &Server) -> Result<()> {
     Ok(())
 }
 
-/// github scan：`gh` CLI 自己问（async 子进程，不阻塞 worker）。
-/// 有 repo 就查，没有就如实报缺配 —— 不装作「没有 open PR」。
+/// github scan: the `gh` CLI asks directly (async subprocess, doesn't block workers).
+/// With a repo it queries; without, it honestly reports missing config — no fake "no PRs".
 fn bind_github() -> GithubScanFn {
     let repo = std::env::var("JOY_GH_REPO").unwrap_or_default();
     Arc::new(move || {
@@ -187,11 +187,11 @@ async fn gh_list(repo: &str, args: &[&str]) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// web scan：search_web 工具当库调。工具失败时返回 Err —— 图那层会把它
-/// 翻译成诚实文字，跟模型自己调工具时的「文本化错误」是同一个约定。
+/// web scan: the search_web tool called as a library. Failures return Err — the
+/// graph layer textualizes them, same contract as when the model calls tools itself.
 async fn bind_web(home: &std::path::Path) -> WebScanFn {
-    // search_web 的 handler 需要 ToolCtx（它只用 home）；开一个独立的连接池
-    // 是可接受的 —— 这一路每天就跑一次，池随闭包活到进程结束。
+    // search_web's handler needs a ToolCtx (it only uses home); opening a separate
+    // pool is acceptable — this leg runs once a day, the pool lives with the closure.
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
@@ -204,7 +204,7 @@ async fn bind_web(home: &std::path::Path) -> WebScanFn {
         episodes: joyczl_state::Episodes::new(pool.clone()),
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
-        cwd: None, // gather 是离线汇总：进程 cwd 语义。
+        cwd: None, // gather is offline aggregation: process cwd semantics.
         home: home.to_path_buf(),
     };
     let topics = std::env::var("JOY_GH_REPO").unwrap_or_else(|_| DEFAULT_TOPICS.to_string());

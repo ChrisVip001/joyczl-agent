@@ -1,4 +1,4 @@
-//! `spill.rs` 的三条不变式：桩放得下、只切完整行、落盘失败不撒谎。
+//! The three invariants of `spill.rs`: the stub fits, whole lines only, spilling failure never lies.
 
 use super::spill::{spill_text, stub};
 
@@ -13,7 +13,7 @@ fn long_text(lines: usize, width: usize) -> String {
 fn a_text_that_already_fits_is_left_alone() {
     let text = long_text(3, 10);
     assert_eq!(stub(None, &text, 10_000, "t"), None);
-    // 预算是 0 也不该做无意义的桩（预算为 0 是配置错误，不是内容问题）。
+    // Even a budget of 0 must not produce a pointless stub (a 0 budget is a config error, not a content problem).
     assert_eq!(stub(None, &text, 0, "t"), None);
 }
 
@@ -32,8 +32,8 @@ fn the_stub_fits_the_budget_and_only_cuts_complete_lines() {
     assert!(stub.path.is_some(), "落了盘就该带上路径");
     assert!(stub.omitted_lines > 0);
 
-    // 除了省略说明那一行，其余每一行都必须是原文里**完整存在**的一行：
-    // 半个行（半句 JSON、半条日志）比少一行更难读。
+    // Except the omission-notice line, every line must be a line that **really exists** in the original:
+    // half a line (half a JSON, half a log entry) reads worse than one fewer line.
     for line in stub.text.lines() {
         if line.starts_with('…') {
             assert!(line.contains("已截断"), "省略说明要诚实：{line}");
@@ -64,7 +64,7 @@ fn without_a_directory_it_still_stubs_but_never_promises_a_path() {
 #[test]
 fn one_line_longer_than_the_budget_gets_no_fake_head() {
     let dir = tempfile::tempdir().expect("临时目录");
-    // 单行 5000 字符，预算只有 200：一行都放不下。
+    // One line of 5000 chars, budget 200: not even one line fits.
     let text = "y".repeat(5_000);
     let stub = stub(Some(dir.path()), &text, 200, "tool-result").expect("该做桩");
     assert!(
@@ -72,8 +72,8 @@ fn one_line_longer_than_the_budget_gets_no_fake_head() {
         "桩必须放得下：{}",
         stub.text.chars().count()
     );
-    // 「不放半行」要按**行**验：整段文本里可能有别的字符（路径里就会出现 y），
-    // 但没有一行是那条超长原文的碎片。
+    // "No half lines" is verified by **lines**: the whole text may contain other characters
+    // (a path would contain y), but no line is a fragment of that oversized original.
     assert!(
         stub.text.lines().all(|line| line.chars().count() < 200),
         "放不下一整行就别放半行：{:?}",
@@ -96,7 +96,7 @@ fn spill_writes_the_whole_text_and_reports_a_relative_path() {
 
 #[test]
 fn the_stub_is_smaller_than_what_it_replaces() {
-    // 防回归：预算给得比原文还大时不做桩；做出来的桩一定比原文短。
+    // Regression guard: no stub when the budget exceeds the original; a produced stub is always shorter than the original.
     let text = long_text(100, 40);
     let stub = stub(None, &text, 500, "t").expect("该做桩");
     assert!(

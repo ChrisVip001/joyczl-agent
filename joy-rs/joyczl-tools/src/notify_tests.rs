@@ -1,7 +1,7 @@
-//! 通知器的测试：消息格式、装载语义、Slack POST 真发（回环监听）。
+//! Notifier tests: message format, load semantics, a real Slack POST (loopback listener).
 
 use super::notify::{load, Notifier, NotifyEvent, Slack};
-/// 一句人话：三类事件的关键信息都在。
+/// One human-readable sentence: the key facts of all three event kinds are present.
 #[test]
 fn messages_carry_the_essentials() {
     let approval = NotifyEvent::ApprovalRequested {
@@ -27,7 +27,7 @@ fn messages_carry_the_essentials() {
         "{job}"
     );
 
-    // 没有退出码（interrupted）也不该出现 "exit None" 这种东西。
+    // Even without an exit code (interrupted), something like "exit None" must not appear.
     let job = NotifyEvent::JobFinished {
         id: "j2".into(),
         command: "c".into(),
@@ -49,7 +49,7 @@ fn messages_carry_the_essentials() {
     );
 }
 
-/// 装载语义：没开关 / 没文件 / 没字段 / 空字段 —— 都是没有。
+/// Load semantics: no flag / no file / no field / empty field — all mean none.
 #[test]
 fn load_semantics_are_conservative() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -74,17 +74,17 @@ fn load_semantics_are_conservative() {
     assert!(load(dir.path(), true).is_some(), "有配置就有通知器");
 }
 
-/// Slack POST 真发：回环监听收一次请求，验证路径与载荷。URL 是管理员配的，
-/// 指向内网/回环是合法用法（ntfy/Gotify），所以回环测试成立。
+/// A real Slack POST: a loopback listener receives one request; path and payload are checked. The URL is admin-set,
+/// and pointing at intranet/loopback is legitimate (ntfy/Gotify), so the loopback test is valid.
 #[tokio::test]
 async fn slack_posts_the_text_payload() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("占个口");
     let port = listener.local_addr().expect("拿端口").port();
-    // 阻塞 accept 必须在普通线程上 —— 放进 tokio 单线程运行时会把它自己
-    // 唯一的执行线程堵死（刚踩过）。
+    // The blocking accept must run on a plain thread — putting it on the tokio single-thread
+    // runtime would clog its only executor thread (learned the hard way).
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("等一次连接");
-        // 读完请求再回 —— 半读就回在 macOS 上会偶发丢包。
+        // Read the whole request before replying — replying on a half-read occasionally drops packets on macOS.
         use std::io::{Read as _, Write as _};
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
@@ -98,17 +98,17 @@ async fn slack_posts_the_text_payload() {
         status: "completed".into(),
         exit_code: Some(0),
     });
-    // notify 是 fire-and-forget（spawn 出去的）。先 await 让单线程运行时
-    // 有机会跑发送任务（join 会堵住这根线程 —— runtime 就在这根线程上），
-    // 再 join 服务线程做断言：accept 到过连接 = 确实发过。
+    // notify is fire-and-forget (spawned). Await first to give the single-thread runtime
+    // a chance to run the send task (join blocks this thread — the runtime lives on it),
+    // then join the server thread for asserts: a connection accepted = it really sent.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     server.join().expect("服务线程");
 }
 
-/// 失败旁路：指向一个没人听的端口 —— 不 panic、不传播，这就是全部要求。
+/// Failure side path: pointing at a port nobody listens on — no panic, no propagation; that's the whole requirement.
 #[tokio::test]
 async fn a_dead_endpoint_is_just_a_stderr_line() {
-    // 49152 起的动态端口大概率没人听；就算真有人听，收到一条 POST 也无害。
+    // Dynamic ports from 49152 up are most likely unlistened; even if listened, one harmless POST is fine.
     let slack = Slack::new("http://127.0.0.1:49150/hook".to_string());
     slack.notify(NotifyEvent::GoalFinished {
         session_id: "s1".into(),

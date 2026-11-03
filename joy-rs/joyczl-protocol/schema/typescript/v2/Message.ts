@@ -3,26 +3,26 @@ import type { MessageRole } from "./MessageRole";
 import type { TurnMeta } from "./TurnMeta";
 
 /**
- * 会话历史里的一条消息：`chat_log` 的一行。
+ * One message in session history: a row of `chat_log`.
  *
- * 跟实时那一路（`turnStarted` / `textDelta` / `turnCompleted`）说的是同一场
- * 对话的两个视角：实时那一路只为**这一次连接**活着（刷新即消失），
- * 这一条让「刷新、换台设备、换个时候再看」成为可能。
+ * Same conversation, second viewpoint alongside the live stream (`turnStarted` /
+ * `textDelta` / `turnCompleted`): the live stream lives only for **this connection**
+ * (gone on refresh); this one makes "refresh, switch devices, look back later" possible.
  */
 export type Message = {
   /**
-   * chat_log 的行号。**也是游标**：`session/messages` 的 cursor 就是它。
-   * 用行号而不是时间戳：同一轮的两行是同一秒写进去的，时间戳分不出先后。
+   * The chat_log row number. **Also the cursor**: it is `session/messages`' cursor.
+   * Row numbers over timestamps: both rows of one turn are written in the same second, so timestamps cannot order them.
    */
   id: number;
   role: MessageRole;
   content: string;
   /**
-   * ISO 8601（UTC）。写进来的时刻。
+   * ISO 8601 (UTC). When it was written.
    */
   at: string;
   /**
-   * 这一轮的遥测（检索门 / 工具 / 迭代 / 模型 / usage），**只有 assistant 行上有**。
+   * This turn's telemetry (gate / tools / iterations / model / usage), **present only on assistant rows**.
    */
   meta: TurnMeta | null;
 };

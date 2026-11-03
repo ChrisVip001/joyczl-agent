@@ -8,10 +8,10 @@ import type { LarkFrame } from "../src/lark-proto.ts";
 import type { Responder } from "../src/bridge.ts";
 
 /**
- * 假的那根连接。
+ * The fake connection.
  *
- * 它**用真的编解码**来收发 —— 测试里的帧是实打实编成二进制再解回来的，所以
- * 「发出去的帧自己都认不出」这种事会当场炸，而不是等到连真服务端的时候。
+ * It sends and receives **with the real codec** — frames are truly encoded to binary and decoded
+ * back, so "a frame we can't decode ourselves" blows up on the spot, not at a real server.
  */
 class FakeSocket implements LarkSocket {
   readonly sent: LarkFrame[] = [];
@@ -35,22 +35,22 @@ class FakeSocket implements LarkSocket {
     this.onclose?.();
   }
 
-  /** 连上了。第一帧得等这个之后才发得出去。 */
+  /** Connected. The first frame can only go out after this. */
   open(): void {
     this.onopen?.();
   }
 
-  /** 服务端推一帧过来。 */
+  /** The server pushes one frame in. */
   push(frame: LarkFrame | Uint8Array): void {
     this.onmessage?.({ data: frame instanceof Uint8Array ? frame : encodeFrame(frame) });
   }
 
-  /** 推一帧**不是二进制**的东西过来。 */
+  /** Push something over that is **not binary**. */
   pushRaw(data: unknown): void {
     this.onmessage?.({ data });
   }
 
-  /** 发出去的、`type` 是这个值的帧。 */
+  /** Sent frames whose `type` equals this value. */
   frames(type: string): LarkFrame[] {
     return this.sent.filter((frame) => headerValue(frame, "type") === type);
   }
@@ -72,17 +72,17 @@ class FakeSockets {
   }
 }
 
-/** 假的飞书 HTTP 那一侧。请求的形状跟真的一样。 */
+/** The fake Lark HTTP side. Requests have the same shape as real ones. */
 class FakeLark {
-  /** 发出去的正文（按顺序）。 */
+  /** The bodies sent out (in order). */
   readonly said: string[] = [];
   readonly asked: string[] = [];
-  /** 换地址那次请求的正文。 */
+  /** The body of the address-trade request. */
   handshake: unknown;
 
   pingInterval: number | undefined;
   selfId: string | undefined = "ou_joy";
-  /** 让某条路径按脚本回答，按次取。 */
+  /** Script a path's answers, consumed in order. */
   readonly #scripted = new Map<string, Array<{ code: number; msg?: string }>>();
 
   script(path: string, response: { code: number; msg?: string }): void {
@@ -95,7 +95,7 @@ class FakeLark {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    // 先让出事件循环再回答：真网络每次都得等一个往返。
+    // Yield the event loop before answering: a real network always waits a round trip.
     await new Promise((resolve) => setImmediate(resolve));
 
     const url = String(input);
@@ -141,9 +141,9 @@ function reply(status: number, value: unknown): Response {
 }
 
 /**
- * 等一个条件成立。假的网络也是异步的，不能假设下一步就好了。
+ * Wait for a condition. The fake network is still async; never assume the next step is done.
  *
- * 期限给到 5 秒：重连那条要走完 2 秒的退避，是真的在等。
+ * The deadline is 5 seconds: the reconnect case walks a 2-second backoff, which genuinely waits.
  */
 async function waitFor(condition: () => boolean, what = "条件", timeoutMs = 5_000): Promise<void> {
   const until = Date.now() + timeoutMs;
@@ -154,7 +154,7 @@ async function waitFor(condition: () => boolean, what = "条件", timeoutMs = 5_
   assert.fail(`等不到：${what}`);
 }
 
-/** 把排着的微任务放完。 */
+/** Drain the queued microtasks. */
 async function settle(): Promise<void> {
   for (let round = 0; round < 6; round += 1) {
     await new Promise((resolve) => setImmediate(resolve));
@@ -166,9 +166,9 @@ interface Harness {
   sockets: FakeSockets;
   lark: FakeLark;
   running: Promise<void>;
-  /** 适配器说过的每一句话。有些行为只能从日志上看出来。 */
+  /** Everything the adapter said. Some behaviors are only visible in the logs. */
   logs: string[];
-  /** 连上并叫它开张（第一帧要等 onopen 之后才发得出去）。 */
+  /** Connect and let it start (the first frame must wait for onopen). */
   connect: () => Promise<FakeSocket>;
   stop: () => Promise<void>;
 }
@@ -211,7 +211,7 @@ function harness(options: Partial<LarkAdapterOptions>, respond: Responder): Harn
   };
 }
 
-/** 一条消息事件的 JSON。 */
+/** The JSON of one message event. */
 function eventBody(options: {
   openId?: string;
   senderType?: string;
@@ -246,7 +246,7 @@ function eventBody(options: {
   });
 }
 
-/** 一个数据帧。默认就是一条单聊的文本消息。 */
+/** One data frame. By default, a p2p text message. */
 function dataFrame(
   body: string,
   options: { messageId?: string; sum?: number; seq?: number; logId?: bigint; type?: string } = {},
@@ -271,7 +271,7 @@ function dataFrame(
   };
 }
 
-/** 把一段事件按飞书的规矩切成 `count` 片。 */
+/** Split one event into `count` pieces per Lark's fragmentation rule. */
 function fragments(body: string, count: number, messageId = "om_1"): LarkFrame[] {
   const bytes = new TextEncoder().encode(body);
   const size = Math.ceil(bytes.length / count);
@@ -281,14 +281,14 @@ function fragments(body: string, count: number, messageId = "om_1"): LarkFrame[]
   }));
 }
 
-// ---- 握手与帧 --------------------------------------------------------------
+// ---- Handshake and frames --------------------------------------------------------------
 
 test("换地址：拿 AppID/AppSecret 去要一个有票据的地址", async () => {
   const world = harness({}, async () => "嗯");
   await world.connect();
 
   assert.deepEqual(world.lark.handshake, { AppID: "cli_test", AppSecret: "secret" });
-  // 连的是换来的那个地址，不是写死的。
+  // The connection goes to the traded address, not a hardcoded one.
   assert.equal(world.sockets.all.length, 1);
 
   await world.stop();
@@ -298,7 +298,7 @@ test("连上就先发心跳，service 是地址里解出来的那个", async () 
   const world = harness({}, async () => "嗯");
   const socket = await world.connect();
 
-  // 服务端不会先开口，所以这第一帧必须我们自己发 —— 而且得等 onopen 之后。
+  // The server never speaks first, so this first frame must be ours — and only after onopen.
   const pings = socket.frames("ping");
   assert.equal(pings.length, 1);
   const ping = pings[0];
@@ -310,7 +310,7 @@ test("连上就先发心跳，service 是地址里解出来的那个", async () 
   await world.stop();
 });
 
-/** 一个控制帧，负载里挂着服务端给的新配置。 */
+/** A control frame whose payload carries the server's new config. */
 function pongWith(config: unknown): LarkFrame {
   return {
     seqId: 1n,
@@ -326,8 +326,8 @@ function pongWith(config: unknown): LarkFrame {
 }
 
 test("心跳按服务端给的间隔发", async (t) => {
-  // 只把 setInterval 换成假的。setTimeout 得留真的 —— 握手和等条件都靠它。
-  // 真等 120 秒不现实，而这个间隔正是要验的东西。
+  // Swap only setInterval for a fake. setTimeout must stay real — the handshake and the waits
+  // depend on it. Actually waiting 120s is unrealistic, and that interval is what's under test.
   t.mock.timers.enable({ apis: ["setInterval"] });
 
   const world = harness({}, async () => "嗯");
@@ -353,7 +353,7 @@ test("服务端可以在 pong 里把心跳间隔改掉", async (t) => {
     `日志里该说一句：${world.logs.join(" / ")}`,
   );
 
-  // 新间隔真的生效了：还按老的 120 秒的话，这 20 秒里一次都不该发。
+  // The new interval really took effect: still on the old 120s, nothing should fire in these 20s.
   t.mock.timers.tick(20_000);
   assert.equal(socket.frames("ping").length, 2);
 
@@ -361,8 +361,8 @@ test("服务端可以在 pong 里把心跳间隔改掉", async (t) => {
 });
 
 test("小于 10 秒的心跳间隔不吃", async (t) => {
-  // 官方 SDK 对小于 10 秒的是「静默忽略」，这里也一样 —— 那个数是服务端按
-  // 自己那一轮算的，改得比 10 秒更勤只会把轮次搅乱。
+  // The official SDK "silently ignores" intervals under 10 seconds; so do we — the server counts
+  // its rounds by that number, and beating faster than 10s only scrambles them.
   t.mock.timers.enable({ apis: ["setInterval"] });
 
   const world = harness({}, async () => "嗯");
@@ -391,7 +391,7 @@ test("数据帧：先 ACK 再回答，且 ACK 把原帧原样回显", async () =
   assert.equal(acked.length, 1, "除了 ACK 不该再往这根连接上写东西 —— 答复走 HTTP");
   const ack = acked[0];
   assert.ok(ack !== undefined);
-  // 回显：编号一模一样，一个都不能自己编。
+  // Echo: the ids identical, not one invented by us.
   assert.equal(ack.logId, 9_007_199_254_740_993n);
   assert.equal(ack.seqId, 0n);
   assert.equal(ack.method, METHOD_DATA);
@@ -408,8 +408,8 @@ test("数据帧：先 ACK 再回答，且 ACK 把原帧原样回显", async () =
 });
 
 test("ACK 不等回答 —— 想多久都不耽误那 3 秒", async () => {
-  // 这是飞书跟微信最大的不同：应答和答复是两件事。让「想」这一步故意挂住，
-  // ACK 必须已经到了。
+  // Lark's biggest difference from WeChat: acknowledgment and answer are two things. Hold the
+  // "thinking" step on purpose — the ACK must already have arrived.
   let release: (() => void) | undefined;
   const thinking = new Promise<void>((resolve) => {
     release = resolve;
@@ -432,7 +432,7 @@ test("ACK 不等回答 —— 想多久都不耽误那 3 秒", async () => {
   await world.stop();
 });
 
-// ---- 分片 ------------------------------------------------------------------
+// ---- Fragments ------------------------------------------------------------------
 
 test("分片：凑齐了才处理", async () => {
   const world = harness({}, async () => "齐了");
@@ -449,14 +449,14 @@ test("分片：凑齐了才处理", async () => {
   await waitFor(() => world.lark.said.length > 0, "凑齐之后的答复");
   assert.deepEqual(world.lark.said, ["齐了"]);
 
-  // 三片都得 ACK —— 应答跟拼不拼得齐是两件事。
+  // All three pieces must be ACKed — acknowledgment and completeness are two things.
   assert.equal(socket.frames("event").length, 3);
   await world.stop();
 });
 
 test("分片：乱序号或者没给分组键的，丢掉不当整条", async () => {
-  // 坏在这里要命：把半截 JSON 当整条去解，只会得到一句「事件不是 JSON」，
-  // 然后你永远不知道真实原因是一条大消息。
+  // Breaking here is fatal: decoding half a JSON as a whole yields only "event isn't JSON", and
+  // you'd never learn the real cause was one large message.
   const world = harness({}, async () => "不该走到这儿");
   const socket = await world.connect();
 
@@ -468,7 +468,7 @@ test("分片：乱序号或者没给分组键的，丢掉不当整条", async ()
   await world.stop();
 });
 
-// ---- 重复与过滤 ------------------------------------------------------------
+// ---- Duplicates and filtering ------------------------------------------------------------
 
 test("同一条重发两遍，只回答一次（但两遍都得 ACK）", async () => {
   const world = harness({}, async () => "只答一次");
@@ -482,7 +482,7 @@ test("同一条重发两遍，只回答一次（但两遍都得 ACK）", async (
   await settle();
 
   assert.equal(world.lark.said.length, 1, "重发的别再答一遍");
-  // 重发也要应答：不应答的话飞书会一直重发下去。
+  // Re-sends must be ACKed too: otherwise Lark keeps re-sending forever.
   assert.equal(socket.frames("event").length, 2);
   await world.stop();
 });
@@ -515,9 +515,9 @@ test("白名单：不在里头就不理，且说清楚为什么不理", async ()
   await world.stop();
 });
 
-// 顺带钉住响应形状：这条只有在 `open_id` 是从**顶层** `bot` 上读出来的时候
-// 才过（假飞书返回的就是线上那个平的 `{code, msg, bot}`）。哪天有人把它改成
-// `data.bot`，这里立刻红。
+// This also pins the response shape: it passes only if `open_id` is read from the **top-level**
+// `bot` (the fake Lark returns the flat on-the-wire `{code, msg, bot}`). The day someone changes
+// it to `data.bot`, this goes red immediately.
 test("群里：@ 的是别人就不插嘴，@ 到自己才接", async () => {
   const heard: string[] = [];
   const world = harness({}, async (_conversation, text) => {
@@ -548,13 +548,13 @@ test("群里：@ 的是别人就不插嘴，@ 到自己才接", async () => {
   );
   await waitFor(() => world.lark.said.length > 0, "被 @ 之后的答复");
 
-  // 占位符得剥掉 —— 那串东西对模型是噪音。
+  // The placeholder must be stripped — that string is noise to the model.
   assert.deepEqual(heard, ["在吗"]);
   await world.stop();
 });
 
 test("问不到自己是谁时退回去「有 @ 就算」，且把这件事喊出来", async () => {
-  // 这条退路会多嘴，所以日志必须说清楚 —— 不然「它怎么接了别人的话」没人查得动。
+  // This fallback is chattier, so the log must say so — "why did it answer someone else" is untraceable.
   const world = harness({}, async () => "在");
   world.lark.selfId = undefined;
   const socket = await world.connect();
@@ -575,9 +575,9 @@ test("问不到自己是谁时退回去「有 @ 就算」，且把这件事喊�
 });
 
 test("机器人信息被拒时，日志里要带上那个 code", async () => {
-  // 应用没开机器人能力 / 没发版时，这个接口回的是「有响应但没用」：
-  // 非 0 的 code，没有 bot。只喊一句「问不到 open_id」是不够的 ——
-  // 那会让人去查网络，而原因在开发者后台。
+  // With bot capability off / unpublished, this API answers "a response, but useless": a non-zero
+  // code and no bot. Shouting only "can't fetch open_id" isn't enough — it sends people chasing
+  // the network when the cause sits in the developer console.
   const world = harness({}, async () => "在");
   world.lark.script("/open-apis/bot/v3/info", { code: 10_001, msg: "app not enabled" });
   const socket = await world.connect();
@@ -602,7 +602,7 @@ test("单聊里不用 @", async () => {
   await world.stop();
 });
 
-// ---- 答复 ------------------------------------------------------------------
+// ---- Replies ------------------------------------------------------------------
 
 test("读不了的消息（图片之类）明说一句，不是装作没看见", async () => {
   const world = harness({}, async () => "不该走到这儿");
@@ -629,13 +629,13 @@ test("答复太长就切成几条发，一条都不丢", async () => {
   await world.stop();
 });
 
-// ---- 坏输入与重连 ----------------------------------------------------------
+// ---- Bad input and reconnects ----------------------------------------------------------
 
 test("认不出的帧丢掉，连接和后面的事都不受影响", async () => {
   const world = harness({}, async () => "还在");
   const socket = await world.connect();
 
-  socket.push(Uint8Array.from([0x08])); // 解到一半就断了
+  socket.push(Uint8Array.from([0x08])); // breaks off mid-decode
   socket.pushRaw("纯文本，这根线上不该有");
   await settle();
 
@@ -645,7 +645,7 @@ test("认不出的帧丢掉，连接和后面的事都不受影响", async () =>
     world.logs.join(" / "),
   );
 
-  // 后面照样能干活。
+  // Work continues as usual afterwards.
   socket.push(dataFrame(eventBody({}), { messageId: "om_after" }));
   await waitFor(() => world.lark.said.length > 0, "坏帧之后的答复");
   assert.deepEqual(world.lark.said, ["还在"]);
@@ -653,9 +653,9 @@ test("认不出的帧丢掉，连接和后面的事都不受影响", async () =>
 });
 
 test("帧是 Blob 递过来的一定得喊一声", async () => {
-  // 这是最阴的一种坏法：连上了、一帧都读不出来，日志上却一个字都没有。
-  // 根子在 WebSocket 默认的 `binaryType` 是 blob，而 Blob 只能异步读 ——
-  // 所以这声喊就是唯一的线索。得拿**第一帧**来测，因为每次连接只喊一次。
+  // The sneakiest failure: connected, not one frame decodes, and the log says nothing. The root
+  // is WebSocket's default `binaryType` of blob, readable only asynchronously — so this shout is
+  // the only clue. Tested with the **first** frame, because the warning fires once per connection.
   const world = harness({}, async () => "嗯");
   const socket = await world.connect();
 
@@ -678,7 +678,7 @@ test("断了会退避重连，而且退避能被 stop() 打断", async () => {
     `该说清楚等多久：${world.logs.join(" / ")}`,
   );
 
-  // 第一次退避是 2 秒（1000 * 2^1）。
+  // The first backoff is 2 seconds (1000 * 2^1).
   await waitFor(() => world.sockets.all.length === 2, "第二次连接");
 
   world.sockets.latest.open();
@@ -689,7 +689,7 @@ test("断了会退避重连，而且退避能被 stop() 打断", async () => {
 });
 
 test("退避中途叫停，不用干等完", async () => {
-  // 按 Ctrl-C 之后要能立刻退出去。等完 2 秒才退出，脚本里就得多挂两秒。
+  // After Ctrl-C the process must exit immediately. Sitting out the 2 seconds would hang scripts.
   const world = harness({}, async () => "嗯");
   await world.connect();
   world.sockets.latest.close();

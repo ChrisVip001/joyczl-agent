@@ -10,12 +10,12 @@ interface Call {
   body: Record<string, unknown>;
 }
 
-/** 假的 Telegram API。真发出去的那些请求，形状跟真的一样。 */
+/** A fake Telegram API. The requests that go out have the same shape as real ones. */
 class FakeTelegram {
   readonly calls: Call[] = [];
   readonly sent: string[] = [];
 
-  /** 排好队的 `getUpdates` 结果，按次发；发完就一直给空。 */
+  /** Queued `getUpdates` results, served in order; empty forever once exhausted. */
   readonly #batches: unknown[][] = [];
   #failNext = 0;
   #refuseSending = 0;
@@ -24,12 +24,12 @@ class FakeTelegram {
     this.#batches.push(updates);
   }
 
-  /** 下一次请求失败（模拟断网 / 502）。 */
+  /** Fail the next request (simulating a network drop / 502). */
   breakOnce(): void {
     this.#failNext += 1;
   }
 
-  /** 下一次「回话」被拒 —— 用户把 bot 封了、被踢出群，真机上就是这么回事。 */
+  /** The next "reply" is refused — the user blocked the bot or it was kicked, as on a real phone. */
   refuseSendingOnce(): void {
     this.#refuseSending += 1;
   }
@@ -38,12 +38,12 @@ class FakeTelegram {
     input: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
-    // 先让出事件循环，再回答。
+    // Yield the event loop before answering.
     //
-    // 这不是装饰：适配器的长轮询是 `while (!stopped) await fetch(...)`，
-    // 而一个**立刻** resolve 的假 fetch 会把整个循环压缩成一串 microtask ——
-    // microtask 队列排空之前定时器根本没机会跑，`stop()` 也就永远递不进去。
-    // 真网络每次都得等一个往返，一定会让出，所以这里照做才是忠实的替身。
+    // Not decoration: the adapter's long poll is `while (!stopped) await fetch(...)`, and a fake
+    // fetch that resolves **immediately** compresses the whole loop into a string of microtasks —
+    // timers never get a turn before the microtask queue drains, so `stop()` is never delivered.
+    // A real network always waits a round trip and always yields; matching that makes a faithful double.
     await new Promise((resolve) => setImmediate(resolve));
 
     if (this.#failNext > 0) {
@@ -97,7 +97,7 @@ function update(
   };
 }
 
-/** 没有文字的那种消息：语音、图片、贴纸都长这样。 */
+/** The kind of message without text: voice, images, and stickers all look like this. */
 function nonTextUpdate(updateId: number, chatId: number): unknown {
   return {
     update_id: updateId,
@@ -131,7 +131,7 @@ function setup(
   return { adapter, api };
 }
 
-/** 一直转到 `done()` 成立，然后把轮询停掉、等它真的收尾。 */
+/** Loop until `done()` holds, then stop the poll and await its real shutdown. */
 async function runUntil(
   adapter: TelegramAdapter,
   done: () => boolean,
@@ -146,7 +146,7 @@ async function runUntil(
   await running;
 }
 
-// ---- 切长消息 ---------------------------------------------------------------
+// ---- Splitting long messages ---------------------------------------------------------------
 
 test("短消息原样一条", () => {
   assert.deepEqual(splitMessage("你好", MESSAGE_LIMIT), ["你好"]);
@@ -174,7 +174,7 @@ test("连一个换行都没有的超长内容也得切完", () => {
   assert.equal(chunks.join(""), text);
 });
 
-// ---- 适配器 ----------------------------------------------------------------
+// ---- Adapter ----------------------------------------------------------------
 
 test("来一条文字：按对话去问 Joy，把答复发回那个聊天", async () => {
   const asked: Array<[string, string]> = [];
@@ -188,7 +188,7 @@ test("来一条文字：按对话去问 Joy，把答复发回那个聊天", asyn
 
   await runUntil(adapter, () => api.sent.length > 0);
 
-  // 会话按**聊天**分，不按人分 —— 群里大家共用一段对话才聊得下去。
+  // Sessions split by **chat**, not by person — a group shares one conversation or nobody can keep up.
   assert.deepEqual(asked, [["telegram:42", "你好"]]);
   assert.deepEqual(api.sent, ["你也好"]);
 });
@@ -218,7 +218,7 @@ test("不在白名单里的人：不问 Joy，也不回一句", async () => {
     },
     onLog: (text) => logs.push(text),
   });
-  // 陌生人（id 99）先来搭话，然后才是名单里的 alice。
+  // A stranger (id 99) speaks first, then the allowlisted alice.
   api.pushUpdates([update(1, 99, "你好")]);
   api.pushUpdates([update(2, 42, "我才是 alice", { id: 7, username: "alice" })]);
 
@@ -237,7 +237,7 @@ test("白名单里的用户名大小写不敏感", async () => {
     allow: ["@Alice"],
     respond: async () => "答复",
   });
-  // 名单里写的是 `@Alice`，来的是小写 —— 用户名不该分大小写。
+  // The list says `@Alice`, the arrival is lowercase — usernames must be case-insensitive.
   api.pushUpdates([update(1, 42, "你好", { id: 7, username: "alice" })]);
 
   await runUntil(adapter, () => api.sent.length > 0);
@@ -282,9 +282,9 @@ test("回答太长：分成几条发，不撞 Telegram 的上限", async () => {
     { length: 900 },
     (_, index) => `第 ${index} 行：这一行特意写长一点，好让总长度确实超过一条消息的上限。`,
   ).join("\n");
-  // 期望的切片数是确定的（splitMessage 是纯函数）——等到**全部**切片
-  // 到齐再断言，否则异步发送中途截到的只是半张清单（Linux 调度更快
-  // 暴露了这个竞态）。
+  // The expected chunk count is deterministic (splitMessage is pure) — assert only when **all**
+  // chunks have arrived, else the async send mid-way yields half a list (Linux scheduling exposed
+  // this race faster).
   const expected = splitMessage(long, MESSAGE_LIMIT);
   const { adapter, api } = setup({ respond: async () => long });
   api.pushUpdates([update(1, 42, "讲个长的")]);
@@ -317,8 +317,8 @@ test("回话被拒（比如用户把 bot 封了）：只留个痕，网关不能
   api.refuseSendingOnce();
   api.pushUpdates([update(1, 42, "你好")]);
 
-  // `runUntil` 最后要 await 那个 run()：它没被拒绝，就说明这个错被兜住了
-  // —— 没兜住的话，整个进程会因为一次未捕获的拒绝直接退出。
+  // `runUntil` awaits run() at the end: no rejection means the error was caught — uncaught, the
+  // whole process would exit on one unhandled rejection.
   await runUntil(adapter, () => logs.some((line) => line.includes("没处理完")));
 
   assert.ok(

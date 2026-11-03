@@ -1,19 +1,19 @@
-//! 后台作业的宿主实现：进程 + 有界环 + 完成落盘。
+//! The host implementation of background jobs: process + bounded ring + completion persistence.
 //!
-//! 工具层只知道 `JobRegistry` 那个 trait（见 `joyczl-tools/src/jobs.rs`）；真正的
-//! 东西在这儿 —— 与子代理、批准同一条注入纪律：依赖方向只从 app-server 指向 tools。
+//! The tool layer only knows the `JobRegistry` trait (see `joyczl-tools/src/jobs.rs`); the real thing
+//! lives here — the same injection discipline as subagent and approval: dependencies flow only from app-server toward tools.
 //!
-//! 三条实现要点：
+//! Three implementation points:
 //!
-//! * **闸门与前台同一条**：起作业前先过 `pass_gate`（`run_command` 的 handler 做），
-//!   用的是同一份 `ExecPolicy` —— 后台不是绕过批准的侧门。
-//! * **环是有界的**：溢出丢最旧的字节并记下丢了多少，读的时候如实说。一个刷屏的
-//!   命令不该把内存吃光，也不该让「读一次」变成失败。
-//! * **输出随写随落**：每份输出同时追加进 `<home>/jobs/<pid>-<id>.log`（1 MiB
-//!   封顶，超了明说）。内存环管「活着的时候读」，这个文件管「死后读」。
-//! * **台账落库**：起跑/收尾都写 state.db 的 jobs 表（迁移 0009）。进程死了，
-//!   「跑过什么、跑到哪」还在；启动对账把挂着的标成 interrupted —— **不自动
-//!   重跑**（重跑是事故放大器）。
+//! * **The same gate as the foreground**: starting a job first passes `pass_gate` (done by
+//!   `run_command`'s handler), using the same `ExecPolicy` — background is not a side door around approval.
+//! * **The ring is bounded**: on overflow it drops the oldest bytes and records how much was dropped,
+//!   reporting it honestly on read. A screen-flooding command must not eat all memory, nor turn "read once" into a failure.
+//! * **Output spills as it is written**: every output is also appended into `<home>/jobs/<pid>-<id>.log`
+//!   (capped at 1 MiB; when exceeded, say so). The memory ring handles "read while alive"; this file handles "read after death".
+//! * **The ledger goes to the db**: both start and finish write the jobs table in state.db (migration 0009).
+//!   If the process dies, "what ran and how far" remains; startup reconciliation marks hanging jobs as
+//!   interrupted — **never auto-rerun** (rerunning is an incident amplifier).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,15 +24,15 @@ use joyczl_tools::jobs::{JobFut, JobId, JobRead, JobRegistry, JobSummary};
 use tokio::io::AsyncReadExt;
 use tokio::sync::oneshot;
 
-/// 输出环的容量（字节）。64 KiB 够看进度，也够不着内存。
+/// Capacity of the output ring (bytes). 64 KiB is enough to watch progress without reaching memory.
 const RING_BYTES: usize = 64 * 1024;
-/// `wait=true` 的最长等待：比一次工具调用该花的时间短，等不到就如实说还在跑。
+/// Longest wait for `wait=true`: shorter than a tool call should take; if the wait fails, say honestly it is still running.
 const WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
-/// 输出日志文件的字节上限。比内存环宽（16 倍）——事后回查比实时看需要更多
-/// 上下文；但一个刷屏的命令照样不能把磁盘写穿，超了明说。
+/// Byte cap of the output log file. Wider than the memory ring (16x) — post-hoc review needs more
+/// context than live watching; but a screen-flooding command still must not write through the disk; when exceeded, say so.
 const LOG_CAP: u64 = 1024 * 1024;
 
-/// 落盘的输出日志：随写随落，封顶后丢弃并留一句标记。
+/// The spilled output log: written as output arrives; once capped, further bytes are dropped with a marker note.
 struct Log {
     file: Option<std::fs::File>,
     written: u64,
@@ -77,7 +77,7 @@ impl Log {
 pub(crate) struct Ring {
     buf: VecDeque<u8>,
     cap: usize,
-    /// 已经丢掉的字节数（读的时候要告诉模型「前面这些你读不到了」）。
+    /// Bytes already dropped (on read, the model must be told "you can no longer read these early ones").
     dropped: u64,
 }
 
@@ -92,7 +92,7 @@ impl Ring {
 
     pub(crate) fn push(&mut self, bytes: &[u8]) {
         if bytes.len() >= self.cap {
-            // 一次就超过整个环：只留最后 cap 字节，前面的全算丢掉。
+            // Exceeds the whole ring in one shot: keep only the last cap bytes; everything earlier counts as dropped.
             let keep = bytes.len() - self.cap;
             self.dropped += self.buf.len() as u64 + keep as u64;
             self.buf.clear();
@@ -107,7 +107,7 @@ impl Ring {
         }
     }
 
-    /// 从绝对位置 `cursor` 读到现在。返回（文本, 新 cursor, 是否丢过东西）。
+    /// Read from absolute position `cursor` to now. Returns (text, new cursor, whether anything was dropped).
     pub(crate) fn read_from(&self, cursor: u64) -> (String, u64, bool) {
         let start = cursor.max(self.dropped);
         let lossy = cursor < self.dropped;
@@ -139,22 +139,22 @@ struct Job {
     command: String,
     ring: Arc<Mutex<Ring>>,
     status: Arc<Mutex<Status>>,
-    /// 停它：唤醒那个正在等子进程的 task，让它 kill（子进程归它持有）。
+    /// Stop it: wake the task waiting on the child process so it can kill (the child belongs to that task).
     killer: Option<oneshot::Sender<()>>,
 }
 
-/// 进程内的作业表。**台账在 state.db**（见模块头）；内存里只有活着的那部分。
+/// The in-process job table. **The ledger is in state.db** (see module header); memory holds only the live part.
 pub struct Jobs {
     policy: ExecPolicy,
     home: std::path::PathBuf,
     jobs: Arc<Mutex<HashMap<JobId, Job>>>,
     next: AtomicU64,
     rows: Arc<joyczl_state::Jobs>,
-    /// 通知器（M3a）：作业收尾往外推——旁路，没有就不发。
+    /// Notifier (M3a): pushes job completions outward — a side path; absent means nothing is sent.
     notify: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
-    /// 历史作业的内存快照（reconcile时装入）。台账查询是异步的，而
-    /// `JobRegistry::list` 是同步的 —— 与其搭同步桥，不如在启动时把历史
-    /// 一次装进来：历史不会在本进程里新增（新收尾的作业本来就在内存表里）。
+    /// In-memory snapshot of historical jobs (loaded at reconcile). Ledger queries are async while
+    /// `JobRegistry::list` is sync — rather than building a sync bridge, load history once at startup:
+    /// history never grows inside this process (newly finished jobs are already in the in-memory table).
     history: Arc<Mutex<Vec<joyczl_state::JobRow>>>,
 }
 
@@ -171,7 +171,7 @@ impl Jobs {
         }
     }
 
-    /// 装上通知器（boot 时调；测试里不装）。
+    /// Attach the notifier (called at boot; not attached in tests).
     pub fn with_notifier(
         mut self,
         notify: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
@@ -180,14 +180,14 @@ impl Jobs {
         self
     }
 
-    /// 启动对账：上次崩溃时还在跑的作业标成 interrupted。**不自动重跑** ——
-    /// 重跑的决定留给看着台账的人或模型；这条日志就是给他们的「发生了什么」。
+    /// Startup reconciliation: jobs still running at the last crash are marked interrupted. **Never auto-rerun** —
+    /// the rerun decision is left to the human or model looking at the ledger; this log line is their "what happened".
     pub async fn reconcile(&self) {
         match self.rows.reconcile_interrupted().await {
             Ok(rows) if rows.is_empty() => {}
             Ok(rows) => {
-                // 快照在清账**之前**拍：那些行马上要被标成 interrupted 了，
-                // 但历史列表正需要它们。
+                // Take the snapshot **before** clearing: those rows are about to be marked interrupted,
+                // but the history list needs them.
                 *self.history.lock().expect("history 锁不该中毒") = rows.clone();
                 for row in &rows {
                     eprintln!(
@@ -203,15 +203,15 @@ impl Jobs {
         }
     }
 
-    /// 「查不到」就这一句话，**两条路径共用**：读与停必须给出同一个答复 ——
-    /// 措辞一旦分岔，就等于把「有这个东西但不是你的」泄露出去。
+    /// The one sentence for "not found", **shared by both paths**: read and stop must give the same
+    /// answer — once the wording diverges, it leaks "this thing exists but is not yours".
     fn unknown(id: &str) -> String {
         format!("没有叫 {id} 的作业（用 job_list 看看有哪些）")
     }
 
-    /// 台账回查：作业不在内存表里（进程重启过 / 已收尾清掉）。owner 围栏
-    /// 照样核对 —— 历史记录不因为「旧」就放开归属。输出读日志文件全文；
-    /// 历史作业不会再有增量，一次给完。
+    /// Ledger lookback: the job is not in the in-memory table (process restarted / finished and cleared).
+    /// The owner fence is still checked — history does not open up ownership just because it is "old".
+    /// Output is read in full from the log file; historical jobs have no more increments, so it is given all at once.
     async fn read_from_ledger(
         rows: &Arc<joyczl_state::Jobs>,
         owner: &str,
@@ -242,7 +242,7 @@ impl Jobs {
         })
     }
 
-    /// 找一个作业，并确认它属于这个会话。别人的 id 猜到了也没用。
+    /// Find a job and confirm it belongs to this session. Guessing someone else's id is useless.
     fn owned<'a>(
         jobs: &'a mut HashMap<JobId, Job>,
         owner: &str,
@@ -250,7 +250,7 @@ impl Jobs {
     ) -> Result<&'a mut Job, String> {
         let job = jobs.get_mut(id).ok_or_else(|| Self::unknown(id))?;
         if job.owner != owner {
-            // 不透露「有这个东西但不是你的」：只说查不到。
+            // Do not reveal "this thing exists but is not yours": only say not found.
             return Err(Self::unknown(id));
         }
         Ok(job)
@@ -270,13 +270,13 @@ impl JobRegistry for Jobs {
         let home = self.home.clone();
         let table = self.jobs.clone();
         let rows = self.rows.clone();
-        // self 的引用不进 async 块（生命周期不活那么久）—— 在块外 clone。
+        // A reference to self must not enter the async block (the lifetime does not live that long) — clone outside the block.
         let notifier = self.notify.clone();
         let id = format!("j{}", self.next.fetch_add(1, Ordering::SeqCst));
 
-        // 可写的根：显式给的工作目录（或进程当前目录）+ home —— 与前台
-        // `run_command` 完全一致的三条来源（外加策略里的 extra_roots，由
-        // `spawn_sandboxed` 内部并进来）。
+        // Writable roots: the explicitly given working directory (or the process cwd) + home — exactly the
+        // same three sources as foreground `run_command` (plus the policy's extra_roots, merged in by
+        // `spawn_sandboxed` internally).
         let mut writable: Vec<std::path::PathBuf> = Vec::new();
         if let Some(cwd) = cwd
             .map(std::path::PathBuf::from)
@@ -297,8 +297,8 @@ impl JobRegistry for Jobs {
                 exit_code: None,
             }));
 
-            // 输出日志：随写随落，进程死了输出还在。带 pid 防撞名（job id
-            // 是进程内自增的），与 outbox 文件同一个理由。
+            // Output log: spills as output arrives; the output survives process death. The pid guards
+            // against name collisions (job ids are per-process counters), same reason as the outbox files.
             let log_dir = home.join("jobs");
             let _ = std::fs::create_dir_all(&log_dir);
             let log_path = log_dir.join(format!("{}-{job_id}.log", std::process::id()));
@@ -307,13 +307,13 @@ impl JobRegistry for Jobs {
                 .record_started(&job_id, &owner, &command, &log_path.display().to_string())
                 .await
             {
-                // 台账写失败不拦作业 —— 作业还能跑、还能读，只是「死后可查」
-                // 这一层缺了。但必须说，不能静默。
+                // A ledger write failure does not block the job — it can still run and be read; only the
+                // "queryable after death" layer is missing. But it must be said, never silently.
                 eprintln!("(joy) 作业 {job_id} 没记进台账：{e}");
             }
 
-            // 两条读管道并发抽干：先读完 stdout 再读 stderr 会在 stderr 塞满时
-            // 互相锁死（前台那条路上也是同一个理由）。
+            // Both read pipes drain concurrently: reading stdout fully before stderr would deadlock when
+            // stderr fills up (the same reason as on the foreground path).
             if let Some(mut stdout) = child.stdout.take() {
                 let ring = ring.clone();
                 let log = log.clone();
@@ -351,8 +351,8 @@ impl JobRegistry for Jobs {
             let watched_id = job_id.clone();
             let watched_rows = rows.clone();
             tokio::spawn(async move {
-                // 等它自己结束，或者等到「有人要停它」。停下的记 killed ——
-                // 「失败」和「被人叫停」在台账里是两回事。
+                // Wait for it to finish by itself, or until "someone wants it stopped". A stopped job is
+                // recorded as killed — "failed" and "stopped by someone" are two different things in the ledger.
                 let (exit, was_killed) = tokio::select! {
                     exit = child.wait() => (exit, false),
                     _ = killed => {
@@ -387,7 +387,7 @@ impl JobRegistry for Jobs {
                         exit_code: Some(code),
                     });
                 }
-                // 收尾落盘：进程退出后仍然回查得到（不是「重启后继续跑」）。
+                // Completion spill: still queryable after the process exits (not "keeps running across restarts").
                 let bytes = watched_ring.lock().expect("ring 锁不该中毒").snapshot();
                 let dir = watched_home.join("outbox").join("jobs");
                 if std::fs::create_dir_all(&dir).is_ok() {
@@ -395,9 +395,9 @@ impl JobRegistry for Jobs {
                         "# {watched_id}: {watched_command}\n退出码 {code}\n\n{}",
                         String::from_utf8_lossy(&bytes)
                     );
-                    // 文件名带 **pid**：job id 是进程内自增的（j1、j2…），两个
-                    // Joy 进程会生成同名文件互相覆盖。加 pid 之后撞名只剩
-                    // 「同进程同 id」—— 而那不可能（id 唯一）。
+                    // The filename carries the **pid**: job ids are per-process counters (j1, j2...), so two
+                    // Joy processes would generate same-named files overwriting each other. With the pid,
+                    // collisions reduce to "same process, same id" — which is impossible (ids are unique).
                     let file = dir.join(format!("{}-{watched_id}.txt", std::process::id()));
                     if let Err(e) = std::fs::write(&file, body) {
                         eprintln!("(joy) 后台作业 {watched_id} 的输出没写成文件：{e}");
@@ -432,10 +432,10 @@ impl JobRegistry for Jobs {
         let table = self.jobs.clone();
         let rows = self.rows.clone();
         Box::pin(async move {
-            // 先把要等的东西取出来，**不跨 await 持锁**。
+            // Take out the thing to wait on first, **never holding the lock across an await**.
             let table = table.clone();
-            // 活表里没有 → 去台账回查。守卫必须先放掉再 await（std
-            // MutexGuard 不是 Send，跨 await 持有整条 future 都不 Send）。
+            // Not in the live table → look back in the ledger. The guard must be released before the await
+            // (a std MutexGuard is not Send; holding it across an await makes the whole future not Send).
             let found = {
                 let jobs = table.lock().expect("jobs 锁不该中毒");
                 jobs.get(&id)
@@ -490,8 +490,8 @@ impl JobRegistry for Jobs {
             if let Some(killer) = job.killer.take() {
                 let _ = killer.send(());
             }
-            // 立刻标记为「停了」：等那个 task 真的收完进程还要一会儿，而用户
-            // 现在问的是「停了吗」。
+            // Mark "stopped" immediately: waiting for that task to actually reap the process takes a
+            // while, and the user is asking "is it stopped" right now.
             job.status.lock().expect("status 锁不该中毒").running = false;
             Ok(true)
         })
@@ -514,9 +514,9 @@ impl JobRegistry for Jobs {
             })
             .collect();
         drop(jobs);
-        // 台账里的历史（进程重启前的那些）也列出来 —— 「上次跑到一半的那个」
-        // 得看得见，否则 interrupted 就只是个没人知道的墓碑。历史来自启动时
-        // 装的快照，纯同步，不做任何阻塞查询。
+        // History from the ledger (the ones from before the process restart) is listed too — "the one that
+        // got cut off halfway last time" must be visible, otherwise interrupted is just a tombstone nobody
+        // knows about. History comes from the snapshot loaded at startup, purely synchronous, no blocking queries.
         for row in self.history.lock().expect("history 锁不该中毒").iter() {
             if row.owner != owner || out.iter().any(|summary| summary.id == row.id) {
                 continue;
@@ -535,7 +535,7 @@ impl JobRegistry for Jobs {
                 bytes,
             });
         }
-        // 按 id 排：id 是递增的，于是就是「起的先后」。
+        // Sort by id: ids are increasing, so this is "order of starting".
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }

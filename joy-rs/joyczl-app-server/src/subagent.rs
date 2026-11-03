@@ -1,23 +1,23 @@
-//! 子代理的执行体。
+//! The subagent's executor.
 //!
-//! 放在这一层是因为它要模型、状态句柄与工具表 —— `joyczl-tools` 那边只认得
-//! `SubagentRunner` 这个 trait（依赖方向不能反过来：loop 依赖 tools）。
+//! It lives at this layer because it needs the model, state handles, and tool table — `joyczl-tools`
+//! only knows the `SubagentRunner` trait (the dependency direction cannot be reversed: loop depends on tools).
 //!
-//! 与父轮的区别，逐条说清：
+//! Differences from the parent turn, spelled out one by one:
 //!
-//! * **自己的上下文**：空历史 + 一份简短 system（人格 + 一句「你只干这一件事」），
-//!   不带检索、不带技能、不带摘要。派出去的活应当自成一体。
-//! * **独立的迭代上限**：默认 5、硬上限 10。给到几十轮就等于在别处偷偷跑一整轮
-//!   长对话，而「省上下文」正是委派的理由。
-//! * **不能再派生**：工具表显式去掉 `delegate_task`（递归派生是那种平时看不出来、
-//!   一旦有人试就烧穿配额的东西）。
-//! * **没有通知、没有打断**：父轮只知道「在调用 delegate_task」，然后拿到结论。
-//! * **不留档**：子代理的对话不写 `chat_log`（否则 `session/list` 里会多出一堆
-//!   没人认领的会话）。要知道它干了什么，看返回的摘要 —— 里面带着它用过的工具。
+//! * **Its own context**: empty history + a short system (persona + one line "you do only this task"),
+//!   no retrieval, no skills, no summary. A delegated task should be self-contained.
+//! * **Its own iteration cap**: default 5, hard cap 10. Allowing dozens of turns amounts to secretly
+//!   running a whole long conversation elsewhere, while "saving context" is the very reason for delegation.
+//! * **No further delegation**: the tool table explicitly drops `delegate_task` (recursive delegation is
+//!   the kind of thing that is invisible until someone tries it and burns through the quota).
+//! * **No notifications, no interrupts**: the parent turn only knows "delegate_task was called", then gets the conclusion.
+//! * **Nothing persisted**: the subagent's conversation is not written to `chat_log` (otherwise
+//!   `session/list` would fill with unclaimed sessions). To know what it did, read the returned summary — it lists its tools.
 //!
-//! 模型与设置是**运行时现读**的（共享那两个 Arc，而不是在构造时clone 一份）：
-//! `config/write` 换 provider 之后、或测试里 `install_provider` 之后进来的这一轮，
-//! 用的必须是**当下**的 client —— 捕获启动那一刻的副本是个静默的坑。
+//! Model and settings are **read at runtime** (sharing those two Arcs, not cloning at construction):
+//! a turn arriving after `config/write` switches providers, or after `install_provider` in tests,
+//! must use the **current** client — capturing a snapshot from startup is a silent trap.
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -28,36 +28,36 @@ use joyczl_state::{Calendar, Chat, Episodes, Facts};
 use joyczl_tools::{subagent::SubagentRunner, BoxFut, ToolRegistry};
 use serde_json::Value;
 
-/// 默认迭代上限：委派出去的活应当比一轮对话小。
+/// Default iteration cap: a delegated task should be smaller than a full conversation.
 const DEFAULT_ITERATIONS: i32 = 5;
-/// 硬上限：再多就不叫「委派」了。
+/// Hard cap: beyond this it is no longer "delegation".
 const MAX_ITERATIONS: i32 = 10;
-/// 子代理的答案不该占满一整轮的额度：它给的是结论。
+/// The subagent's answer should not consume a whole turn's quota: it delivers conclusions.
 const SUBAGENT_MAX_TOKENS: i32 = 2048;
 
 pub(crate) struct Delegated {
-    /// 父轮工具表的副本（其中已经没有 `delegate_task`）。
+    /// A copy of the parent turn's tool table (already without `delegate_task`).
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) facts: Facts,
     pub(crate) episodes: Episodes,
     pub(crate) chat: Chat,
     pub(crate) calendar: Calendar,
-    /// 与 `Server` 共享的设置与模型句柄（运行时现读，见模块文档）。
+    /// Settings and model handles shared with `Server` (read at runtime; see module docs).
     pub(crate) settings: Arc<RwLock<Settings>>,
     pub(crate) resolved: Arc<RwLock<Option<Resolved>>>,
-    /// 子代理的工具调用也走钩子（工具级事件由 `ToolRegistry::execute` 发）。
+    /// The subagent's tool calls also go through hooks (tool-level events are fired by `ToolRegistry::execute`).
     pub(crate) hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
 }
 
-/// 这一次要喂给子代理的东西。
+/// What gets fed to the subagent this time.
 struct Prompt {
     system: String,
     history: Vec<joyczl_provider::Message>,
     user_message: String,
 }
 
-/// 跑一次子代理的 loop。抽出来是因为「结构化结果不合规」要**再跑一轮**，
-/// 而那一轮除了历史与指令之外和第一轮完全一样。
+/// Run one subagent loop. Extracted because "the structured result failed validation" needs **one
+/// more round**, and that round is identical to the first except for history and instruction.
 async fn run_child(
     resolved: &Resolved,
     tools: &ToolRegistry,
@@ -84,7 +84,7 @@ async fn run_child(
     .await
 }
 
-/// 把子代理的结论压成「符合 schema 的 JSON 字符串」。
+/// Squeeze the subagent's conclusion into a "schema-valid JSON string".
 fn coerce_structured(reply: &str, schema: &Value) -> Result<String, String> {
     let Some(json) = joyczl_memory::gate::extract_json(reply) else {
         return Err("回复里没找到 JSON 对象".to_string());
@@ -115,7 +115,7 @@ impl SubagentRunner for Delegated {
         let calendar = self.calendar.clone();
 
         Box::pin(async move {
-            // 现读：这一轮用的是当下的 provider 与设置。
+            // Read now: this turn uses the current provider and settings.
             let Some(resolved) = resolved.read().expect("resolved 锁不该中毒").clone() else {
                 return Err(anyhow::anyhow!("模型还没配好，子代理起不来"));
             };
@@ -125,7 +125,7 @@ impl SubagentRunner for Delegated {
             let iterations = max_iterations
                 .unwrap_or(DEFAULT_ITERATIONS)
                 .clamp(1, MAX_ITERATIONS);
-            // 事件载荷用任务的前一小段：整段可能很长，而钩子要的是「在干什么」。
+            // The event payload uses a short head of the task: it may be long, and the hook wants "what is being done".
             let task_preview: String = task.chars().take(400).collect();
 
             let soul = crate::turn::load_soul(&home);
@@ -135,25 +135,25 @@ impl SubagentRunner for Delegated {
                 &resolved.provider_id,
                 "",
                 "",
-                // 子代理没有待办清单：那张表属于父轮的任务线，它也不该去写。
+                // The subagent has no todo list: that board belongs to the parent turn's task line, and it must not write it.
                 None,
                 None,
             ) + "\n\nYou are a subagent: do the one task below and answer with the \
                  conclusion only. Whoever asked cannot see your steps, and you cannot ask \
                  follow-up questions.";
 
-            // 工具表用**父轮的副本**，只是其中没有 delegate_task —— 于是递归
-            // 派生不是「被拒绝」，而是根本不存在的选项。
-            // 子代理的表里既没有 `delegate_task`（递归结构性不存在），
-            // 也没有 `todo_write`：清单属于**父轮那条任务线**，子代理写它会
-            // 把父轮的计划表覆盖掉。
+            // The tool table is the **parent turn's copy**, just without delegate_task — so recursive
+            // delegation is not "denied", it is an option that does not exist at all.
+            // The subagent's table has neither `delegate_task` (recursion structurally absent)
+            // nor `todo_write`: the board belongs to **the parent turn's task line**; the subagent
+            // writing it would overwrite the parent turn's plan.
             let child_tools = tools
                 .without(joyczl_tools::subagent::NAME)
                 .without("todo_write");
-            // 子代理**没有批准通道**（`None`）：它不该阻塞在人类身上，所以
-            // 需要批准的动作在它那儿直接按拒绝处理 —— 见 limitations.md。
+            // The subagent has **no approval channel** (`None`): it must not block on a human, so
+            // actions requiring approval are treated as rejected outright — see limitations.md.
             //
-            // 会话名给一个自己的：日志与 spill 归属查得到「这是谁弄出来的」。
+            // Give it a session name of its own: logs and spill attribution can then trace "who made this".
             let child_session = format!(
                 "subagent:{}",
                 std::time::SystemTime::now()
@@ -169,13 +169,13 @@ impl SubagentRunner for Delegated {
                 &home,
                 crate::Injections {
                     session_id: child_session.clone(),
-                    // 子代理跟父任务在同一个目录里干活 —— 父轮 cwd 由
-                    // run() 的 parent_cwd 带进来。
+                    // The subagent works in the same directory as the parent task — the parent turn's
+                    // cwd is carried in via run()'s parent_cwd.
                     cwd,
-                    // 子代理不碰后台作业：那是父轮的活，它也没有批准通道。
+                    // The subagent does not touch background jobs: that is the parent turn's business, and it has no approval channel.
                     jobs: None,
-                    // 子代理没有批准通道（它不该阻塞在人类身上），但有钩子：工具级
-                    // 事件照常走（用子代理自己的 session 名）。
+                    // The subagent has no approval channel (it must not block on a human), but it has hooks: tool-level
+                    // events flow as usual (under the subagent's own session name).
                     approval: None,
                     hooks: hooks.clone(),
                 },
@@ -183,8 +183,8 @@ impl SubagentRunner for Delegated {
 
             let budget = crate::tool_result_budget(&settings);
 
-            // SubagentStart：派出去的活也要显形（审计与「谁在动我的东西」）。
-            // 观察事件 —— 钩子的话不会拦住这次委派。
+            // SubagentStart: delegated work must also be visible (audit and "who is touching my things").
+            // Observe-only event — the hook's words will not block this delegation.
             crate::fire_hook(
                 &hooks,
                 joyczl_tools::hooks::HookEvent::SubagentStart,
@@ -202,7 +202,7 @@ impl SubagentRunner for Delegated {
                 ctx.clone(),
                 Prompt {
                     system: system.clone(),
-                    // 空历史：委派的意义就是把上下文的重担留在父轮那边。
+                    // Empty history: the point of delegation is to leave the context burden on the parent turn's side.
                     history: Vec::new(),
                     user_message: task,
                 },
@@ -225,10 +225,10 @@ impl SubagentRunner for Delegated {
 
             let mut summary = result.reply.trim().to_string();
 
-            // ---- 结构化结果：父模型给了 schema 就要求它是合法 JSON 且过校验。
-            // 不合规**带着报错重试一次**（把上一轮的 messages 也带上，它看得见自己
-            // 写了什么），仍不合规就回落成散文并写明原因 —— 一次没按格式回话，
-            // 不该让整件活白跑（与「失败开放」同一条）。
+            // ---- Structured result: when the parent model gave a schema, require valid JSON that passes validation.
+            // On failure **retry once with the error attached** (also carrying the previous round's messages,
+            // so it can see what it wrote); if it still fails, fall back to prose and state why — one
+            // off-format answer must not waste the whole task (the same rule as "fail-open").
             if let Some(schema) = &result_schema {
                 match coerce_structured(&summary, schema) {
                     Ok(json) => summary = json,
@@ -273,10 +273,10 @@ impl SubagentRunner for Delegated {
             if summary.is_empty() {
                 summary = "（子代理没有给出结论。）".to_string();
             }
-            // 把「它用了什么」附在结论后面：父轮只看到一次工具调用，这些细节
-            // 是它判断「这份结论可不可信」的唯一线索 —— **失败的尤其要标出来**，
-            // 否则父轮会以为子代理一路顺利，而它其实是在一次失败的调用上编了
-            // 个结论。
+            // Append "what it used" after the conclusion: the parent turn sees only one tool call, and these
+            // details are its only clue for judging "can this conclusion be trusted" — **failures especially
+            // must be flagged**, otherwise the parent turn will believe the subagent sailed through, when it
+            // actually fabricated a conclusion on top of a failed call.
             let used: Vec<String> = result
                 .tool_calls
                 .iter()

@@ -1,17 +1,17 @@
-//! `joyczl-eval` —— 评测，发版前的那颗钻石。
+//! `joyczl-eval` — evaluation, the diamond before release.
 //!
-//! 确定性 eval 进程内跑同一个 `run_turn` + scripted 模型——离线、0/1、
-//! 可重复，跟单测同一套基建；judge 走真模型；release gate 由确定性
-//! eval 的退出码把守。
+//! Deterministic evals run the same `run_turn` in-process with a scripted model —
+//! offline, 0/1, reproducible, the same infrastructure as unit tests; judge uses real
+//! models; the release gate is guarded by the deterministic evals' exit code.
 //!
-//! 三层，从便宜到贵：
+//! Three tiers, cheap to expensive:
 //!
-//!   * deterministic：脚本化模型 + 断言（回复包含什么、哪些工具、几轮）。离线、确定、必须 100% 通过 —— 它们就是发版闸门。
-//!   * judge：真模型答一轮，referee 小模型按 rubric 打 0-10 分。需要 key；出分不拦发版。
-//!   * arena：双模型竞速**不做** —— 展示性大于工程价值，见 README。
+//!   * deterministic: scripted model + assertions (what the reply contains, which tools, how many turns). Offline, deterministic, must pass 100% — they are the release gate.
+//!   * judge: a real model answers one turn; a referee small model scores 0-10 by rubric. Needs a key; scores don't block release.
+//!   * arena: dual-model racing is **not done** — more show than engineering value, see README.
 //!
-//! 报告落在 `<home>/eval_report.json`，历史追加 `<home>/eval_runs.jsonl`
-//! —— 跟 trace/usage 同一条「落盘账本」的规矩。
+//! Reports land in `<home>/eval_report.json`, history appends to `<home>/eval_runs.jsonl`
+//! — the same "ledger on disk" rule as trace/usage.
 
 pub mod judge;
 pub mod report;
@@ -19,12 +19,12 @@ pub mod scenario;
 
 use std::path::{Path, PathBuf};
 
-/// 用例里的 `{{home}}` 一律展开成**正斜杠**路径。
+/// `{{home}}` in cases always expands to a **forward-slash** path.
 ///
-/// 装置文件常常把它嵌进 JSON（`mcp.json` 的 args、工具参数），而 Windows 的
-/// home 形如 `C:\Users\…\Temp\.tmp42`：反斜杠在 JSON 字符串里是非法转义，
-/// 整份装置会被判成「不是合法 JSON」，用例就在自己的夹具上失败。
-/// 正斜杠在 Windows 的文件 API 里是合法分隔符，两种平台都读得懂。
+/// Fixture files often embed it inside JSON (mcp.json args, tool arguments), while a
+/// Windows home looks like `C:\Users\…\Temp\.tmp42`: backslashes are illegal JSON
+/// escapes, so the fixture would be judged "not valid JSON" and the case fails on its
+/// own fixture. Forward slashes are legal separators in the Windows file API — both read.
 fn expand_home(text: &str, home: &Path) -> String {
     text.replace("{{home}}", &home.display().to_string().replace('\\', "/"))
 }
@@ -39,7 +39,7 @@ use joyczl_provider::{CreateRequest, CreateResponse, Resolved};
 
 use scenario::{Expectations, Scenario};
 
-/// 一个用例跑完后的收成（确定性与 judge 共用）。
+/// The harvest after one case runs (shared by deterministic and judge).
 #[derive(Debug, Default)]
 pub struct TurnOutput {
     pub reply: String,
@@ -48,13 +48,13 @@ pub struct TurnOutput {
     pub gate: Option<String>,
     pub interrupted: bool,
     pub consolidation_new_facts: i32,
-    /// 每次工具执行的输出原文 —— 断言「工具真的成功跑过」用。
+    /// Raw output of each tool execution — for asserting "the tool really succeeded".
     pub tool_outputs: Vec<String>,
-    /// 每次模型请求的全文，按序 —— prompt 断言的原料。
+    /// Full text of each model request, in order — raw material for prompt assertions.
     pub prompts: Vec<String>,
 }
 
-/// 一条断言的裁定：通过为空，失败给「为什么」。
+/// The verdict on one assertion: empty on pass, "why" on failure.
 type Verdict = Vec<String>;
 
 fn check_contains(where_: &str, text: &str, needles: &[String], fails: &mut Verdict) {
@@ -135,8 +135,8 @@ fn score(expect: &Expectations, out: &TurnOutput) -> Verdict {
     fails
 }
 
-/// 包装 provider：把每次请求的全文抄送一份 —— prompt 断言的原料。
-/// inner 是 scripted mock；抄送之外零改动。
+/// A provider wrapper: carbon-copies each request's full text — raw material for
+/// prompt assertions. `inner` is the scripted mock; zero changes beyond the copy.
 struct RecordingProvider {
     inner: Arc<dyn joyczl_provider::Provider>,
     prompts: Mutex<Vec<String>>,
@@ -185,14 +185,15 @@ impl joyczl_provider::Provider for RecordingProvider {
     }
 }
 
-/// 起一个干净的 home + server，装上 scripted 模型，把用例的每一轮跑完。
+/// Starts a clean home + server, installs the scripted model, and runs every turn of
+/// the case.
 ///
-/// 每个用例一个全新的 state.db：consolidation 计数、历史、事实互不串味
-/// —— eval 之间没有顺序依赖，失败才有唯一的原因。
+/// Each case gets a brand-new state.db: consolidation counts, history, and facts stay
+/// separate — no ordering between evals, so a failure has exactly one cause.
 async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
     let settings = joyczl_config::Settings {
         home: home.to_path_buf(),
-        // 假 key：让 boot 的 resolve 安静地成功，随后整个被 mock 替换。
+        // Fake key: lets boot's resolve succeed quietly; the whole thing is swapped for the mock later.
         api_key: Some("eval-dummy".to_string()),
         history_turns: scenario.settings.history_turns.unwrap_or(12),
         consolidate_every: scenario.settings.consolidate_every.unwrap_or(6),
@@ -238,7 +239,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
     for turn in scenario.effective_turns() {
         let session_id = turn.session_id.unwrap_or_else(|| "eval".to_string());
         let (sink, mut rx) = EventSink::channel();
-        // 消息里的 {{home}}：让用例能指着自己在 home 里的文件说话。
+        // {{home}} in messages: lets the case point at its own files inside home.
         let message = expand_home(&turn.message, home);
         let params = TurnStartParams {
             session_id: Some(session_id),
@@ -251,7 +252,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
             run_turn(&task_server, params, RequestId::Number(0), &sink).await
         });
 
-        // 通知循环：打断与 consolidation 计数都在这里收。
+        // Notification loop: interrupts and consolidation counts are collected here.
         let mut deltas = 0usize;
         let mut turn_id = String::new();
         loop {
@@ -266,7 +267,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                 ServerNotification::TextDelta(_) => {
                     deltas += 1;
 
-                    // 恰好到第 N 个增量时拨令牌（is_some_and 保证只拨一次）。
+                    // Flip the token exactly at the Nth increment (is_some_and fires once).
                     if turn.interrupt_after_deltas.is_some_and(|n| deltas == n)
                         && !server.interrupt_turn(&turn_id)
                     {
@@ -303,8 +304,8 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
 
         if let Some(patch) = &turn.apply_patch {
             apply_config(&server, patch).await?;
-            // config/write 会按补丁重解析 provider —— 把 scripted mock
-            // 重新装回去，否则下一轮打的是真端点。
+            // config/write re-resolves the provider per patch — reinstall the scripted
+            // mock, or the next turn hits the real endpoint.
             server.install_provider(Resolved {
                 provider_id: "eval-mock".to_string(),
                 client: recording.clone(),
@@ -318,8 +319,8 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
     Ok(output)
 }
 
-/// 走真协议写配置 —— eval 与 dashboard 走同一条 `config/write` 路，
-/// 热生效的验证才是端到端的。
+/// Writes config through the real protocol — evals and the dashboard share the same
+/// `config/write` path, so hot-reload verification is truly end-to-end.
 async fn apply_config(server: &Server, patch: &serde_json::Value) -> Result<()> {
     let (sink, mut rx) = EventSink::channel();
     let request = JsonRpcRequest {
@@ -337,7 +338,7 @@ async fn apply_config(server: &Server, patch: &serde_json::Value) -> Result<()> 
     Ok(())
 }
 
-/// 确定性 eval：跑全部用例，打印一张表，写报告，**返回失败数**（0 = 闸门放行）。
+/// Deterministic evals: run all cases, print a table, write the report, **return the failure count** (0 = gate opens).
 pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
     let scenarios = scenario::load_all(paths)?;
     if scenarios.is_empty() {
@@ -419,11 +420,11 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
     Ok(if any_failed { failed as i32 } else { 0 })
 }
 
-/// 前置依赖要**真的跑得起来**，不只是 PATH 里有个同名文件。
+/// Prerequisites must **actually run**, not just exist under the same PATH name.
 ///
-/// Windows 的 `python3.exe` 常常只是应用商店的占位符：文件在、一跑就退出，
-/// 于是「有 python3」的用例会被放行，然后在起 MCP 服务器时莫名其妙地失败。
-/// 探测一次比赌一把诚实。
+/// Windows' `python3.exe` is often just the app-store placeholder: the file exists,
+/// running it exits immediately, so "has python3" cases pass the check and then fail
+/// inexplicably when starting the MCP server. Probing once is more honest than betting.
 fn runnable(program: &str, args: &[&str]) -> bool {
     std::process::Command::new(program)
         .args(args)
@@ -434,7 +435,7 @@ fn runnable(program: &str, args: &[&str]) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// 真模型路径：provider 从环境解析（key 缺失返回 None，调用方决定跳过）。
+/// The real-model path: the provider resolves from the environment (None when the key is missing; the caller decides to skip).
 async fn server_from_env(home: &Path) -> Result<Option<Server>> {
     let mut settings = joyczl_config::Settings::from_env();
     settings.home = home.to_path_buf();
@@ -472,10 +473,10 @@ async fn collect_turn(server: &Server, message: &str) -> Result<TurnOutput> {
     Ok(output)
 }
 
-/// judge：真模型答一轮，small model 当裁判按 rubric 打 0-10 分。
-/// 裁判不是选手 —— 被考的是主模型，打分的是便宜的那档。
-/// 需要 key；没 key 整组跳过并如实说明（judge 出分，不拦发版）。
-/// 返回值恒为 0（除非用例根本没加载到）。
+/// judge: a real model answers one turn; a small model referees, scoring 0-10 by rubric.
+/// The referee is not a contestant — the main model is tested, the cheap tier scores.
+/// Needs a key; without one the whole group skips with an honest note (judge scores, doesn't block release).
+/// Returns 0 always (unless no cases loaded at all).
 pub async fn run_judge(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
     let scenarios = scenario::load_judge(paths)?;
     if scenarios.is_empty() {

@@ -35,16 +35,16 @@ import type {
 import type { Transport } from "./transport.ts";
 
 /**
- * 「哪个方法收什么、回什么」的对照表。
+ * The table of "which method takes what and returns what".
  *
- * 这里手写的**只有配对关系**，形状全部来自生成物 —— Rust 侧的方法名是个
- * 运行时字符串常量，跟 `*Params` 类型之间没有任何类型层面的联系，生成器
- * 无从推导，只能在这边写一次。
+ * Only the **pairing** is handwritten here; the shapes all come from the generated artifacts —
+ * the Rust method name is a runtime string constant with no type-level link to the `*Params`
+ * types, so the generator can't derive it and it must be written once here.
  *
- * 写不错的地方：
- * - 方法名用生成的计算属性名（`METHODS.*`），Rust 改名这里就编译不过；
- * - 参数/应答直接引用生成的类型，字段改名这里跟着变。
- * 剩下唯一能漂的就是「配错对」—— 配错了 tsc 会在调用处报出来，因为形状不合。
+ * What can't be gotten wrong:
+ * - Method names use generated computed names (`METHODS.*`); a Rust rename breaks compile here.
+ * - Params/results reference generated types; renamed fields follow automatically.
+ * The only drift left is "mispairing" — tsc reports it at the call site, because shapes clash.
  */
 export interface Methods {
   [METHODS.TURN_START]: { params: TurnStartParams; result: TurnStartResponse };
@@ -89,11 +89,11 @@ export interface Methods {
 export type MethodName = keyof Methods;
 
 /**
- * 服务端回的错，按 JSON-RPC 的错误对象还原。
+ * The error the server returned, restored from the JSON-RPC error object.
  *
- * 带上 `code` 而不是只留一句话，是因为调用方**真的会按它分流**：
- * `PROVIDER_ERROR` 要提示用户去配 key，`NOT_IMPLEMENTED` 是「这功能还没做」
- * 而不是「你调错了」，两者对用户是两件事（见 rpc.rs 里那段注释）。
+ * Carrying `code` rather than just a message, because callers **really branch on it**:
+ * `PROVIDER_ERROR` should tell the user to configure a key; `NOT_IMPLEMENTED` means "not built
+ * yet", not "you called it wrong" — two different things to a user (see the comment in rpc.rs).
  */
 export class JoyError extends Error {
   readonly code: number;
@@ -106,30 +106,30 @@ export class JoyError extends Error {
     this.data = object.data ?? null;
   }
 
-  /** key 无效、限流、模型不存在…… 都是这一类。 */
+  /** Bad key, rate limited, model missing… all in this class. */
   get isProvider(): boolean {
     return this.code === CODES.PROVIDER_ERROR;
   }
 
-  /** 协议里有、当前阶段还没做。 */
+  /** In the protocol but not built in this phase. */
   get isNotImplemented(): boolean {
     return this.code === CODES.NOT_IMPLEMENTED;
   }
 
-  /** 参数形状不对 —— 多半是本端跟服务端版本对不上。 */
+  /** Wrong param shape — most likely a version mismatch with the server. */
   get isInvalidParams(): boolean {
     return this.code === CODES.INVALID_PARAMS;
   }
 }
 
-/** 通知在线上统一挂在这个方法名底下，真正的判别式在 `params.type`。 */
+/** Notifications all ride under this method name on the wire; the real discriminant is `params.type`. */
 const NOTIFICATION_METHOD = "turn/notification";
 
 export interface JoyClientOptions {
   transport: Transport;
   /**
-   * 服务端的人话（stderr）与解析不了的帧。默认打到 `console.error`：
-   * 这些是「该被看见但不该中断流程」的东西，吞掉才是错的。
+   * The server's human words (stderr) and unparseable frames. Defaults to `console.error`:
+   * these deserve to be seen but must not interrupt flow — swallowing them is the real bug.
    */
   onLog?: (text: string) => void;
 }
@@ -141,19 +141,19 @@ interface Pending {
 }
 
 /**
- * app-server 的客户端。
+ * The app-server client.
  *
- * 只做三件事，多一件都不做：
- * 1. 给请求配 id、按 id 把应答还给出请求的那个 `await`；
- * 2. 把通知原样分发给订阅者 —— **不解释、不缓存、不重放**。一轮对话的
- *    过程事件属于当下那个 UI，客户端替它记着只会记出另一份状态。
- * 3. 进程一没，把所有挂着的请求一口气拒掉。不然调用方会永远等下去，
- *    而「永远等下去」是最难查的那种坏法。
+ * It does exactly three things, nothing more:
+ * 1. Attach ids to requests and return each reply to the asking `await`, by id;
+ * 2. Hand notifications to subscribers as-is — **no interpreting, caching, or replay**: a turn's
+ *    process events belong to the UI of the moment; remembering them only duplicates state.
+ * 3. The moment the process dies, reject all pending requests at once — callers would otherwise
+ *    wait forever, and "waiting forever" is the hardest kind of bug to find.
  */
 export class JoyClient {
   readonly #transport: Transport;
   readonly #onLog: (text: string) => void;
-  /** key 是 id 归一化后的字符串 —— 见 `asId`。 */
+  /** Keys are normalized id strings — see `asId`. */
   readonly #pending = new Map<string, Pending>();
   readonly #notificationHandlers = new Set<
     (notification: ServerNotification) => void
@@ -171,10 +171,10 @@ export class JoyClient {
   }
 
   /**
-   * 调一个方法，等它的应答。
+   * Call a method and wait for its reply.
    *
-   * 参数是必填的 —— 连「什么都不带」也要写成 `{}`。可选的第二参数会让
-   * 「忘了传」和「就传空」看起来一样，而这个协议里它们往往不一样。
+   * Params are required — even "nothing to pass" must be `{}`. An optional second parameter
+   * makes "forgot to pass" and "passed empty" look identical; in this protocol they often aren't.
    */
   request<M extends MethodName>(
     method: M,
@@ -197,7 +197,7 @@ export class JoyClient {
     });
   }
 
-  /** 订阅过程事件。返回退订函数。 */
+  /** Subscribe to process events. Returns an unsubscribe function. */
   onNotification(handler: (notification: ServerNotification) => void): () => void {
     this.#notificationHandlers.add(handler);
     return () => {
@@ -205,7 +205,7 @@ export class JoyClient {
     };
   }
 
-  /** 文明关闭：不再收新请求，等排着的帧写完。 */
+  /** Civilized close: stop accepting new requests, wait for queued frames to flush. */
   close(): void {
     if (this.#closedReason !== null) return;
     this.#closedReason = "客户端主动关闭";
@@ -218,8 +218,8 @@ export class JoyClient {
     try {
       frame = JSON.parse(line) as JsonRpcMessage | JsonRpcNotification;
     } catch {
-      // 服务端只会写合法 JSON；真写坏了说明它自己也出了事，
-      // 但这一句坏掉不该让客户端跟着崩 —— 抖出去给人看。
+      // The server only writes valid JSON; a broken line means it's in real trouble,
+      // but one bad line shouldn't crash the client — shake it out for humans to see.
       this.#onLog(`这一帧读不出来，原样贴出来：${line}`);
       return;
     }
@@ -249,10 +249,10 @@ export class JoyClient {
       this.#onLog(`不认识的通知方法：${frame.method}`);
       return;
     }
-    // `params` 在生成物里是 `unknown`（服务端那一侧它就是一段 JSON）。
-    // 这里**刻意不做运行时校验**：协议的形状由 Rust 侧的类型保证，
-    // 在客户端再抄一遍校验逻辑就是又一份会漂的合同。真出了形状不对的帧，
-    // 那是服务端的 bug，前端会在用到那个字段时才炸 —— 而那时离现场更近。
+    // `params` is `unknown` in the artifacts (on the server side it's just JSON).
+    // **No runtime validation is done here on purpose**: the protocol's shape is guaranteed by
+    // Rust-side types; copying validation into the client makes another contract that drifts.
+    // A malformed frame is a server bug; the frontend breaks when the field is used — closer to it.
     const notification = frame.params as ServerNotification | null | undefined;
     if (notification == null || typeof notification !== "object") {
       this.#onLog(`通知没有内容：${JSON.stringify(frame)}`);
@@ -262,8 +262,8 @@ export class JoyClient {
   }
 
   #handleError(frame: JsonRpcError): void {
-    // 解析不了请求时服务端给不了 id（JSON-RPC 规定为 null）——没有请求
-    // 能拿这个错，只能当噪音。
+    // On an unparseable request the server can't provide an id (null per JSON-RPC) — no request
+    // can claim this error, so treat it as noise.
     if (frame.id === null) {
       this.#onLog(frame.error.message);
       return;
@@ -288,21 +288,21 @@ export class JoyClient {
     const pending = [...this.#pending.values()];
     this.#pending.clear();
     for (const entry of pending) {
-      // 把方法名带上：一个永远挂着的 await 最难查的地方就是不知道
-      // 它在等哪个请求。
+      // Include the method name: the hardest part of debugging a forever-pending await is not
+      // knowing which request it was waiting for.
       entry.reject(new Error(`${entry.method} 没等到应答，连接断了：${reason}`));
     }
   }
 }
 
 /**
- * 帧里的 id 归一化成 Map 的 key。
+ * Normalize a frame's id into a Map key.
  *
- * JSON-RPC 的 id 可以是数字也可以是字符串（`RequestId` 就是这么定义的），
- * 两种都得能用同一条路配对回来 —— 所以按字符串存，不猜类型。
+ * A JSON-RPC id may be a number or a string (that's how `RequestId` is defined); both must pair
+ * back through the same path — so store as strings, never guessing types.
  *
- * 存和取**必须**都过这里：`Map` 不帮你转换 `1` 和 `"1"`，键写成数字、
- * 查用字符串，配不上是静悄悄的 —— 那个 `await` 会永远挂着。
+ * Both writes and reads **must** go through here: `Map` doesn't convert `1` and `"1"`; a numeric
+ * key looked up as a string fails silently — and that `await` hangs forever.
  */
 function asId(id: number | string): string {
   return String(id);

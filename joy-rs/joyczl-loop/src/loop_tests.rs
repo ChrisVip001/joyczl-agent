@@ -1,8 +1,8 @@
-//! loop 的测试。
+//! Tests for the loop.
 //!
-//! 用 mock provider 精确编排「模型每轮说什么」，把护栏逐条验证：
-//! 自然结束、工具往返、错误不当崩、迭代上限。
-//! scripted model：模型说什么完全由测试决定。
+//! A mock provider scripts exactly what the model says each turn, verifying the guardrails
+//! one by one: natural end, tool round trip, errors not fatal, iteration cap.
+//! Scripted model: what the model says is entirely decided by the test.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,13 +13,13 @@ use serde_json::json;
 
 use crate::{run, LoopEvent, Turn};
 
-/// 一个真的 state.db + 默认工具集。
+/// A real state.db + the default tool set.
 async fn ctx() -> joyczl_tools::ToolCtx {
     let dir = tempfile::tempdir().expect("临时目录");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     joyczl_tools::ToolCtx {
         cwd: None,
         approval: None,
@@ -69,7 +69,7 @@ async fn no_tool_call_ends_the_turn_immediately() {
     assert_eq!(result.iterations, 1);
     assert!(result.tool_calls.is_empty());
     assert_eq!(result.usage.input_tokens, 10);
-    // 用户消息进了 prompt，system 也在。
+    // The user message made it into the prompt, and so did the system.
     let sent = mock.received.lock().unwrap()[0].clone();
     assert!(sent
         .messages
@@ -101,7 +101,7 @@ async fn tool_call_round_trip_feeds_result_back() {
         result.tool_calls[0].output
     );
 
-    // 工具结果真的被喂回给了模型。
+    // The tool result really was fed back to the model.
     let second = mock.received.lock().unwrap()[1].clone();
     let has_tool_result = second.messages.iter().any(|m| {
         m.content
@@ -109,14 +109,14 @@ async fn tool_call_round_trip_feeds_result_back() {
             .any(|b| matches!(b, joyczl_provider::ContentBlock::ToolResult { .. }))
     });
     assert!(has_tool_result, "第二轮的 messages 里应当有 tool_result");
-    // 而且事实也真的写进库了。
+    // And the fact really was written to the store.
     assert_eq!(ctx.facts.search("早会", 4).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
 async fn tool_error_becomes_text_and_the_loop_continues() {
     let mock = Mock::new(vec![
-        Mock::tool_use("tu_1", "save_note", json!({"subject": 42})), // 类型错 → 工具返回 Error: 文本
+        Mock::tool_use("tu_1", "save_note", json!({"subject": 42})), // type error → the tool returns an "Error:" text
         Mock::text("参数好像不对，你能再说一遍吗？"),
     ]);
     let tools = handlers::build_default();
@@ -125,7 +125,7 @@ async fn tool_error_becomes_text_and_the_loop_continues() {
     assert!(!result.tool_calls[0].ok());
     assert_eq!(result.iterations, 2, "出错后 loop 应当继续，而不是崩掉");
     assert_eq!(result.reply, "参数好像不对，你能再说一遍吗？");
-    // 错误文本作为 tool_result 回给了模型。
+    // The error text went back to the model as a tool_result.
     let second = mock.received.lock().unwrap()[1].clone();
     let text = second
         .messages
@@ -155,7 +155,7 @@ async fn unknown_tool_name_is_surfaced_not_fatal() {
 
 #[tokio::test]
 async fn iteration_limit_stops_the_loop() {
-    // 模型永远在调工具、不给文本 —— 必须由护栏硬停，而不是无限转下去。
+    // The model keeps calling tools and never speaks — the guardrail must hard-stop, not spin forever.
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "current_time", json!({})),
         Mock::tool_use("tu_2", "current_time", json!({})),
@@ -171,7 +171,7 @@ async fn iteration_limit_stops_the_loop() {
         user_message: "现在几点".to_string(),
         tools: &tools,
         ctx,
-        max_iterations: 2, // 故意卡在两条工具应答上
+        max_iterations: 2, // deliberately stuck on two tool replies
         max_tokens: 1024,
         tool_result_budget: Default::default(),
         observer: None,
@@ -242,7 +242,7 @@ async fn observer_sees_llm_and_tool_events_in_order() {
 
 #[tokio::test]
 async fn streaming_emits_text_deltas_in_order() {
-    // mock 拆成两字一块 —— 应当按序到达，且最终应答仍是完整文本。
+    // The mock splits into two-char chunks — they must arrive in order, and the final reply must be complete.
     let mock = Mock::streaming(vec![Mock::text("好的，我记住了。")]);
     let tools = handlers::build_default();
 
@@ -288,7 +288,7 @@ async fn streaming_emits_text_deltas_in_order() {
         "应当有多个增量，而不是一整段"
     );
 
-    // observer 也收到了同样的 Text 事件。
+    // The observer also received the same Text events.
     let text_events = events
         .lock()
         .unwrap()
@@ -305,7 +305,7 @@ async fn streaming_emits_text_deltas_in_order() {
 
 #[tokio::test]
 async fn streaming_works_across_tool_rounds() {
-    // 第一轮流式 + 工具调用，第二轮纯文本 —— 两条路径不能互相干扰。
+    // First round streaming + tool call, second round plain text — the two paths must not interfere.
     let mock = Mock::streaming(vec![
         Mock::tool_use("tu_1", "save_note", json!({"subject": "a", "content": "b"})),
         Mock::text("记好了。"),
@@ -346,8 +346,8 @@ async fn streaming_works_across_tool_rounds() {
     assert!(result.tool_calls[0].ok());
 }
 
-/// 预先拨下取消令牌：loop 一进来就收兵，不发任何模型调用，
-/// reply 诚实地说这轮被打断了。
+/// Cancel the token up front: the loop stands down on entry, sends no model call,
+/// and the reply honestly says this turn was interrupted.
 #[tokio::test]
 async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
     let mock = Mock::new(vec![Mock::text("这句话永远轮不到被说出。")]);
@@ -383,8 +383,8 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
     );
 }
 
-/// 打断发生在工具往返之间：save_note 真的执行了，但第二轮模型调用没有发生，
-/// 已经拿到的结果带 interrupted 标记回来。
+/// The interrupt lands between tool rounds: save_note really ran, but the second model call
+/// never happened, and the results already obtained come back with the interrupted flag.
 #[tokio::test]
 async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
     let mock = Mock::new(vec![
@@ -395,8 +395,8 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
     let ctx = ctx().await;
 
     let interrupt = crate::Interrupt::new();
-    // 第一轮流式（mock 不拆块，没有增量可监听）—— 用 observer 在第一个
-    // 工具事件到达时拨下令牌：此刻第一轮工具已完成，第二轮还没开始。
+    // First round streaming (the mock does not chunk, so no deltas to listen for) — use the
+    // observer to flip the token when the first tool event arrives: round 1 tools are done, round 2 not started.
     let first_tool_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = first_tool_fired.clone();
     let interrupt_for_observer = interrupt.clone();
@@ -432,13 +432,13 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
     assert_eq!(result.reply, "（这轮被打断了。）");
 }
 
-/// 循环护栏接进了 loop：同一调用重复到第 3 次时，喂回模型的文本会多一段提醒，
-/// 但 `tool_calls` 里记的仍是**真结果**（trace 与通知该看到真的）。
+/// The loop guardrail wired into the loop: when the same call repeats to the 3rd time, the
+/// fed-back text gains a reminder, but `tool_calls` records the **real result** (trace sees the truth).
 #[tokio::test]
 async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
-    // 用 `search_memory` 而不是 `save_note`：后者现在会去重，第一次的答复
-    // （「已记住 #1」）和后来的（「已经记过了」）不一样，恰好构不成「三次完全相同」。
-    // 护栏要的是**同一个调用、同一份结果**，所以挑一个输出稳定的只读工具。
+    // Use `search_memory` instead of `save_note`: the latter dedupes now, so the first reply
+    // ("remembered #1") differs from later ones ("already noted"), never forming "3 identical".
+    // The guardrail wants the **same call, same result**, so pick a read-only tool with stable output.
     let args = json!({"query": "查不到的东西"});
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "search_memory", args.clone()),
@@ -453,7 +453,7 @@ async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
     assert!(result.guard.hits >= 1, "第 3 次相同调用必须触发护栏");
     assert!(result.guard.note.is_some(), "命中的说明要留下来");
 
-    // 喂回模型的那条 ToolResult 里有提醒……
+    // The ToolResult fed back to the model carries the reminder...
     let warned = result.messages.iter().any(|message| {
         message.content.iter().any(|block| {
             matches!(block, joyczl_provider::ContentBlock::ToolResult { content, .. }
@@ -462,7 +462,7 @@ async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
     });
     assert!(warned, "提醒必须进到模型看得见的地方");
 
-    // ……而记录下来的工具输出还是干净的。
+    // ...while the recorded tool output is still clean.
     assert!(
         result
             .tool_calls
@@ -476,8 +476,8 @@ async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
     );
 }
 
-/// 轮内预算真的在跑：第二次请求里那条 10 万字符的结果已经被换成桩，
-/// 而且桩指向的文件里有完整原文。
+/// The intra-turn budget really runs: by the second request the 100k-char result is stubbed,
+/// and the file the stub points to holds the full original text.
 #[tokio::test]
 async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
     use joyczl_tools::{BoxFut, Tool, ToolRegistry};
@@ -500,7 +500,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         home: home.path().to_path_buf(),
     };
 
-    // 一个「MCP 式」的工具：没人管它的输出，回 10 万字符。
+    // An "MCP-style" tool: nobody watches its output; it returns 100k characters.
     let big: Tool = Tool {
         name: "mcp__demo__fetch".to_string(),
         description: "回一大段文本".to_string(),
@@ -559,7 +559,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
     );
     assert!(stub.contains("完整输出在 spill/"), "{stub}");
 
-    // 桩指的文件里是完整原文（10 万字符）。
+    // The file the stub points to holds the full original (100k chars).
     let relative = stub
         .split("完整输出在 ")
         .nth(1)
@@ -568,6 +568,6 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
     let saved = std::fs::read_to_string(home.path().join(relative)).expect("读回落盘");
     assert_eq!(saved.chars().count(), 100_000);
 
-    // 落盘的文件在会话目录下（`spill/日期/…`）。
+    // The spilled file lives under the session directory (`spill/date/…`).
     assert!(relative.starts_with("spill/"), "{relative}");
 }

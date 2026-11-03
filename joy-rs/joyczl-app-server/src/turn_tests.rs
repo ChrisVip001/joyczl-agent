@@ -1,14 +1,14 @@
-//! 一轮 turn 的装配测试 —— 这一层只回答一个问题：**这一轮是怎么走的**。
+//! Assembly tests for one turn — this layer answers exactly one question: **how did this turn run**.
 //!
-//! 模型是脚本化的假货（`joyczl_provider::mock`），"模型第几次说了什么" 完全
-//! 可控，于是图的每条分支都能钉死。跑完看三样东西：
+//! The model is a scripted fake (`joyczl_provider::mock`); "what the model said on which call" is fully
+//! controllable, so every branch of the graph can be pinned. After a run, three things are checked:
 //!
-//!   1. 客户端收到了哪些通知 —— 图的节点事件只在这一层看得见；
-//!   2. `TurnMeta` 里的 gate / graph / model —— 这一轮的门和路线；
-//!   3. **模型实际被调用了几次** —— 快答的全部价值就在这个数字上。
+//!   1. which notifications the client received — graph node events are visible only at this layer;
+//!   2. gate / graph / model in `TurnMeta` — this turn's gate and route;
+//!   3. **how many times the model was actually called** — the entire value of quick answers is that number.
 //!
-//! 判据都写在这层：图**开着**时才存在的那条路，和不带图那条路，跑出来的
-//! 东西必须只差「少了什么」，不能差「答错了什么」。
+//! The criteria live at this layer: the path that exists only when the graph is **on**, and the path
+//! without the graph, must differ only by "what is missing", never by "what was answered wrongly".
 
 use std::sync::Arc;
 
@@ -24,13 +24,13 @@ use tokio::sync::mpsc;
 
 use crate::{EventSink, Frame, Server};
 
-/// 一次 turn 跑完之后，测试要看的全部东西。
+/// Everything a test wants to look at after one turn has run.
 struct Ran {
     notifications: Vec<ServerNotification>,
-    /// 快答与完整两条路都会发 `TurnCompleted`；只有提前失败才没有。
+    /// Both the quick and full paths emit `TurnCompleted`; only an early failure has none.
     meta: Option<TurnMeta>,
     reply: String,
-    /// 模型收到的请求，按顺序。这个向量就是「花了多少钱」。
+    /// The requests the model received, in order. This vector is "how much was spent".
     requests: Vec<CreateRequest>,
     error: Option<ErrorObject>,
 }
@@ -51,12 +51,12 @@ async fn server(mock: Arc<Mock>, graph_workflows: bool) -> Server {
         graph_workflows,
         ..Settings::default()
     };
-    // 目录跟着测试进程走 —— 临时目录是这里的脚手架，不是被测对象。
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    // The directory follows the test process — the temp dir is scaffolding here, not the thing under test.
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
 
     let server = Server::boot(pool, settings).await;
-    // 真 provider 要 key，这里换成脚本化的假货：同一条 trait 上的另一个实现，
-    // 这也正是把「模型调用」收敛成一个 trait 之后白拿的测试能力。
+    // The real provider wants a key; swap in the scripted fake here: another implementation of the same
+    // trait — exactly the test capability gained for free by collapsing "model calls" into one trait.
     server.set_resolved(Some(Resolved {
         provider_id: "mock".to_string(),
         client: mock,
@@ -66,7 +66,7 @@ async fn server(mock: Arc<Mock>, graph_workflows: bool) -> Server {
     server
 }
 
-/// 发一条请求，等它的应答（通知排空即丢 —— 专测应答的方法用）。
+/// Send one request and await its response (notifications are drained and dropped — for response-focused methods).
 async fn call(server: &Server, request: JsonRpcRequest) -> JsonRpcMessage {
     let (tx, mut rx) = mpsc::unbounded_channel();
     crate::handle(server, request, EventSink::new(tx)).await;
@@ -107,7 +107,7 @@ async fn run(mock: Mock, message: &str, graph_workflows: bool) -> Ran {
     )
     .await;
 
-    // 通知和应答走同一条通道，应答是最后一条 —— 排空即全部到齐。
+    // Notifications and responses share one channel, with the response last — draining means everything has arrived.
     let mut notifications = Vec::new();
     let mut meta = None;
     let mut reply = String::new();
@@ -122,7 +122,7 @@ async fn run(mock: Mock, message: &str, graph_workflows: bool) -> Ran {
         }
     }
 
-    // 先把收到的请求抄出来再组 Ran —— 锁的守卫活不到函数尾表达式。
+    // Copy out the received requests before building Ran — the lock guard cannot live to the function's tail expression.
     let requests = mock.received.lock().expect("锁").clone();
     Ran {
         notifications,
@@ -133,7 +133,7 @@ async fn run(mock: Mock, message: &str, graph_workflows: bool) -> Ran {
     }
 }
 
-/// 客户端看到的节点顺序。
+/// The node order as the client saw it.
 fn nodes(ran: &Ran) -> Vec<String> {
     ran.notifications
         .iter()
@@ -144,7 +144,7 @@ fn nodes(ran: &Ran) -> Vec<String> {
         .collect()
 }
 
-/// 检索门这次说了什么 —— `None` 表示这一轮根本没进门。
+/// What the retrieval gate said this time — `None` means the turn never reached the gate at all.
 fn gate_of(ran: &Ran) -> Option<joyczl_protocol::GateDecisionKind> {
     ran.notifications
         .iter()
@@ -160,13 +160,13 @@ fn has_graph_started(ran: &Ran) -> bool {
         .any(|notification| matches!(notification, ServerNotification::GraphStarted(_)))
 }
 
-/// 关掉图 = 今天的行为，一个字都不差。
+/// Graph off = today's behavior, down to the last word.
 #[tokio::test]
 async fn graph_off_is_the_plain_path() {
     let mock = Mock::new(vec![
-        // 检索门：不用查记忆。
+        // Retrieval gate: no need to consult memory.
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
-        // THE LOOP。
+        // THE LOOP.
         Mock::text("四。"),
     ]);
     let ran = run(mock, "2+2 等于几？", false).await;
@@ -179,7 +179,7 @@ async fn graph_off_is_the_plain_path() {
     assert_eq!(ran.reply, "四。");
     assert!(!has_graph_started(&ran), "没开图就没图的通知");
     assert_eq!(ran.requests.len(), 2, "门一次 + loop 一次");
-    // usage 随 meta 落库：token 数不再只活在 turnCompleted 里。
+    // Usage is persisted along with meta: token counts no longer live only in turnCompleted.
     assert_eq!(
         meta.usage,
         Some(TokenUsage {
@@ -190,11 +190,11 @@ async fn graph_off_is_the_plain_path() {
     assert!(!meta.interrupted, "没人打断它，meta 得说实话");
 }
 
-/// 快答：两次模型调用，其中一次是小模型的分类。**没有检索门**。
+/// Quick answer: two model calls, one of them the small model's classification. **No retrieval gate**.
 #[tokio::test]
 async fn quick_route_is_one_short_call_and_no_gate() {
     let mock = Mock::new(vec![
-        // 分类器：这句不用查记忆，小模型直接答。
+        // Classifier: this line needs no memory lookup; the small model answers directly.
         Mock::text(r#"{"route": "quick", "reason": "greeting"}"#),
         Mock::text("你好呀。"),
     ]);
@@ -213,11 +213,11 @@ async fn quick_route_is_one_short_call_and_no_gate() {
     assert_eq!(meta.model, "test-small", "快答是小模型答的，meta 得说实话");
     assert_eq!(ran.reply, "你好呀。");
 
-    // 两次：分类一次、快答一次。没有第三次 —— 这正是快答便宜的全部。
+    // Two calls: one classify, one quick answer. No third — that is the entire cheapness of the quick path.
     assert_eq!(ran.requests.len(), 2);
     assert!(ran.requests[0].messages[0].text().contains("triage gate"));
 
-    // 图的通知发了，节点顺序与 meta 里记的对得上。
+    // The graph notifications went out, and the node order matches what meta recorded.
     assert!(has_graph_started(&ran));
     let walked = nodes(&ran);
     assert!(walked.contains(&"classify".to_string()), "{walked:?}");
@@ -232,7 +232,7 @@ async fn quick_route_is_one_short_call_and_no_gate() {
     );
 }
 
-/// 完整路径：门在，答的还是大模型 —— 跟不带图时**同一轮**。
+/// Full path: the gate is present and the big model still answers — the **same turn** as without the graph.
 #[tokio::test]
 async fn full_route_is_the_same_turn_as_the_plain_path() {
     let mock = Mock::new(vec![
@@ -254,7 +254,7 @@ async fn full_route_is_the_same_turn_as_the_plain_path() {
     );
     assert_eq!(meta.model, "test-model", "完整路径还是大模型");
     assert_eq!(ran.reply, "你和阿明周四下午三点开会。");
-    // 分类 + 门 + loop。
+    // Classify + gate + loop.
     assert_eq!(ran.requests.len(), 3);
     assert!(
         ran.requests[1].messages[0]
@@ -264,10 +264,10 @@ async fn full_route_is_the_same_turn_as_the_plain_path() {
     );
 }
 
-/// 图里的 loop 失败：如实报一次，**不重试** —— 重试只会用同样的方式再失败。
+/// A loop failure inside the graph: reported once, honestly, **no retry** — a retry would just fail the same way again.
 #[tokio::test]
 async fn a_failed_loop_inside_the_graph_is_reported_without_a_retry() {
-    // 分类说了 full，然后就没了：门和 loop 各撞一次空队列。
+    // The classifier said full, then nothing: the gate and the loop each hit the empty queue once.
     let mock = Mock::new(vec![Mock::text(r#"{"route": "full", "reason": "x"}"#)]);
     let ran = run(mock, "帮我看下", true).await;
 
@@ -275,9 +275,9 @@ async fn a_failed_loop_inside_the_graph_is_reported_without_a_retry() {
     assert_eq!(error.code, joyczl_protocol::codes::PROVIDER_ERROR);
     assert!(error.message.contains("模型调用失败"), "{error:?}");
 
-    // 三次尝试：分类、门、loop。多出来一次就说明重试了。
+    // Three attempts: classify, gate, loop. One more would mean a retry happened.
     assert_eq!(ran.requests.len(), 3);
-    // 图本身是正常收尾的（节点错只记录不外抛）—— 失败的是里面那次 loop。
+    // The graph itself finishes normally (node errors are recorded, not thrown) — what failed was the loop inside.
     assert_eq!(
         ran.notifications
             .iter()
@@ -287,7 +287,7 @@ async fn a_failed_loop_inside_the_graph_is_reported_without_a_retry() {
     );
 }
 
-/// 配错的 MCP 服务器不该让整个助理起不来。
+/// A misconfigured MCP server must not keep the whole assistant from starting.
 #[tokio::test]
 async fn a_broken_mcp_server_still_leaves_the_builtin_tools() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -314,10 +314,10 @@ async fn a_broken_mcp_server_still_leaves_the_builtin_tools() {
     );
 }
 
-/// `<home>/mcp.json` 里配的工具真的进了服务端的工具表 —— 端到端。
+/// Tools configured in `<home>/mcp.json` really land in the server's tool table — end to end.
 ///
-/// 假服务器是个真子进程（`python3`，没有 SDK），跟 MCP 那边的做法一致：
-/// 这一层要验的就是「配置 → 子进程 → 工具表」这条线通到底。
+/// The fake server is a real subprocess (`python3`, no SDK), consistent with the MCP side's approach:
+/// what this layer verifies is that the "config → subprocess → tool table" line works end to end.
 #[tokio::test]
 async fn an_mcp_server_next_to_home_lands_in_the_tool_table() {
     let Some(python) = python3() else {
@@ -358,7 +358,7 @@ fn python3() -> Option<String> {
     out.status.success().then(|| "python3".to_string())
 }
 
-/// 一个只会 initialize + tools/list 的 MCP 服务器。
+/// An MCP server that only handles initialize + tools/list.
 const FAKE_SERVER: &str = r#"
 import json, sys
 
@@ -386,12 +386,12 @@ for line in sys.stdin:
     send({"jsonrpc": "2.0", "id": msg["id"], "result": result})
 "#;
 
-/// 工具开始的通知必须赶在工具完成的通知**前面** —— 客户端才能画出
-/// "正在调用 X"。这是 turn/interrupt 之外 ToolStarted 存在的全部理由。
+/// The tool-start notification must arrive **before** the tool-completed notification — only then can
+/// the client draw "calling X". That is the entire reason ToolStarted exists, apart from turn/interrupt.
 #[tokio::test]
 async fn tool_started_goes_out_before_tool_completed() {
     let mock = Mock::new(vec![
-        // 检索门。
+        // Retrieval gate.
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
         Mock::tool_use("tu_1", "save_note", json!({"subject": "a", "content": "b"})),
         Mock::text("记好了。"),
@@ -415,14 +415,14 @@ async fn tool_started_goes_out_before_tool_completed() {
     );
 }
 
-/// turn/interrupt：在跑的 turn 拨得下；没在跑的 turn 打断不到 —— 但要
-/// 诚实地说 false，而不是装作打断了什么。
+/// turn/interrupt: a running turn's token can be flipped; a non-running turn cannot be interrupted —
+/// but it must say false honestly, instead of pretending something was interrupted.
 #[tokio::test]
 async fn interrupt_hits_a_running_turn_and_misses_a_finished_one() {
     let mock = Arc::new(Mock::new(vec![]));
     let server = server(mock, false).await;
 
-    // 没登记过的 turn。
+    // A turn that was never registered.
     let response = call(
         &server,
         request(1, "turn/interrupt", json!({"turnId": "t_missing"})),
@@ -435,7 +435,7 @@ async fn interrupt_hits_a_running_turn_and_misses_a_finished_one() {
         other => panic!("打断一个不存在的 turn 不该报错：{other:?}"),
     }
 
-    // 在跑的 turn：应答说打到了，令牌也真的拨下了。
+    // A running turn: the response says it hit, and the token really flipped.
     let interrupt = server.register_turn("t_live");
     let response = call(
         &server,
@@ -452,7 +452,7 @@ async fn interrupt_hits_a_running_turn_and_misses_a_finished_one() {
     server.finish_turn("t_live");
 }
 
-/// config/write：内存生效、磁盘落档、重启还在 —— 三样缺一不可。
+/// config/write: takes effect in memory, lands on disk, survives a reboot — all three or nothing.
 #[tokio::test]
 async fn config_write_lands_in_memory_and_survives_a_reboot() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -460,7 +460,7 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     let settings = Settings {
         home: home.clone(),
         ..Settings::default()
@@ -472,7 +472,7 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
         request(
             1,
             "config/write",
-            // 运行参数走 config/write；provider 与模型不在这条路上（见下一条测试）。
+            // Runtime parameters go through config/write; provider and models are not on this path (see the next test).
             json!({"patch": {"maxIterations": 20, "maxTokens": 4096}}),
         ),
     )
@@ -484,13 +484,13 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
         }
         other => panic!("config/write 不该报错：{other:?}"),
     }
-    // 内存里的下一轮也用新值。
+    // The next turn in memory uses the new values too.
     assert_eq!(server.settings().max_iterations, 20);
     assert_eq!(server.settings().max_tokens, 4096);
-    // 磁盘上有档。
+    // There is a record on disk.
     assert!(home.join("settings.json").exists(), "补丁必须落盘");
 
-    // 重启：同一个 home 再开一次，补丁叠在环境值上。
+    // Reboot: open the same home again, patches stacked on top of env values.
     let settings2 = Settings {
         home,
         ..Settings::default()
@@ -500,8 +500,8 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
     assert_eq!(server2.settings().max_tokens, 4096);
 }
 
-/// 模型与密钥**不在** config/write 这条路上：补丁里没有 provider / model /
-/// 密钥字段，改它们只能走 `model/*`。这条断言钉住「旧那条路已经拆掉」。
+/// Models and keys are **not** on the config/write path: the patch has no provider / model / key fields;
+/// changing them only goes through `model/*`. This assertion pins "the old road has been torn out".
 #[tokio::test]
 async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -530,7 +530,7 @@ async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
     .await;
     match response {
         JsonRpcMessage::Response(resp) => {
-            // 未知字段被忽略（不是报错）—— 关键是它们**不生效**。
+            // Unknown fields are ignored (not an error) — the point is that they **do not take effect**.
             assert_eq!(resp.result["config"]["provider"], "anthropic");
         }
         other => panic!("不该报错：{other:?}"),
@@ -545,7 +545,7 @@ async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
     );
 }
 
-/// config/write 的校验：写坏了就整个拒绝，半个补丁比没有更糟。
+/// config/write validation: a bad patch is rejected wholesale — half a patch is worse than none.
 #[tokio::test]
 async fn a_bad_patch_is_rejected_without_touching_anything() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -553,7 +553,7 @@ async fn a_bad_patch_is_rejected_without_touching_anything() {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     let settings = Settings {
         home: home.clone(),
         ..Settings::default()
@@ -572,12 +572,12 @@ async fn a_bad_patch_is_rejected_without_touching_anything() {
         }
         other => panic!("非法补丁必须被拒绝：{other:?}"),
     }
-    // 什么都没改：内存还是默认值，盘上没有补丁文件。
+    // Nothing changed: memory still holds the defaults, and no patch file is on disk.
     assert_eq!(server.settings().max_iterations, 10);
     assert!(!home.join("settings.json").exists());
 }
 
-/// model/list：目录就是 PROVIDERS 那张表，filter 按 provider 收窄。
+/// model/list: the catalog is the PROVIDERS table, narrowed by the provider filter.
 #[tokio::test]
 async fn model_list_reports_the_provider_catalog() {
     let mock = Arc::new(Mock::new(vec![]));
@@ -609,8 +609,8 @@ async fn model_list_reports_the_provider_catalog() {
     }
 }
 
-/// 跑完一轮：trace 落了 traces/<日期>.jsonl，usage 落了 usage.jsonl ——
-/// 观测不是可选项，但写失败也不该连累对话。
+/// After one turn: trace landed in traces/<date>.jsonl, usage landed in usage.jsonl —
+/// observability is not optional, but a write failure must not drag the conversation down either.
 #[tokio::test]
 async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
     let mock = Mock::new(vec![
@@ -635,7 +635,7 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
     .await
     .expect("这轮该跑通");
 
-    // trace 文件按日期命名，每轮一行，行里带 turnId / meta。
+    // The trace file is named by date, one line per turn, each line carrying turnId / meta.
     let mut traces = std::fs::read_dir(home.join("traces"))
         .expect("traces 目录")
         .collect::<Vec<_>>();
@@ -649,7 +649,7 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
         "usage 随 meta 落盘"
     );
 
-    // usage 账本：一轮一行。
+    // The usage ledger: one line per turn.
     let usage = std::fs::read_to_string(home.join("usage.jsonl")).unwrap();
     let row: serde_json::Value = serde_json::from_str(usage.trim()).expect("合法 JSON");
     assert_eq!(row["provider"], "mock");
@@ -657,25 +657,25 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
     assert_eq!(row["iterations"], 1);
 }
 
-// ---- 上下文溢出：压缩后重试一次 ---------------------------------------------
+// ---- Context overflow: retry once after compaction ---------------------------------------------
 
-/// 溢出是唯一值得重试的错误：压一次再试，成功就照常收尾。
+/// Overflow is the only error worth retrying: compact once, retry, and on success wind down as usual.
 #[tokio::test]
 async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
     let mock = Arc::new(Mock::with_outcomes(vec![
-        // 门
+        // Gate
         Ok(Mock::text(
             r#"{"retrieve": false, "query": "", "reason": "small talk"}"#,
         )),
-        // 第一次 loop：provider 说上下文超了
+        // First loop: the provider says the context overflowed
         Mock::context_overflow(),
-        // 重试前的强制压缩（摘要那一次模型调用）
+        // Forced compaction before the retry (that one summary model call)
         Ok(Mock::text("更早的对话摘要。")),
-        // 第二次 loop：成功
+        // Second loop: success
         Ok(Mock::text("四。")),
     ]));
     let server = server(mock.clone(), false).await;
-    // 攒几轮历史 —— 强制压缩得有东西可折。
+    // Accumulate a few turns of history — forced compaction needs something to fold.
     for i in 0..4 {
         server
             .chat
@@ -728,7 +728,7 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
     );
 }
 
-/// 别的错误**不**重试：重试只会用同样的方式再失败一次（白等一倍时间）。
+/// Other errors are **not** retried: a retry would just fail the same way again (wasting double the time).
 #[tokio::test]
 async fn a_plain_provider_error_is_not_retried() {
     let mock = Arc::new(Mock::with_outcomes(vec![
@@ -762,17 +762,17 @@ async fn a_plain_provider_error_is_not_retried() {
     );
 }
 
-// ---- 限流重试：真 HTTP、真客户端 --------------------------------------------
+// ---- Rate-limit retry: real HTTP, real client --------------------------------------------
 
-/// 把一次请求**读完**（头部 + `Content-Length` 指的 body）再回话。
+/// Read a request **completely** (headers + the body named by `Content-Length`) before answering.
 ///
-/// 不等读完就回、然后关连接，会把还在写 body 的客户端顶掉 —— macOS/Linux 上
-/// 多半没事，Windows 上表现为 RST，客户端那边看到的是
-/// 「error sending request」，于是「服务器明明回了」变成一条网络错误。
-/// 这个测试的请求带着整份 system prompt 与工具表，body 超过一次 read 的量，
-/// 所以它只在 Windows 上稳定复现。
+/// Answering before the read finishes and then closing the connection knocks over a client still writing
+/// its body — mostly harmless on macOS/Linux, but on Windows it shows up as an RST, and the client sees
+/// "error sending request", so "the server clearly replied" becomes a network error. This test's request
+/// carries the full system prompt and tool table, so the body exceeds one read's worth —
+/// which is why it reproduces stably on Windows only.
 async fn drain_request(socket: &mut tokio::net::TcpStream) {
-    // 导入写在函数里：这两个测试文件各自在别处按需 use，别处不引这个 trait。
+    // The imports live inside the function: these test files each use what they need elsewhere; this trait is not referenced elsewhere.
     use tokio::io::AsyncReadExt;
 
     let mut seen: Vec<u8> = Vec::new();
@@ -799,10 +799,10 @@ async fn drain_request(socket: &mut tokio::net::TcpStream) {
     }
 }
 
-/// 一个极小的 HTTP 服务器：按剧本逐个应答。返回 base_url。
+/// A minimal HTTP server: answers one by one from the script. Returns the base_url.
 ///
-/// 这里不引测试框架也不用 Mock —— 要钉住的正是「真的 openai 客户端在真的
-/// 429 上会退避重试」，用假客户端就测不到这件事。
+/// No test framework and no Mock here — what is being pinned is exactly "a real OpenAI client backs off
+/// and retries on a real 429"; a fake client cannot test that.
 async fn scripted_http(responses: Vec<(u16, String)>) -> String {
     use tokio::io::AsyncWriteExt;
 
@@ -824,7 +824,7 @@ async fn scripted_http(responses: Vec<(u16, String)>) -> String {
             } else {
                 "OK"
             };
-            // `Retry-After: 0`：既验证读了它，又让测试不用真等。
+            // `Retry-After: 0`: verifies it is read, while keeping the test from truly waiting.
             let extra = if status == 429 {
                 "Retry-After: 0\r\n"
             } else {
@@ -841,7 +841,7 @@ async fn scripted_http(responses: Vec<(u16, String)>) -> String {
     format!("http://{addr}")
 }
 
-/// 一次完整的（非流式）应答 —— 门走这条路。
+/// One complete (non-streaming) response — the gate takes this path.
 fn completion(text: &str) -> String {
     serde_json::json!({
         "choices": [{"message": {"role": "assistant", "content": text}}],
@@ -850,7 +850,7 @@ fn completion(text: &str) -> String {
     .to_string()
 }
 
-/// 一次流式应答 —— loop 走这条路（`stream: true`）。
+/// One streaming response — the loop takes this path (`stream: true`).
 fn sse_text(text: &str) -> String {
     format!(
         "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
@@ -859,17 +859,17 @@ fn sse_text(text: &str) -> String {
     )
 }
 
-/// 429 被重试，而且重试**看得到**：一条 Retry 通知 + `meta.retries`。
+/// A 429 is retried, and the retry is **visible**: one Retry notification + `meta.retries`.
 #[tokio::test]
 async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
     let base = scripted_http(vec![
         (429, r#"{"error":{"message":"slow down"}}"#.to_string()),
-        // 门（重试之后才轮到它）
+        // Gate (its turn comes only after the retry)
         (
             200,
             completion(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
         ),
-        // loop
+        // Loop
         (200, sse_text("四。")),
     ])
     .await;
@@ -923,8 +923,8 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
     assert_eq!(meta_retries, 1, "meta 里的次数是实测的");
 }
 
-/// 工作目录准入（fail-closed）：合法的过；相对路径、不存在的路径都挡下；
-/// 空串视同没给 —— 与协议侧「缺省 = 进程 cwd」同一个语义。
+/// Working-directory admission (fail-closed): valid ones pass; relative and nonexistent paths are blocked;
+/// an empty string counts as not given — the same semantics as the protocol side's "default = process cwd".
 #[test]
 fn turn_cwd_validation_is_fail_closed() {
     use crate::turn::resolve_turn_cwd;
@@ -937,11 +937,11 @@ fn turn_cwd_validation_is_fail_closed() {
     assert!(resolve_turn_cwd(&Some(String::new())).unwrap().is_none());
     assert!(resolve_turn_cwd(&Some("   ".into())).unwrap().is_none());
 
-    // 相对路径：拒绝，且报错说人话。
+    // Relative path: rejected, and the error speaks plainly.
     let err = resolve_turn_cwd(&Some("相对/路径".into())).unwrap_err();
     assert!(err.message.contains("绝对路径"), "{}", err.message);
 
-    // 不存在的绝对路径：拒绝。
+    // A nonexistent absolute path: rejected.
     let err = resolve_turn_cwd(&Some("/不存在/的/目录/joy".into())).unwrap_err();
     assert!(err.message.contains("不存在"), "{}", err.message);
 }

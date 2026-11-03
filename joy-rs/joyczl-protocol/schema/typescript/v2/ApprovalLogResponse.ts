@@ -3,7 +3,7 @@ import type { ApprovalLogEntry } from "./ApprovalLogEntry";
 
 export type ApprovalLogResponse = {
   /**
-   * 新的在前，服务端封顶 100 条。
+   * Newest first, capped at 100 entries by the server.
    */
   entries: Array<ApprovalLogEntry>;
 };

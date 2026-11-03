@@ -1,20 +1,20 @@
-//! `joyczl-provider` —— 模型接入。
+//! `joyczl-provider` — model access.
 //!
-//! loop 只说一种方言：Anthropic Messages 的形状（system/messages/tools 进，
-//! content blocks 出）。provider 用两种方式接进来：
+//! loop speaks only one dialect: the Anthropic Messages shape (system/messages/tools in,
+//! content blocks out). Providers plug in via two paths:
 //!
-//!   * anthropic 原生格式 → Anthropic、Kimi/Moonshot、GLM/Z.ai、MiniMax
-//!   * openai 兼容格式   → OpenAI、Gemini、DeepSeek、OpenRouter、xAI …
-//!   * 本地推理           → Ollama（同一份 openai 兼容格式，不需要 key）
+//!   * anthropic native format → Anthropic, Kimi/Moonshot, GLM/Z.ai, MiniMax
+//!   * openai compatible format → OpenAI, Gemini, DeepSeek, OpenRouter, xAI ...
+//!   * local inference → Ollama (same openai compatible format, no key needed)
 //!
-//! 两种 wire format 之间的全部差异，就是 openai.rs 里那两个转换函数 ——
-//! 两个转换函数加起来不过几十行。
+//! The entire difference between the two wire formats is those two conversion functions
+//! in openai.rs — together they are only a few dozen lines.
 //!
-//! 与 Python 版的差异（刻意为之）：
-//!   * 不再需要 `SimpleNamespace` 伪造对象 —— 这里是真的类型；
-//!   * 流式是一条独立路径（`Provider::stream`）：文本边到边回调 `on_text`，
-//!     结束时仍然返回组装好的完整应答，所以 loop 两条路径共用同一套逻辑，
-//!     dashboard 的打字机效果直接用它。
+//! Differences from the Python version (deliberate):
+//!   * no more `SimpleNamespace` fake objects — these are real types;
+//!   * streaming is a separate path (`Provider::stream`): text is streamed to `on_text` as
+//!     it arrives, and the fully assembled answer is still returned at the end, so loop
+//!     shares one logic across both paths, and the dashboard's typewriter effect uses it.
 
 pub mod anthropic;
 pub mod embed;
@@ -33,7 +33,7 @@ use std::time::Duration;
 use joyczl_config::Settings;
 use serde::{Deserialize, Serialize};
 
-// ---- loop 说的一种方言 -----------------------------------------------------
+// ---- The one dialect loop speaks --------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,8 +42,8 @@ pub enum Role {
     Assistant,
 }
 
-/// Anthropic Messages 的 content block。`tag = "type"` + snake_case 让序列化
-/// 结果与 Anthropic 线上格式逐字相同，所以 anthropic.rs 几乎不用做转换。
+/// content block of Anthropic Messages. `tag = "type"` + snake_case makes the serialized
+/// output byte-identical to Anthropic's wire format, so anthropic.rs barely converts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
@@ -54,10 +54,10 @@ pub enum ContentBlock {
         id: String,
         name: String,
         input: serde_json::Value,
-        /// Gemini 的思考模型在 tool_call 上附带 `thought_signature`，下一轮
-        /// 必须原样回传否则 400。只有走 openai wire 的 Gemini 会设置它；
-        /// 反序列化缺省 None、序列化 None 不输出 —— Anthropic 那条 wire
-        /// 完全看不到这个字段。
+        /// Gemini thinking models attach `thought_signature` to tool_call; the next turn
+        /// must pass it back verbatim or 400. Only Gemini over the openai wire sets it;
+        /// deserialization defaults to None and serializing None emits nothing — the
+        /// Anthropic wire never sees this field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         extra: Option<serde_json::Value>,
     },
@@ -81,7 +81,7 @@ impl Message {
         }
     }
 
-    /// 把一条消息里的纯文本拼出来（忽略 tool 调用块）。
+    /// Join the plain text of a message (ignoring tool call blocks).
     pub fn text(&self) -> String {
         self.content
             .iter()
@@ -93,7 +93,7 @@ impl Message {
     }
 }
 
-/// 模型能调的工具的**声明**（不是实现 —— 实现在 joyczl-tools）。
+/// The **declaration** of a tool the model may call (not the implementation — that is joyczl-tools).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSchema {
     pub name: String,
@@ -157,15 +157,15 @@ impl CreateResponse {
     }
 }
 
-/// 逐 token 文本的出口。dashboard 的打字机效果靠它。
+/// The outlet for token-by-token text. The dashboard's typewriter effect relies on it.
 pub type TextSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
-/// provider 只需要会两件事。加一个 trait 方法就要想清楚 ——
-/// 接口面越小，能接进来的 provider 越多。
+/// A provider only needs to do two things. Think twice before adding a trait method — a
+/// smaller interface lets more providers plug in.
 ///
-/// 返回类型写成手动装箱的 Future 而不是 RPITIT：后者不能做 trait object，
-/// 而 app-server 需要把不同 provider 装进同一个 `Box<dyn Provider>`。
-/// 装箱写法等价于 `#[async_trait]` 生成的东西，只是没有那个宏的依赖。
+/// The return type is a manually boxed Future instead of RPITIT: the latter cannot be a
+/// trait object, and app-server needs to box different providers into one `Box<dyn Provider>`.
+/// The boxed form equals what `#[async_trait]` generates, minus the macro dependency.
 pub trait Provider: Send + Sync {
     fn create(
         &self,
@@ -174,11 +174,11 @@ pub trait Provider: Send + Sync {
         Box<dyn std::future::Future<Output = Result<CreateResponse, ProviderError>> + Send + '_>,
     >;
 
-    /// 流式版本：文本一到就回调 `on_text`，结束时返回**组装好的完整应答**
-    /// （含重新拼起来的 tool 调用和用量）—— 所以 loop 的逻辑两条路径完全一样。
+    /// Streaming version: calls `on_text` as soon as text arrives and returns the **fully assembled
+    /// answer** at the end (reassembled tool calls and usage) — loop's logic is identical on both.
     ///
-    /// 默认实现直接退回非流式：没实现流式的 provider 照常可用，
-    /// 只是拿不到逐 token 的回调。
+    /// The default falls back to non-streaming: providers without streaming still work, minus
+    /// the token-by-token callback.
     fn stream(
         &self,
         request: CreateRequest,
@@ -190,9 +190,9 @@ pub trait Provider: Send + Sync {
     }
 }
 
-// ---- provider 目录 ---------------------------------------------------------
+// ---- provider catalog -------------------------------------------------------
 
-/// 两种线上格式。选哪个决定了用哪个 HTTP 客户端。
+/// The two wire formats. Choosing one decides which HTTP client is used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wire {
     Anthropic,
@@ -202,35 +202,35 @@ pub enum Wire {
 pub struct ProviderInfo {
     pub id: &'static str,
     pub wire: Wire,
-    /// 存 key 的环境变量。key 本身绝不进配置文件 —— mcp.json 那种被人贴进
-    /// bug 报告的文件里出现 bearer token 就是泄漏。
+    /// Env var holding the key. The key itself never goes into config files — a bearer
+    /// token in an mcp.json-style file pasted into a bug report is a leak.
     ///
-    /// **留空 = 本地端点**（Ollama）：它不需要 key，`resolve` 也就不去找。
+    /// **Empty = local endpoint** (Ollama): it needs no key, so `resolve` does not look.
     pub key_env: &'static str,
     pub base_url: Option<&'static str>,
-    /// 主模型（loop 用）
+    /// Main model (used by loop)
     pub model: &'static str,
-    /// 便宜模型（检索门 / consolidation 用）
+    /// Cheap model (used by retrieval gate / consolidation)
     pub small_model: &'static str,
-    /// 上下文窗口的**近似值**（token）。用途只有一个：算「什么时候该压缩」
-    /// （见 `tokens.rs` 与 `JOY_COMPACT_THRESHOLD`）。
+    /// The **approximate** context window (tokens). One single use: computing "when to compact"
+    /// (see `tokens.rs` and `JOY_COMPACT_THRESHOLD`).
     ///
-    /// 估小了只会让压缩早发生（多花一次便宜模型调用），估大了才会溢出 ——
-    /// 所以取值一律偏保守。真实上限以 provider 自己报的错为准：那类错误会被
-    /// 认出来（`ProviderError::ContextOverflow`），压缩后重试一次。
+    /// Underestimating only compacts earlier (one extra cheap call); overestimating overflows —
+    /// so values are always conservative. The real cap is what the provider reports as an
+    /// error: those are recognized (`ProviderError::ContextOverflow`) and retried after compaction.
     pub context_window: u32,
 }
 
 impl ProviderInfo {
-    /// 这个 provider 需不需要 key。本地推理不需要 —— 这正是它能离线、
-    /// 零成本、不把对话送出这台机器的原因。
+    /// Whether this provider needs a key. Local inference does not — which is exactly why
+    /// it can run offline, at zero cost, without sending the conversation off this machine.
     pub fn needs_key(&self) -> bool {
         !self.key_env.is_empty()
     }
 }
 
-/// 这些默认值只是起点，`JOY_MODEL` / `JOY_SMALL_MODEL` 随时覆盖。
-/// openrouter 的默认是 `:free` id，一分钱不花也能跑（限速）。
+/// These defaults are just starting points; `JOY_MODEL` / `JOY_SMALL_MODEL` override anytime.
+/// openrouter's default is a `:free` id — it runs at zero cost (rate-limited).
 pub static PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         id: "anthropic",
@@ -332,22 +332,22 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         context_window: 128_000,
     },
     ProviderInfo {
-        // 本地推理：不需要 key，不需要网络。`key_env` 空着就是声明这件事。
-        // Ollama 暴露的是 OpenAI 兼容端点（`/v1`），所以复用同一条 wire ——
-        // LM Studio / vLLM 也长一样，改 `JOY_BASE_URL` 即可指过去。
+        // Local inference: no key, no network needed. An empty `key_env` declares exactly that.
+        // Ollama exposes an OpenAI-compatible endpoint (`/v1`), so the same wire is reused —
+        // LM Studio / vLLM look the same; point `JOY_BASE_URL` at them.
         id: "ollama",
         wire: Wire::OpenAi,
         key_env: "",
         base_url: Some("http://127.0.0.1:11434/v1"),
-        // 先 `ollama pull qwen3:8b`（主模型）与 `qwen3:4b`（检索门 /
-        // consolidation 用的便宜模型）；换成自己装过的名字用 JOY_MODEL。
+        // First `ollama pull qwen3:8b` (main model) and `qwen3:4b` (the cheap model for the
+        // retrieval gate / consolidation); swap in your own pulled names via JOY_MODEL.
         model: "qwen3:8b",
         small_model: "qwen3:4b",
         context_window: 32_768,
     },
 ];
 
-/// key 从哪领。报错时一起给出来，省得用户去搜。
+/// Where to get a key. Included in error messages, saving the user a search.
 fn key_url(id: &str) -> Option<&'static str> {
     match id {
         "anthropic" => Some("https://console.anthropic.com/settings/keys"),
@@ -372,16 +372,16 @@ pub fn lookup(id: &str) -> Option<&'static ProviderInfo> {
 #[path = "provider_tests.rs"]
 mod provider_tests;
 
-/// 流式的端到端测试要起本地 HTTP 服务、开真 socket，所以单列一个模块：
-/// 它比纯转换测试慢，但覆盖了「解析 → 传输 → 回调」整条链。
+/// End-to-end streaming tests need a local HTTP server and real sockets, hence their own
+/// module: slower than pure conversion tests, but they cover "parse → transport → callback".
 #[cfg(test)]
 #[path = "streaming_tests.rs"]
 mod streaming_tests;
 
-/// 解析完 key / endpoint / 模型之后的东西 —— app-server 拿着它跑 loop。
+/// What remains after key / endpoint / model are resolved — app-server runs loop with it.
 ///
-/// `Arc` 而不是 `Box`：图里的节点是 'static 闭包，它得**拥有**一份 client
-/// 才活得比这一轮久（triage 的 classify / quick_reply 两条路都要）。
+/// `Arc` instead of `Box`: graph nodes are 'static closures, so it must **own** a client
+/// to outlive this turn (both triage paths, classify / quick_reply, need it).
 #[derive(Clone)]
 pub struct Resolved {
     pub provider_id: String,
@@ -390,15 +390,15 @@ pub struct Resolved {
     pub small_model: String,
 }
 
-/// 表里没有的 provider（mock、评测、自建网关）按这个数算上下文窗口。
-/// 保守取值：压缩早发生只是多花一次便宜调用，溢出要多跑一整轮请求。
+/// Context window for providers not in the table (mocks, evals, self-built gateways).
+/// Conservative: compacting early only costs one cheap call; overflowing costs a whole round.
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 32_768;
 
 impl Resolved {
-    /// 这一轮的上下文窗口近似值。查 `PROVIDERS` 表，查不到就用默认。
+    /// The approximate context window for this turn. Looks up `PROVIDERS`, else the default.
     ///
-    /// 不把窗口塞进 `Resolved` 的字段里：它本来就住在表里，多一份副本就多一处
-    /// 会不一致的地方（而且每加一个 provider 都得记得同步两处）。
+    /// Not stored in `Resolved`: it lives in the table, and one more copy is one more place
+    /// to drift (plus every new provider would need syncing in two places).
     pub fn context_window(&self) -> u32 {
         lookup(&self.provider_id)
             .map(|info| info.context_window)
@@ -406,8 +406,8 @@ impl Resolved {
     }
 }
 
-// 手写 Debug：dyn Provider 没法 derive，而测试里 expect_err 需要它。
-// client 本身没有值得打印的状态（key 绝不能出现在日志里），所以略去。
+// Handwritten Debug: dyn Provider cannot derive, but expect_err in tests needs it.
+// The client has no state worth printing (the key must never hit logs), so it is omitted.
 impl std::fmt::Debug for Resolved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Resolved")
@@ -418,8 +418,8 @@ impl std::fmt::Debug for Resolved {
     }
 }
 
-/// 从 Settings 解析出可用的 client。key 缺失时给出**能照着做**的提示：
-/// 去哪儿领 key、往哪个文件加哪一行、还有哪些 provider 可选。
+/// Resolve a usable client from Settings. On a missing key, give **actionable** guidance:
+/// where to get a key, which line to add to which file, and which providers exist.
 pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
     let info = lookup(&settings.provider).ok_or_else(|| {
         format!(
@@ -429,16 +429,16 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
         )
     })?;
 
-    // 密钥**只有一个来源**：`<home>/models.json` 里当前那套的凭据指针
-    // （环境变量 / 钥匙串 / 兜底文件），由 `joyczl-config::models` 解析后填进
-    // `settings.api_key`。
+    // The key has **exactly one source**: the credential pointer of the active entry in
+    // `<home>/models.json` (env var / keychain / fallback file), resolved by
+    // `joyczl-config::models` into `settings.api_key`.
     //
-    // 这里**不**再偷偷读 `info.key_env` 兜底：那条隐式路径会让「我明明从没
-    // 配过模型，它却因为我 shell 里有个变量就跑起来了」，出问题时最难查。
-    // 想用环境变量就明说：`/model add <名字> <厂商> --env 变量名`。
+    // Here we do **not** silently fall back to `info.key_env`: that implicit path makes
+    // "I never configured a model, yet it ran because my shell had a variable" — the
+    // hardest bug to trace. To use an env var, say so: `/model add <name> <vendor> --env VAR`.
     //
-    // 本地 provider（`needs_key()` 为 false）不需要 key：空着，客户端的
-    // `authed` 会因此不发 Authorization 头。
+    // Local providers (`needs_key()` false) need no key: left empty, the client's `authed`
+    // then sends no Authorization header.
     let api_key = settings
         .api_key
         .clone()

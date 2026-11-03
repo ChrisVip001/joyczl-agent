@@ -1,20 +1,20 @@
-//! 待办清单：模型自己维护的「我现在做到哪了」。
+//! Todo list: the model's self-maintained "where am I right now".
 //!
-//! 设计上刻意**只加规划能力，不加执行能力**（
-//! 清单不影响任何工具的权限、不阻塞任何调用、不落库
-//! —— 它只是把「打算做什么、做到哪一步」写在一个每轮都看得见的地方。真正需要
-//! 「跨会话、能认领、有依赖」的东西是任务系统，那是另一件事，不是把这张表撑大。
+//! The design deliberately **adds planning capability only, no execution power** (the
+//! list grants no tool permissions, blocks no calls, persists nowhere
+//! — it just writes "what I plan to do, how far along" somewhere visible every turn. What
+//! really needs "cross-session, claimable, dependency-aware" is a task system, not this table.
 //!
-//! 三条硬边界（都有测试）：
+//! Three hard boundaries (all tested):
 //!
-//! * **整表替换**：每次写都是全量替换，不做逐项编辑 —— 逐项编辑会让「谁删了第 3
-//!   项」这类问题没有答案，而模型本来就擅长重写整张表。
-//! * **同时只允许一个 `in_progress`**：两个并行推进的任务等于没有推进中的任务。
-//!   （false 时直接拒绝执行。）
-//! * **有上限**：20 项、单项 4000 字符。清单是给人看的工作记忆，不是日志。
+//! * **Whole-table replace**: every write replaces the full table, no per-item edits —
+//!   per-item edits leave "who deleted item 3" unanswered, and the model rewrites tables well.
+//! * **Only one `in_progress` at a time**: two tasks pushed in parallel mean none is in progress.
+//!   (Rejected outright when false.)
+//! * **Bounded**: 20 items, 4000 chars each. The list is working memory for humans, not a log.
 //!
-//! `revision` 每次写单调递增：驾驶舱据此丢弃过期更新（网络乱序时不该把新表
-//! 覆盖成旧的）。
+//! `revision` increases monotonically on every write: the cockpit drops stale updates by it
+//! (an out-of-order network must not overwrite a new table with an old one).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -23,11 +23,11 @@ use serde_json::{json, Value};
 
 use crate::Tool;
 
-/// 最多几项。超过它就说明这不是「正在做的事」，而是「想做的事」。
+/// How many items max. Beyond it this isn't "things being done", but "things wished for".
 pub const MAX_ITEMS: usize = 20;
-/// 单项内容上限。
+/// Per-item content cap.
 pub const MAX_CONTENT_CHARS: usize = 4_000;
-/// 注入 system prompt 时的标题 —— 固定不变，便于压缩之后仍然认得出来。
+/// Header when injected into the system prompt — fixed, recognizable even after compaction.
 pub const INJECTION_HEADER: &str = "## 待办清单（todo_write 维护 · 整表替换）";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,13 +67,13 @@ pub struct TodoItem {
 
 #[derive(Debug, Clone)]
 pub struct TodoList {
-    /// 单调递增的版本号。
+    /// Monotonically increasing version number.
     pub revision: u64,
     pub items: Vec<TodoItem>,
 }
 
 impl TodoList {
-    /// 渲染成给模型看的那几行（注入与工具应答共用同一份渲染）。
+    /// Render into the lines shown to the model (injection and tool replies share one rendering).
     pub fn render(&self) -> String {
         let mut out = format!("{INJECTION_HEADER} · 第 {} 版\n", self.revision);
         for item in &self.items {
@@ -82,7 +82,7 @@ impl TodoList {
         out.trim_end().to_string()
     }
 
-    /// 「3 项：1 进行中、2 未开始」这种一句话概括。
+    /// A one-line summary like "3 items: 1 in progress, 2 pending".
     pub fn summary(&self) -> String {
         let count = |status: TodoStatus| self.items.iter().filter(|i| i.status == status).count();
         format!(
@@ -96,8 +96,8 @@ impl TodoList {
     }
 }
 
-/// 会话 -> 清单。**进程内**：清单是这一趟的工作记忆，重启就重来（要留下来的
-/// 东西走 `save_note` 与 schedule，不是这张表）。
+/// Session -> list. **In-process**: the list is this run's working memory; a restart resets it
+/// (things that must survive go through `save_note` and schedules, not this table).
 #[derive(Debug, Default)]
 pub struct TodoBoard {
     lists: Mutex<HashMap<String, TodoList>>,
@@ -108,7 +108,7 @@ impl TodoBoard {
         Self::default()
     }
 
-    /// 整表替换。校验不过就一个字都不改（`Err` 里是给模型读的理由）。
+    /// Whole-table replace. If validation fails, nothing changes (`Err` carries a model-readable reason).
     pub fn write(&self, session: &str, items: Vec<TodoItem>) -> Result<TodoList, String> {
         if items.len() > MAX_ITEMS {
             return Err(format!(
@@ -153,15 +153,15 @@ impl TodoBoard {
             .cloned()
     }
 
-    /// 注入 system prompt 的那一段。没有清单就返回 `None` —— 调用方因此不必
-    /// 自己判断「空清单要不要加个空标题」。
+    /// The block injected into the system prompt. Returns `None` when there's no list — so the
+    /// caller needn't decide itself "should an empty list get an empty header".
     pub fn render(&self, session: &str) -> Option<String> {
         self.read(session).map(|list| list.render())
     }
 }
 
-/// `todo_write`：**传 `todos` 就是写，省略 `todos` 就是读**（一物两用，
-/// 省一个工具名，也少一次「读要用哪个工具」的犹豫）。
+/// `todo_write`: **passing `todos` writes, omitting `todos` reads** (dual-purpose: saves a
+/// tool name and one round of "which tool do I read with").
 pub fn todo_write(board: std::sync::Arc<TodoBoard>) -> Tool {
     Tool {
         name: "todo_write".to_string(),
@@ -193,7 +193,7 @@ pub fn todo_write(board: std::sync::Arc<TodoBoard>) -> Tool {
             let board = board.clone();
             Box::pin(async move {
                 let Some(raw) = args.get("todos") else {
-                    // 读：没清单也如实说，而不是回一个空数组让人猜。
+                    // Read: say honestly when there's no list, rather than an empty array to guess at.
                     return Ok(match board.read(&ctx.session_id) {
                         Some(list) => list.render(),
                         None => "还没有待办清单。要建一张就把 todos 传进来。".to_string(),
@@ -226,8 +226,8 @@ pub fn todo_write(board: std::sync::Arc<TodoBoard>) -> Tool {
                 }
 
                 match board.write(&ctx.session_id, items) {
-                    // 把权威结果原样回给模型：它下一轮看到的就是这一份（包括版本号），
-                    // 不必凭记忆猜自己刚才写了什么。
+                    // Return the authoritative result as-is: what the model sees next turn is
+                    // this copy (revision included), so it needn't guess what it just wrote.
                     Ok(list) => Ok(format!("{}（{}）", list.render(), list.summary())),
                     Err(why) => Ok(format!("Error: {why}")),
                 }

@@ -1,31 +1,31 @@
-//! THE GRAPH —— 节点、边、波次。这个文件就是全部机制。
+//! THE GRAPH — nodes, edges, waves. This file is the whole mechanism.
 //!
-//! 图工作流是一张步骤地图：每个节点干一件事，每条边说「这件事干完了就去哪」。
-//! 引擎按波次跑它：
+//! A graph workflow is a map of steps: each node does one thing, each edge says
+//! "when this is done, go here". The engine runs it in waves:
 //!
 //! ```text
-//! while 还有节点就绪:
-//!     跑这一波所有就绪的节点（有多个就同时跑）
-//!     把它们写的东西并进共享 state
-//!     触发它们的边 / 问它们的 router 下一步去哪
+//! while any node is ready:
+//!     run every ready node in this wave (concurrently if several)
+//!     merge what they wrote into the shared state
+//!     fire their edges / ask their routers where to go next
 //! ```
 //!
-//! 就这些。三件事撑起全部：
+//! That's it. Three things carry everything:
 //!
-//!   state    一个普通的 map（黑板）。每个节点读它，返回自己想并进去的键。
-//!            并行的节点必须写**不相交**的键 —— 撞了就直接报错，而不是悄悄丢一次写。
-//!   routers  对 state 的普通函数。模型写 state，代码读它并选边。
-//!            控制流永远不由模型直接决定。
-//!   guards   loop 那套双护栏的推广：每节点 max_visits（有界循环）+
-//!            全局 max_steps（绝不空转）。节点出错如实记下并露出来，
-//!            绝不从 run 里抛出去 —— 跟 ToolRegistry.execute 同一条
-//!            「露出来，别崩」的规矩。
+//!   state    a plain map (blackboard). Each node reads it, returns the keys it
+//!            wants merged; parallel nodes must write **disjoint** keys — a collision
+//!            errors out instead of silently dropping a write.
+//!   routers  plain functions over state. The model writes state; code reads it
+//!            and picks the edge. Control flow is never decided by the model.
+//!   guards   loop's double guardrail, generalized: per-node max_visits (bounded
+//!            loops) plus a global max_steps (never spin). Node errors are recorded
+//!            and surfaced, never thrown from run — same rule as ToolRegistry.execute.
 //!
-//! 波次用一点流水线换回大量可读性：执行顺序是确定的，于是 trace 读两遍
-//! 都一样，测试也能钉死路径。
+//! Waves trade a little pipeline-ness for a lot of readability: execution order is
+//! deterministic, so a trace reads the same twice and tests can pin paths.
 //!
-//! observer 是一个枚举事件而不是 `(kind, dict)` —— 跟 loop 同一个理由，
-//! 字段有了类型就拼不错。observer 本身就是 Sync，锁由落盘那一侧自己拿。
+//! observer is an enum event, not a `(kind, dict)` — same reason as loop: typed
+//! fields can't be misspelled. The observer itself is Sync; the disk side takes locks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -39,40 +39,41 @@ use joyczl_loop::{LoopEvent, Observer as LoopObserver};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-/// 图的起点：一个虚拟节点，只负责点着第一批节点。
+/// The graph's start: a virtual node that just fires the first batch of nodes.
 pub const START: &str = "START";
-/// 图的终点：走到这里就收工，不产生任何节点。
+/// The graph's end: reaching it wraps up; it produces no nodes.
 pub const END: &str = "END";
 
-/// 默认全局步数上限：到顶说明图没收敛。
+/// Default global step cap: hitting it means the graph didn't converge.
 pub const DEFAULT_MAX_STEPS: usize = 25;
 
-/// 节点写回的键值对。
+/// Key-value pairs written back by a node.
 pub type NodeWrites = Map<String, Value>;
 
-/// 节点函数的返回：要么写回一批键，要么说明为什么不行。
+/// A node function's return: either a batch of writes, or why it couldn't.
 pub type Boxed<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send>>;
 
-/// 节点拿到的东西：一份 state 快照 + 一个出口。
+/// What a node receives: a state snapshot plus an outlet.
 pub struct NodeCtx {
-    /// 黑板的快照。节点改它不影响别人，想留下的东西要**返回**回引擎。
+    /// A snapshot of the blackboard. Mutating it affects nobody; keep things by
+    /// **returning** them to the engine.
     pub state: State,
-    /// 节点内部的事件（loop 的 llm / text / tool）从这里出去，
-    /// 引擎负责补上 node= 再转给图的观察者。
+    /// The node's internal events (loop's llm / text / tool) exit here; the engine
+    /// tags them with node= and forwards them to the graph's observer.
     pub inner: LoopObserver,
 }
 
 pub type NodeFn = Arc<dyn Fn(NodeCtx) -> Boxed<NodeWrites> + Send + Sync>;
 
-/// 路由函数：读 state 的**当前**内容，返回一个边的标签。
-/// 它是代码，不是模型。
+/// Router function: reads the **current** contents of state, returns an edge label.
+/// It is code, not a model.
 pub type RouteFn = Arc<dyn Fn(&State) -> String + Send + Sync>;
 
-/// 图的观察者。跟 loop 一样，用 Arc 是为了能搬进 'static 闭包。
+/// The graph's observer. As with loop, Arc is so it can move into 'static closures.
 pub type Observer = Arc<dyn Fn(GraphEvent) + Send + Sync>;
 
-/// graph 往外发的事件。跟 loop 同一套规矩：gateway 拿它画界面，
-/// trace 拿它落盘，两者都不需要被接进图自己的逻辑里。
+/// Events the graph emits. Same rule as loop: the gateway draws UI with them,
+/// the trace persists them; neither needs to be wired into the graph's own logic.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphEvent {
     Started {
@@ -82,27 +83,27 @@ pub enum GraphEvent {
     NodeStarted {
         workflow: String,
         node: String,
-        /// 这是本节点第几次跑（>1 说明它在循环里）。
+        /// Which visit this is for the node (>1 means it's in a loop).
         visit: i32,
     },
     NodeEnded {
         workflow: String,
         node: String,
         ms: i64,
-        /// 本次写回的键（不含下划线开头的私有键）。
+        /// Keys written back this time (private underscore-prefixed keys excluded).
         keys: Vec<String>,
         error: Option<String>,
     },
     Route {
         workflow: String,
         router: String,
-        /// 走到的节点；router 返回了不认识的标签时是 END。
+        /// The node jumped to; END when the router returned an unknown label.
         target: String,
-        /// router 返回的标签本身。
+        /// The label the router returned itself.
         reason: String,
     },
-    /// 节点自己发的内部事件（full_agent 里的 llm / text / tool），
-    /// 引擎补上 node= 再转出来。
+    /// Internal events emitted by the node itself (llm / text / tool inside
+    /// full_agent); the engine tags node= and forwards them out.
     Inner { node: String, event: LoopEvent },
     Ended {
         workflow: String,
@@ -113,10 +114,10 @@ pub enum GraphEvent {
     },
 }
 
-/// 黑板。节点读它、写它，路由器读它。
+/// The blackboard. Nodes read and write it; routers read it.
 ///
-/// 实现就是一个 `BTreeMap<String, Value>`：键有序，于是并行的写合并进
-/// state 后顺序也是确定的（trace 与测试都受益）。
+/// The implementation is just a `BTreeMap<String, Value>`: keys are ordered, so
+/// merged parallel writes keep a deterministic order (trace and tests both benefit).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct State(Map<String, Value>);
 
@@ -125,7 +126,7 @@ impl State {
         State(Map::new())
     }
 
-    /// 从 JSON 对象建 state；不是对象就是调用方的错。
+    /// Builds state from a JSON object; a non-object is the caller's bug.
     pub fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Object(map) => Ok(State(map)),
@@ -157,7 +158,7 @@ impl State {
         self.0.get(key).and_then(Value::as_i64)
     }
 
-    /// 反序列化某个键。类型不对就是节点写坏了东西 —— 报错，别猜。
+    /// Deserializes a key. A wrong type means a node wrote garbage — error out, don't guess.
     pub fn get_as<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
         serde_json::from_value(self.0.get(key)?.clone()).ok()
     }
@@ -166,7 +167,7 @@ impl State {
         self.0.keys().map(String::as_str)
     }
 
-    /// 并进一批写回。下划线开头的键是节点/引擎私有的，不出图。
+    /// Merges a batch of writes. Underscore-prefixed keys are node/engine private, never leave the graph.
     pub fn merge(&mut self, writes: NodeWrites) {
         for (key, value) in writes {
             if !key.starts_with('_') {
@@ -176,7 +177,7 @@ impl State {
     }
 }
 
-/// 写回一批键值对。节点函数的出口用这个，省得手搓 Map。
+/// Writes a batch of key-value pairs. The exit helper for node functions, no hand-rolled Map.
 pub fn writes(pairs: impl IntoIterator<Item = (&'static str, Value)>) -> NodeWrites {
     pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
@@ -192,14 +193,14 @@ fn kind_of(value: &Value) -> &'static str {
     }
 }
 
-/// 图里的一个节点。
+/// One node in the graph.
 pub struct Node {
     pub name: String,
-    /// tool / llm / agent / router —— 给 describe() 用的标签。
+    /// tool / llm / agent / router — a label for describe().
     pub kind: String,
-    /// >1 只用在**有意**的循环里的节点上。
+    /// >1 only on nodes inside **intentional** loops.
     pub max_visits: i32,
-    /// 出错时跳到哪。不设就是空转到 END（跟 loop 的护栏同一条规矩）。
+    /// Where to jump on error. Unset means drift to END (same rule as loop's guardrail).
     pub on_error: Option<String>,
     f: NodeFn,
 }
@@ -226,14 +227,14 @@ impl Node {
     }
 }
 
-/// 一条无条件的边。
+/// An unconditional edge.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Edge {
     pub src: String,
     pub dst: String,
 }
 
-/// 拓扑里的一条边（多一个 conditional 标记）—— dashboard 画图用的数据。
+/// An edge in the topology (plus a conditional flag) — data for the dashboard to draw.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TopologyEdge {
     pub src: String,
@@ -247,8 +248,8 @@ pub struct TopologyNode {
     pub kind: String,
 }
 
-/// 拓扑即数据。界面从这份数据画图（而不是照着一张手抄的图片），
-/// 图才不会跟代码走散。
+/// Topology as data. The UI draws from this data (not from a hand-copied picture),
+/// so the graph never drifts from the code.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Topology {
     pub name: String,
@@ -261,20 +262,20 @@ struct Router {
     targets: BTreeMap<String, String>,
 }
 
-/// 图本身：节点、边、路由。建好之后只读。
+/// The graph itself: nodes, edges, routers. Read-only once built.
 pub struct Graph {
     name: String,
-    /// 用一个 Vec + 索引表保存节点：**插入顺序**对波次计算是语义的一部分。
+    /// Nodes kept in a Vec + index map: **insertion order** is part of wave semantics.
     nodes: Vec<Node>,
     index: BTreeMap<String, usize>,
     edges: Vec<Edge>,
     routers: BTreeMap<String, Router>,
 }
 
-/// 图的结构性错误（建图时就能发现，或者同一波次里两个节点撞了键）。
+/// Structural graph errors (catchable at build time, or two same-wave nodes colliding on a key).
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphError {
-    /// START / END 是保留名。
+    /// START / END are reserved names.
     Reserved {
         name: String,
     },
@@ -285,7 +286,7 @@ pub enum GraphError {
         label: String,
         target: String,
     },
-    /// 同一波次里两个节点写了同一个键 —— 这是图的 bug，不是竞态。
+    /// Two nodes in the same wave wrote the same key — a graph bug, not a race.
     Collision {
         key: String,
         nodes: Vec<String>,
@@ -338,8 +339,8 @@ impl Graph {
         Ok(self)
     }
 
-    /// 无条件的边：src 干完了，dst 就离就绪近一步。
-    /// 先加节点再加边 —— 未知端点在这里就报错，而不是跑到一半才发现。
+    /// Unconditional edge: when src finishes, dst moves one step closer to ready.
+    /// Add nodes before edges — unknown endpoints error here, not mid-run.
     pub fn add_edge(&mut self, src: &str, dst: &str) -> Result<&mut Self, GraphError> {
         for end in [src, dst] {
             if !self.has(end) && end != START && end != END {
@@ -355,8 +356,8 @@ impl Graph {
         Ok(self)
     }
 
-    /// 有条件的边：src 干完了，`route(state)` 返回一个标签，
-    /// 执行就跳到 targets[标签]。路由器是代码，永远不是模型。
+    /// Conditional edge: when src finishes, `route(state)` returns a label and
+    /// execution jumps to targets[label]. The router is code, never a model.
     pub fn add_router(
         &mut self,
         src: &str,
@@ -388,8 +389,8 @@ impl Graph {
         Ok(self)
     }
 
-    /// 起点：START → 这批节点。等价于一批 `add_edge(START, ..)`，
-    /// 但读起来就是「图从哪开始」。
+    /// Entry: START → these nodes. Equivalent to a batch of `add_edge(START, ..)`,
+    /// but it reads as "where the graph begins".
     pub fn entry(&mut self, nodes: &[&str]) -> Result<&mut Self, GraphError> {
         for name in nodes {
             self.add_edge(START, name)?;
@@ -405,12 +406,12 @@ impl Graph {
         self.index.get(name).map(|i| &self.nodes[*i])
     }
 
-    /// 节点名，按插入顺序。
+    /// Node names, in insertion order.
     pub fn node_names(&self) -> Vec<String> {
         self.nodes.iter().map(|n| n.name.clone()).collect()
     }
 
-    /// 每个节点的静态入边。END 没有入边（走到 END 就是收工）。
+    /// Each node's static in-edges. END has none (reaching END is wrapping up).
     fn deps(&self) -> BTreeMap<String, BTreeSet<String>> {
         let mut deps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for edge in &self.edges {
@@ -423,7 +424,7 @@ impl Graph {
         deps
     }
 
-    /// 拓扑即数据。
+    /// Topology as data.
     pub fn describe(&self) -> Topology {
         let mut edges: Vec<TopologyEdge> = self
             .edges
@@ -435,7 +436,7 @@ impl Graph {
             })
             .collect();
         for (src, router) in &self.routers {
-            // dict.fromkeys：同一个目标只画一条边。
+            // dict.fromkeys: one edge per distinct target.
             let mut seen: BTreeSet<&str> = BTreeSet::new();
             for dst in router.targets.values() {
                 if seen.insert(dst.as_str()) {
@@ -462,31 +463,31 @@ impl Graph {
     }
 }
 
-/// 一次图运行的收成。
+/// The harvest of one graph run.
 #[derive(Debug, Clone)]
 pub struct RunReport {
-    /// 跑完之后的 state。`result` / `reply` 这类键就是图的产出。
+    /// The state after the run. Keys like `result` / `reply` are the graph's output.
     pub state: State,
-    /// 执行路径，按实际顺序 —— 测试钉的就是这个。
+    /// The execution path, in actual order — what tests pin.
     pub path: Vec<String>,
-    /// 每个节点自己的错，外加引擎自己的（`engine` 这个 key）。
+    /// Each node's own errors, plus the engine's own (under the `engine` key).
     pub errors: BTreeMap<String, String>,
     pub ms: i64,
 }
 
 impl RunReport {
-    /// 第一个错（`errors` 是 BTreeMap，顺序是键序 —— 跟 Python 的插入序
-    /// 不同，但它的用途只是「有没有出错、错的是什么」，不是顺序）。
+    /// The first error (`errors` is a BTreeMap, ordered by key — unlike Python's
+    /// insertion order, but its use is only "did anything fail, and what", not order).
     pub fn first_error(&self) -> Option<&str> {
         self.errors.values().next().map(String::as_str)
     }
 }
 
-/// 跑完一张图。返回最终的 state；错误落在 `state["errors"]` 和
-/// `graph_end` 事件里，绝不抛出来。
+/// Runs a graph to completion. Returns the final state; errors land in
+/// `state["errors"]` and the `graph_end` event, never thrown.
 ///
-/// 唯一的例外是节点撞键（[`GraphError::Collision`]）—— 那是图的 bug，
-/// 静默丢一次写比报错糟得多。
+/// The one exception is a node key collision ([`GraphError::Collision`]) — that's
+/// a graph bug; silently dropping a write is worse than erroring.
 pub async fn run_graph(
     graph: Graph,
     state: State,
@@ -499,7 +500,7 @@ pub async fn run_graph(
     let mut fired: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut runs: BTreeMap<String, i32> = BTreeMap::new();
     let mut path: Vec<String> = Vec::new();
-    // 上一次跑留下的错要留着（state 可以是复用的）。
+    // Errors left by a previous run must be kept (state may be reused).
     let mut errors: BTreeMap<String, String> = existing_errors(&state);
 
     let mut state = state;
@@ -508,7 +509,7 @@ pub async fn run_graph(
         nodes: graph.node_names(),
     });
 
-    // START 先把自己的边点着，再算第一波。
+    // START fires its own edges first, then the first wave is computed.
     for edge in &graph.edges {
         if edge.src == START {
             fired
@@ -542,7 +543,7 @@ pub async fn run_graph(
 
         let mut jumps: Vec<String> = Vec::new();
         let mut wave_writes: BTreeMap<String, String> = BTreeMap::new();
-        // 按波次顺序合并 —— 确定的。
+        // Merge in wave order — deterministic.
         for (name, out, error, ms) in results {
             path.push(name.clone());
             let keys: Vec<String> = match &out {
@@ -580,7 +581,7 @@ pub async fn run_graph(
                 if let Some(jump) = graph.get(&name).and_then(|n| n.on_error.clone()) {
                     jumps.push(jump);
                 }
-                continue; // 没有 on_error → 什么都不触发，运行自然地排空到 END
+                continue; // No on_error → nothing fires; the run drains naturally to END
             }
 
             match graph.routers.get(&name) {
@@ -600,7 +601,7 @@ pub async fn run_graph(
                                 format!("router returned unknown label '{label}'"),
                             );
                         }
-                        Some(target) if target != END => jumps.push(target), // 路由是跳，不是依赖
+                        Some(target) if target != END => jumps.push(target), // a route is a jump, not a dependency
                         Some(_) => {}
                     }
                 }
@@ -628,7 +629,7 @@ pub async fn run_graph(
         path: path.clone(),
         error: first_error,
     });
-    // 错也如实写回 state —— 调用方读 state 就能看到。
+    // Errors are also written back into state — callers can see them by reading state.
     state.set(
         "errors",
         Value::Object(
@@ -646,8 +647,8 @@ pub async fn run_graph(
     })
 }
 
-/// 跑一波节点。有多个就同时跑 —— 它们只看得到同一份快照，
-/// 所以谁先谁后都行（写回是后面按波次顺序合并的）。
+/// Runs one wave of nodes. Several run concurrently — they only see the same
+/// snapshot, so order doesn't matter (writes are merged in wave order later).
 async fn run_wave(
     graph: &Graph,
     state: &State,
@@ -658,11 +659,11 @@ async fn run_wave(
     for name in wave {
         let node = match graph.get(name) {
             Some(node) => node,
-            None => continue, // next_wave 只放图里有的名字，这里取不到是 bug
+            None => continue, // next_wave only admits names in the graph; a miss here is a bug
         };
         let f = node.f.clone();
         let node_name = name.clone();
-        // 每个节点一个已打好 node= 标签的出口：节点不用知道自己在图里的名字。
+        // One node=-tagged outlet per node: nodes needn't know their name in the graph.
         let tagged = raw.clone();
         let inner: LoopObserver = Arc::new(move |event| {
             tagged(GraphEvent::Inner {
@@ -686,9 +687,9 @@ async fn run_wave(
     join_all(futures).await
 }
 
-/// 强制跳转（路由 / 出错改道）的节点 + 静态入边全部点着的节点。
-///
-/// 注意这是**确定性**的：先跳转，再按插入顺序扫；同一波里不会重复。
+/// Nodes with forced jumps (routes / error detours) plus nodes whose static in-edges
+/// have all fired. Note this is **deterministic**: jumps first, then a scan in
+/// insertion order; no duplicates within one wave.
 fn next_wave(
     graph: &Graph,
     deps: &BTreeMap<String, BTreeSet<String>>,

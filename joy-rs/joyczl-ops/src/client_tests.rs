@@ -1,5 +1,5 @@
-//! 传输层的测试。假服务端就是内存里的两条管子 —— 不需要真的起进程，
-//! 也不需要真的磁盘：这一层该被验证的只有「帧怎么进出」，那就只测这个。
+//! Transport-layer tests. The fake server is just two pipes in memory — no real process,
+//! no real disk: the only thing to verify here is "how frames go in and out", so test that.
 
 use std::sync::Arc;
 
@@ -9,13 +9,13 @@ use tokio::io::{BufReader, DuplexStream, ReadHalf, WriteHalf};
 
 use super::*;
 
-/// 假服务端的另一头：读请求、写应答和通知。
+/// The other end of the fake server: reads requests, writes answers and notifications.
 pub(crate) struct Fake {
     requests: BufReader<ReadHalf<DuplexStream>>,
     to_client: WriteHalf<DuplexStream>,
 }
 
-/// 一条内存连接。左边是我们的客户端，右边是假的 app-server。
+/// One in-memory connection. Left side is our client, right side a fake app-server.
 pub(crate) fn fake() -> (AppServer, Fake) {
     let (ours, theirs) = tokio::io::duplex(8192);
     let (reader, writer) = tokio::io::split(ours);
@@ -29,7 +29,7 @@ pub(crate) fn fake() -> (AppServer, Fake) {
 }
 
 impl Fake {
-    /// 收一条请求（客户端发来的那一行）。
+    /// Receive one request (the line the client sent).
     pub(crate) async fn next_request(&mut self) -> Value {
         let mut line = String::new();
         self.requests
@@ -70,7 +70,7 @@ impl Fake {
         .await;
     }
 
-    /// 原样写一行，用来喂坏数据。
+    /// Write a line verbatim, used to feed bad data.
     async fn raw(&mut self, text: &str) {
         let line = format!("{text}\n");
         self.to_client
@@ -80,7 +80,7 @@ impl Fake {
     }
 }
 
-/// 在后台起一个请求，好让测试同时握着管子两头。
+/// Start a request in the background, so the test holds both ends of the pipe at once.
 fn spawn_call(
     app: &Arc<AppServer>,
     method: &'static str,
@@ -103,7 +103,7 @@ async fn 应答按_id_配对_倒着回来也对得上() {
     assert_eq!(two["method"], "session/list");
     assert_ne!(one["id"], two["id"], "每条请求都该有自己的 id");
 
-    // 倒着回：先回后到的那条。配错的话这里就会串味。
+    // Answer out of order: the later arrival first. A mix-up would show right here.
     fake.respond(&two["id"], json!({"data": ["second"]})).await;
     fake.respond(&one["id"], json!({"data": ["first"]})).await;
 
@@ -114,7 +114,7 @@ async fn 应答按_id_配对_倒着回来也对得上() {
 #[tokio::test]
 async fn 通知原样广播出来() {
     let (app, mut fake) = fake();
-    // 先订阅再发请求 —— 这是真代码里的规矩，测试也照做。
+    // Subscribe before sending the request — the rule in real code; tests follow it.
     let mut events = app.subscribe();
 
     let call = spawn_call(&Arc::new(app), "turn/start");
@@ -148,7 +148,7 @@ async fn 错误带着原来的错误码传回去() {
     .await;
 
     let error = call.await.unwrap().expect_err("该是错误");
-    // 原样传回：驾驶舱要把这句话直接显示给用户，换成「请求失败」就白写了。
+    // Passed back verbatim: the dashboard shows this sentence to the user directly.
     assert_eq!(error.code, codes::PROVIDER_ERROR);
     assert!(
         error.message.contains("ANTHROPIC_API_KEY"),
@@ -178,7 +178,7 @@ async fn 服务端走了_挂着的请求会被叫醒() {
     let call = spawn_call(&app, "memory/list");
     let _ = fake.next_request().await;
 
-    // 把管子那头扔掉：等于 app-server 退出了。
+    // Drop the far end of the pipe: the same as app-server exiting.
     drop(fake);
 
     let error = call

@@ -1,6 +1,6 @@
-// 由 ts-rs 生成物汇总而来，别手改。
-// 生成逻辑：joyczl-protocol/src/export.rs 的 write_consts。
-// 清单在 `protocol::v2::methods`。值就是线上传的方法名。
+// Assembled from the ts-rs generated files — do not edit by hand.
+// Generation logic: write_consts in joyczl-protocol/src/export.rs.
+// Inventory at `protocol::v2::methods`.值就是线上传的方法名。
 export const METHODS = {
   TURN_START: "turn/start",
   TURN_INTERRUPT: "turn/interrupt",

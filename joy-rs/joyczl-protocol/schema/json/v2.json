@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "ApprovalLogEntry": {
-      "description": "`approval/log` 的一行：一次「问了才跑」的完整记录。",
+      "description": "One row of `approval/log`: the complete record of one \"ask before running\".",
       "properties": {
         "argsPreview": {
           "type": "string"
@@ -11,7 +11,7 @@
           "type": "string"
         },
         "outcome": {
-          "description": "approved / denied / timeout / voided 四态之一。",
+          "description": "One of approved / denied / timeout / voided.",
           "type": "string"
         },
         "reason": {
@@ -46,7 +46,7 @@
     "ApprovalLogResponse": {
       "properties": {
         "entries": {
-          "description": "新的在前，服务端封顶 100 条。",
+          "description": "Newest first, capped at 100 entries by the server.",
           "items": {
             "$ref": "#/definitions/ApprovalLogEntry"
           },
@@ -60,27 +60,27 @@
       "type": "object"
     },
     "ApprovalRequestedNotification": {
-      "description": "一次「要不要执行」的询问。\n\n服务端把问题抛给客户端后**等待**（默认 120 秒），回答由 `approval/respond` 送来。没人回答、超时、或者根本没有批准通道 —— 一律**按拒绝处理**：默认 拒绝是这个功能的地基，不是它的边界情况。",
+      "description": "A \"may I execute this?\" query.\n\nAfter throwing the question to the client the server **waits** (120 s by default); the answer arrives via `approval/respond`. No reply, timeout, or no approval channel at all — everything is **treated as denied**: default-deny is this feature's foundation, not its edge case.",
       "properties": {
         "argsPreview": {
-          "description": "给人看的动作预览：命令原文，或参数摘要。",
+          "description": "Human-facing action preview: the raw command or an args summary.",
           "type": "string"
         },
         "expiresInMs": {
-          "description": "多少毫秒内没人回答就按拒绝算。",
+          "description": "How many milliseconds of silence count as a denial.",
           "format": "int32",
           "type": "integer"
         },
         "reason": {
-          "description": "为什么没被放行规则直接放行。",
+          "description": "Why the allow rules did not let it through automatically.",
           "type": "string"
         },
         "requestId": {
-          "description": "这一轮内的请求号，回答时要原样带回来。",
+          "description": "Request id within this turn; echo it back verbatim when answering.",
           "type": "string"
         },
         "tool": {
-          "description": "想执行什么（工具名，目前只有 `run_command`）。",
+          "description": "What wants to run (tool name; currently only `run_command`).",
           "type": "string"
         },
         "turnId": {
@@ -99,14 +99,14 @@
       "type": "object"
     },
     "ApprovalRespondParams": {
-      "description": "`approval/respond` 的参数。",
+      "description": "Parameters for `approval/respond`.",
       "properties": {
         "approved": {
           "type": "boolean"
         },
         "remember": {
           "default": false,
-          "description": "记住这个决定：把这条命令本身写进 `<home>/settings.json` 的放行表 （不加通配 —— 用户批准的是这条命令，不是这一类）。",
+          "description": "Remember this decision: write the command itself into the allowlist in `<home>/settings.json` (no wildcards — the user approved this command, not this kind).",
           "type": "boolean"
         },
         "requestId": {
@@ -125,10 +125,10 @@
       "type": "object"
     },
     "ApprovalRespondResponse": {
-      "description": "`approval/respond` 的应答。",
+      "description": "Response to `approval/respond`.",
       "properties": {
         "accepted": {
-          "description": "这个请求还在等人回答吗？太晚送达（已超时或那一轮已经结束）时为 false —— 客户端据此知道「我的回答没人听」，而不是以为批准生效了。",
+          "description": "Is this request still awaiting an answer? False when the reply arrives too late (timed out, or the turn already ended) — the client learns nobody heard its answer.",
           "type": "boolean"
         }
       },
@@ -141,7 +141,7 @@
     "ConfigReadParams": {
       "properties": {
         "keys": {
-          "description": "只取这几个 key；不给就全量返回。",
+          "description": "Fetch only these keys; absent = return everything.",
           "items": {
             "type": "string"
           },
@@ -186,7 +186,7 @@
               "$ref": "#/definitions/SettingsView"
             }
           ],
-          "description": "写入后的完整配置，便于前端直接替换本地缓存。"
+          "description": "The full config after writing, so the frontend can replace its local cache outright."
         }
       },
       "required": [
@@ -198,7 +198,7 @@
     "ConsolidationCompletedNotification": {
       "properties": {
         "newFacts": {
-          "description": "这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。",
+          "description": "How many new facts this batch distilled; 0 means not due yet or nothing surfaced.",
           "format": "int32",
           "type": "integer"
         }
@@ -210,7 +210,7 @@
       "type": "object"
     },
     "DashboardData": {
-      "description": "驾驶舱首屏要的全部东西，一次取齐。\n\n它不是某个 RPC 的应答，而是 `joy dashboard` 那个 HTTP 端点 （`GET /api/data`）的载荷。**为什么定义在协议 crate 里**：因为判断标准 只有一条 —— 它跨语言。浏览器那一侧要按它做类型检查，手抄一遍就又会 漂移，而这正是整个工程在消灭的东西。\n\n字段都直接复用协议里的类型：驾驶舱不做二次建模，它就是这些数据的 一个视图。",
+      "description": "Everything the dashboard's first screen needs, fetched in one shot.\n\nIt is not the response to any RPC but the payload of the `joy dashboard` HTTP endpoint (`GET /api/data`). **Why it lives in the protocol crate**: the only criterion is that it crosses languages. The browser side type-checks against it, and hand-copying it would drift again — exactly what this whole effort exists to eliminate.\n\nFields reuse protocol types directly: the dashboard does no second modeling — it is just a view over these data.",
       "properties": {
         "config": {
           "$ref": "#/definitions/SettingsView"
@@ -228,7 +228,7 @@
           "type": "array"
         },
         "generatedAt": {
-          "description": "ISO 8601，毫秒精度。页面上显示「数据是什么时候的」。",
+          "description": "ISO 8601, millisecond precision. The page shows \"when is this data from\".",
           "type": "string"
         },
         "sessions": {
@@ -257,7 +257,7 @@
           ]
         },
         "happenedAt": {
-          "description": "ISO 8601 日期。",
+          "description": "ISO 8601 date.",
           "type": "string"
         },
         "id": {
@@ -327,11 +327,11 @@
           "type": "integer"
         },
         "kind": {
-          "description": "这条事实**关于什么**：`user` / `feedback` / `project` / `reference` / `fact`（兜底）。分类不出来的都落在 `fact`。",
+          "description": "What this fact is **about**: `user` / `feedback` / `project` / `reference` / `fact` (fallback). Anything that resists classification lands on `fact`.",
           "type": "string"
         },
         "source": {
-          "description": "`user`（直接告诉它的）或 `consolidation`（从对话里提炼的）。",
+          "description": "`user` (told directly) or `consolidation` (distilled from conversations).",
           "type": "string"
         },
         "subject": {
@@ -370,14 +370,14 @@
           "$ref": "#/definitions/GateDecisionKind"
         },
         "query": {
-          "description": "判定为 retrieve 时的检索词；skip 时为 null。",
+          "description": "The search query when the verdict is retrieve; null when skipping.",
           "type": [
             "string",
             "null"
           ]
         },
         "reason": {
-          "description": "门给的理由（≤5 个词的那种）。失败开放时带上原因，便于排查。",
+          "description": "The gate's reason (the ≤5-word kind). Present on fail-open so it can be debugged.",
           "type": "string"
         }
       },
@@ -389,7 +389,7 @@
       "type": "object"
     },
     "GateDecisionKind": {
-      "description": "检索门的判定：这一轮到底要不要翻记忆。 Joy 的 hero moment —— 默认全量检索既慢又会让无关记忆带偏答案。",
+      "description": "The retrieval gate's verdict: whether this turn should search memory at all. Joy's hero moment — retrieving everything by default is slow and lets irrelevant memories skew answers.",
       "enum": [
         "retrieve",
         "skip"
@@ -398,23 +398,23 @@
       "type": "string"
     },
     "GoalRoundNotification": {
-      "description": "目标循环每判一次就发一条 —— 「为什么又跑了一轮」从来不靠猜。",
+      "description": "One notification per goal-loop verdict — \"why did it run another round\" is never guessed.",
       "properties": {
         "maxRounds": {
           "format": "int32",
           "type": "integer"
         },
         "reason": {
-          "description": "判断器给的理由（或出口的原因）。",
+          "description": "The judge's reason (or the reason for exiting).",
           "type": "string"
         },
         "round": {
-          "description": "第几轮（从 1 开始）。",
+          "description": "Which round (starting at 1).",
           "format": "int32",
           "type": "integer"
         },
         "status": {
-          "description": "`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。",
+          "description": "`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`.",
           "type": "string"
         },
         "turnId": {
@@ -432,11 +432,11 @@
       "type": "object"
     },
     "GoalSetParams": {
-      "description": "`goal/set` 的参数。`condition` 为空 = 清除目标。",
+      "description": "Parameters for `goal/set`. Empty `condition` = clear the goal.",
       "properties": {
         "condition": {
           "default": null,
-          "description": "目标条件（自然语言，比如「让测试全绿」）。空/不传 = 清除。",
+          "description": "The goal condition (natural language, e.g. \"make the tests green\"). Empty/absent = clear.",
           "type": [
             "string",
             "null"
@@ -453,10 +453,10 @@
       "type": "object"
     },
     "GoalSetResponse": {
-      "description": "`goal/set` 的应答：设完之后的权威状态。",
+      "description": "Response to `goal/set`: the authoritative state after setting.",
       "properties": {
         "active": {
-          "description": "现在有活跃目标吗。",
+          "description": "Whether a goal is currently active.",
           "type": "boolean"
         },
         "condition": {
@@ -471,7 +471,7 @@
         },
         "roundsUsed": {
           "default": 0,
-          "description": "这个目标已经续了几轮。",
+          "description": "How many rounds this goal has already consumed.",
           "format": "int32",
           "type": "integer"
         }
@@ -521,7 +521,7 @@
     "GraphInfo": {
       "properties": {
         "path": {
-          "description": "实际走过的节点名，顺序即执行顺序。",
+          "description": "The node names actually traversed, in execution order.",
           "items": {
             "type": "string"
           },
@@ -549,14 +549,14 @@
     "GraphNodeEndedNotification": {
       "properties": {
         "error": {
-          "description": "节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。",
+          "description": "Error text when the node throws; errors are logged, never rethrown, and the run still finishes normally.",
           "type": [
             "string",
             "null"
           ]
         },
         "keys": {
-          "description": "该节点写回了哪些 state key。",
+          "description": "Which state keys the node wrote back.",
           "items": {
             "type": "string"
           },
@@ -588,7 +588,7 @@
           "type": "string"
         },
         "visit": {
-          "description": "第几次进入该节点（>1 只可能出现在有意设计的环里）。",
+          "description": "Which visit to this node this is (>1 only happens in deliberately designed loops).",
           "format": "int32",
           "type": "integer"
         },
@@ -605,7 +605,7 @@
       "type": "object"
     },
     "GraphRouteKind": {
-      "description": "triage graph 把这一轮判成「快回答」还是「完整走一圈」。",
+      "description": "Whether the triage graph routed this turn as a \"quick answer\" or a \"full lap\".",
       "enum": [
         "quick",
         "full"
@@ -646,7 +646,7 @@
               "type": "null"
             }
           ],
-          "description": "解析不了 id 时（比如请求本身就是坏 JSON）为 null。"
+          "description": "null when the id cannot be parsed (e.g. the request itself is bad JSON)."
         },
         "jsonrpc": {
           "type": "string"
@@ -668,11 +668,11 @@
           "$ref": "#/definitions/JsonRpcError"
         }
       ],
-      "description": "服务端回的任意一帧：应答或错误。",
+      "description": "Any frame the server sends back: a response or an error.",
       "title": "JsonRpcMessage"
     },
     "JsonRpcNotification": {
-      "description": "服务端主动推送（SSE / stdio 上就是一帧一帧的事件）。",
+      "description": "Server-initiated push (on SSE / stdio this is simply frame after frame of events).",
       "properties": {
         "jsonrpc": {
           "type": "string"
@@ -698,7 +698,7 @@
           "type": "string"
         },
         "method": {
-          "description": "形如 `turn/start`、`<resource>/<method>`，resource 用单数。",
+          "description": "Shaped like `turn/start`, `<resource>/<method>`, resource in singular.",
           "type": "string"
         },
         "params": true
@@ -720,7 +720,7 @@
           "type": "string"
         },
         "result": {
-          "description": "具体结构由 method 决定，解码方按 `*Response` 类型自行 narrow。"
+          "description": "The concrete shape depends on method; decoders narrow it to the matching `*Response` type themselves."
         }
       },
       "required": [
@@ -746,7 +746,7 @@
     "MemoryForgetResponse": {
       "properties": {
         "removed": {
-          "description": "实际删掉多少条。0 表示本来就没有这个主题的记忆。",
+          "description": "How many were actually deleted. 0 means there was no memory of this subject to begin with.",
           "format": "int32",
           "type": "integer"
         }
@@ -772,7 +772,7 @@
       "type": "object"
     },
     "MemoryListEpisodesResponse": {
-      "description": "情景记忆的列表。**没有 cursor**：`Episodes::recent` 只按时间倒序取最近 N 条， 存储层没有偏移量的概念。与其编一个用不了的游标，不如诚实地返回 null。",
+      "description": "The episode list. **No cursor**: `Episodes::recent` only fetches the most recent N by time desc — storage has no notion of offset. Rather than invent an unusable cursor, it honestly returns null.",
       "properties": {
         "data": {
           "items": {
@@ -840,7 +840,7 @@
           "type": "string"
         },
         "source": {
-          "description": "不给就是 `user`（用户直接说的）。consolidation 从对话里提炼时传 `consolidation`，这样前端能区分「你告诉它的」和「它自己总结的」。",
+          "description": "Defaults to `user` (said directly by the user). Consolidation passes `consolidation` when distilling from conversations, so the frontend can tell \"you told it\" from \"it summarized itself\".",
           "type": [
             "string",
             "null"
@@ -865,7 +865,7 @@
               "$ref": "#/definitions/Fact"
             }
           ],
-          "description": "写进去的完整 fact，带 id —— 前端可以直接插进列表，不用再查一次。"
+          "description": "The full fact as written, with id — the frontend can insert it directly, no re-query needed."
         }
       },
       "required": [
@@ -917,17 +917,17 @@
       "type": "object"
     },
     "Message": {
-      "description": "会话历史里的一条消息：`chat_log` 的一行。\n\n跟实时那一路（`turnStarted` / `textDelta` / `turnCompleted`）说的是同一场 对话的两个视角：实时那一路只为**这一次连接**活着（刷新即消失）， 这一条让「刷新、换台设备、换个时候再看」成为可能。",
+      "description": "One message in session history: a row of `chat_log`.\n\nSame conversation, second viewpoint alongside the live stream (`turnStarted` / `textDelta` / `turnCompleted`): the live stream lives only for **this connection** (gone on refresh); this one makes \"refresh, switch devices, look back later\" possible.",
       "properties": {
         "at": {
-          "description": "ISO 8601（UTC）。写进来的时刻。",
+          "description": "ISO 8601 (UTC). When it was written.",
           "type": "string"
         },
         "content": {
           "type": "string"
         },
         "id": {
-          "description": "chat_log 的行号。**也是游标**：`session/messages` 的 cursor 就是它。 用行号而不是时间戳：同一轮的两行是同一秒写进去的，时间戳分不出先后。",
+          "description": "The chat_log row number. **Also the cursor**: it is `session/messages`' cursor. Row numbers over timestamps: both rows of one turn are written in the same second, so timestamps cannot order them.",
           "format": "int32",
           "type": "integer"
         },
@@ -940,7 +940,7 @@
               "type": "null"
             }
           ],
-          "description": "这一轮的遥测（检索门 / 工具 / 迭代 / 模型 / usage），**只有 assistant 行上有**。"
+          "description": "This turn's telemetry (gate / tools / iterations / model / usage), **present only on assistant rows**."
         },
         "role": {
           "$ref": "#/definitions/MessageRole"
@@ -956,7 +956,7 @@
       "type": "object"
     },
     "MessageRole": {
-      "description": "消息的角色。**闭集**，故意不留「未知」这个口子。\n\n`chat_log` 里将来若真多出别的角色，`session/messages` 会**跳过**那些行， 而不是硬塞一个值进来 —— 前端那个 `switch` 才能是穷尽的， 「还有第三种角色要画」这种事就会在编译期现形。",
+      "description": "A message's role. A **closed set** — deliberately no \"unknown\" escape hatch.\n\nIf some future `chat_log` really does grow other roles, `session/messages` will **skip** those rows rather than force a value in — so the frontend `switch` can stay exhaustive and \"there is a third role to render\" shows up at compile time.",
       "enum": [
         "user",
         "assistant"
@@ -1032,10 +1032,10 @@
       "type": "object"
     },
     "ModelProfileView": {
-      "description": "一套配置的**视图**：与存储里那份的区别是它不含密钥，只说密钥在哪。",
+      "description": "A profile's **view**: unlike the stored copy it contains no secret, only where the secret lives.",
       "properties": {
         "active": {
-          "description": "这套现在是当前生效的吗。",
+          "description": "Whether this profile is currently active.",
           "type": "boolean"
         },
         "baseUrl": {
@@ -1048,7 +1048,7 @@
           "type": "string"
         },
         "keySource": {
-          "description": "凭据的位置：`keychain` / `file` / `env:VAR` / `memory` / 无（本地模型）。 **只是指针，不是密钥本身** —— 界面拿它如实显示「你的 key 存在哪」。",
+          "description": "Where the credential lives: `keychain` / `file` / `env:VAR` / `memory` / none (local model). **A pointer, not the key itself** — the UI uses it to honestly show \"where your key is stored\".",
           "type": [
             "string",
             "null"
@@ -1061,7 +1061,7 @@
           ]
         },
         "provider": {
-          "description": "`joyczl-provider` 的 provider id。",
+          "description": "The provider id in `joyczl-provider` terms.",
           "type": "string"
         },
         "smallModel": {
@@ -1079,14 +1079,14 @@
       "type": "object"
     },
     "ModelProfilesParams": {
-      "description": "`model/profiles` 的应答：已配置的多套模型 + 当前那套。",
+      "description": "Response to `model/profiles`: all configured model profiles + the active one.",
       "title": "ModelProfilesParams",
       "type": "null"
     },
     "ModelProfilesResponse": {
       "properties": {
         "activeId": {
-          "description": "当前生效的 id（没配就是 null）。",
+          "description": "The currently active id (null when nothing is configured).",
           "type": [
             "string",
             "null"
@@ -1120,7 +1120,7 @@
     "ModelRemoveResponse": {
       "properties": {
         "activeId": {
-          "description": "删的是当前那套时，active 会跟着清空。",
+          "description": "When the active profile is removed, active is cleared along with it.",
           "type": [
             "string",
             "null"
@@ -1137,10 +1137,10 @@
       "type": "object"
     },
     "ModelSaveParams": {
-      "description": "`model/save` 的参数。`provider` 只在**新建**时必填 —— 只带 `id` + `make_active` 就是切换。",
+      "description": "Parameters for `model/save`. `provider` is required only when **creating** — passing only `id` + `make_active` means switch.",
       "properties": {
         "apiKey": {
-          "description": "密钥本身。不给 = 保持原样（改模型、切换都不用重发）。",
+          "description": "The key itself. Absent = keep as-is (changing models or switching never requires re-sending).",
           "type": [
             "string",
             "null"
@@ -1156,7 +1156,7 @@
           "type": "string"
         },
         "keyEnv": {
-          "description": "用环境变量里的 key（写 `DEEPSEEK_API_KEY` 这样的变量名）：Joy 只读它， 不复制进任何文件。",
+          "description": "Use a key from an environment variable (pass a name like `DEEPSEEK_API_KEY`): Joy only reads it and never copies it into any file.",
           "type": [
             "string",
             "null"
@@ -1164,7 +1164,7 @@
         },
         "makeActive": {
           "default": null,
-          "description": "存完就设为当前（默认 true —— 第一次配置时这是最顺手的）。",
+          "description": "Make it active right after saving (default true — the smoothest on first setup).",
           "type": [
             "boolean",
             "null"
@@ -1198,7 +1198,7 @@
     "ModelSaveResponse": {
       "properties": {
         "active": {
-          "description": "这套现在是当前生效的吗。",
+          "description": "Whether this profile is currently active.",
           "type": "boolean"
         },
         "activeId": {
@@ -1208,7 +1208,7 @@
           ]
         },
         "current": {
-          "description": "切换后的当前模型（`provider / model`），没配好就是 null。",
+          "description": "The current model after switching (`provider / model`); null when not fully configured.",
           "type": [
             "string",
             "null"
@@ -1218,7 +1218,7 @@
           "type": "string"
         },
         "keyStoredIn": {
-          "description": "凭据**实际**落在哪：`keychain` / `file` / `env:VAR` / `memory` / `none`。 兜底成明文文件时也要如实说 —— 不能让用户以为进了钥匙串。",
+          "description": "Where the credential **actually** landed: `keychain` / `file` / `env:VAR` / `memory` / `none`. Fall back to a plaintext file and say so honestly — never let the user assume the keychain.",
           "type": "string"
         }
       },
@@ -1240,24 +1240,24 @@
           "type": "string"
         }
       ],
-      "description": "请求 id：JSON-RPC 允许数字或字符串。\n\n数字这一支是 `i32` 而不是 `u64`：`u64` 会被 ts-rs 映射成 TypeScript 的 `bigint`，而 `JSON.parse` 出来的是 `number` —— 客户端拿到 `1` 却被告知类型是 `bigint`，这是那种不报错、只在运行时对不上的 bug。跨语言边界只用 `i32`， 跟 v2.rs 的规矩是同一条。",
+      "description": "Request id: JSON-RPC allows a number or a string.\n\nThe number arm is `i32`, not `u64`: ts-rs maps `u64` to TypeScript `bigint`, while `JSON.parse` yields `number` — the client receives `1` typed as `bigint`: the kind of bug that never errors but only fails at runtime. Only `i32` crosses language boundaries — the same rule as v2.rs.",
       "title": "RequestId"
     },
     "RetryNotification": {
-      "description": "一次「正在重试」的说明。\n\n重试**从不静默**：用户看到的是这句话，而不是一段莫名其妙的长时间停顿。",
+      "description": "A \"retrying now\" notice.\n\nRetries are **never silent**: the user sees this message, not an inexplicable long pause.",
       "properties": {
         "attempt": {
-          "description": "第几次重试（从 1 开始）。",
+          "description": "Which retry attempt (starting at 1).",
           "format": "int32",
           "type": "integer"
         },
         "delayMs": {
-          "description": "等了多久。",
+          "description": "How long it waited.",
           "format": "int32",
           "type": "integer"
         },
         "reason": {
-          "description": "为什么重试（`HTTP 429` / `网络错误：…`）。",
+          "description": "Why it is retrying (`HTTP 429` / `network error: …`).",
           "type": "string"
         },
         "turnId": {
@@ -1280,7 +1280,7 @@
     "ScheduleListResponse": {
       "properties": {
         "jobs": {
-          "description": "按名字排序的全部任务；一个都没登记过为空数组。",
+          "description": "All jobs sorted by name; an empty array when none was ever registered.",
           "items": {
             "$ref": "#/definitions/ScheduleStateRow"
           },
@@ -1294,25 +1294,25 @@
       "type": "object"
     },
     "ScheduleStateRow": {
-      "description": "`schedule/list` 的一行：一个定时任务的当前状态（迁移 0012）。",
+      "description": "One row of `schedule/list`: a scheduled job's current state (migration 0012).",
       "properties": {
         "catchUp": {
-          "description": "true = 至少一次（补跑），false = 至多一次（放弃）。",
+          "description": "true = at-least-once (re-run), false = at-most-once (give up).",
           "type": "boolean"
         },
         "claimedMinute": {
-          "description": "非空 = 上次执行中断，等重启按 catch_up 决定补跑或放弃。",
+          "description": "Non-null = the last run was interrupted; on restart catch_up decides whether to re-run or give up.",
           "type": [
             "string",
             "null"
           ]
         },
         "delivery": {
-          "description": "outbox / notify / quiet。",
+          "description": "outbox / notify / quiet.",
           "type": "string"
         },
         "lastFiredMinute": {
-          "description": "上次落定的触发分钟（去重锚点）；没跑过为 null。",
+          "description": "The last settled trigger minute (the dedup anchor); null if it never ran.",
           "type": [
             "string",
             "null"
@@ -1331,7 +1331,7 @@
       "type": "object"
     },
     "ServerNotification": {
-      "description": "一轮 turn 的全部过程事件。\n\n`type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。",
+      "description": "The full stream of events for one turn.\n\n`type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated union. **No failure here should crash the client**: this only describes \"what happened\".",
       "oneOf": [
         {
           "properties": {
@@ -1339,7 +1339,7 @@
               "type": "string"
             },
             "ts": {
-              "description": "ISO 8601，毫秒精度。",
+              "description": "ISO 8601, millisecond precision.",
               "type": "string"
             },
             "turnId": {
@@ -1367,7 +1367,7 @@
         {
           "properties": {
             "delta": {
-              "description": "流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。",
+              "description": "A streaming text delta. Present only when `turn/start` passed `stream: true`.",
               "type": "string"
             },
             "turnId": {
@@ -1410,20 +1410,20 @@
           "type": "object"
         },
         {
-          "description": "正在重试（限流/临时故障）：**每次必发**，不静默。",
+          "description": "Retrying now (rate limit / transient fault): **sent every time**, never silent.",
           "properties": {
             "attempt": {
-              "description": "第几次重试（从 1 开始）。",
+              "description": "Which retry attempt (starting at 1).",
               "format": "int32",
               "type": "integer"
             },
             "delayMs": {
-              "description": "等了多久。",
+              "description": "How long it waited.",
               "format": "int32",
               "type": "integer"
             },
             "reason": {
-              "description": "为什么重试（`HTTP 429` / `网络错误：…`）。",
+              "description": "Why it is retrying (`HTTP 429` / `network error: …`).",
               "type": "string"
             },
             "turnId": {
@@ -1446,27 +1446,27 @@
           "type": "object"
         },
         {
-          "description": "有一条命令在等人批准：先回它，那一轮才会继续。",
+          "description": "A command is waiting for approval: answer it first, then the turn continues.",
           "properties": {
             "argsPreview": {
-              "description": "给人看的动作预览：命令原文，或参数摘要。",
+              "description": "Human-facing action preview: the raw command or an args summary.",
               "type": "string"
             },
             "expiresInMs": {
-              "description": "多少毫秒内没人回答就按拒绝算。",
+              "description": "How many milliseconds of silence count as a denial.",
               "format": "int32",
               "type": "integer"
             },
             "reason": {
-              "description": "为什么没被放行规则直接放行。",
+              "description": "Why the allow rules did not let it through automatically.",
               "type": "string"
             },
             "requestId": {
-              "description": "这一轮内的请求号，回答时要原样带回来。",
+              "description": "Request id within this turn; echo it back verbatim when answering.",
               "type": "string"
             },
             "tool": {
-              "description": "想执行什么（工具名，目前只有 `run_command`）。",
+              "description": "What wants to run (tool name; currently only `run_command`).",
               "type": "string"
             },
             "turnId": {
@@ -1491,23 +1491,23 @@
           "type": "object"
         },
         {
-          "description": "目标循环每判一次就发一条 —— 「为什么又跑了一轮」从来不靠猜。",
+          "description": "One notification per goal-loop verdict — \"why did it run another round\" is never guessed.",
           "properties": {
             "maxRounds": {
               "format": "int32",
               "type": "integer"
             },
             "reason": {
-              "description": "判断器给的理由（或出口的原因）。",
+              "description": "The judge's reason (or the reason for exiting).",
               "type": "string"
             },
             "round": {
-              "description": "第几轮（从 1 开始）。",
+              "description": "Which round (starting at 1).",
               "format": "int32",
               "type": "integer"
             },
             "status": {
-              "description": "`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`。",
+              "description": "`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`.",
               "type": "string"
             },
             "turnId": {
@@ -1533,7 +1533,7 @@
         {
           "properties": {
             "args": {
-              "description": "模型给的参数，结构随工具而定。"
+              "description": "The model-supplied arguments; structure depends on the tool."
             },
             "tool": {
               "type": "string"
@@ -1566,7 +1566,7 @@
               ]
             },
             "output": {
-              "description": "工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。",
+              "description": "The text the tool returned to the model. Failure details live here too — the turn is not aborted.",
               "type": "string"
             },
             "status": {
@@ -1597,7 +1597,7 @@
         {
           "properties": {
             "newFacts": {
-              "description": "这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。",
+              "description": "How many new facts this batch distilled; 0 means not due yet or nothing surfaced.",
               "format": "int32",
               "type": "integer"
             },
@@ -1651,7 +1651,7 @@
               "type": "string"
             },
             "visit": {
-              "description": "第几次进入该节点（>1 只可能出现在有意设计的环里）。",
+              "description": "Which visit to this node this is (>1 only happens in deliberately designed loops).",
               "format": "int32",
               "type": "integer"
             },
@@ -1670,14 +1670,14 @@
         {
           "properties": {
             "error": {
-              "description": "节点抛错时是错误文本；错误只记录、不外抛，整个 run 会正常收尾。",
+              "description": "Error text when the node throws; errors are logged, never rethrown, and the run still finishes normally.",
               "type": [
                 "string",
                 "null"
               ]
             },
             "keys": {
-              "description": "该节点写回了哪些 state key。",
+              "description": "Which state keys the node wrote back.",
               "items": {
                 "type": "string"
               },
@@ -1751,7 +1751,7 @@
           "type": "object"
         },
         {
-          "description": "装了 `Box`：它带的 `TurnMeta` 比别的变体大一个量级，而通知是按事件 构造、在通道里搬运的。ts-rs 对 `Box<T>` 透明，TS/Python 生成物不受影响。",
+          "description": "Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.",
           "properties": {
             "iterations": {
               "format": "int32",
@@ -1861,10 +1861,10 @@
       "type": "object"
     },
     "SessionMessagesParams": {
-      "description": "读一个会话说过的话。\n\n**为什么需要它**：没有这个方法，页面上那场对话就只活在浏览器里 —— 刷新一下全没了。它同时是「切换会话」的前提：切过去至少能看见那边说过什么。",
+      "description": "Read what was said in a session.\n\n**Why it exists**: without it, the conversation on the page lives only in the browser — a refresh erases it. Also the prerequisite for \"switch session\".",
       "properties": {
         "cursor": {
-          "description": "只取比这条消息**更早**的（往上翻旧账）。不给就是最新的那一页。",
+          "description": "Fetch only messages **older** than this one (paging back through history). Absent = the newest page.",
           "type": [
             "string",
             "null"
@@ -1889,7 +1889,7 @@
       "type": "object"
     },
     "SessionMessagesResponse": {
-      "description": "消息**最新的在最前** —— 跟对话本身的方向相反，因为「往上翻」才是 这个方法的用法：先拿最近一页，再顺着 `nextCursor` 往更早的地方走。",
+      "description": "Messages with the **newest first** — opposite to the conversation's direction, because \"paging back\" is the point: take the latest page, then follow `nextCursor` into the past.",
       "properties": {
         "data": {
           "items": {
@@ -1898,7 +1898,7 @@
           "type": "array"
         },
         "nextCursor": {
-          "description": "还有更早的才给：把它当下一次的 cursor。null = 到底了。",
+          "description": "Present only when older messages exist: pass it as the next cursor. null = the end.",
           "type": [
             "string",
             "null"
@@ -1914,7 +1914,7 @@
     "SessionNewParams": {
       "properties": {
         "sessionId": {
-          "description": "不给就由服务端生成。",
+          "description": "Generated by the server when absent.",
           "type": [
             "string",
             "null"
@@ -1958,7 +1958,7 @@
           ]
         },
         "title": {
-          "description": "会话标题 = 第一条用户消息的前 60 个字。",
+          "description": "Session title = the first 60 characters of the first user message.",
           "type": "string"
         }
       },
@@ -1971,7 +1971,7 @@
       "type": "object"
     },
     "SettingsPatch": {
-      "description": "配置的**写入补丁**。只传要改的字段，null 表示不改。",
+      "description": "The **write patch** for config. Pass only the fields to change; null means leave as-is.",
       "properties": {
         "appleCalendar": {
           "type": [
@@ -1987,7 +1987,7 @@
           ]
         },
         "execAllow": {
-          "description": "放行表（`JOY_EXEC_ALLOW`）的整表替换 —— 「记住这条命令」写的就是它。",
+          "description": "Whole-table replacement of the allowlist (`JOY_EXEC_ALLOW`) — what \"remember this command\" writes.",
           "items": {
             "type": "string"
           },
@@ -2047,7 +2047,7 @@
       "type": "object"
     },
     "SettingsView": {
-      "description": "配置的**读取视图**。字段刻意全量且非可选：读出来就该是完整现状。",
+      "description": "The **read view** of config. Fields are deliberately complete and non-optional: reading it yields the full current state.",
       "properties": {
         "appleCalendar": {
           "type": "boolean"
@@ -2066,7 +2066,7 @@
           "type": "boolean"
         },
         "historyTurns": {
-          "description": "工作记忆滑窗：只把最近 N 轮塞进 prompt。",
+          "description": "Working-memory sliding window: only the last N turns go into the prompt.",
           "format": "int32",
           "type": "integer"
         },
@@ -2116,7 +2116,7 @@
     "TextDeltaNotification": {
       "properties": {
         "delta": {
-          "description": "流式文本增量。只在 `turn/start` 传了 `stream: true` 时才有。",
+          "description": "A streaming text delta. Present only when `turn/start` passed `stream: true`.",
           "type": "string"
         },
         "turnId": {
@@ -2181,7 +2181,7 @@
           ]
         },
         "output": {
-          "description": "工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。",
+          "description": "The text the tool returned to the model. Failure details live here too — the turn is not aborted.",
           "type": "string"
         },
         "status": {
@@ -2206,7 +2206,7 @@
     "ToolStartedNotification": {
       "properties": {
         "args": {
-          "description": "模型给的参数，结构随工具而定。"
+          "description": "The model-supplied arguments; structure depends on the tool."
         },
         "tool": {
           "type": "string"
@@ -2281,7 +2281,7 @@
     "TurnInterruptResponse": {
       "properties": {
         "interrupted": {
-          "description": "false = 这一轮已经跑完了，没打断到什么。",
+          "description": "false = this turn already finished; nothing was interrupted.",
           "type": "boolean"
         }
       },
@@ -2292,7 +2292,7 @@
       "type": "object"
     },
     "TurnMeta": {
-      "description": "一轮 turn 的遥测。落库到 chat_log.meta，所以重开一个旧会话 仍能看到当时是哪个脑子的哪个决定，而不只是最终那句回复。",
+      "description": "Telemetry for one turn. Persisted into chat_log.meta, so reopening an old session still shows which brain made which decision, not just the final reply.",
       "properties": {
         "gate": {
           "anyOf": [
@@ -2306,13 +2306,13 @@
         },
         "goalRounds": {
           "default": 0,
-          "description": "这个目标到这一轮为止续了几轮。没设目标就是 0。",
+          "description": "How many rounds this goal has consumed up to this turn. 0 when no goal is set.",
           "format": "int32",
           "type": "integer"
         },
         "goalStatus": {
           "default": null,
-          "description": "目标循环的出口（`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`）。没设目标就是 `None`。",
+          "description": "The goal loop's exit (`continuing` / `satisfied` / `impossible` / `round-limit` / `blocked`). `None` when no goal is set.",
           "type": [
             "string",
             "null"
@@ -2327,17 +2327,17 @@
               "type": "null"
             }
           ],
-          "description": "graph 没介入时为 null。"
+          "description": "Null when no graph was involved."
         },
         "guardHits": {
           "default": 0,
-          "description": "循环护栏在这一轮命中几次（0 = 模型没有卡在重复/交替的工具调用里）。 是 0 才正常；不为 0 说明这一轮的预算有一部分花在了原地打转上。",
+          "description": "How many times the loop guard fired this turn (0 = the model never got stuck repeating/alternating tool calls). Zero is normal; non-zero means part of this turn's budget went to spinning in place.",
           "format": "int32",
           "type": "integer"
         },
         "guardNote": {
           "default": null,
-          "description": "命中时护栏对模型说的那句话（给人看的解释；没命中就是 null）。",
+          "description": "What the guard told the model when it fired (a human-readable explanation; null otherwise).",
           "type": [
             "string",
             "null"
@@ -2345,7 +2345,7 @@
         },
         "interrupted": {
           "default": false,
-          "description": "这一轮被 `turn/interrupt` 打断时为 true。 旧库里的 meta 没有这个字段 —— `#[serde(default)]` 让它们照常解析。",
+          "description": "True when this turn was cut short by `turn/interrupt`. Older metas in the DB lack this field — `#[serde(default)]` lets them parse as before.",
           "type": "boolean"
         },
         "iterations": {
@@ -2357,7 +2357,7 @@
           "type": "integer"
         },
         "model": {
-          "description": "真正回答这一轮的模型：被 graph 判成 quick 时是小模型，如实记录。",
+          "description": "The model that actually answered this turn: the small model when the graph routed quick, recorded as-is.",
           "type": "string"
         },
         "provider": {
@@ -2365,13 +2365,13 @@
         },
         "retries": {
           "default": 0,
-          "description": "这一轮里 provider 重试了几次（限流/临时故障）。0 是常态。",
+          "description": "How many provider retries happened this turn (rate limits / transient faults). Zero is the norm.",
           "format": "int32",
           "type": "integer"
         },
         "routeReason": {
           "default": null,
-          "description": "这轮的模型是怎么选的（路由，见 route.rs）：`auto:reasoning → ds-r1` / `fallback: …`。fixed 模式与「选中的就是 active」时是 `None` —— 页脚保持干净，只有真的发生了选择/回落才说话。",
+          "description": "How this turn's model was chosen (routing, see route.rs): `auto:reasoning → ds-r1` or `fallback: …`. `None` in fixed mode and when the chosen one is already active — the footer stays quiet and only speaks when a choice/fallback actually happened.",
           "type": [
             "string",
             "null"
@@ -2393,7 +2393,7 @@
             }
           ],
           "default": null,
-          "description": "这一轮的 token 用量。只走过 `turnCompleted`、没进库的历史缺陷 已经补上：现在它随 meta 一起落进 chat_log，重看历史也看得到花了多少。"
+          "description": "Token usage for this turn. The historical flaw of only reaching `turnCompleted` without being persisted is fixed: it now lands in chat_log with the meta, so past turns show their cost too."
         }
       },
       "required": [
@@ -2409,7 +2409,7 @@
     "TurnStartParams": {
       "properties": {
         "cwd": {
-          "description": "本轮的工作目录（逐轮覆盖语义）： 必须是已存在的绝对路径（fail-closed 准入）；exec 的相对命令与 read_file/list_dir 的相对路径都按它解析。缺省 = 进程 cwd（旧行为）。",
+          "description": "Working directory for this turn (per-turn override semantics): must be an existing absolute path (fail-closed admission); relative exec commands and relative read_file/list_dir paths resolve against it. Default = process cwd (old behavior).",
           "type": [
             "string",
             "null"
@@ -2425,7 +2425,7 @@
           ]
         },
         "stream": {
-          "description": "是否逐 token 推送 `textDelta`。dashboard 开着，脚本调用关着。",
+          "description": "Whether to stream `textDelta` token by token. On for the dashboard, off for scripts.",
           "type": [
             "boolean",
             "null"
@@ -2456,7 +2456,7 @@
           "type": "string"
         },
         "ts": {
-          "description": "ISO 8601，毫秒精度。",
+          "description": "ISO 8601, millisecond precision.",
           "type": "string"
         },
         "turnId": {
@@ -2476,7 +2476,7 @@
       "type": "object"
     },
     "UsageByModel": {
-      "description": "`usage/summary` 的应答：per-model 聚合 + 总数。hub 模式下这就是 per-user 记账（每个用户一个 home、一个 state.db，台账天然按人隔离）。",
+      "description": "Response to `usage/summary`: per-model aggregates + totals. In hub mode this is per-user bookkeeping (one home and one state.db per user — the ledger is isolated by person by construction).",
       "properties": {
         "inputTokens": {
           "format": "int64",

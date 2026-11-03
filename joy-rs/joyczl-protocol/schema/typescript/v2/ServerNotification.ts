@@ -16,10 +16,10 @@ import type { TurnCompletedNotification } from "./TurnCompletedNotification";
 import type { TurnStartedNotification } from "./TurnStartedNotification";
 
 /**
- * 一轮 turn 的全部过程事件。
+ * The full stream of events for one turn.
  *
- * `type` 是判别式 —— 前端拿它做 switch，Python 侧用 pydantic discriminated
- * union。**任何失败都不应让客户端崩**：这里只描述「发生了什么」。
+ * `type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated
+ * union. **No failure here should crash the client**: this only describes "what happened".
  */
 export type ServerNotification =
   | ({ type: "turnStarted" } & TurnStartedNotification)

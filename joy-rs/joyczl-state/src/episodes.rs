@@ -1,4 +1,4 @@
-//! 情景记忆：发生过的事，带日期。
+//! Episodic memory: things that happened, with dates.
 
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
@@ -8,7 +8,7 @@ use crate::fts::{like_pattern, to_match_expr};
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct EpisodeRow {
     pub id: i64,
-    /// ISO 8601 日期。
+    /// ISO 8601 date.
     pub happened_at: String,
     pub summary: String,
     pub created_at: Option<String>,
@@ -35,7 +35,7 @@ impl Episodes {
         Ok(id)
     }
 
-    /// 同 `Facts::search`：先 FTS5（trigram），没命中再退回 LIKE。
+    /// Same as `Facts::search`: FTS5 (trigram) first, fall back to LIKE on no hits.
     pub async fn search(&self, query: &str, top_k: u32) -> Result<Vec<EpisodeRow>> {
         if let Some(expr) = to_match_expr(query) {
             let hits = sqlx::query_as::<_, EpisodeRow>(
@@ -73,7 +73,7 @@ impl Episodes {
         .map_err(Into::into)
     }
 
-    /// 最近发生的事，不看查询词 —— 「我上次跟阿明聊了什么」这类问题靠它。
+    /// Most recent events, ignoring the query — powers "what did we talk about last time".
     pub async fn recent(&self, limit: u32) -> Result<Vec<EpisodeRow>> {
         sqlx::query_as::<_, EpisodeRow>(
             "SELECT id, happened_at, summary, created_at
@@ -85,7 +85,7 @@ impl Episodes {
         .map_err(Into::into)
     }
 
-    /// 按编号删一条情景。触发器会同步清掉 FTS 索引。
+    /// Delete one episode by id. A trigger keeps the FTS index in sync.
     pub async fn delete(&self, id: i64) -> Result<bool> {
         let done = sqlx::query("DELETE FROM episodes WHERE id = ?")
             .bind(id)

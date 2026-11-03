@@ -1,10 +1,10 @@
-//! `joyczl-config` —— 每个旋钮都是一个环境变量，见仓库根的 `.env.example`。
+//! `joyczl-config` — every knob is an environment variable; see the root `.env.example`.
 //!
-//! 注意 Joy **不读 `.env` 文件**：那份模板是给人 source 的
-//! （`set -a; source .env; set +a`），不是自动加载的。
+//! Note Joy does **not** read the `.env` file: that template is for humans to source
+//! (`set -a; source .env; set +a`), not loaded automatically.
 //!
-//! 不搞设置框架：启动时读一次，之后就是不可变的普通结构体。
-//! 读得懂这个文件，就读得懂 Joy 能被配置成什么样。
+//! No settings framework: read once at startup, then it's an immutable plain struct.
+//! If you can read this file, you know what Joy can be configured into.
 
 pub mod models;
 pub mod routes;
@@ -33,18 +33,18 @@ fn env_float(name: &str, default: f64) -> f64 {
     env(name).and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
-// ---- 旋钮的边界：唯一来源 ----------------------------------------------------
+// ---- The knobs' bounds: single source of truth ----------------------------------------------
 //
-// 两个入口共用这张表：**启动期**（`Settings::validate`，非法值当场退出）与
-// **config/write**（`validate_patch_values`，非法补丁整个拒绝）。此前只有后者
-// 校验，于是 `JOY_HISTORY_TURNS=-5`、`JOY_EXEC_TIMEOUT=abc` 这类值会在启动时
-// 静默变成默认值或零窗口 —— 「配错了」于是变成运行期的惊喜。
+// Two entry points share this table: **startup** (`Settings::validate`, exits on the
+// spot for illegal values) and **config/write** (`validate_patch_values`, rejects the
+// whole patch). Before, only the latter validated, so `JOY_HISTORY_TURNS=-5` or
+// `JOY_EXEC_TIMEOUT=abc` would silently become defaults or zero windows at startup.
 //
-// 表里同时带补丁字段名与环境变量名：报错时按来源挑一个念给人听。
+// The table carries both patch field names and env var names; errors pick one by source.
 
 pub struct Bound {
-    /// `SettingsPatch` 里的字段名（`config/write` 路径用）。
-    /// `None` = 只能从环境变量来（目前是两个超时）。
+    /// Field name in `SettingsPatch` (used by the `config/write` path).
+    /// `None` = settable only via env vars (currently the two timeouts).
     pub patch_name: Option<&'static str>,
     pub env_name: &'static str,
     pub min: i64,
@@ -144,12 +144,12 @@ pub const BOUNDS: &[Bound] = &[
     },
 ];
 
-/// 放行规则的条数与单条长度上限。规则是手写的，几百条或几千字符的「规则」
-/// 只可能是一次误粘贴（比如把整个脚本贴进了环境变量）。
+/// Count and per-entry length caps for allow rules. Rules are handwritten; hundreds of
+/// entries or thousands of chars can only be an accidental paste (e.g. a whole script).
 const MAX_EXEC_RULES: usize = 64;
 const MAX_EXEC_RULE_CHARS: usize = 200;
 
-/// 按补丁字段名或环境变量名查边界并报错。
+/// Look up a bound by patch field name or env var name and error out.
 fn check_bound(key: &str, value: i64) -> Result<(), String> {
     let bound = BOUNDS
         .iter()
@@ -164,139 +164,139 @@ fn check_bound(key: &str, value: i64) -> Result<(), String> {
     Ok(())
 }
 
-// 只有 PartialEq，没有 Eq：`compact_threshold` 是 f64，而 f64 不是 Eq
-// （NaN 让「相等」失去自反性）。除它之外全是整数与布尔，用不上 Eq 的地方
-// 就别假装用得上。
+// PartialEq only, no Eq: `compact_threshold` is f64, and f64 is not Eq
+// (NaN makes "equal" non-reflexive). Everything else is integers and bools —
+// no point pretending Eq is usable where it is not.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
-    // ---- LLM：选一个 provider，配它的 key。见 joyczl-provider 的 PROVIDERS。
+    // ---- LLM: pick a provider and configure its key. See PROVIDERS in joyczl-provider.
     pub provider: String,
-    /// 显式覆盖：key、endpoint、模型 id。留空就用 provider 自己的默认。
+    /// Explicit overrides: key, endpoint, model id. Empty = provider's own defaults.
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
-    /// 便宜模型：检索门和 consolidation 用它。
+    /// Cheap model: used by the retrieval gate and consolidation.
     pub small_model: Option<String>,
 
-    // ---- Home：Joy 的状态都在这（state.db、SOUL.md、traces/）。
+    // ---- Home: all of Joy's state lives here (state.db, SOUL.md, traces/).
     pub home: PathBuf,
 
-    // ---- Loop 护栏
-    /// `JOY_GOAL_MAX_ROUNDS`：一个目标最多自动续几轮（默认 5）。超了就如实
-    /// 置 `round-limit` —— 不伪装完成、也不清掉目标。
+    // ---- Loop guardrails
+    /// `JOY_GOAL_MAX_ROUNDS`: max auto-continuation rounds per goal (default 5). Beyond
+    /// that, honestly set `round-limit` — no faking completion, no clearing the goal.
     pub goal_max_rounds: i32,
-    /// `JOY_LLM_RETRIES`：限流/临时故障时最多退避重试几次（默认 2，上限 5，
-    /// 0 = 关闭）。只重试「再试一次有意义」的错误，而且**每次必发通知** ——
-    /// 见 joyczl-provider 的 retry.rs。
+    /// `JOY_LLM_RETRIES`: max backoff retries on rate limits / transient faults (default
+    /// 2, cap 5, 0 = off). Only retries errors where "try again" makes sense, and
+    /// **always sends a notification per retry** — see retry.rs in joyczl-provider.
     pub llm_retries: i32,
-    /// 单次模型调用的超时。挂掉的网络调用绝不能让一轮 turn 静默冻结。
+    /// Timeout for a single model call. A hung network call must never silently freeze a turn.
     pub llm_timeout_secs: i64,
     pub max_iterations: i32,
-    /// 留够余量：推理模型（kimi-k3、gpt-5.x、gemini-*-pro）会先花输出 token
-    /// 思考再作答，cap 太低会 stop_reason=max_tokens 卡在思考里。
+    /// Leave headroom: reasoning models (kimi-k3, gpt-5.x, gemini-*-pro) spend output tokens
+    /// thinking first; a low cap leaves stop_reason=max_tokens stuck mid-thought.
     pub max_tokens: i32,
-    /// 工作记忆滑窗：只把最近 N 轮塞进 prompt。更老的在 state.db 里，
-    /// 靠检索门 + 情景记忆找回来。
+    /// Working-memory sliding window: only the last N turns go into the prompt. Older
+    /// ones stay in state.db, recovered via the retrieval gate + episodic memory.
     ///
-    /// 它是**上限**，不是触发条件：真正决定什么时候压缩的是 token，
-    /// 见 `compact_threshold`。
+    /// It is an **upper bound**, not a trigger: tokens decide when compaction happens,
+    /// see `compact_threshold`.
     pub history_turns: i32,
-    /// `JOY_CONTEXT_WINDOW`：覆盖 provider 表里的上下文窗口近似值。
-    /// 本地模型（ollama / LM Studio）的窗口千差万别，表里的值只是常见默认。
+    /// `JOY_CONTEXT_WINDOW`: overrides the approximate context window in the provider
+    /// table. Local models (ollama / LM Studio) vary wildly; the table holds common defaults.
     pub context_window: Option<u32>,
-    /// `JOY_COMPACT_THRESHOLD`：用到上下文窗口的多少比例就开始压缩
-    /// （默认 0.8）。轮数是上限、token 是闸门 —— 一个长工具输出就能撑爆
-    /// 窗口，而轮数看起来还很"安全"。
+    /// `JOY_COMPACT_THRESHOLD`: fraction of the context window used before compacting
+    /// (default 0.8). Turns are the cap, tokens are the gate — one long tool output can
+    /// blow the window while the turn count still looks "safe".
     pub compact_threshold: f64,
 
-    // ---- 记忆
-    /// 每 N 轮新对话才提炼一次事实。
+    // ---- Memory
+    /// Distill facts only once every N turns of new conversation.
     pub consolidate_every: i32,
     pub retrieval_top_k: i32,
 
-    // ---- 驾驶舱 HTTP 面（见 joyczl-ops）
-    /// `JOY_OPS_HOST`：驾驶舱绑的地址。默认 127.0.0.1 —— 个人助理不默认对外，
-    /// 想从别的机器看是**另一个决定**：得同时设 `JOY_OPS_TOKEN`。
+    // ---- Cockpit HTTP surface (see joyczl-ops)
+    /// `JOY_OPS_HOST`: address the cockpit binds to. Default 127.0.0.1 — a personal assistant
+    /// isn't exposed by default; viewing remotely is **another decision**: set `JOY_OPS_TOKEN` too.
     pub ops_host: String,
-    /// `JOY_OPS_TOKEN`：驾驶舱 `/api/*` 的 Bearer token（常量时间比对）。
-    /// 绑非回环地址而不设它 = 启动期拒绝，不是警告。**刻意不进 `view()`**：
-    /// 这是部署面参数，不该出现在协议载荷里被模型看到。
+    /// `JOY_OPS_TOKEN`: Bearer token for the cockpit's `/api/*` (constant-time compare).
+    /// Binding a non-loopback address without it = rejected at startup, not a warning. It is
+    /// **deliberately not in `view()`**: a deployment param the model must not see in payloads.
     pub ops_token: Option<String>,
 
-    // ---- 开关
+    // ---- Switches
     pub apple_calendar: bool,
     pub google_calendar: bool,
     pub experimental: bool,
     pub graph_workflows: bool,
 
-    // ---- 混合检索（向量那条腿，见 joyczl-provider 的 embed.rs）
-    /// `JOY_EMBEDDINGS=1`：检索时把向量相似度与关键词结果融合。
-    /// 默认关 —— 它要有 embedding 模型才有意义，且多一次网络调用。
+    // ---- Hybrid retrieval (the vector leg; see embed.rs in joyczl-provider)
+    /// `JOY_EMBEDDINGS=1`: blend vector similarity with keyword results at retrieval time.
+    /// Off by default — it needs an embedding model to matter, plus one extra network call.
     pub embeddings_enabled: bool,
-    /// `JOY_EMBED_MODEL`：embedding 模型名（如 nomic-embed-text）。
+    /// `JOY_EMBED_MODEL`: embedding model name (e.g. nomic-embed-text).
     pub embed_model: Option<String>,
 
-    // ---- 轮内工具结果预算（见 joyczl-loop 的 budget.rs）
-    /// `JOY_TOOL_RESULT_TOTAL_CHARS`：一轮里所有工具结果的字符总量上限。
-    /// 超了就从最大的开始换成桩（完整原文落盘 + 头尾预览）。
-    /// 默认 200000 —— 只有病态输出才会碰到；设 0 关闭。
+    // ---- In-turn tool result budget (see budget.rs in joyczl-loop)
+    /// `JOY_TOOL_RESULT_TOTAL_CHARS`: total char cap for all tool results within a turn.
+    /// When exceeded, replace from the largest with stubs (full text spilled to disk +
+    /// head/tail previews). Default 200000 — only pathological output hits it; 0 disables.
     pub tool_result_total_chars: i64,
-    /// `JOY_TOOL_RESULT_MAX_CHARS`：单条结果超过它才有资格被换桩。
-    /// 默认 30000（约 8k token）。设 0 关闭。
+    /// `JOY_TOOL_RESULT_MAX_CHARS`: a result must exceed this to qualify for stubbing.
+    /// Default 30000 (about 8k tokens). Set 0 to disable.
     pub tool_result_max_chars: i64,
 
-    // ---- 生命周期钩子（见 joyczl-tools 的 hooks.rs）
-    /// `JOY_HOOKS`：开了才会读 `<home>/hooks.json` 并跑里面的命令。默认关 ——
-    /// 让外部命令挂在每个工具调用上，开关必须是用户亲手按下的。
+    // ---- Lifecycle hooks (see hooks.rs in joyczl-tools)
+    /// `JOY_HOOKS`: only when enabled does Joy read `<home>/hooks.json` and run its commands.
+    /// Off by default — external commands on every tool call is a switch pressed by hand.
     pub hooks_enabled: bool,
-    /// `JOY_HOOKS_TIMEOUT`：hook 的默认超时（秒）。条目里写了 `timeout` 就以它为准。
+    /// `JOY_HOOKS_TIMEOUT`: default hook timeout (seconds). An entry's `timeout` wins.
     pub hooks_timeout_secs: i64,
 
-    /// `JOY_HUB_MAX_OPEN`：hub 同时最多开几个用户的 app-server（每个是一个
-    /// 子进程）。满了按「最久未用且没在用」驱逐 —— 三条策略：
-    /// 上限、LRU、in-use 永不驱逐。
+    /// `JOY_HUB_MAX_OPEN`: max user app-servers the hub keeps open at once (each is a
+    /// subprocess). When full, evict "least recently used and idle" — three policies:
+    /// a cap, LRU, and in-use instances are never evicted.
     pub hub_max_open: i64,
 
-    /// `JOY_HUB_IDLE_SECS`：用户的 app-server 闲置多久后关掉（秒）。0 =
-    /// 不按闲置驱逐，只受上限约束。每个实例是一个子进程，闲置就关是
-    /// 资源密度的底线。
+    /// `JOY_HUB_IDLE_SECS`: how long a user's app-server may idle before closing
+    /// (seconds). 0 = no idle eviction, only the cap applies. Each instance is a
+    /// subprocess; closing idle ones is the baseline of resource density.
     pub hub_idle_secs: i64,
 
-    /// `JOY_NOTIFY`：开了才会读 `<home>/notify.json` 并往里配的 webhook 推
-    /// 通知（审批请求/作业收尾/目标 blocked）。默认关 —— 往外部服务发数据
-    /// 是用户亲手按下的决定。
+    /// `JOY_NOTIFY`: only when enabled does Joy read `<home>/notify.json` and push
+    /// notifications to its webhooks (approval requests / job completion / blocked goals).
+    /// Off by default — sending data to external services is a decision pressed by hand.
     pub notify_enabled: bool,
 
-    // ---- 执行（`run_command`，见 joyczl-tools 的 exec.rs）
-    /// `JOY_DELEGATE`：开了才会把 `delegate_task` 注册进工具表。默认关 ——
-    /// 「把活交出去自己跑」是能力也是风险（多一份上下文、多一段没人看的
-    /// 过程），开关同样得是用户亲手按下的。
+    // ---- Execution (`run_command`; see exec.rs in joyczl-tools)
+    /// `JOY_DELEGATE`: only when enabled is `delegate_task` registered in the tool table.
+    /// Off by default — "hand the work off and let it run" is capability as well as risk
+    /// (one more context, one more unread trail); the switch too must be pressed by hand.
     pub delegate_enabled: bool,
-    /// `JOY_EXEC`：开了才会把 run_command 注册进工具表。默认关 ——
-    /// 一个能执行命令的助手，开关必须是用户亲手按下的。
+    /// `JOY_EXEC`: only when enabled is run_command registered in the tool table. Off
+    /// by default — an assistant that can execute commands must be switched on by hand.
     pub exec_enabled: bool,
-    /// `JOY_EXEC_ALLOW`：放行规则（逗号分隔，支持末尾 `*` 通配）。
-    /// **空表 = 什么都不放行**：默认拒绝，不是默认允许。
+    /// `JOY_EXEC_ALLOW`: allow rules (comma-separated; trailing `*` wildcard supported).
+    /// **Empty list = nothing is allowed**: deny by default, not allow by default.
     pub exec_allow: Vec<String>,
-    /// `JOY_EXEC_TIMEOUT`：单条命令的超时（秒）。
+    /// `JOY_EXEC_TIMEOUT`: timeout for a single command (seconds).
     pub exec_timeout_secs: i64,
 
-    // ---- 交互式批准（见 joyczl-tools 的 approval.rs）
-    /// `JOY_APPROVAL`：没被放行表匹配时怎么办。
+    // ---- Interactive approval (see approval.rs in joyczl-tools)
+    /// `JOY_APPROVAL`: what happens when nothing matches the allow table.
     ///
-    /// * `never`（默认）—— 直接拒绝（等于从前行为）。
-    /// * `on-request` —— 问一句再决定；**没人回答就按拒绝算**。
+    /// * `never` (default) — reject outright (same as the old behavior).
+    /// * `on-request` — ask once, then decide; **no answer counts as rejection**.
     ///
-    /// 硬拒名单与沙箱这两道闸门**永远不可协商**：批准只能翻开放行表那一关。
+    /// The hard-deny list and the sandbox are **never negotiable**: approval only opens the gate.
     pub approval: String,
-    /// `JOY_APPROVAL_TIMEOUT`：等人回答的秒数（默认 120）。
+    /// `JOY_APPROVAL_TIMEOUT`: seconds to wait for an answer (default 120).
     pub approval_timeout_secs: i64,
-    /// `JOY_EXEC_NETWORK`：沙箱里**能不能联网**。默认 **false（断网）** ——
-    /// 一条被放行的命令默认不该拥有把数据送出去的能力。
-    /// 要让 `cargo test` 这类需要下载的命令跑起来，得显式设成 1。
+    /// `JOY_EXEC_NETWORK`: whether the sandbox **may reach the network**. Default **false
+    /// (offline)** — an allowed command should not by default own the ability to ship data
+    /// out. Commands like `cargo test` needing downloads require explicitly setting it to 1.
     pub exec_network: bool,
-    /// `JOY_EXEC_WRITABLE_ROOTS`：除了工作目录与 home 之外，还允许写哪些目录
-    /// （冒号分隔的绝对路径，必须已存在）。为了 `cargo build` 之类的构建缓存。
+    /// `JOY_EXEC_WRITABLE_ROOTS`: extra writable dirs beyond workdir and home (colon-separated
+    /// absolute paths, must already exist). For build caches like `cargo build`.
     pub exec_writable_roots: Vec<PathBuf>,
 }
 
@@ -347,18 +347,18 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// 从环境变量读。运行参数的唯一读取路径 —— 不另有配置文件、不另有优先级规则。
+    /// Read from env vars — the only read path for runtime parameters; no config file, no rules.
     ///
-    /// **例外是模型与密钥**：它们不在环境变量里配，而在
-    /// `<home>/models.json` + 系统钥匙串（见 models.rs）。这里只留
-    /// `provider` 当「一套都没配时的兜底厂商」，让 ollama 这类本地模型能
-    /// 零配置起步；`model` / `base_url` / `api_key` 一律留空，等
-    /// `models::apply_active` 来填。
+    /// **The exception is models and keys**: they are not configured via env vars but
+    /// via `<home>/models.json` + the system keychain (see models.rs). Only `provider`
+    /// is kept here as the fallback vendor when nothing is configured, so local models
+    /// like ollama can start zero-config; `model` / `base_url` / `api_key` stay empty,
+    /// to be filled by `models::apply_active`.
     pub fn from_env() -> Self {
         let d = Settings::default();
         Self {
             provider: env("JOY_PROVIDER").unwrap_or(d.provider),
-            // 由 <home>/models.json 的当前那套填入，不从环境变量读。
+            // Filled by the active entry in <home>/models.json, not read from env vars.
             api_key: None,
             base_url: None,
             model: None,
@@ -421,20 +421,20 @@ impl Settings {
         }
     }
 
-    /// 确保 home 和它的子目录存在。
+    /// Ensure home and its subdirectories exist.
     pub fn ensure_home(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(self.home.join("traces"))?;
         std::fs::create_dir_all(self.home.join("outbox"))?;
         std::fs::create_dir_all(self.home.join("skills"))?;
-        // 超长命令输出落盘的地方（见 joyczl-tools 的 exec.rs 与 limitations）。
+        // Where overlong command output is spilled to disk (see joyczl-tools exec.rs, limitations).
         std::fs::create_dir_all(self.home.join("spill"))?;
         Ok(())
     }
 
-    /// 启动期校验：非法值**当场报错**，不静默变默认值。
+    /// Startup validation: illegal values **error out on the spot**, never silently default.
     ///
-    /// 调用方（`app-server` 的 `open`）拿到 `Err` 就退出并打印原因 ——
-    /// 「启动失败」比「跑起来但行为不对」便宜得多，也容易查得多。
+    /// The caller (`app-server`'s `open`) exits on `Err` and prints the reason — "failing to
+    /// start" is far cheaper and far easier to debug than "runs but misbehaves".
     pub fn validate(&self) -> Result<(), String> {
         check_bound("JOY_MAX_ITERATIONS", self.max_iterations as i64)?;
         check_bound("JOY_MAX_TOKENS", self.max_tokens as i64)?;
@@ -458,8 +458,8 @@ impl Settings {
             ));
         }
 
-        // 覆盖窗口时顺手查一条关系：答案的额度不能比窗口还大 —— 那种配置
-        // 下模型永远答不完，而表现是「莫名其妙被截断」。
+        // While the window is overridden, check one relation: the answer's budget can't
+        // exceed the window — the model never finishes, showing up as "mysteriously truncated".
         if let Some(window) = self.context_window {
             if !(1_024..=10_000_000).contains(&window) {
                 return Err(format!(
@@ -475,7 +475,7 @@ impl Settings {
             }
         }
 
-        // 比例型旋钮单独查（不是整数，进不了 BOUNDS 那张表）。
+        // Ratio-type knobs validated separately (not integers, so they cannot enter BOUNDS).
         if !(0.05..=0.95).contains(&self.compact_threshold) {
             return Err(format!(
                 "JOY_COMPACT_THRESHOLD 应该在 0.05 到 0.95 之间，收到 {}",
@@ -483,9 +483,9 @@ impl Settings {
             ));
         }
 
-        // 额外可写根：必须是**已存在的绝对目录**。写规则时它们要被塞进沙箱
-        // 配置里，一个不存在的路径只会让规则静默失效（seatbelt 认不存在的
-        // subpath），于是「我明明放开了却写不进去」。
+        // Extra writable roots: must be **existing absolute dirs**. When writing sandbox
+        // rules they get embedded there; a nonexistent path just makes the rule silently
+        // fail (seatbelt rejects nonexistent subpaths) — "I allowed it but writes still fail".
         for root in &self.exec_writable_roots {
             if !root.is_absolute() {
                 return Err(format!(
@@ -505,7 +505,7 @@ impl Settings {
         Ok(())
     }
 
-    /// `config/read` 的载荷：读出来的就该是完整现状，所以字段全量且非可选。
+    /// The `config/read` payload: the readback must be the full current state; fields are total.
     pub fn view(&self) -> SettingsView {
         SettingsView {
             provider: self.provider.clone(),
@@ -525,22 +525,22 @@ impl Settings {
     }
 }
 
-// ---- config/write：补丁的合并、落盘与套用 -----------------------------------
+// ---- config/write: patch merging, persistence and application -------------------------------
 //
-// 旋钮的唯一来源仍然是环境变量（`from_env`），这一点不变。dashboard 的
-// `config/write` 需要让改动活过重启，于是多了一层**补丁**：写到
-// `<home>/settings.json` 的 `SettingsPatch`，启动时叠在环境值之上。
-// 补丁里没有的字段 = 交给环境；有 = 显式覆盖。谁最后说话，文件里一目了然。
+// Env vars remain the single source of the knobs (`from_env`), unchanged. The dashboard's
+// `config/write` needs changes to survive restarts, so there is one more **patch** layer:
+// a `SettingsPatch` written to `<home>/settings.json`, overlaid on env values at startup.
+// Absent = left to the env; present = explicit override. Who spoke last is plain in the file.
 
-/// `<home>/settings.json` —— `config/write` 的持久化位置。
+/// `<home>/settings.json` — where `config/write` persists.
 pub fn patch_path(home: &std::path::Path) -> std::path::PathBuf {
     home.join("settings.json")
 }
 
-/// `config/write` 补丁的**数值**校验：与启动期共用 `BOUNDS`。
+/// **Numeric** validation for `config/write` patches: shares `BOUNDS` with startup.
 ///
-/// provider 的存在性不在这里查 —— `joyczl-config` 不认识 `PROVIDERS`
-/// （那是 provider 层的事），调用方（app-server）把那一步补上。
+/// Provider existence is not checked here — `joyczl-config` does not know `PROVIDERS`
+/// (that is the provider layer's business); the caller (app-server) adds that step.
 pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(), String> {
     for (key, value) in [
         ("maxIterations", patch.max_iterations),
@@ -553,16 +553,16 @@ pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(
             check_bound(key, v as i64)?;
         }
     }
-    // 整表替换的放行表（「记住这条命令」走的就是它）：与启动期同一套规则校验。
+    // Allow-list replaced as a whole ("remember this command" uses it): same rules as startup.
     if let Some(rules) = &patch.exec_allow {
         check_exec_rules(rules)?;
     }
     Ok(())
 }
 
-/// 放行规则：空表合法（= 什么都不放行，那是默认）。但表里每一条都得是
-/// 一条**能用的**规则 —— 写坏的规则会静默地永不匹配，而命令被拒时拒因里
-/// 还列着它，查起来很费劲。启动期与 `config/write` 共用这一处。
+/// Allow rules: an empty list is legal (= nothing allowed; that is the default). But every
+/// entry must be a **working** rule — a broken rule silently never matches, yet still shows
+/// up in rejection reasons, which is painful to debug. Shared by startup and `config/write`.
 fn check_exec_rules(rules: &[String]) -> Result<(), String> {
     if rules.len() > MAX_EXEC_RULES {
         return Err(format!(
@@ -587,8 +587,8 @@ fn check_exec_rules(rules: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// 读已保存的补丁。文件不存在、解析不了都当「没有补丁」：
-/// 一个坏掉的配置文件不该让 Joy 起不来，环境变量还在兜底。
+/// Read the saved patch. A missing file or a parse failure both count as "no patch":
+/// a broken config file must not keep Joy from starting — env vars still backstop.
 pub fn load_patch(home: &std::path::Path) -> joyczl_protocol::SettingsPatch {
     std::fs::read_to_string(patch_path(home))
         .ok()
@@ -596,8 +596,8 @@ pub fn load_patch(home: &std::path::Path) -> joyczl_protocol::SettingsPatch {
         .unwrap_or_default()
 }
 
-/// 把补丁写到 `<home>/settings.json`。全空的补丁没有可说的，删掉文件，
-/// 让 `config/write` 把所有字段改回默认后，「这个目录里没有覆盖」这件事成立。
+/// Write the patch to `<home>/settings.json`. An all-empty patch has nothing to say — delete
+/// the file, so after `config/write` resets all fields, "no overrides in this dir" holds.
 pub fn save_patch(
     home: &std::path::Path,
     patch: &joyczl_protocol::SettingsPatch,
@@ -606,7 +606,7 @@ pub fn save_patch(
     if patch.is_empty() {
         match std::fs::remove_file(&path) {
             Ok(()) => return Ok(()),
-            // 本来就没有：目标已经达成。
+            // Didn't exist in the first place: the goal is already achieved.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         }
@@ -615,11 +615,11 @@ pub fn save_patch(
     std::fs::write(&path, raw)
 }
 
-/// 把补丁叠到设置上。补丁里 `Some` 的字段才有发言权。
+/// Overlay the patch onto settings. Only `Some` fields in the patch get a say.
 ///
-/// **模型与密钥不在这张补丁里**：那两套东西归 `<home>/models.json`
-/// （见 models.rs），改它们走 `model/*` —— 一条路比两条路好懂，也不给
-/// 「密钥被顺手写进 settings.json」留缝。
+/// **Models and keys are not in this patch**: they belong to `<home>/models.json`
+/// (see models.rs); change them via `model/*` — one path beats two, and leaves no gap for
+/// "keys casually written into settings.json".
 pub fn apply_patch(patch: &joyczl_protocol::SettingsPatch, settings: &mut Settings) {
     let p = patch;
     if let Some(v) = p.max_iterations {
@@ -680,8 +680,8 @@ mod config_tests {
 
     #[test]
     fn empty_env_value_is_treated_as_unset() {
-        // .env 里常见 `JOY_MODEL=` 这种留空行 —— 应当视为没设，
-        // 让 provider 的默认值生效，而不是把空串当成模型名发出去。
+        // `.env` files commonly contain empty lines like `JOY_MODEL=` — treat as unset, so the
+        // provider default applies instead of sending the empty string out as a model name.
         std::env::set_var("JOY_MODEL", "");
         let s = Settings::from_env();
         assert_eq!(s.model, None);
@@ -723,12 +723,12 @@ mod config_tests {
         apply_patch(&patch, &mut s);
         assert_eq!(s.max_tokens, 4096);
         assert!(s.graph_workflows);
-        // 没带的字段不动。
+        // Fields not carried are untouched.
         assert_eq!(s.max_iterations, Settings::default().max_iterations);
     }
 
-    /// 模型与密钥**不在**这张补丁里 —— 改它们走 `model/*`，密钥只进
-    /// models.json / 钥匙串。这条断言钉住「补丁上没有这些缝」。
+    /// Models and keys are **not** in this patch — change them via `model/*`; keys go only into
+    /// models.json / the keychain. This assertion pins "the patch has no such gaps".
     #[test]
     fn the_patch_has_no_model_or_key_fields_to_leak() {
         let patch = joyczl_protocol::SettingsPatch::default();
@@ -791,11 +791,11 @@ mod config_tests {
         let dir = tempfile::tempdir().expect("临时目录");
         std::fs::write(patch_path(dir.path()), "这不是 JSON").expect("写坏文件");
         assert!(load_patch(dir.path()).is_empty());
-        // 文件不存在也一样。
+        // A missing file is the same.
         assert!(load_patch(std::path::Path::new("/definitely/not/here")).is_empty());
     }
 
-    // ---- 启动期校验 ---------------------------------------------------------
+    // ---- Startup validation ---------------------------------------------------------
 
     #[test]
     fn the_defaults_pass_validation() {
@@ -804,7 +804,7 @@ mod config_tests {
 
     #[test]
     fn an_out_of_range_number_names_the_env_var() {
-        // 报错必须指出**哪个变量**错了，否则用户要在二十几个旋钮里猜。
+        // The error must name **which variable** is wrong, or users guess among two dozen knobs.
         let s = Settings {
             history_turns: -5,
             ..Settings::default()
@@ -834,35 +834,35 @@ mod config_tests {
 
     #[test]
     fn broken_exec_allow_rules_are_caught_at_startup() {
-        // 空串：不是一条规则（`from_env` 会过滤掉，但补丁路径塞得进来）。
+        // Empty string: not a rule (`from_env` filters it, but the patch path can inject it).
         let s = Settings {
             exec_allow: vec!["cargo test".to_string(), "   ".to_string()],
             ..Settings::default()
         };
         assert!(s.validate().expect_err("空规则要被抓到").contains("空规则"));
 
-        // 换行：多半是把整个脚本贴进了环境变量。
+        // Newline: most likely a whole script pasted into an env var.
         let s = Settings {
             exec_allow: vec!["cargo test\nrm -rf /".to_string()],
             ..Settings::default()
         };
         assert!(s.validate().expect_err("换行规则要被抓到").contains("换行"));
 
-        // 超长。
+        // Overlong.
         let s = Settings {
             exec_allow: vec!["x".repeat(300)],
             ..Settings::default()
         };
         assert!(s.validate().expect_err("超长规则要被抓到").contains("最长"));
 
-        // 条数。
+        // Too many entries.
         let s = Settings {
             exec_allow: vec!["ls".to_string(); 100],
             ..Settings::default()
         };
         assert!(s.validate().expect_err("规则太多要被抓到").contains("最多"));
 
-        // 空表合法：什么都不放行是**默认**，不是错误。
+        // An empty list is legal: allowing nothing is the **default**, not an error.
         let s = Settings {
             exec_allow: Vec::new(),
             ..Settings::default()
@@ -872,7 +872,7 @@ mod config_tests {
 
     #[test]
     fn the_compaction_threshold_is_a_ratio() {
-        // 0 会让每一轮都压缩，1 以上会让压缩永远不发生 —— 两者都是配错了。
+        // 0 would compact every turn; >=1 would make compaction never happen — both misconfig.
         for bad in [0.0, 0.01, 1.0, 2.0, -0.5] {
             let s = Settings {
                 compact_threshold: bad,
@@ -899,7 +899,7 @@ mod config_tests {
             .expect_err("10 的窗口没意义")
             .contains("JOY_CONTEXT_WINDOW"));
 
-        // 答案额度比窗口还大：永远答不完，属于配错了。
+        // Answer budget larger than the window: it never finishes — a misconfiguration.
         let impossible = Settings {
             context_window: Some(4096),
             max_tokens: 8192,
@@ -927,10 +927,10 @@ mod config_tests {
         };
         assert!(ok.validate().is_ok());
 
-        // 「不存在」这一条要用**本平台也认的绝对路径**来测：`/x/y` 在 Windows
-        // 上根本不是绝对路径（没有盘符），会先被上面那条规则拦下 —— 于是断言
-        // 「说不存在」在 Windows 上必然失败。用临时目录底下的一个不存在名字，
-        // 两边都落在「不存在」这条分支上。
+        // "Nonexistent" must be tested with an absolute path **the platform itself accepts**:
+        // `/x/y` is not absolute on Windows at all (no drive letter) and gets caught by the
+        // rule above first — so the assertion would always fail there. Use a nonexistent name
+        // under the temp dir; both platforms land on the "nonexistent" branch.
         let missing = Settings {
             exec_writable_roots: vec![std::env::temp_dir().join("joy-not-here-9f3a1")],
             ..Settings::default()
@@ -950,14 +950,14 @@ mod config_tests {
 
     #[test]
     fn the_sandbox_is_offline_unless_asked_otherwise() {
-        // 默认值本身就是要被钉住的行为：不开这个开关，命令不能联网。
+        // The default itself is behavior to pin: without the switch, commands cannot network.
         assert!(!Settings::default().exec_network);
         assert!(Settings::default().exec_writable_roots.is_empty());
     }
 
     #[test]
     fn patch_validation_reuses_the_same_bounds() {
-        // 补丁路径与启动期共用 BOUNDS：同样的越界，同样的数字。
+        // The patch path shares BOUNDS with startup: same overflow, same numbers.
         use joyczl_protocol::SettingsPatch;
         let bad = SettingsPatch {
             max_tokens: Some(1),

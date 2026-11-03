@@ -1,23 +1,23 @@
-//! 驾驶舱前端的「新鲜度」检查（M2 收尾补的）。
+//! "Freshness" check for the dashboard frontend (added to close out M2).
 //!
-//! dist 是构建产物且被 gitignore —— 没有任何机制逼人重建，于是出现过
-//! 「源码更新了一个多月、端出来的页面还是 9 月的」这种最隐蔽的坏：服务
-//! 正常 200，用户面对的却是一年前的 UI。修法对齐守护锁同一条哲学：
-//! **配错（前端过期）就该起不来**，而不是默默端出旧页面。
+//! dist is a build artifact and gitignored — nothing forces a rebuild, and so the sneakiest
+//! failure appeared: "source updated a month ago, the served page is still from September".
+//! The service returns 200 while the user faces a year-old UI. The fix follows the guard
+//! lock's philosophy: **a misconfiguration (stale frontend) must fail to start**, not serve an old page.
 //!
-//! 只在源码目录存在时才检查（发布/安装场景只有 dist 没有 joy-ts，不检查
-//! —— 那时候没有「更新鲜的源码」可言）。
+//! Only checked when the source directory exists (in release/install scenes there is dist
+//! but no joy-ts; skip — there is no "fresher source" to compare against).
 
 use std::path::Path;
 use std::time::SystemTime;
 
-/// 源码目录：与 `workspace_assets()` 同一条相对路径。
+/// Source directory: same relative path as `workspace_assets()`.
 pub(crate) fn dashboard_src_dir(dist: &Path) -> Option<std::path::PathBuf> {
     // …/joy-ts/packages/dashboard/dist → …/joy-ts/packages/dashboard/src
     dist.parent().map(|pkg| pkg.join("src"))
 }
 
-/// dist 比 src 旧就报错。返回 Err(说明文案) —— 调用方直接 bail。
+/// Error when dist is older than src. Returns Err(explanation) — the caller just bails.
 pub(crate) fn check_dashboard_freshness(dist: &Path) -> Result<(), String> {
     let built = match std::fs::metadata(dist.join("main.js")) {
         Ok(meta) => meta
@@ -34,7 +34,7 @@ pub(crate) fn check_dashboard_freshness(dist: &Path) -> Result<(), String> {
         return Ok(());
     };
     if !src.is_dir() {
-        return Ok(()); // 发布场景：没有源码可比较，不检查。
+        return Ok(()); // Release scene: no source to compare against; skip the check.
     }
     let newest_src = newest_mtime(&src).unwrap_or(SystemTime::UNIX_EPOCH);
     if newest_src > built {
@@ -47,8 +47,8 @@ pub(crate) fn check_dashboard_freshness(dist: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 目录下（递归）最新的 mtime。读不了的文件跳过 —— 新鲜度是尽力而为的
-/// 提示，不是审计。
+/// Newest mtime under a directory (recursive). Unreadable files are skipped — freshness is
+/// a best-effort hint, not an audit.
 fn newest_mtime(dir: &Path) -> Option<SystemTime> {
     let mut newest = None;
     let mut stack = vec![dir.to_path_buf()];
@@ -84,7 +84,7 @@ mod freshness_tests {
         std::fs::write(path, "x").expect("写文件");
     }
 
-    /// 源码比 dist 新 → 报错，且文案里有重建命令。
+    /// Source newer than dist → error, with the rebuild command in the message.
     #[test]
     fn stale_dist_is_a_hard_error_with_the_fix() {
         let dir = tempfile::tempdir().expect("临时目录");
@@ -98,7 +98,7 @@ mod freshness_tests {
         assert!(error.contains("just dashboard-build"), "{error}");
     }
 
-    /// dist 比源码新（或一样新）→ 放行；没有 src 目录（发布场景）→ 放行。
+    /// dist newer than (or equal to) source → pass; no src dir (release) → pass.
     #[test]
     fn fresh_or_sourceless_passes() {
         let dir = tempfile::tempdir().expect("临时目录");
@@ -109,12 +109,12 @@ mod freshness_tests {
         touch(&dist.join("main.js"));
         check_dashboard_freshness(&dist).expect("新的 dist 该放行");
 
-        // 没有 dist → 另一条错误（没构建），不是「过期」。
+        // No dist → the other error (not built), not "stale".
         let empty = tempfile::tempdir().expect("临时目录");
         let error = check_dashboard_freshness(empty.path()).unwrap_err();
         assert!(error.contains("还没构建"), "{error}");
 
-        // 没有 src（发布场景）→ 放行，哪怕 dist 很老。
+        // No src (release scene) → pass, even if dist is old.
         let lonely = tempfile::tempdir().expect("临时目录");
         touch(&lonely.path().join("dist/main.js"));
         check_dashboard_freshness(&lonely.path().join("dist")).expect("无源码不检查");

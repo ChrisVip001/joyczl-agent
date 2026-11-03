@@ -1,17 +1,17 @@
-//! 一轮 turn 的装配 —— 白板上"Ephemeral Agent Run"那个框。
+//! Assembly of one turn — the "Ephemeral Agent Run" box on the whiteboard.
 //!
-//! 这里的每样东西都是**每轮重建、用完就扔**：system prompt、工作记忆、
-//! 检索到的上下文。能留下来的都在 state.db 里（joyczl-state）。
+//! Everything here is **rebuilt per turn and thrown away after use**: system prompt,
+//! working memory, retrieved context. What persists lives in state.db (joyczl-state).
 //!
-//! 流程：检索门 → system prompt → 滑窗历史 → THE LOOP → 落库 → consolidation。
+//! Flow: retrieval gate → system prompt → sliding-window history → THE LOOP → persist → consolidation.
 //!
-//! 最前面还有一道**前门**：triage 图（`graph_workflows`，默认关）。
-//! 开着时它决定这一轮是「快答」（小模型直接回，一次调用）还是「完整」
-//! （下面那整条路）。图坏了就掉回完整路径 —— 它只能省时间，不能减能力。
+//! At the very front there is also a **front door**: the triage graph (`graph_workflows`, off by default).
+//! When enabled it decides whether this turn is a "quick answer" (small model replies directly, one call)
+//! or "full" (the whole path below). A broken graph falls back to the full path — it can only save time, never cut capability.
 //!
-//! 通知**随发生随发**：模型的文本增量一到就往客户端推（dashboard 的
-//! 打字机效果），工具一完成也立刻推。`turn/start` 的应答由本函数自己发
-//! —— 它必须等所有通知发完之后才轮到，顺序只有它自己清楚。
+//! Notifications are **sent as they happen**: model text deltas are pushed to the client as soon as they
+//! arrive (typewriter effect on the dashboard), and a finished tool is pushed the moment it completes.
+//! The reply to `turn/start` is sent by this function itself — it must come only after all notifications are out; only it knows the order.
 
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -53,8 +53,8 @@ const DEFAULT_SOUL: &str = "\
 - [tools used: ...] 是你过去几轮实际做过的事；已经做过的不要重复做。\
 ";
 
-/// SOUL.md 是用户可编辑的人格文件，第一次运行时创建。
-/// 改它就改了 Joy 是谁 —— 这是最朴素的程序性记忆。
+/// SOUL.md is the user-editable persona file, created on first run.
+/// Editing it changes who Joy is — the plainest form of procedural memory.
 pub(crate) fn load_soul(home: &std::path::Path) -> String {
     let path = home.join("SOUL.md");
     if !path.exists() {
@@ -72,7 +72,7 @@ pub async fn run_turn(
     let started = std::time::Instant::now();
     let settings = server.settings();
 
-    // 模型没配好：把「怎么办」说清楚，而不是丢一句 no key。
+    // Model not configured: spell out "what to do" instead of just dropping a "no key".
     let resolved: Resolved = server.resolved().ok_or_else(|| ErrorObject {
         code: codes::PROVIDER_ERROR,
         message: "模型还没配好：缺 API key。配一套就能用 —— \
@@ -82,8 +82,8 @@ pub async fn run_turn(
         data: None,
     })?;
 
-    // 按任务档位自动选模型（route.rs）。fixed 模式或选中的就是 active 时
-    // 原样返回、零开销；回落与选择的原因进 route_reason，不静默。
+    // Auto-select a model by task tier (route.rs). In fixed mode, or when the selected model is
+    // already active, return as-is with zero overhead; the fallback and selection reasons go into route_reason, unhidden.
     let (resolved, turn_route) = server.resolved_for_turn(resolved, &params.message).await;
 
     let session_id = params
@@ -93,18 +93,18 @@ pub async fn run_turn(
         .unwrap_or_else(|| "default".to_string());
     let turn_id = new_turn_id();
 
-    // 登记取消令牌：turn/interrupt 靠 turn_id 找到它。无论这轮怎么退出
-    // （成功、报错、被打断），守卫的 Drop 都会把它摘掉。
+    // Register the cancellation token: turn/interrupt finds it by turn_id. However this turn
+    // exits (success, error, interrupted), the guard's Drop removes it from the table.
     let interrupt = server.register_turn(&turn_id);
     let _guard = TurnGuard {
         server,
         turn_id: turn_id.clone(),
     };
 
-    // 本轮工作目录：协议给了就校验（fail-closed）。起轮之前就拒绝，
-    // 不留下半个 turn。
+    // Working directory for this turn: validate when provided (fail-closed). Reject before the
+    // turn starts, leaving no half-turn behind.
     let turn_cwd = resolve_turn_cwd(&params.cwd)?;
-    // 真用过的目录才进「最近使用」（workspaces.json）—— 驾驶舱选择器的快捷入口。
+    // Only actually-used directories enter "recently used" (workspaces.json) — quick entries for the cockpit picker.
     if let Some(path) = &turn_cwd {
         joyczl_config::workspaces::record_workspace(
             &server.settings().home,
@@ -119,8 +119,8 @@ pub async fn run_turn(
         ts: Local::now().to_rfc3339(),
     }));
 
-    // ---- SessionStart：这个会话的第一次。返回的 `additionalContext` 并进这一轮的
-    // 话里（钩子想给模型铺点背景，比如「这个仓库的规矩在 CONTRIBUTING.md」）。
+    // ---- SessionStart: the first turn of this session. The returned `additionalContext` merges into this
+    // turn's message (the hook may want to lay some background for the model, e.g. "this repo's rules live in CONTRIBUTING.md").
     let mut message = params.message.clone();
     if server
         .chat
@@ -141,7 +141,7 @@ pub async fn run_turn(
         )
         .await;
         if let Some(context) = outcome.context {
-            // 明说这段来自钩子：模型不该以为这是用户说的话。
+            // Say explicitly that this came from a hook: the model must not assume the user said it.
             message = format!("{context}\n\n{message}");
         }
         if let Some(reason) = outcome.blocked {
@@ -153,10 +153,10 @@ pub async fn run_turn(
         }
     }
 
-    // ---- 重试通知：**每次必发**。
+    // ---- Retry notifications: **sent on every occurrence**.
     //
-    // 计数也走这里 —— `meta.retries` 因此是实测值而不是猜的。用户看到的应该
-    // 是「限流了，正在重试」，而不是一段莫名其妙的长时间停顿。
+    // The counter flows through here too — `meta.retries` is therefore a measured value, not a
+    // guess. What the user should see is "rate limited, retrying", not an inexplicably long pause.
     let retries = Arc::new(AtomicI32::new(0));
     let retry_sink: joyczl_provider::retry::NoteSink = {
         let counter = retries.clone();
@@ -173,14 +173,14 @@ pub async fn run_turn(
         })
     };
 
-    // ---- 前门：triage 图（默认关着）。
+    // ---- Front door: the triage graph (off by default).
     //
-    // 图只可能让这一轮**更快**，绝不可能让它更差：任何一步出问题都掉回下面
-    // 那条普通的完整 loop —— 跟检索门同一条「失败开放」的规矩。
+    // The graph can only make this turn **faster**, never worse: any failure at any step falls back to
+    // the ordinary full loop below — the same "fail-open" rule as the retrieval gate.
     //
-    // 整段（图与 full_turn）都套在通知出口里：模型调用可能发生在两条路径的
-    // 任何一处，重试通知不该只覆盖其中一条。
-    // 显式标注错误类型：这里不再用 `?` 往上抛，编译器需要知道它是什么。
+    // The whole section (graph and full_turn) is wrapped in the notification outlet: model calls may
+    // happen anywhere along either path, so retry notifications must not cover only one of them.
+    // Annotate the error type explicitly: no more `?` bubbling up here; the compiler needs to know what it is.
     let dispatched: Result<_, joyczl_protocol::ErrorObject> =
         joyczl_provider::retry::with_note_sink(retry_sink, async {
             match graph_route(
@@ -224,8 +224,8 @@ pub async fn run_turn(
     let (graph, mut full) = match dispatched {
         Ok(pair) => pair,
         Err(e) => {
-            // StopFailure：这一轮**没跑完**（模型挂了、图炸了……）。观察事件 ——
-            // 钩子自己出问题不该把原来的错误盖掉。
+            // StopFailure: this turn **did not finish** (model died, graph blew up...). Observe-only event —
+            // problems in the hook itself must not overwrite the original error.
             crate::fire_hook(
                 &server.hooks,
                 joyczl_tools::hooks::HookEvent::StopFailure,
@@ -240,9 +240,9 @@ pub async fn run_turn(
         }
     };
 
-    // ---- Stop：这一轮跑完了。钩子要求继续（exit 2 / decision: block）就再跑一轮，
-    // 上限 1 次。通用的「自动续轮」是目标循环（`goal/set`）的事，这里只兑现
-    // 「Stop 能拦住结束」这一点，不把它做成第二套循环。
+    // ---- Stop: this turn finished. If the hook demands continuation (exit 2 / decision: block), run one
+    // more turn, capped at 1. The generic "auto-continue" belongs to the goal loop (`goal/set`); here we
+    // only honor "Stop can hold off the end", without building a second loop out of it.
     let mut stop_rounds = 0usize;
     loop {
         let payload = serde_json::json!({
@@ -257,7 +257,7 @@ pub async fn run_turn(
             break;
         };
         if stop_rounds >= MAX_STOP_CONTINUATIONS {
-            // 续过之后还要求继续：如实说出来，不假装它满意了。
+            // Continuation demanded even after continuing: say so honestly, don't pretend it is satisfied.
             full.result
                 .reply
                 .push_str(&format!("\n\n（Stop hook 仍要求继续：{reason}）"));
@@ -282,10 +282,10 @@ pub async fn run_turn(
         .await?;
     }
 
-    // ---- 目标循环：主循环停下来**不代表目标达成**。
+    // ---- Goal loop: the main loop stopping **does not mean the goal is met**.
     //
-    // 只有人能设目标（`goal/set`，模型连这个工具都没有），所以这里续轮不是
-    // 「模型给自己派活」—— 是人在前面说过「一直做到 X 为止」。
+    // Only a human can set a goal (`goal/set`; the model does not even have that tool), so continuing here
+    // is not "the model assigning itself work" — it is the human having said earlier "keep going until X".
     let mut goal_status: Option<String> = None;
     let mut goal_rounds = 0i32;
     if let Some(goal) = crate::goal::active(&server.goals, &session_id) {
@@ -306,7 +306,7 @@ pub async fn run_turn(
             let judgement = match verdict {
                 Ok(judgement) => judgement,
                 Err(why) => {
-                    // 判断器挂了：停续轮、**保住目标**（不清、不假装达成）。
+                    // The judge broke down: stop continuing, **keep the goal** (don't clear it, don't fake success).
                     notify_goal(sink, &turn_id, goal_rounds, max_rounds, "blocked", &why);
                     eprintln!("(joy) 目标循环停了：{why}");
                     goal_status = Some("blocked".to_string());
@@ -345,7 +345,7 @@ pub async fn run_turn(
                 break;
             }
             if goal_rounds >= max_rounds {
-                // 上限到了就**如实说没完成**：不伪装完成，也不清掉目标。
+                // Cap reached: **say honestly it is not done** — don't fake completion, don't clear the goal.
                 notify_goal(
                     sink,
                     &turn_id,
@@ -372,7 +372,7 @@ pub async fn run_turn(
                 "(joy) 目标循环第 {goal_rounds} 轮（上限 {max_rounds}）：{}",
                 judgement.reason
             );
-            // 把理由当成下一条用户消息，**回到同一个会话**再跑一轮。
+            // Feed the reason back as the next user message and run another round **in the same session**.
             full = full_turn(
                 server,
                 &resolved,
@@ -409,11 +409,11 @@ pub async fn run_turn(
         ));
     }
 
-    // 工具活动折进 assistant 文本。没有这一行，模型会忘了自己已经做过、
-    // 下一轮再做一次（三重预定会议就是这么来的）。
+    // Tool activity is folded into the assistant text. Without this, the model forgets what it already
+    // did and does it again next turn (that is how triple-booked meetings happen).
     let reply = fold_tool_activity(&result.reply, &result.tool_calls);
 
-    // 快答是小模型答的。如实记下来 —— "你是什么模型" 才不会被自己答错。
+    // The quick answer came from the small model. Record that honestly — so "what model are you" won't be answered wrong by the model itself.
     let quick = graph
         .as_ref()
         .is_some_and(|info| info.route == GraphRouteKind::Quick);
@@ -456,8 +456,8 @@ pub async fn run_turn(
 
     let meta_json = serde_json::to_string(&meta).ok();
 
-    // ---- 落盘：trace 一行 + usage 一行。观测不是可选项，但也不能连累对话
-    // —— 两个函数内部写失败只往 stderr 喊。
+    // ---- Persist: one trace line + one usage line. Observability is not optional, but it must not drag
+    // the conversation down either — write failures inside the two functions only shout to stderr.
     trace::record_turn(
         &settings.home,
         &serde_json::json!({
@@ -484,8 +484,8 @@ pub async fn run_turn(
         }),
     );
 
-    // 用量台账（迁移 0010）：只记账不强制。写失败不拦 turn —— 记账是旁路，
-    // 不是主路；stderr 说一声就够。
+    // Usage ledger (migration 0010): bookkeeping only, never enforced. A write failure does not block
+    // the turn — bookkeeping is a side path, not the main road; a note on stderr is enough.
     if let Err(e) = server
         .usage
         .record(
@@ -516,8 +516,8 @@ pub async fn run_turn(
             data: None,
         })?;
 
-    // ---- 用实测校准估算：这一轮最后一次请求的 (实测 prefill, 本地估算) 存下来，
-    // 下一轮算预算时按比值修正。失败只喊一声 —— 校准是优化，不是这一轮的账。
+    // ---- Calibrate estimates with measurements: save this turn's last request's (measured prefill, local estimate);
+    // next turn's budget math corrects by the ratio. Failure only shouts — calibration is an optimization, not this turn's ledger.
     if let Err(e) = server
         .chat
         .observe_context(
@@ -530,7 +530,7 @@ pub async fn run_turn(
         eprintln!("(joy) 记上下文实测值失败（不影响这一轮）：{e}");
     }
 
-    // ---- 攒够了就提炼。失败不丢数据，consolidation 内部保证。
+    // ---- Consolidate when enough has accumulated. Failure never loses data — consolidation guarantees that internally.
     let new_facts = joyczl_memory::consolidation::consolidate_if_due(
         &server.chat,
         &server.facts,
@@ -549,9 +549,9 @@ pub async fn run_turn(
         ));
     }
 
-    // ---- MEMORY.md 镜像：每轮刷新一份人类可读的视图。
-    // 它是生成的视图而不是事实来源，写失败只警告 —— 不能因为一面镜子
-    // 让整轮对话报错。
+    // ---- MEMORY.md mirror: refresh a human-readable view every turn.
+    // It is a generated view, not the source of truth; a write failure only warns — a mirror must not
+    // make the whole turn error out.
     if let Err(e) =
         joyczl_memory::export_markdown(&server.facts, &server.episodes, &settings.home).await
     {
@@ -571,7 +571,7 @@ pub async fn run_turn(
         },
     )));
 
-    // 全部通知发完，才轮到应答。
+    // Only after every notification is out does the response get its turn.
     sink.response(JsonRpcMessage::Response(JsonRpcResponse {
         jsonrpc: JSONRPC_VERSION.to_string(),
         id,
@@ -580,17 +580,17 @@ pub async fn run_turn(
     Ok(())
 }
 
-/// 一轮完整 loop 的产出，外加这轮检索门的决定。
+/// The output of one full loop, plus this turn's retrieval-gate decision.
 ///
-/// 门是**完整路径内部**的细节：快答那条路连记忆都不翻，这正是它便宜的原因，
-/// 所以它没有门。
+/// The gate is a detail **inside the full path**: the quick-answer path does not even consult memory —
+/// that is exactly why it is cheap, and why it has no gate.
 struct FullTurn {
     result: LoopResult,
     gate: Option<GateDecision>,
 }
 
-/// turn 的注销守卫：无论这轮怎么退出（成功、报错、被打断），
-/// 取消令牌都从表里摘掉 —— 跑完的 turn 没有可打断的东西。
+/// Deregistration guard for a turn: however this turn exits (success, error, interrupted),
+/// the cancellation token is removed from the table — a finished turn has nothing left to interrupt.
 struct TurnGuard<'a> {
     server: &'a Server,
     turn_id: String,
@@ -602,35 +602,35 @@ impl Drop for TurnGuard<'_> {
     }
 }
 
-/// 图的前门这一趟的收成：这一轮怎么走的，以及答案本身。
+/// What one trip through the graph's front door yields: how this turn ran, and the answer itself.
 struct Routed {
     info: GraphInfo,
     turn: FullTurn,
 }
 
-/// 一轮完整 loop：检索门 → system prompt → 滑窗历史 → THE LOOP。
+/// One full loop: retrieval gate → system prompt → sliding-window history → THE LOOP.
 ///
-/// 图的前门打开时，`full_agent` 节点调的就是这个函数 —— 不带图的默认路径与
-/// 图里那条路径**共用同一个实现**，于是「loop 作为节点」不可能跟「loop 作为
-/// 默认」走偏。
+/// When the graph's front door is open, the `full_agent` node calls this function — the default path
+/// without the graph and the path inside the graph **share the same implementation**, so the
+/// "loop as node" can never drift from the "loop as default".
 ///
-/// `inner` 是节点留给 loop 的事件出口：图里跑的时候事件得从那儿出去，
-/// 引擎才好补上 `node=full_agent`。不带图时是 `None`。
+/// `inner` is the event outlet the node leaves for the loop: when running inside the graph, events must
+/// leave through it so the engine can attach `node=full_agent`. `None` when there is no graph.
 ///
-/// 溢出重试时强制保留的轮数：留最新两轮原文，其余折进摘要。
+/// Turns force-kept on overflow retry: keep the newest two turns verbatim, fold the rest into the summary.
 const FORCED_RETRY_TURNS: usize = 2;
 
-/// 摘要那一段的预留：摘要模型的上限（700 token）+ 段头与余量。
-/// 摘要是在 load_history 里生成的，算预算时它还不存在，只能先扣下。
+/// Reserve for the summary section: the summary model's cap (700 tokens) + section header and slack.
+/// The summary is generated inside load_history; at budget time it does not exist yet, so it must be set aside up front.
 const SUMMARY_RESERVE_TOKENS: usize = 800;
 
-/// 这一轮的上下文预算（token）：窗口（`JOY_CONTEXT_WINDOW` 优先，否则用
-/// provider 表里的近似值）× 比例。下限 1024 —— 比例配得再小，也不该把窗口
-/// 压到连一轮对话都装不下。
+/// This turn's context budget (tokens): window (`JOY_CONTEXT_WINDOW` first, else the
+/// provider table's approximation) × ratio. Floor of 1024 — however small the ratio, never squeeze
+/// the window below fitting even one turn of conversation.
 ///
-/// `factor` 是上一轮实测 / 估算的比值（见 `session_context`）：**用实测校准估算**。
-/// 估算偏小（factor > 1）时把预算缩回来，压缩就会早一点发生；偏大时放开。
-/// 没有记录（第一轮、或走了图）就不校准。
+/// `factor` is last turn's measured/estimated ratio (see `session_context`): **calibrate estimates with measurements**.
+/// When the estimate is too small (factor > 1), shrink the budget so compaction happens sooner; relax when it is too large.
+/// No record (first turn, or the graph path) means no calibration.
 fn budget_tokens(
     resolved: &Resolved,
     settings: &joyczl_config::Settings,
@@ -647,30 +647,30 @@ fn budget_tokens(
     (calibrated as usize).max(1024)
 }
 
-/// 这个错误是「上下文溢出」吗？loop 把 provider 的错误包进了 anyhow，
-/// 这里下钻一层认它 —— 溢出是唯一值得「压缩后重试一次」的错误。
+/// Is this error a "context overflow"? The loop wrapped the provider error in anyhow;
+/// drill down one level here to recognize it — overflow is the only error worth "retry once after compaction".
 fn is_context_overflow(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<joyczl_provider::ProviderError>()
         .is_some_and(joyczl_provider::ProviderError::is_context_overflow)
 }
 
-/// 一轮的定位信息：会话、轮次、事件出口、取消令牌、工作目录。
-/// 收成结构体与 Injections 同一条理由：它们**总是一起变**，
-/// 而 clippy 会在第 8 个参数上拦下来。
+/// Positioning info for one turn: session, turn, event outlet, cancellation token, working directory.
+/// The same reason as Injections for bundling into a struct: they **always change together**,
+/// and clippy stops at the 8th parameter.
 struct TurnFrame<'a> {
     session_id: &'a str,
     turn_id: &'a str,
     sink: &'a EventSink,
     interrupt: Option<Arc<joyczl_loop::Interrupt>>,
     turn_cwd: Option<std::path::PathBuf>,
-    /// 这轮的路由决策原因（route.rs）；None = 没发生选择。
+    /// This turn's route decision reason (route.rs); None = no selection happened.
     route_reason: Option<String>,
 }
 
-/// 本轮工作目录的准入校验（fail-closed）：给了就必须是已存在的
-/// 绝对路径 —— 静默回退会让「我以为在 A 目录干活」变成最难查的坏。
-/// 空串视同没给。
+/// Admission check for this turn's working directory (fail-closed): when given, it must be an existing
+/// absolute path — silent fallback turns "I thought I was working in dir A" into the hardest bug to trace.
+/// An empty string counts as not given.
 pub(crate) fn resolve_turn_cwd(
     cwd: &Option<String>,
 ) -> Result<Option<std::path::PathBuf>, ErrorObject> {
@@ -708,12 +708,12 @@ async fn full_turn(
         sink,
         interrupt,
         turn_cwd,
-        // route_reason 不在这里用：TurnMeta 由 run_turn 组装（它持有 turn_route）。
+        // route_reason is not used here: TurnMeta is assembled by run_turn (which holds turn_route).
         ..
     } = frame;
     let settings = server.settings();
 
-    // ---- 检索门：这轮要不要翻记忆？
+    // ---- Retrieval gate: does this turn consult memory?
     let decision = joyczl_memory::gate::should_retrieve(
         resolved.client.as_ref(),
         &resolved.small_model,
@@ -735,9 +735,9 @@ async fn full_turn(
         decision: gate_decision.clone(),
     }));
 
-    // 混合检索的那条腿：开关开着才装配 embedder。装配失败（没配模型、
-    // provider 没有默认端点）只警告一次，检索退回纯关键词 —— 一个配错的
-    // 旋钮不该让整轮对话起不来。
+    // The hybrid-retrieval leg: the embedder is assembled only when the switch is on. Assembly failure
+    // (no model configured, provider lacks a default endpoint) warns once and retrieval falls back to
+    // pure keywords — one misconfigured knob must not keep the whole conversation from starting.
     let embedder = if settings.embeddings_enabled {
         match joyczl_provider::embed::Embedder::from_settings(&settings) {
             Ok(embedder) => Some(embedder),
@@ -764,28 +764,28 @@ async fn full_turn(
         String::new()
     };
 
-    // ---- 过程记忆：SKILL.md 渐进披露。frontmatter 永远扫（便宜），
-    // 正文只在消息匹配上时才进 prompt。
+    // ---- Procedural memory: SKILL.md progressive disclosure. Frontmatter is always scanned (cheap),
+    // the body enters the prompt only when the message matches.
     let mut skill_loader = joyczl_memory::skills::SkillLoader::new(
         joyczl_memory::skills::SkillLoader::dirs_for(&settings.home),
     );
     let skill_hits = skill_loader.hits(message);
     let skills = skill_hits.section;
-    // 显式引用（`$技能名`）剥掉之后再送模型 —— 引用是给 loader 看的，模型看正文
-    // 就够；引用了不存在的技能就附一句提示，让它能回一句而不是装作没看见。
-    // 落库的历史仍然是**用户原话**（那是 run_turn 那边的事）。
+    // Explicit references (`$skill-name`) are stripped before sending to the model — references are for
+    // the loader; the body text is enough for it. A reference to a nonexistent skill appends a hint, so it
+    // can reply instead of pretending not to see. The persisted history remains **the user's original words** (run_turn's business).
     let prompt_message = if skill_hits.hints.is_empty() {
         skill_hits.message.clone()
     } else {
         format!("{}\n\n{}", skill_hits.hints.join("\n"), skill_hits.message)
     };
 
-    // ---- 工作记忆：滑窗 + 滚动摘要 + token 预算。
+    // ---- Working memory: sliding window + rolling summary + token budget.
     //
-    // 轮数是**上限**，token 才是闸门：一个长工具输出就能把窗口撑爆，而轮数
-    // 看起来还很"安全"。预算是「上下文窗口 × JOY_COMPACT_THRESHOLD」减去
-    // 已经确定要花掉的部分（system 前缀、工具声明、这一轮的答案、摘要段）。
-    // 估算是近似的（cl100k），所以刻意留宽一点。
+    // The turn count is the **ceiling**, tokens are the gate: one long tool output can blow past the
+    // window while the turn count still looks "safe". The budget is "context window × JOY_COMPACT_THRESHOLD"
+    // minus the parts already committed to spend (system prefix, tool declarations, this turn's answer, the summary section).
+    // Estimation is approximate (cl100k), so slack is deliberately left wide.
     let soul = load_soul(&settings.home);
     let reserve = joyczl_provider::tokens::estimate_text(&soul)
         + joyczl_provider::tokens::estimate_text(&memory_context)
@@ -793,7 +793,7 @@ async fn full_turn(
         + joyczl_provider::tokens::estimate_tools(&server.tools.schemas())
         + settings.max_tokens.max(0) as usize
         + SUMMARY_RESERVE_TOKENS;
-    // 上一轮的实测/估算比值：拿它校准这一次的估算（没有记录就不校准）。
+    // Last turn's measured/estimated ratio: use it to calibrate this estimate (no record, no calibration).
     let factor = server.chat.context_factor(session_id).await.unwrap_or(None);
     let history_budget = budget_tokens(resolved, &settings, factor).saturating_sub(reserve);
 
@@ -817,7 +817,7 @@ async fn full_turn(
         summary.as_deref(),
     );
 
-    // 流式出口：模型的文本增量一到就推给客户端。
+    // Streaming outlet: push model text deltas to the client as soon as they arrive.
     let delta_sink = sink.clone();
     let delta_turn_id = turn_id.to_string();
     let on_text: TextSink = Arc::new(move |delta: &str| {
@@ -828,13 +828,13 @@ async fn full_turn(
     });
 
     // ---- THE LOOP
-    // 工具环境只有一处构造（见 lib.rs 的 tool_ctx）—— 子代理走同一个（它传 None）。
-    // 批准通道按这一轮建：`never` 模式下是 None，需要批准的动作直接拒绝。
+    // The tool environment is constructed in exactly one place (see tool_ctx in lib.rs) — the subagent uses
+    // the same one (it passes None). The approval channel is built per turn: None in `never` mode, actions needing approval are rejected.
     let ctx = server.tool_ctx(session_id, turn_cwd, server.approval_bridge(turn_id, sink));
 
-    // 工具**开始**的通知得在执行前发出去：客户端才能画出"正在调用 X"。
-    // 图里的节点事件出口（inner）若也在，就两个都叫 —— 互不挡道。
-    // 注意这是 joyczl_loop 的 Observer（收 LoopEvent），不是 graph 的那个。
+    // The tool **start** notification must go out before execution: the client can then draw "calling X".
+    // If the graph's node event outlet (inner) is also present, call both — neither blocks the other.
+    // Note this is joyczl_loop's Observer (receiving LoopEvent), not the graph's one.
     let tool_started: joyczl_loop::Observer = {
         let sink = sink.clone();
         let turn_id = turn_id.to_string();
@@ -849,7 +849,7 @@ async fn full_turn(
         })
     };
     let observer: Option<joyczl_loop::Observer> = match inner {
-        // 图里跑：工具开始的通知先发，节点事件再交给引擎补上 node=。
+        // Running inside the graph: the tool-start notification goes out first, then node events go to the engine to attach node=.
         Some(inner) => {
             let combined: joyczl_loop::Observer = Arc::new(move |event| {
                 tool_started(event.clone());
@@ -857,12 +857,12 @@ async fn full_turn(
             });
             Some(combined)
         }
-        // 不带图：工具开始的通知就是唯一的观察者。
+        // No graph: the tool-start notification is the only observer.
         None => Some(tool_started),
     };
 
-    // 跑一轮；**只有**上下文溢出值得压缩后重试一次 —— 别的错误重试只会得到
-    // 同样的错误（跟 graph_route 里那句注释是同一条规矩）。
+    // Run one turn; **only** context overflow is worth a retry after compaction — retrying other errors
+    // just yields the same error again (same rule as that comment in graph_route).
     let mut retried = false;
     let result: LoopResult = loop {
         let attempt = joyczl_loop::run(joyczl_loop::Turn {
@@ -925,14 +925,14 @@ async fn full_turn(
     })
 }
 
-/// 图的前门。
+/// The graph's front door.
 ///
-/// flag 关着 → `Ok(None)`，调用方走原来的路径；flag 开着而图没交出答案
-/// （引擎出错、分类器坏了、节点抛错）→ 同样 `Ok(None)`，掉回普通的完整 loop。
-/// 「图坏了」的代价必须是延迟，绝不能是能力。
+/// Flag off → `Ok(None)`, the caller takes the original path; flag on but the graph yields no answer
+/// (engine error, classifier broken, node throws) → also `Ok(None)`, falling back to the ordinary full loop.
+/// The cost of a "broken graph" must be latency, never capability.
 ///
-/// 唯一的例外是 loop 自己失败：那个错原样返回，**不再重试一遍** —— 重试
-/// 只会用同样的方式再失败一次，白等一倍时间。
+/// The sole exception is the loop itself failing: that error is returned as-is, **no second retry** —
+/// a retry would just fail the same way again, wasting double the time.
 async fn graph_route(
     server: &Server,
     resolved: &Resolved,
@@ -951,9 +951,9 @@ async fn graph_route(
         return Ok(None);
     }
 
-    // state 只装 JSON，而一轮 loop 的产物（`LoopResult`）不是 JSON ——
-    // 所以 full_agent 的**真**结果从这条侧信道递回来，写进 state 的只是
-    // 「我跑过了」。
+    // State only holds JSON, and a loop turn's product (`LoopResult`) is not JSON —
+    // so full_agent's **real** result comes back through this side channel; what goes into state is
+    // just "I ran".
     let slot: Arc<Mutex<Option<Result<FullTurn, ErrorObject>>>> = Arc::new(Mutex::new(None));
 
     let classify: ClassifyFn = {
@@ -1003,16 +1003,16 @@ async fn graph_route(
         let route_reason = route_reason.clone();
         let slot = slot.clone();
         Arc::new(move |ctx: NodeCtx| {
-            // FullFn 是 Fn（引擎可能多次调）：这里只能克隆，不能把捕获的值移走。
+            // FullFn is an Fn (the engine may call it multiple times): only clone here; never move the captured values.
             let turn_cwd = turn_cwd.clone();
             let route_reason = route_reason.clone();
             let (server, resolved, sink) = (server.clone(), resolved.clone(), sink.clone());
             let (turn_id, session_id, slot) = (turn_id.clone(), session_id.clone(), slot.clone());
             let interrupt = interrupt.clone();
             Box::pin(async move {
-                // 用户这一轮说了什么就在黑板上 —— run_graph 拿到的初始 state。
+                // Whatever the user said this turn is on the whiteboard — the initial state run_graph receives.
                 let message = ctx.state.str("message").unwrap_or_default().to_string();
-                // loop 的事件从节点出口走，引擎会补上 node= 再转出来。
+                // The loop's events go out through the node outlet; the engine attaches node= before forwarding.
                 let inner = Some(ctx.inner.clone());
                 let outcome = full_turn(
                     &server,
@@ -1029,8 +1029,8 @@ async fn graph_route(
                     inner,
                 )
                 .await;
-                // 先记下来，再决定怎么回引擎：错只在引擎那边留个记录，
-                // 真话从侧信道出去（那边的 ErrorObject 带着 code）。
+                // Record first, then decide what to return to the engine: the error only leaves a trace on the
+                // engine side; the truth goes out through the side channel (its ErrorObject carries the code).
                 let why = outcome.as_ref().err().map(|error| error.message.clone());
                 *slot.lock().expect("侧信道锁不该中毒") = Some(outcome);
                 match why {
@@ -1041,8 +1041,8 @@ async fn graph_route(
         })
     };
 
-    // 图是写死在这个文件旁边的，走到 Err 说明我们把它写坏了 —— 这轮照旧
-    // 走普通路径，别拿用户的这一轮去赌一张搭不起来的图。
+    // The graph is hard-coded next to this file; reaching Err means we wrote it wrong — this turn still
+    // takes the ordinary path; don't gamble the user's turn on a graph that cannot be built.
     let graph = match build_triage_graph(classify, calendar, quick, full) {
         Ok(graph) => graph,
         Err(error) => {
@@ -1060,7 +1060,7 @@ async fn graph_route(
     state.set("message", serde_json::json!(message));
 
     let report = match run_graph(graph, state, Some(observer), DEFAULT_MAX_STEPS).await {
-        // 撞键是图的 bug（并行节点写了同一个键），报出来比悄悄丢一次写好。
+        // A key collision is a graph bug (parallel nodes wrote the same key); reporting beats silently dropping a write.
         Err(error) => {
             eprintln!("(joy) triage 图跑挂了，这轮走普通路径 —— {error}");
             return Ok(None);
@@ -1080,8 +1080,8 @@ async fn graph_route(
         path: report.path.clone(),
     };
 
-    // full_agent 跑过没有，看侧信道；跑过而失败，就把那个失败如实报出去。
-    // 先把锁放掉再分派（这段是函数的尾表达式，守卫活不到那儿）。
+    // Whether full_agent ran, check the side channel; if it ran and failed, report that failure honestly.
+    // Release the lock before dispatching (this is the function's tail expression; the guard cannot live that long).
     let landed = slot.lock().expect("侧信道锁不该中毒").take();
     match landed {
         Some(Err(error)) => Err(error),
@@ -1089,12 +1089,12 @@ async fn graph_route(
             info: info(GraphRouteKind::Full),
             turn,
         })),
-        // 快答把那句话直接写在黑板上。
+        // The quick answer wrote its reply directly on the whiteboard.
         None => match report.state.str("reply").filter(|reply| !reply.is_empty()) {
             Some(reply) => Ok(Some(Routed {
                 info: info(GraphRouteKind::Quick),
                 turn: FullTurn {
-                    // 一次模型调用、没有工具 —— 就是它的全部。
+                    // One model call, no tools — that is its entirety.
                     result: LoopResult {
                         reply: reply.to_string(),
                         tool_calls: Vec::new(),
@@ -1103,26 +1103,26 @@ async fn graph_route(
                         messages: Vec::new(),
                         interrupted: false,
                         guard: joyczl_loop::guard::GuardReport::default(),
-                        // 图自己跑完了（没走 loop），没有可配对的本地估算。
+                        // The graph finished on its own (loop not used); there is no local estimate to pair with.
                         estimated_input_tokens: 0,
                         observed_input_tokens: 0,
                     },
                     gate: None,
                 },
             })),
-            // 图什么也没交出来 —— 调用方掉回普通的完整 loop。
+            // The graph produced nothing — the caller falls back to the ordinary full loop.
             None => Ok(None),
         },
     }
 }
 
-/// 图的事件翻成协议通知。
+/// Translate graph events into protocol notifications.
 ///
-/// 两种事件**不**在这儿发：
-///   - `Inner`：loop 那一层已经发过了（文本增量、工具完成）。再发一遍，
-///     客户端会看见两次。
-///   - `Route`：走了哪条路最后落在 turn 的 meta 里（`TurnMeta.graph`），
-///     单独一个「选边」通知对用户没有信息量。
+/// Two event kinds are **not** emitted here:
+///   - `Inner`: the loop layer already emitted them (text deltas, tool completions). Emitting again,
+///     the client would see them twice.
+///   - `Route`: which path was taken lands in the turn's meta at the end (`TurnMeta.graph`);
+///     a standalone "picked a side" notification carries no information for the user.
 fn graph_event(sink: &EventSink, event: GraphEvent) {
     match event {
         GraphEvent::Started { workflow, nodes } => {
@@ -1192,22 +1192,22 @@ pub(crate) fn build_system(
     let now = Local::now();
     let mut parts = vec![
         soul.to_string(),
-        // Agent 跑在用户的电脑上，就该知道用户电脑的钟 ——
-        // 带时区名，"30 分钟后" 才有解。
+        // The agent runs on the user's machine, so it should know the user machine's clock —
+        // include the timezone name, or "in 30 minutes" has no answer.
         format!(
             "\nRight now it is {} ({}, UTC{})",
             now.format("%A, %Y-%m-%d %H:%M"),
             now.format("%Z"),
             now.format("%:z")
         ),
-        // "你是什么模型"是每个好奇用户的第一问。
+        // "What model are you" is every curious user's first question.
         format!(
             "Your model: you are running on '{model}' via the '{provider}' provider, \
              inside Joy, a local-first open-source agent harness."
         ),
     ];
-    // 待办清单排在记忆与方法之前：它是**这一趟正在做的事**，比背景知识更该先看到。
-    // 而且它是注入的，不进历史 —— 压缩、滑窗都冲不掉它。
+    // The todo list comes before memory and methods: it is **what this run is doing**, which should be seen
+    // before background knowledge. And it is injected, not in history — compaction and sliding windows cannot wash it away.
     if let Some(todo) = todo {
         parts.push(format!("\n{todo}"));
     }
@@ -1223,10 +1223,10 @@ pub(crate) fn build_system(
     parts.join("\n")
 }
 
-/// 给判断器看的对话记录：这个会话的最近几轮，末尾补上这一轮的答复。
+/// The transcript for the judge: the session's recent turns, with this turn's reply appended.
 ///
-/// 判断器**只看对话**（没有工具、没有检索）：它要回答的是「这段对话说明目标达成了
-/// 吗」，多看别的只会让它开始替模型干活。
+/// The judge **only reads the conversation** (no tools, no retrieval): what it must answer is "does this
+/// conversation show the goal is met"; looking at anything else only makes it start doing the model's work.
 async fn judge_transcript(server: &Server, session_id: &str, reply: &str) -> String {
     let history = server
         .chat
@@ -1245,7 +1245,7 @@ async fn judge_transcript(server: &Server, session_id: &str, reply: &str) -> Str
     out
 }
 
-/// 发一条目标循环的通知（`GoalRound` 是「为什么又跑了一轮」的唯一答案）。
+/// Emit one goal-loop notification (`GoalRound` is the only answer to "why another round ran").
 fn notify_goal(
     sink: &crate::EventSink,
     turn_id: &str,
@@ -1263,17 +1263,17 @@ fn notify_goal(
     }));
 }
 
-/// 一轮里最多因为 Stop hook 继续几次。通用机制是目标循环（`goal/set`）。
+/// How many times a single turn may continue because of the Stop hook. The generic mechanism is the goal loop (`goal/set`).
 const MAX_STOP_CONTINUATIONS: usize = 1;
 
-/// 只取最近 N 轮，外加一份滚动摘要。
+/// Take only the most recent N turns, plus a rolling summary.
 ///
-/// 没有滑窗，一个长会话每轮都把全部历史塞进 prompt，直到上下文爆炸；
-/// 只有滑窗，被挤出去的那部分就等于失忆。所以：被挤出去的老轮次交给
-/// `compaction` 折成一段摘要（失败开放，最差也是截断摘录），随会话存库，
-/// 每轮拼进 system prompt。返回 `(工作记忆, 摘要)`。
-/// `token_budget` 是这一轮**能花在历史上**的近似 token 数；`window_override`
-/// 是「上下文溢出后强制压缩」那条路：指定保留几轮，不再看预算。
+/// Without a sliding window, a long session stuffs the entire history into the prompt every turn until
+/// the context explodes; with only a sliding window, the squeezed-out part equals amnesia. So: the squeezed-out
+/// old turns are handed to `compaction`, folded into one summary (fail-open; worst case a truncated excerpt),
+/// stored with the session, and spliced into the system prompt every turn. Returns `(working memory, summary)`.
+/// `token_budget` is the approximate token count this turn **may spend on history**; `window_override`
+/// is the "force compaction after context overflow" path: it pins how many turns to keep, ignoring the budget.
 #[allow(clippy::too_many_arguments)]
 async fn load_history(
     chat: &joyczl_state::Chat,
@@ -1286,7 +1286,7 @@ async fn load_history(
 ) -> (Vec<Message>, Option<String>) {
     let pairs = chat.session_history(session_id).await.unwrap_or_default();
     let ceiling = history_turns.max(0) as usize;
-    // 轮数是上限、token 是闸门。
+    // The turn count is the ceiling; tokens are the gate.
     let window = match window_override {
         Some(forced) => forced,
         None => ceiling.min(joyczl_memory::compaction::turns_that_fit(
@@ -1295,8 +1295,8 @@ async fn load_history(
         )),
     };
 
-    // PreCompact 要在**动手之前**发（事后补一条就不叫 Pre 了）。是否真会压由
-    // `compaction::due` 一处判定 —— 钩子不该在「其实没压」的时候也响。
+    // PreCompact must fire **before acting** (a note after the fact is not "Pre"). Whether compaction will
+    // actually happen is decided in one place, `compaction::due` — the hook should not ring when nothing was really compacted.
     let will_compact = joyczl_memory::compaction::due(chat, session_id, &pairs, window).await;
     if will_compact {
         let outcome = crate::fire_hook(
@@ -1305,7 +1305,7 @@ async fn load_history(
             serde_json::json!({ "session_id": session_id, "window": window, "turns": pairs.len() }),
         )
         .await;
-        // 观察事件：钩子的话只是旁注，不能拦住压缩（拦住了这一轮就可能溢出）。
+        // Observe-only event: the hook's words are a side note and must not block compaction (blocking it could overflow this turn).
         if let Some(note) = outcome.note {
             eprintln!("(joy) PreCompact：{note}");
         }

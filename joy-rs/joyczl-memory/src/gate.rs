@@ -1,13 +1,13 @@
-//! HERO MOMENT #1 —— 决定「这轮到底要不要查记忆」的门。
+//! HERO MOMENT #1 — the gate deciding "does this turn consult memory at all".
 //!
-//! 受众问得最多的问题："为什么每轮都要打一遍记忆库？" 默认全量检索
-//! （a）慢 —— 每次回复前多一次搜索；（b）更糟：无关的记忆会带偏答案。
+//! The audience's top question: "why hit the memory store every turn?" Full retrieval
+//! is slow (one more search per reply) and worse: irrelevant memories drag answers.
 //!
-//! 所以在碰任何存储之前，先让一个便宜的小模型回答一个问题：
-//!   这条消息需要用户的记忆吗？
-//! "2+2 等于几" → 不用。"我什么时候和阿明开会" → 用，这是检索词。
+//! So before touching any store, a cheap small model answers one question:
+//!   does this message need the user's memory?
+//! "what's 2+2" → no. "when's my meeting with Ah Ming" → yes, and that's the query.
 //!
-//! 成本：一次小模型调用（几百 token）。收益：只在有帮助时才检索。
+//! Cost: one small-model call (a few hundred tokens). Gain: retrieve only when it helps.
 
 use joyczl_provider::{CreateRequest, Message, Provider};
 use serde_json::Value;
@@ -28,15 +28,15 @@ User message: {message}";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
     pub retrieve: bool,
-    /// retrieve 为真时的检索词；失败开放时退回原消息本身。
+    /// The query when retrieve is true; on fail-open it falls back to the message itself.
     pub query: String,
-    /// 简短理由。失败开放时带上原因，排查时能看到。
+    /// Short reason. On fail-open it carries the cause, visible when debugging.
     pub reason: String,
 }
 
 impl Decision {
-    /// **失败开放**：门自己坏了，就当作需要检索。
-    /// 过时的记忆好过丢失的记忆 —— 这是有意的选择，不是疏忽。
+    /// **Fail-open**: if the gate itself breaks, assume retrieval is needed.
+    /// Stale memory beats lost memory — a deliberate choice, not an oversight.
     fn fail_open(reason: impl Into<String>, message: &str) -> Self {
         Self {
             retrieve: true,
@@ -53,8 +53,8 @@ pub async fn should_retrieve(client: &dyn Provider, small_model: &str, message: 
         system: None,
         messages: vec![Message::user_text(prompt)],
         tools: vec![],
-        // 余量给足：推理模型（Kimi K3 …）会先吐一段思考再给 JSON，
-        // 100 token 会把答案截在思考里。
+        // Generous headroom: reasoning models (Kimi K3 …) emit thinking before the
+        // JSON; 100 tokens would truncate the answer inside the thinking.
         max_tokens: 600,
     };
 
@@ -65,7 +65,7 @@ pub async fn should_retrieve(client: &dyn Provider, small_model: &str, message: 
 
     let text = response.text();
     let Some(json_text) = extract_json(&text) else {
-        // 只有一段思考、没有 JSON：不是出错，是模型没给答案 —— 同样失败开放。
+        // Only thinking, no JSON: not an error, the model gave no answer — fail-open too.
         return Decision::fail_open("gate 没返回 JSON — 失败开放", message);
     };
 
@@ -96,8 +96,8 @@ pub async fn should_retrieve(client: &dyn Provider, small_model: &str, message: 
     }
 }
 
-/// 从模型回复里抠出第一个 `{...}`。
-/// 推理模型常在 JSON 前后带说明文字，所以不能假定整段就是 JSON。
+/// Extracts the first `{...}` from a model reply.
+/// Reasoning models often wrap JSON in prose, so the whole reply can't be assumed JSON.
 pub fn extract_json(text: &str) -> Option<String> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;

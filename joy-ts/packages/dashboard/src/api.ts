@@ -1,8 +1,8 @@
-// app-server 的 HTTP 面，三个端点。
+// The HTTP face of app-server — three endpoints.
 //
-// 这里不引入客户端库：这几个端点的形状简单到不值得再包一层 —— 多一层抽象
-// 就多一层要读、要跟着协议改的代码。形状对不对是**编译期**的事，因为类型
-// 直接来自生成物（`./protocol.ts`），不是手抄的。
+// No client library here: these endpoints are simple enough that wrapping them isn't worth it —
+// one more abstraction is one more layer to read and to track with the protocol. Shape checks
+// are **compile-time**, because the types come from the generated artifacts (`./protocol.ts`).
 
 import type {
   ApprovalRespondParams,
@@ -24,14 +24,14 @@ import type {
   TurnStartParams,
 } from "./protocol";
 
-/** `/api/fs` 的一页目录列表（ops 本地视图，不进协议）。 */
+/** One page of the `/api/fs` directory listing (ops's local view, not in the protocol). */
 export interface FsListing {
   path: string;
   parent: string | null;
   entries: { name: string; path: string }[];
 }
 
-/** app-server 说的话，原样带出来：`code` 是协议里的错误码，`message` 是给人看的。 */
+/** What app-server said, as-is: `code` is the protocol error code, `message` is for humans. */
 export class ApiError extends Error {
   readonly code: number;
 
@@ -43,12 +43,12 @@ export class ApiError extends Error {
 }
 
 /**
- * `/api/*` 的统一入口：自动带上部署面的 Bearer token。
+ * The unified entry for `/api/*`: automatically attaches the deployment-plane Bearer token.
  *
- * 服务端设了 `JOY_OPS_TOKEN` 时，每个 API 请求都要带
- * `Authorization: Bearer …`；token 存 localStorage（这是**部署面**凭据，
- * 与模型 key 是两回事）。收到 401 就问一次 —— 用 `prompt` 而不是一套
- * DOM：这条路一个部署只走一次，问完存下来就再也不见了。
+ * When the server sets `JOY_OPS_TOKEN`, every API request must carry `Authorization: Bearer …`;
+ * the token is stored in localStorage (a **deployment-plane** credential, a different thing
+ * from model keys). On a 401 it asks once — using `prompt` instead of a DOM: this path is
+ * walked once per deployment; ask, save, and it's never seen again.
  */
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
@@ -68,7 +68,7 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
   return response;
 }
 
-/** 首屏数据。失败时抛 `ApiError`。 */
+/** First-screen data. Throws `ApiError` on failure. */
 export async function fetchDashboard(): Promise<DashboardData> {
   const response = await apiFetch("/api/data", { headers: { accept: "application/json" } });
   if (!response.ok) throw new ApiError(await errorOf(response));
@@ -76,10 +76,10 @@ export async function fetchDashboard(): Promise<DashboardData> {
 }
 
 /**
- * 一个会话说过的话。
+ * What one session has said.
  *
- * `cursor` 给了就取比它**更早**的一页 —— 这就是「往上翻旧账」。不给就是最近的
- * 一页，一页多少条由服务端决定（`limit` 留在协议里，页面用不到）。
+ * Given a `cursor`, fetch the page **earlier** than it — "paging back through older messages".
+ * Without it, the latest page; page size is server-decided (`limit` stays in the protocol).
  */
 export async function fetchMessages(
   sessionId: string,
@@ -96,14 +96,14 @@ export async function fetchMessages(
 }
 
 /**
- * 说一句话，把这一轮的通知一条条吐出来。
+ * Say one thing, streaming out this turn's notifications one by one.
  *
- * 用 `fetch` + 自己读 body，而不是 `EventSource`：EventSource 只能发 GET，
- * 而这个请求要带一段消息。SSE 的帧格式简单到不值得再拉一个库 ——
- * 空行分隔，`data:` 后面是载荷。
+ * Uses `fetch` + reading the body manually instead of `EventSource`: EventSource can only send
+ * GET, while this request must carry a message. SSE's frame format is simple enough not to
+ * pull in a library — blank-line separated, with the payload after `data:`.
  *
- * 一定要传 `stream: true`：`textDelta` 只在流式时才发（脚本调用默认关着，
- * 那里不需要逐字）。
+ * Always pass `stream: true`: `textDelta` is only sent when streaming (scripts default off,
+ * where word-by-word isn't needed).
  */
 export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotification> {
   const response = await apiFetch("/api/turn", {
@@ -132,17 +132,17 @@ export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotif
       }
     }
   } finally {
-    // 提前离开（这一轮完了、或者用户切走了）就把连接放掉，
-    // 否则浏览器会攥着一个没人读的流，直到它自己超时。
+    // Leaving early (turn finished, or the user navigated away) releases the connection,
+    // otherwise the browser would hold an unread stream until it times out on its own.
     await reader.cancel().catch(() => undefined);
   }
 }
 
 /**
- * 设或清一个目标。`condition` 为空 = 清除。
+ * Set or clear a goal. Empty `condition` = clear.
  *
- * 目标是**只有人**能设的东西：模型没有这条路径，所以「模型给自己派活」在这里不是
- * 被禁止，而是不存在。
+ * A goal is **only human-settable**: the model has no such path, so "the model assigning
+ * itself work" isn't forbidden here — it simply doesn't exist.
  */
 export async function setGoal(params: GoalSetParams): Promise<GoalSetResponse> {
   const response = await apiFetch("/api/goal", {
@@ -155,10 +155,10 @@ export async function setGoal(params: GoalSetParams): Promise<GoalSetResponse> {
 }
 
 /**
- * 回答一次「要不要执行」。
+ * Answer one "should this execute".
  *
- * 与 turn 不同，这是一问一答：答完就没了，所以不用流。`accepted: false` 表示
- * 太晚送达（那一轮早就不等了）—— 页面上要说一句，别让人以为自己的点击算数了。
+ * Unlike a turn, this is one question one answer: gone once answered, so no stream.
+ * `accepted: false` = arrived too late (that round stopped waiting) — say so on the page.
  */
 export async function respondApproval(
   params: ApprovalRespondParams,
@@ -172,10 +172,10 @@ export async function respondApproval(
   return (await response.json()) as ApprovalRespondResponse;
 }
 
-/** 一帧里 `data:` 后面的东西。keep-alive 那种注释帧返回 null。 */
+/** What follows `data:` in one frame. Keep-alive-style comment frames return null. */
 function dataOf(frame: string): ServerNotification | null {
   const payload = frame
-    // \r 是因为有的代理会把换行改掉；它出现在行尾，不影响载荷本身。
+    // \r exists because some proxies rewrite line endings; at end of line it doesn't affect the payload.
     .split("\n")
     .map((line) => line.replace(/\r$/, ""))
     .filter((line) => line.startsWith("data:"))
@@ -187,11 +187,11 @@ function dataOf(frame: string): ServerNotification | null {
 }
 
 /**
- * 从失败的响应里取出错误。
+ * Extract the error from a failed response.
  *
- * 出错时 body 是协议里的 `ErrorObject`；但万一不是（比如 axum 自己挡下来的
- * 422、或者服务没起来），也得给出一句能看懂的话 —— 把 JSON 解析异常直接
- * 抛到界面上，用户看到的就是一串英文堆栈。
+ * On error the body is the protocol's `ErrorObject`; but if it isn't (say a 422 axum itself
+ * blocked, or the service isn't up), a comprehensible line is still needed — throwing the
+ * JSON parse exception straight to the UI would show the user a stack of English.
  */
 async function errorOf(response: Response): Promise<ErrorObject> {
   const text = await response.text();
@@ -201,7 +201,7 @@ async function errorOf(response: Response): Promise<ErrorObject> {
       return parsed as ErrorObject;
     }
   } catch {
-    // 不是 JSON，走下面那句兜底。
+    // Not JSON; fall through to the fallback below.
   }
   return {
     code: response.status,
@@ -210,9 +210,9 @@ async function errorOf(response: Response): Promise<ErrorObject> {
 }
 
 /**
- * 已配置的多套模型 + 当前那套。
+ * The configured model profiles + the current one.
  *
- * 应答里**没有密钥**，只有「key 存在哪」的指针 —— 浏览器不该拿到密钥。
+ * **No keys in the response**, only a pointer to "where the key is stored" — not for browsers.
  */
 export async function fetchModelProfiles(): Promise<ModelProfilesResponse> {
   const response = await apiFetch("/api/model/profiles", {
@@ -223,9 +223,9 @@ export async function fetchModelProfiles(): Promise<ModelProfilesResponse> {
 }
 
 /**
- * 新增/改一套并切成当前；只给 `id` + `makeActive` 就是**切换**（不用重发密钥）。
+ * Add/change a profile and make it current; only `id` + `makeActive` = **switch** (no key sent).
  *
- * `keyStoredIn` 会如实说密钥落在哪（keychain / file / env:VAR），页面照抄给用户看。
+ * `keyStoredIn` says where the key landed (keychain / file / env:VAR); the page relays it.
  */
 export async function saveModel(params: ModelSaveParams): Promise<ModelSaveResponse> {
   const response = await apiFetch("/api/model/save", {
@@ -237,7 +237,7 @@ export async function saveModel(params: ModelSaveParams): Promise<ModelSaveRespo
   return (await response.json()) as ModelSaveResponse;
 }
 
-/** 删一套，连它的凭据一起。 */
+/** Delete a profile, along with its credentials. */
 export async function removeModel(params: ModelRemoveParams): Promise<ModelRemoveResponse> {
   const response = await apiFetch("/api/model/remove", {
     method: "POST",
@@ -248,14 +248,14 @@ export async function removeModel(params: ModelRemoveParams): Promise<ModelRemov
   return (await response.json()) as ModelRemoveResponse;
 }
 
-/** 用量台账（迁移 0010）：per-model 聚合 + 总数。只记账不强制。 */
+/** Usage ledger (migration 0010): per-model aggregation + totals. Bookkeeping only. */
 export async function fetchUsage(): Promise<UsageSummaryResponse> {
   const response = await apiFetch("/api/usage", { headers: { accept: "application/json" } });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as UsageSummaryResponse;
 }
 
-/** 审批审计（迁移 0011）：最近 100 条「问了才跑」，新的在前。 */
+/** Approval audit (migration 0011): the latest 100 "asked-before-run" entries, newest first. */
 export async function fetchApprovals(): Promise<ApprovalLogResponse> {
   const response = await apiFetch("/api/approvals", { headers: { accept: "application/json" } });
   if (!response.ok) throw new ApiError(await errorOf(response));
@@ -263,11 +263,11 @@ export async function fetchApprovals(): Promise<ApprovalLogResponse> {
 }
 
 /**
- * 上传一个文件，返回相对 home 的路径。
+ * Upload one file, returning the path relative to home.
  *
- * 通道是原始字节而不是 multipart：单文件用不着信封，服务端也少一个解析器。
- * 落盘名由服务端生成（用户输入进不了路径）；返回的路径前端会拼上 home
- * 变成绝对路径注进消息 —— 模型用 read_file 自己读（引用与读取解耦）。
+ * The channel is raw bytes rather than multipart: a single file needs no envelope, and the
+ * server skips a parser. The name is server-generated (user input can't enter the path); the
+ * frontend prepends home and injects the absolute path — the model reads it with read_file.
  */
 export async function uploadFile(file: File): Promise<string> {
   const query = new URLSearchParams({ name: file.name });
@@ -282,10 +282,10 @@ export async function uploadFile(file: File): Promise<string> {
 }
 
 /**
- * 服务端目录浏览（选工作目录用）。
+ * Server-side directory browsing (for picking the working directory).
  *
- * 浏览器的文件夹选择器拿不到绝对路径，所以「像桌面应用那样选文件夹」
- * 由知道文件系统的服务端代劳 —— 只读、只列子目录。
+ * The browser's folder picker can't get absolute paths, so "picking a folder like a desktop
+ * app" is done by the server, which knows the filesystem — read-only, subdirectories only.
  */
 export async function fetchFs(path: string | null, hidden = false): Promise<FsListing> {
   const query = new URLSearchParams();
@@ -299,8 +299,8 @@ export async function fetchFs(path: string | null, hidden = false): Promise<FsLi
 }
 
 /**
- * 在 parent 下新建一个子目录：选择器里
- * 「选目录」途中就能建目录，不用跳出弹层去开终端。名字纪律在服务端。
+ * Create a subdirectory under parent: a directory can be created mid-"pick" in the selector,
+ * without jumping out of the overlay to open a terminal. Name discipline lives on the server.
  */
 export async function createFolder(parent: string, name: string): Promise<string> {
   const query = new URLSearchParams({ path: parent, name });
@@ -313,12 +313,12 @@ export async function createFolder(parent: string, name: string): Promise<string
   return parsed.path;
 }
 
-/** 「最近使用」的工作目录（记住、直达）。 */
+/** "Recently used" working directories (remembered, one-click). */
 export interface Recents {
   paths: string[];
 }
 
-/** 最近用过的目录（服务端持久化在 home/workspaces.json）。 */
+/** Recently used directories (persisted server-side in home/workspaces.json). */
 export async function fetchRecents(): Promise<string[]> {
   const response = await apiFetch("/api/fs/recents", {
     headers: { accept: "application/json" },
@@ -327,7 +327,7 @@ export async function fetchRecents(): Promise<string[]> {
   return ((await response.json()) as Recents).paths;
 }
 
-/** 选定一个目录：记进「最近使用」。失败不碍事 —— 便利品没有资格报警。 */
+/** Record a chosen directory into "Recents". Failure doesn't matter — a convenience has no alarm. */
 export async function recordRecent(path: string): Promise<void> {
   try {
     await apiFetch(`/api/fs/recents?path=${encodeURIComponent(path)}`, {
@@ -335,11 +335,11 @@ export async function recordRecent(path: string): Promise<void> {
       headers: { accept: "application/json" },
     });
   } catch {
-    /* 忽略：下次 turn 用了它还会记。 */
+    /* Ignore: it'll be recorded again the next time a turn uses it. */
   }
 }
 
-/** 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。 */
+/** Scheduling state snapshot (migration 0012): per-job last_fired/claimed/catch_up/delivery. */
 export async function fetchSchedules(): Promise<ScheduleListResponse> {
   const response = await apiFetch("/api/schedules", { headers: { accept: "application/json" } });
   if (!response.ok) throw new ApiError(await errorOf(response));

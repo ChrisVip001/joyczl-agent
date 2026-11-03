@@ -3,6 +3,6 @@ import type { JsonRpcError } from "./JsonRpcError";
 import type { JsonRpcResponse } from "./JsonRpcResponse";
 
 /**
- * 服务端回的任意一帧：应答或错误。
+ * Any frame the server sends back: a response or an error.
  */
 export type JsonRpcMessage = JsonRpcResponse | JsonRpcError;

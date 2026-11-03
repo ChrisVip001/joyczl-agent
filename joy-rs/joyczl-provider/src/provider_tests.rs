@@ -1,7 +1,7 @@
-//! wire format 的往返测试。
+//! Round-trip tests for the wire formats.
 //!
-//! 不联网 —— 转换函数是纯函数，直接喂固定的应答体。
-//! 真正的网络行为由 smoke/集成测试覆盖。
+//! No network — the conversion functions are pure; fixed response bodies are fed directly.
+//! Real network behavior is covered by smoke/integration tests.
 
 use serde_json::{json, Value};
 
@@ -47,7 +47,7 @@ fn anthropic_parse_survives_missing_usage() {
 
 #[test]
 fn stop_reason_unknown_value_becomes_other() {
-    // 服务端加新停因不该把 Joy 打崩。
+    // A server adding a new stop reason must not crash Joy.
     assert_eq!(stop_reason("end_turn"), StopReason::EndTurn);
     assert_eq!(stop_reason("tool_use"), StopReason::ToolUse);
     assert_eq!(stop_reason("max_tokens"), StopReason::MaxTokens);
@@ -94,11 +94,11 @@ fn openai_conversion_round_trips_tool_calls() {
     let body = to_openai(&request);
     assert_eq!(body["model"], "gpt-5.5");
     assert_eq!(body["max_completion_tokens"], 1024);
-    // system 是第一条
+    // system comes first
     assert_eq!(body["messages"][0]["role"], "system");
     assert_eq!(body["messages"][0]["content"], "你是 Joy");
 
-    // assistant：文本 + tool_calls 合成一条
+    // assistant: text + tool_calls merged into one
     let assistant = &body["messages"][2];
     assert_eq!(assistant["role"], "assistant");
     assert_eq!(assistant["content"], "好的");
@@ -109,16 +109,16 @@ fn openai_conversion_round_trips_tool_calls() {
     let parsed: Value = serde_json::from_str(arguments).expect("arguments 是 JSON 字符串");
     assert_eq!(parsed["subject"], "alex");
 
-    // tool 结果单独一条 tool 消息
+    // tool results get their own tool message
     let tool = &body["messages"][3];
     assert_eq!(tool["role"], "tool");
     assert_eq!(tool["tool_call_id"], "call_1");
 
-    // tools 声明
+    // tools declarations
     assert_eq!(body["tools"][0]["type"], "function");
     assert_eq!(body["tools"][0]["function"]["name"], "save_note");
 
-    // 往返
+    // round trip
     let response_body = json!({
         "choices": [{"message": {
             "content": "已记住。",
@@ -138,7 +138,7 @@ fn openai_conversion_round_trips_tool_calls() {
 
 #[test]
 fn openai_rate_limit_error_body_becomes_api_error_not_parse_error() {
-    // OpenRouter 限流时回 200 + error、没有 choices。
+    // OpenRouter rate limits return 200 + error and no choices.
     let body = json!({"error": {"message": "Rate limit exceeded", "code": 429}});
     let error = from_openai(&serde_json::to_string(&body).unwrap()).expect_err("应当报错");
     assert!(error.to_string().contains("Rate limit"), "{error}");
@@ -157,12 +157,12 @@ fn resolve_rejects_unknown_provider_with_the_list() {
     );
 }
 
-// ---- 本地推理（ollama）------------------------------------------------------
+// ---- Local inference (ollama) -----------------------------------------------
 
 #[test]
 fn local_provider_needs_no_key() {
-    // 环境里什么都没有也解析得出来 —— 这正是本地推理的意义：
-    // 离线、零成本、对话不出这台机器。
+    // Resolves even with nothing in the environment — that is the whole point of local
+    // inference: offline, zero cost, conversation never leaves this machine.
     let settings = joyczl_config::Settings {
         provider: "ollama".to_string(),
         ..Default::default()
@@ -183,7 +183,7 @@ fn local_provider_is_openai_wire_at_the_local_endpoint() {
 
 #[test]
 fn local_provider_still_honours_explicit_overrides() {
-    // LM Studio / vLLM 就是靠 JOY_BASE_URL + JOY_MODEL 指过去的。
+    // LM Studio / vLLM are pointed at exactly via JOY_BASE_URL + JOY_MODEL.
     let settings = joyczl_config::Settings {
         provider: "ollama".to_string(),
         base_url: Some("http://127.0.0.1:1234/v1".to_string()),
@@ -198,8 +198,8 @@ fn local_provider_still_honours_explicit_overrides() {
 
 #[test]
 fn a_cloud_provider_still_requires_a_key() {
-    // 免 key 只对本地成立。开发机上可能恰好配着这个 key —— 有就跳过，
-    // 不然断言的不是代码而是这台机器的 .env。
+    // Key-free holds only for local providers. A dev machine may happen to have this key —
+    // skip if so, otherwise the assertion tests the machine's .env, not the code.
     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         return;
     }
@@ -212,7 +212,7 @@ fn a_cloud_provider_still_requires_a_key() {
     assert!(error.contains("ANTHROPIC_API_KEY"), "{error}");
 }
 
-// ---- token 估算 ------------------------------------------------------------
+// ---- Token estimation --------------------------------------------------------
 
 #[test]
 fn token_estimation_is_monotonic_and_never_zero_for_real_text() {
@@ -224,7 +224,7 @@ fn token_estimation_is_monotonic_and_never_zero_for_real_text() {
     assert!(short > 0, "中文至少要数出 token");
     assert!(long > short, "更长的文本成本更高");
 
-    // 中文在这个编码器下偏高，但量级要对：一个字至少一个 token。
+    // Chinese runs high on this encoder, but the magnitude must hold: at least one token per char.
     assert!(crate::tokens::estimate_text("中文测试四个字") >= 4);
 }
 
@@ -252,36 +252,36 @@ fn tool_declarations_cost_tokens_too() {
 #[test]
 fn context_overflow_is_recognised_from_the_wordings_providers_actually_use() {
     use crate::error::looks_like_context_overflow;
-    // OpenAI 风格
+    // OpenAI style
     assert!(looks_like_context_overflow(
         400,
         "This model's maximum context length is 200000 tokens"
     ));
-    // Anthropic 风格
+    // Anthropic style
     assert!(looks_like_context_overflow(
         400,
         "prompt is too long: 250000 tokens > 200000 maximum"
     ));
-    // 中文网关
+    // Chinese gateway
     assert!(looks_like_context_overflow(400, "请求超出上下文长度限制"));
-    // 别的 4xx 不该被误判成溢出 —— 误判会带来一次没意义的压缩
+    // Other 4xx must not be misjudged as overflow — a misjudgment wastes a compaction
     assert!(!looks_like_context_overflow(400, "invalid api key"));
     assert!(!looks_like_context_overflow(404, "context length"));
-    // 2xx 更不该
+    // 2xx even less so
     assert!(!looks_like_context_overflow(200, "context length"));
 }
 
-// ---- 分级退避重试 ------------------------------------------------------------
+// ---- Tiered backoff retries ---------------------------------------------------
 
-/// 把一次请求**读完**（头部 + `Content-Length` 指的 body）再回话。
+/// **Finish reading** a request (head + the body its `Content-Length` names) before replying.
 ///
-/// 不等读完就回、然后关连接，会把还在写 body 的客户端顶掉 —— macOS/Linux 上
-/// 多半没事，Windows 上表现为 RST，客户端那边看到的是
-/// 「error sending request」，于是「服务器明明回了」变成一条网络错误。
-/// 这个测试的请求带着整份 system prompt 与工具表，body 超过一次 read 的量，
-/// 所以它只在 Windows 上稳定复现。
+/// Replying before the read completes and closing the connection knocks over a client still
+/// writing its body — mostly harmless on macOS/Linux, RST on Windows: the client sees
+/// "error sending request", so "the server did answer" becomes a network error. This test's
+/// request carries a full system prompt and tool table; the body exceeds one read, so it
+/// reproduces reliably only on Windows.
 async fn drain_request(socket: &mut tokio::net::TcpStream) {
-    // 导入写在函数里：这两个测试文件各自在别处按需 use，别处不引这个 trait。
+    // Imports live inside the function: each test file uses what it needs elsewhere; nothing else pulls this trait.
     use tokio::io::AsyncReadExt;
 
     let mut seen: Vec<u8> = Vec::new();
@@ -308,10 +308,10 @@ async fn drain_request(socket: &mut tokio::net::TcpStream) {
     }
 }
 
-/// 一个只够用的 HTTP 服务器：按剧本逐个应答。
+/// A just-good-enough HTTP server: answers one by one per the script.
 ///
-/// 手写而不是引测试框架 —— 我们要的就是「第一次 429、第二次 200」这种最小
-/// 剧本，一个 TcpListener 加几行文本足够，而且能从 hits 上直接看出重试了几次。
+/// Handwritten instead of pulling in a test framework — all we want is a minimal script like
+/// "first 429, then 200"; a TcpListener plus a few lines suffices, and `hits` shows the retries.
 struct Scripted {
     base_url: String,
     hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -330,7 +330,7 @@ async fn scripted(responses: Vec<(u16, &'static str)>) -> Scripted {
     tokio::spawn(async move {
         let mut index = 0usize;
         while let Ok((mut socket, _)) = listener.accept().await {
-            // 请求内容不看，但必须**读完**（见 drain_request 的说明）。
+            // The request body is not inspected, but must be **fully read** (see drain_request).
             drain_request(&mut socket).await;
             counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -341,7 +341,7 @@ async fn scripted(responses: Vec<(u16, &'static str)>) -> Scripted {
             } else {
                 "OK"
             };
-            // 429 带一个 `Retry-After: 0`：既验证我们读了它，又让测试不真等。
+            // The 429 carries `Retry-After: 0`: proves we read it, and keeps the test from really waiting.
             let extra = if status == 429 {
                 "Retry-After: 0\r\n"
             } else {
@@ -391,7 +391,7 @@ fn notice_sink() -> (
 const OK_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","content":"好了"}}],
                            "usage":{"prompt_tokens":3,"completion_tokens":1}}"#;
 
-/// 429 → 退避 → 重试成功，而且**说了出去**。
+/// 429 → backoff → retry succeeds, and it is **announced**.
 #[tokio::test]
 async fn a_rate_limit_is_retried_and_announced() {
     let server = scripted(vec![
@@ -427,7 +427,7 @@ async fn a_rate_limit_is_retried_and_announced() {
     assert_eq!(seen[0].delay_ms, 0, "要听服务端 Retry-After 的（这里是 0）");
 }
 
-/// 关掉重试（`JOY_LLM_RETRIES=0`）时，429 立刻如实冒上去。
+/// With retries off (`JOY_LLM_RETRIES=0`), a 429 surfaces immediately and honestly.
 #[tokio::test]
 async fn retries_can_be_switched_off() {
     let server = scripted(vec![(429, r#"{"error":{"message":"slow down"}}"#)]).await;
@@ -452,7 +452,7 @@ async fn retries_can_be_switched_off() {
     assert!(seen.lock().expect("锁").is_empty(), "没有重试就没有通知");
 }
 
-/// 400（key 错、参数错）**不**重试：重试只会以同样方式再失败一次。
+/// 400 (bad key, bad params) is **not** retried: a retry only fails again the same way.
 #[tokio::test]
 async fn a_client_error_is_not_retried() {
     let server = scripted(vec![(400, r#"{"error":{"message":"bad key"}}"#)]).await;
@@ -481,7 +481,7 @@ async fn a_client_error_is_not_retried() {
     assert!(seen.lock().expect("锁").is_empty());
 }
 
-/// 重试类别的判定表本身也要钉住 —— 这是整个机制的地基。
+/// The retryability decision table itself must be pinned — it is the mechanism's foundation.
 #[test]
 fn only_transient_failures_are_retryable() {
     use crate::error::ProviderError;
@@ -494,7 +494,7 @@ fn only_transient_failures_are_retryable() {
     assert!(!http(404).retryable());
     assert!(!ProviderError::Api("x".to_string()).retryable());
     assert!(!ProviderError::Parse("x".to_string()).retryable());
-    // 上下文溢出是「该压缩」，不是「该再撞一次」。
+    // Context overflow means "compact", not "slam into it again".
     assert!(!ProviderError::ContextOverflow {
         status: 400,
         body: "maximum context length".to_string()

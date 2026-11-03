@@ -1,47 +1,47 @@
-//! 记忆后端的契约。
+//! The memory-backend contracts.
 //!
-//! Joy 对「事实住在哪」保持中立：今天只有 SQLite，明天可以是 pgvector 或
-//! 托管记忆 API。这种中立只有一个前提：**每个后端都会做同一组动作**。
-//! 没有契约的时候，
-//! 第二个后端少实现了两个方法，调用点的防御式兜底把一个响亮的错误
-//! 变成了安静的谎言 —— agent 对用户说「没有这条记忆」，而记忆明明在库里。
+//! Joy stays neutral about "where facts live": today only SQLite, tomorrow pgvector or a
+//! hosted memory API. That neutrality has one premise: **every backend performs the same
+//! set of actions**. Without a contract, a second backend missing two methods turns a loud
+//! error into a quiet lie via call-site defensive fallbacks — the agent tells the user
+//! "no such memory" while the memory sits in the store.
 //!
-//! 所以：实现这两个 trait，然后跑 [`crate::conformance`] 里同一套验收 ——
-//! 任何后端缺胳膊少腿，都在 CI 里现形，而不是在用户面前。
+//! So: implement these two traits, then run the same acceptance suite in
+//! [`crate::conformance`] — any half-built backend shows up in CI, not in front of users.
 //!
-//! 契约要点（实现者必读）：
-//!   * **miss 绝不报错** —— 返回空列表 / `false`。会抛错的后端会把整轮带走。
-//!   * `search` 返回空必须意味着「没命中」，绝不是「搜索没跑成」。
-//!   * 本地存储天然同步（写即索引）；托管后端若最终一致，请在自己的
-//!     实现里处理就绪等待，契约层面不设 `settle` —— 上游不该为某一家
-//!     后端的特性付接口复杂度。
+//! Contract essentials (implementers, read this):
+//!   * **A miss never errors** — return an empty list / `false`; a thrower takes the turn down.
+//!   * An empty `search` must mean "no hit", never "the search didn't run".
+//!   * Local storage is naturally synchronous (write = indexed); if a hosted backend is
+//!     eventually consistent, handle readiness in your own implementation — no `settle` in
+//!     the contract: upstream shouldn't pay interface complexity for one backend's trait.
 
 use anyhow::Result;
 
 use crate::{EpisodeRow, Episodes, FactRow, Facts};
 
-/// 语义记忆：关于用户、人、项目、偏好的长期事实。
+/// Semantic memory: long-term facts about the user, people, projects, preferences.
 ///
-/// `async_fn_in_trait` 的取舍与 mcp 的 `Rpc` trait 相同：接口面留给
-/// 「自己仓库里、按 `impl Trait` 传」的实现，不为 dyn 兼容付 Send 装箱的
-/// 复杂度。将来真有跨 crate 的远端后端，再升级成显式的 BoxFuture 版本。
+/// The `async_fn_in_trait` tradeoff is the same as mcp's `Rpc` trait: the interface is for
+/// "in this repo, passed as `impl Trait`" implementations, without paying Send-boxing
+/// complexity for dyn compat. A real cross-crate remote backend can upgrade to BoxFuture later.
 #[allow(async_fn_in_trait)]
 pub trait SemanticStore {
-    /// 存一条事实。`source` 记录谁说的（"user" / "consolidation"），来源要可追溯。
+    /// Store a fact. `source` records who said it ("user" / "consolidation") — provenance matters.
     async fn add(&self, subject: &str, content: &str, source: &str, kind: &str) -> Result<FactRow>;
-    /// 按关键词检索，相关性降序。没命中返回空 vec，绝不报错。
+    /// Search by keyword, relevance desc. No hit = empty vec, never an error.
     async fn search(&self, query: &str, top_k: u32) -> Result<Vec<FactRow>>;
-    /// 最近的事实（按 id 倒序），dashboard 与 list_memory 用。
+    /// Most recent facts (id desc), used by dashboard and list_memory.
     async fn recent(&self, limit: u32, offset: u32) -> Result<Vec<FactRow>>;
-    /// 改一条事实的正文。id 不存在 → `false`，不报错。
+    /// Change a fact's content. Missing id → `false`, no error.
     async fn update(&self, id: i64, content: &str) -> Result<bool>;
-    /// 删一条事实。id 不存在 → `false`，不报错。
+    /// Delete a fact. Missing id → `false`, no error.
     async fn delete(&self, id: i64) -> Result<bool>;
-    /// 忘掉某主题下的全部事实，返回实际删除条数。
+    /// Forget all facts under a subject; returns how many were actually deleted.
     async fn forget_subject(&self, subject: &str) -> Result<u64>;
 }
 
-/// 情景记忆：发生过的事，带日期。
+/// Episodic memory: things that happened, with dates.
 #[allow(async_fn_in_trait)]
 pub trait EpisodicStore {
     async fn add(&self, happened_at: &str, summary: &str) -> Result<i64>;
@@ -52,7 +52,7 @@ pub trait EpisodicStore {
 
 impl SemanticStore for Facts {
     async fn add(&self, subject: &str, content: &str, source: &str, kind: &str) -> Result<FactRow> {
-        // 存储抽象不需要「是不是新记的」这个细节，只把行交出去（去重仍然发生）。
+        // The storage abstraction doesn't need "is it new"; hand over the row (dedup still happens).
         Ok(Facts::add(self, subject, content, source, kind).await?.0)
     }
     async fn search(&self, query: &str, top_k: u32) -> Result<Vec<FactRow>> {

@@ -1,4 +1,4 @@
-//! 技能安装/更新的测试：版本比对、校验先于写入、备份、原子替换。
+//! Skill install/update tests: version comparison, validate-before-write, backup, atomic swap.
 
 use super::install::{
     install, installed_version, needs_update, parse_index, update_all, IndexEntry, Outcome,
@@ -40,16 +40,16 @@ fn version_comparison_never_downgrades() {
     assert!(needs_update(Some("1.9.0"), "1.10.0"), "按段比大小");
     assert!(!needs_update(Some("1.1.0"), "1.1.0"));
     assert!(!needs_update(Some("2.0.0"), "1.9.0"), "不降级");
-    // 比不了大小的（非数字）就老实不动。
+    // Uncomparable (non-numeric) versions stay untouched.
     assert!(!needs_update(Some("2024-05"), "2024-06"));
 }
 
-/// 三条写入路径（`joy skill install` / `joy skill update` / `create_skill`）
-/// 共用同一条名字规则。
+/// The three write paths (`joy skill install` / `joy skill update` / `create_skill`)
+/// share one name rule.
 ///
-/// 它们曾经各写一份，并且**已经分叉**：install_from_text 放行首尾带连字符的
-/// 名字，另两条不放行 —— 同一个名字在不同入口一边能过一边不能过。这个测试
-/// 钉住「一处规则」，名字规则再分叉就会在这里红。
+/// They once each had their own and **already diverged**: install_from_text allowed
+/// leading/trailing hyphens, the others didn't — one name passing here, failing there.
+/// This test pins "one rule"; another divergence turns it red.
 #[test]
 fn every_writer_agrees_on_what_a_valid_name_is() {
     assert!(is_slug("weekly-review"));
@@ -77,22 +77,22 @@ fn install_validates_before_touching_the_disk() {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path();
 
-    // 名字不对版。
+    // Name mismatch.
     let wrong = install(
         home,
         "weekly-review",
         "---\nname: other\ndescription: x\n---\nb",
     );
     assert!(wrong.is_err(), "名不对版要拒绝");
-    // 内容不合格。
+    // Invalid content.
     assert!(install(home, "weekly-review", "没有 frontmatter").is_err());
-    // 路径穿越。
+    // Path traversal.
     assert!(install(home, "../evil", GOOD).is_err());
     assert!(!home.join("skills").join("evil").exists());
-    // 一路拒绝下来，skills 目录里什么都不该有。
+    // After all the rejections, nothing should exist in the skills dir.
     assert!(installed_version(home, "weekly-review").is_none());
 
-    // 合格的才落盘。
+    // Only the valid one lands on disk.
     let path = install(home, "weekly-review", GOOD).expect("装上");
     assert!(path.exists());
     assert_eq!(
@@ -116,12 +116,12 @@ fn a_reinstall_backs_up_the_previous_version() {
         installed_version(home, "weekly-review").as_deref(),
         Some("1.2.0")
     );
-    // 旧版躺在 .backup 里，可回退。
+    // The old version rests in .backup, rollback possible.
     let backups = std::fs::read_dir(home.join("skills").join(".backup"))
         .expect("备份目录")
         .count();
     assert_eq!(backups, 1, "替换前要备份");
-    // 暂存目录不留垃圾。
+    // The staging dir leaves no junk.
     let staged = std::fs::read_dir(home.join("skills").join(".staging"))
         .map(|d| d.count())
         .unwrap_or(0);
@@ -132,7 +132,7 @@ fn a_reinstall_backs_up_the_previous_version() {
 async fn update_all_installs_skips_and_reports_failures() {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path();
-    // 已装一个 1.1.0，索引里有一个同版本、一个更新、一个坏内容、一个取不回。
+    // Installed 1.1.0; the index holds one same version, one newer, one bad content, one unfetchable.
     install(home, "weekly-review", GOOD).expect("先装一版");
 
     let entries = vec![
@@ -169,11 +169,11 @@ async fn update_all_installs_skips_and_reports_failures() {
         "取不回要报告"
     );
 
-    // 报告失败的没有落盘。
+    // The reported failures never touched disk.
     assert!(installed_version(home, "broken").is_none());
-    // 成功的落盘了。
+    // The successes landed on disk.
     assert_eq!(installed_version(home, "roadmap").as_deref(), Some("2.0.0"));
-    // ok 的只有两条（已是最新 + 装上），两条失败的不算。
+    // Only two oks (up-to-date + installed); the two failures don't count.
     assert_eq!(outcomes.iter().filter(|o| o.ok()).count(), 2);
     assert!(
         outcomes.iter().all(|o| !o.line().is_empty()),

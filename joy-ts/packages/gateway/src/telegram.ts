@@ -2,18 +2,18 @@ import { explain } from "./bridge.ts";
 import type { Responder } from "./bridge.ts";
 import { splitMessage } from "./text.ts";
 
-// `Responder`（适配器与 Joy 的接口）和 `splitMessage`（按上限切长回答）
-// 都是两个聊天平台共用的，所以真正的定义不在这儿。在这儿重新导出，
-// 是为了调用方和测试照旧只认这一个模块。
+// `Responder` (the adapter-to-Joy interface) and `splitMessage` (splits long replies by the cap)
+// are shared by both chat platforms, so their real definitions live elsewhere. Re-exporting here
+// keeps callers and tests pointing at this one module as before.
 export type { Responder } from "./bridge.ts";
 export { splitMessage } from "./text.ts";
 
-/** Telegram 单条消息的上限。超了 API 直接报错，不会替你截。 */
+/** Telegram's per-message cap. Past it the API errors out; it won't truncate for you. */
 export const MESSAGE_LIMIT = 4096;
 
-// ---- Telegram API 的形状 ----------------------------------------------------
-// 这些是 Telegram 的协议，不是 Joy 的，所以生成物里没有它们，只能手写。
-// 只写了用得到的字段。
+// ---- Telegram API shapes ----------------------------------------------------
+// These are Telegram's protocol, not Joy's, so they're absent from the generated artifacts and
+// must be handwritten. Only the fields actually used are written down.
 
 interface TelegramChat {
   id: number;
@@ -47,24 +47,24 @@ interface TelegramEnvelope<T> {
 export interface TelegramAdapterOptions {
   token: string;
   /**
-   * 谁可以用。写数字 id 或 `@用户名`。**不填就是谁都能用** ——
-   * 自己在机器上试的时候方便，但一个放出去的 bot 不设它，等于把自己的
-   * 模型额度借给整个互联网。
+   * Who may use it. Numeric ids or `@usernames`. **Unset means anyone** — handy when trying it
+   * on your own machine, but a public bot without it lends your model quota to the whole
+   * internet.
    */
   allow?: readonly string[];
-  /** 长轮询一次挂多久（秒）。 */
+  /** How long one long poll hangs (seconds). */
   pollSeconds?: number;
-  /** 换掉 fetch 来测，默认用全局的。 */
+  /** Swap fetch for tests; the global one by default. */
   fetch?: typeof globalThis.fetch;
   onLog?: (text: string) => void;
 }
 
 /**
- * Telegram 适配器。
+ * The Telegram adapter.
  *
- * 长轮询而不是 webhook：webhook 要一个公网可达的 HTTPS 地址、一张证书、
- * 还有一条「注册/注销 webhook」的生命周期要管。长轮询只要能出网就能跑，
- * 一台笔记本上 `TELEGRAM_BOT_TOKEN=… npm start:telegram` 就活了。
+ * Long polling instead of a webhook: a webhook needs a public HTTPS address, a certificate, and
+ * a register/unregister lifecycle to manage. Long polling runs wherever there's outbound
+ * network — `TELEGRAM_BOT_TOKEN=… npm start:telegram` on a laptop and it's alive.
  */
 export class TelegramAdapter {
   readonly #token: string;
@@ -89,7 +89,7 @@ export class TelegramAdapter {
     );
   }
 
-  /** 一直转到 `stop()`。正常跑不会返回。 */
+  /** Loops until `stop()`. Never returns in normal operation. */
   async run(): Promise<void> {
     let offset = 0;
 
@@ -103,14 +103,14 @@ export class TelegramAdapter {
         this.#failures = 0;
 
         for (const update of updates) {
-          // 先推进 offset 再处理：处理时崩了也不该把同一条消息再收一遍，
-          // 那会让用户看到重复的回答。
+          // Advance the offset before handling: a crash mid-handling must not re-deliver the
+          // same message, or the user sees duplicate replies.
           offset = update.update_id + 1;
           const message = update.message;
           if (message !== undefined) {
-            // 收下这一条就得兜住它。没兜住的话，回话失败（用户把 bot 封了、
-            // 被踢出群）会变成一次未捕获的拒绝 —— Node 默认就因此把进程带走，
-            // 而这个进程管着所有人的会话。
+            // Accepting a message means catching its failures. Uncaught, a failed reply (the
+            // user blocked the bot, the bot was kicked from a group) becomes an unhandled
+            // rejection — Node takes the process down by default, and this process serves everyone.
             void this.#handle(message).catch((error: unknown) => {
               this.#onLog(
                 `这条消息没处理完：${error instanceof Error ? error.message : String(error)}`,
@@ -127,16 +127,16 @@ export class TelegramAdapter {
 
   stop(): void {
     this.#stopped = true;
-    // 长轮询这会儿多半正挂在一次 getUpdates 上，得把它掀了才退得干净。
+    // The long poll is most likely hanging on a getUpdates right now; abort it for a clean exit.
     this.#abort.abort();
   }
 
   /**
-   * 出网抖了一下不该让 bot 死掉。
+   * A network hiccup must not kill the bot.
    *
-   * 退避到 30 秒封顶：Telegram 那边偶发 502、笔记本合盖再打开、
-   * 手机热点换基站 —— 这些都是「等会儿就好」，而一个直接退出的进程
-   * 只能靠人重新敲命令。
+   * Backoff capped at 30 seconds: Telegram's occasional 502s, a laptop waking from sleep, a
+   * phone hotspot switching cells — all "wait a moment and it's fine". A process that exits
+   * outright can only be restarted by a human typing the command again.
    */
   async #backoff(error: unknown): Promise<void> {
     this.#failures += 1;
@@ -153,16 +153,16 @@ export class TelegramAdapter {
     const chatId = message.chat.id;
 
     if (!this.#allowed(message.from)) {
-      // 不搭理，也不回一句「你没权限」—— 那等于告诉陌生人这个 bot 是活的，
-      // 反而招来更多试探。日志里留个痕就够了。
+      // Ignore silently, and don't reply "no permission" — that tells a stranger the bot is
+      // alive and invites more probing. A trace in the logs is enough.
       this.#onLog(
         `忽略了不在白名单里的人：${message.from?.id ?? "?"}（chat ${chatId}）`,
       );
       return;
     }
 
-    // 会话按**聊天**分，不按人分：群里大家共用一段对话才聊得下去，
-    // 而且 @ 来 @ 去的时候上下文本来就是一个。
+    // Sessions split by **chat**, not by person: a group shares one conversation or nobody can
+    // keep up, and while @-mentioning around the context is one anyway.
     const conversation = `telegram:${chatId}`;
 
     const text = message.text;
@@ -175,9 +175,9 @@ export class TelegramAdapter {
     try {
       reply = await this.#respond(conversation, text);
     } catch (error) {
-      // 回一句说清为什么，比默不作声强 —— 用户在聊天框里没有任何别的线索。
-      // 只有**问 Joy** 这一段的错才这么翻：发不出去是另一回事，混进来会
-      // 变成「连不上 Joy」这种指错方向的话。
+      // A reply explaining why beats silence — the chat box offers the user no other clue.
+      // Only errors from **asking Joy** get translated this way: failing to send is another
+      // matter; mixing them in produces misdirection like "can't reach Joy".
       reply = explain(error);
     }
     await this.#say(chatId, reply);

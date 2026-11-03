@@ -1,8 +1,8 @@
-//! oauth 的测试。
+//! Tests for oauth.
 //!
-//! 端到端那条（sign_in）起了**真的本地授权服务器**和真的回调监听 ——
-//! 唯一被替换的是浏览器：测试自己充当浏览器，往本地回调端口发请求。
-//! 发现、注册、PKCE、换 token、落盘这条链，一寸假数据都不用。
+//! The end-to-end one (sign_in) runs a **real local authorization server** and a real
+//! callback listener — the only thing replaced is the browser: the test acts as the browser
+//! and posts to the local callback port. Discover, register, PKCE, exchange, persist: all real.
 
 use super::oauth::{
     base64url_nopad, ensure_access_token, pkce_challenge, pkce_verifier, sanitise, sign_in,
@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[test]
 fn server_names_become_safe_filenames() {
     assert_eq!(sanitise("team-memory"), "team-memory");
-    // 路径穿越的零件全部变下划线。
+    // Path traversal parts all become underscores.
     assert_eq!(sanitise("../evil"), "___evil");
     assert_eq!(sanitise("a b/c"), "a_b_c");
     assert_eq!(sanitise("很长的名字").len(), "很长的名字".len());
@@ -82,7 +82,7 @@ fn expired_is_judged_from_the_clock() {
         expires_at: Some(now - 10)
     }
     .expired());
-    // 没有 expires_at = 服务器没说 = 当没过期，401 会替我们说话。
+    // No expires_at = the server didn't say = treat as unexpired; the 401 will speak for us.
     assert!(!StoredTokens {
         access_token: "a".into(),
         refresh_token: None,
@@ -91,7 +91,7 @@ fn expired_is_judged_from_the_clock() {
     .expired());
 }
 
-/// RFC 7636 附录 B 的官方测试向量 —— PKCE 实现对不对，这一条说了算。
+/// The official test vector from RFC 7636 Appendix B — the arbiter of whether PKCE is right.
 #[test]
 fn pkce_matches_the_rfc_vector() {
     let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -108,7 +108,7 @@ fn base64url_avoids_the_url_hostile_alphabet() {
         !encoded.contains('+') && !encoded.contains('/') && !encoded.contains('='),
         "{encoded}"
     );
-    // 长度规律：3 字节 → 4 字符，1 字节 → 2 字符（无填充）。
+    // Length rule: 3 bytes → 4 chars, 1 byte → 2 chars (no padding).
     assert_eq!(base64url_nopad(&[0x00]).len(), 2);
     assert_eq!(base64url_nopad(&[0x00, 0x00]).len(), 3);
     assert_eq!(base64url_nopad(&[0x00, 0x00, 0x00]).len(), 4);
@@ -119,10 +119,10 @@ fn base64url_avoids_the_url_hostile_alphabet() {
     );
 }
 
-/// 端到端：真 HTTP 的发现、注册、回调、换 token。测试自己当浏览器。
+/// End-to-end: real HTTP discovery, registration, callback, token exchange. The test plays browser.
 #[tokio::test]
 async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
-    // token 端点用一次性记录：记下收到的表单，供断言。
+    // The token endpoint uses a one-shot recorder: it logs the received forms for assertions.
     let received =
         std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<Vec<(String, String)>>::new()));
     let received_form = received.clone();
@@ -132,7 +132,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
         .unwrap();
     let auth_port = auth.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
-        // 三个请求：资源元数据、授权服务器元数据、注册、token —— 顺序不定但都齐。
+        // Four requests: resource metadata, auth-server metadata, register, token — order varies.
         let mut handled = 0;
         while handled < 4 {
             let (mut socket, _) = auth.accept().await.unwrap();
@@ -157,7 +157,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
             } else if target.contains("/token") {
                 let form = parse_form(&request);
                 received_form.lock().await.push(form.clone());
-                // code_verifier 和 code 都得在 —— PKCE 的兑换靠它们对上。
+                // code_verifier and code must both be there — PKCE's exchange needs them to match.
                 assert!(form
                     .iter()
                     .any(|(k, v)| k == "code_verifier" && !v.is_empty()));
@@ -178,14 +178,14 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
     let server_url = format!("http://127.0.0.1:{auth_port}/mcp");
     let dir = tempfile::tempdir().unwrap();
 
-    // 浏览器替身：从授权 URL 里取出真实的 state（真浏览器也是这么干的），
-    // 然后往本地回调端口发一次带 code 的重定向。
+    // The browser stand-in: take the real state out of the authorize URL (a real browser
+    // does the same), then send one redirect with a code to the local callback port.
     let authorize_slot: std::sync::Arc<std::sync::Mutex<Option<String>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
     let browser = {
         let authorize_slot = authorize_slot.clone();
         tokio::spawn(async move {
-            // 等 open_browser 把授权 URL 放进槽里。
+            // Wait for open_browser to put the authorize URL into the slot.
             let authorize_url = loop {
                 if let Some(url) = authorize_slot.lock().unwrap().clone() {
                     break url;
@@ -198,7 +198,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
                 .map(|p| p.trim_start_matches("state=").to_string())
                 .expect("授权 URL 里有 state");
 
-            // 等回调端口有人监听（sign_in 先 bind 再开浏览器），反复试连。
+            // Wait for the callback port to listen (sign_in binds before opening the browser); retry.
             let mut stream = None;
             for _ in 0..100 {
                 match tokio::net::TcpStream::connect("127.0.0.1:41765").await {
@@ -227,7 +227,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
 
     let client = reqwest::Client::new();
     let token = sign_in(&client, dir.path(), "demo", &server_url, &|url| {
-        // 真实现会开浏览器；测试里把 URL 放进槽（浏览器替身在外面取）。
+        // The real implementation opens a browser; in tests the URL goes into the slot.
         assert!(url.contains("/authorize?"));
         assert!(url.contains("code_challenge_method=S256"));
         *authorize_slot.lock().unwrap() = Some(url.to_string());
@@ -238,7 +238,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
     assert_eq!(token, "at-1");
     browser.await.unwrap();
 
-    // 落盘的东西齐：tokens + client_info。
+    // What got persisted is complete: tokens + client_info.
     let store = TokenStore::new(dir.path(), "demo");
     let loaded = store.load();
     assert_eq!(
@@ -247,7 +247,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
     );
     assert_eq!(loaded.client_info.unwrap()["client_id"], "client-123");
 
-    // 换 token 的请求里带上了 client_id 和 PKCE verifier。
+    // The token exchange request carried client_id and the PKCE verifier.
     let forms = received.lock().await.clone();
     let token_request = forms.last().expect("token 请求被收到");
     assert!(token_request
@@ -260,7 +260,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
     server.abort();
 }
 
-/// 没登录过的服务器：ensure_access_token 报「去登录」而不是崩溃。
+/// A never-signed-in server: ensure_access_token reports "go sign in" instead of crashing.
 #[tokio::test]
 async fn ensure_token_without_a_login_points_at_the_command() {
     let dir = tempfile::tempdir().unwrap();
@@ -270,14 +270,14 @@ async fn ensure_token_without_a_login_points_at_the_command() {
     assert!(error.contains("joy mcp login ghost"), "{error}");
 }
 
-// ---- 测试用的小工具 ---------------------------------------------------------
+// ---- Small helpers for the tests -------------------------------------------
 
 async fn read_http_request(socket: &mut tokio::net::TcpStream) -> String {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
         if let Some(head_end) = find_end(&buffer) {
-            // 头读完了：POST 的表单在 body 里，按 content-length 继续读。
+            // Headers done: a POST's form is in the body; keep reading per content-length.
             let head = String::from_utf8_lossy(&buffer[..head_end]).to_string();
             let length: usize = head
                 .lines()

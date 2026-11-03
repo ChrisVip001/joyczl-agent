@@ -1,13 +1,14 @@
-//! `joy mcp` —— MCP 服务器的查看、登录与对外服务。
+//! `joy mcp` — viewing, login, and serving of MCP servers.
 //!
-//! `joy mcp`         列出 mcp.json 里配的服务器和各自的鉴权方式
-//! `joy mcp login X` 跑一遍浏览器 OAuth（发现 → 注册 → 授权 → 换 token），
-//!                   token 落 `<home>/mcp-auth/X.json`（0600）
-//! `joy mcp serve`   反过来：Joy 自己当一台 MCP 服务器，把记忆暴露出去，
-//!                   让别的 agent 读同一份事实（stdio，见 joyczl-mcp/server.rs）
+//! `joy mcp`         lists servers configured in mcp.json and their auth methods
+//! `joy mcp login X` runs browser OAuth (discovery → registration → authorize →
+//!                   token exchange); the token lands in `<home>/mcp-auth/X.json` (0600)
+//! `joy mcp serve`   the reverse: Joy itself acts as an MCP server, exposing memory
+//!                   so other agents read the same facts (stdio, see joyczl-mcp/server.rs)
 //!
-//! 登录是唯一会开浏览器的地方 —— app-server 启动时缺 token 只会警告并
-//! 跳过该服务器，绝不擅自弹浏览器：「一轮对话绝不擅自执行」的同一条规矩。
+//! Login is the only place a browser opens — at startup a missing token only warns
+//! and skips that server, never popping a browser on its own: the same rule as
+//! "a turn never executes on its own".
 
 use std::path::Path;
 
@@ -33,8 +34,8 @@ pub async fn run(home: &Path, args: &[String]) -> Result<()> {
     }
 }
 
-/// `joy mcp serve`：开同一个 state.db（WAL + busy_timeout，本来就能多进程
-/// 共存），在 stdio 上说 MCP。告示只走 stderr —— stdout 是协议通道。
+/// `joy mcp serve`: opens the same state.db (WAL + busy_timeout; multi-process
+/// coexistence is fine by design) and speaks MCP over stdio. Notices go to stderr.
 async fn serve(home: &Path) -> Result<()> {
     let pool = joyczl_state::open(&home.join("state.db")).await?;
     eprintln!(
@@ -131,7 +132,7 @@ async fn login(config_path: &Path, home: &Path, name: &str) -> Result<()> {
         } else {
             "xdg-open"
         };
-        // 打不开（headless/SSH）不是错误 —— 上面打印的 URL 就是唯一的路。
+        // Failing to open (headless/SSH) is not an error — the URL above is the only path.
         let mut parts = browser.split_whitespace();
         if let Some(program) = parts.next() {
             let _ = std::process::Command::new(program)

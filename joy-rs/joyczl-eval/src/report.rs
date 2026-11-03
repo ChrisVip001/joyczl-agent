@@ -1,14 +1,14 @@
-//! 评测报告：最新一份 verdict + 永续的运行历史。
+//! Eval reports: the latest verdict + a permanent run history.
 //!
-//! `eval_report.json` 给人和 CI 看「最近跑成什么样」；`eval_runs.jsonl`
-//! 是 append-only 的历史 —— 模型换了、prompt 改了，分数曲线就长在这里。
+//! `eval_report.json` shows people and CI "how the latest run went"; `eval_runs.jsonl`
+//! is the append-only history — swap models, change prompts, and the score curve grows here.
 
 use std::path::Path;
 
 use anyhow::Result;
 use chrono::Local;
 
-/// 写最新报告并追加一条历史。写失败只警告 —— 账本不该拦住评测本身。
+/// Writes the latest report and appends one history entry. Write failures only warn — the ledger must not block the eval itself.
 pub fn write(home: &Path, suite: &str, payload: serde_json::Value) -> Result<()> {
     let record = serde_json::json!({
         "suite": suite,

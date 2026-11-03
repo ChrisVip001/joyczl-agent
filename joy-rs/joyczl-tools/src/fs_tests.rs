@@ -1,4 +1,4 @@
-//! `read_file` / `list_dir` 的行为边界。全部用临时目录，Windows 可跑。
+//! Behavior edges of `read_file` / `list_dir`. All temp dirs; runs on Windows too.
 
 use super::*;
 use crate::ToolRegistry;
@@ -10,7 +10,7 @@ async fn ctx() -> ToolCtx {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm
+    let _ = dir.keep(); // sqlite still writes -wal/-shm
     ToolCtx {
         cwd: None,
         approval: None,
@@ -36,7 +36,7 @@ async fn run(registry: &ToolRegistry, ctx: &ToolCtx, name: &str, args: Value) ->
     registry.execute(ctx.clone(), name, args).await
 }
 
-/// 基本读取：行号、总数、页脚。
+/// Basic read: line numbers, total, footer.
 #[tokio::test]
 async fn reads_a_file_with_line_numbers_and_a_footer() {
     let registry = registry();
@@ -53,7 +53,7 @@ async fn reads_a_file_with_line_numbers_and_a_footer() {
     );
 }
 
-/// 分页：offset/limit 切对位置，页脚告诉模型怎么继续。
+/// Paging: offset/limit cut at the right places, the footer tells the model how to continue.
 #[tokio::test]
 async fn pagination_slices_and_tells_the_model_how_to_continue() {
     let registry = registry();
@@ -76,7 +76,7 @@ async fn pagination_slices_and_tells_the_model_how_to_continue() {
     assert!(out.contains("[Use offset=7 to continue.]"), "{out}");
 }
 
-/// offset 超出范围：如实说，不给假内容。
+/// offset out of range: say so honestly; no fake content.
 #[tokio::test]
 async fn an_offset_past_the_end_says_so() {
     let registry = registry();
@@ -95,20 +95,20 @@ async fn an_offset_past_the_end_says_so() {
     assert!(out.contains("超出范围"), "{out}");
 }
 
-/// 字节上限：在**行边界**上截 —— 不会出现半行，页脚给续读提示。
+/// Byte cap: cut on a **line boundary** — never half a line; the footer offers the resume offset.
 #[tokio::test]
 async fn the_byte_cap_cuts_at_a_line_boundary() {
     let registry = registry();
     let ctx = ctx().await;
     let file = ctx.home.join("wide.md");
-    // 每行 ~1000 字节，60 行 ≈ 60KB > 50KB 上限。
+    // ~1000 bytes per line, 60 lines ≈ 60KB > the 50KB cap.
     let body: String = (1..=60)
         .map(|i| format!("{:04}{}", i, "x".repeat(996)) + "\n")
         .collect();
     std::fs::write(&file, body).unwrap();
 
     let out = run(&registry, &ctx, "read_file", json!({"path": file})).await;
-    // 50 行上下被留下（50 × ~1002 ≈ 50.1KB，行边界取整），绝不出现半行。
+    // About 50 lines survive (50 × ~1002 ≈ 50.1KB, rounded to line boundaries), never half a line.
     let shown_lines = out.lines().filter(|l| l.contains("xxxx")).count();
     assert!(
         (40..=51).contains(&shown_lines),
@@ -116,7 +116,7 @@ async fn the_byte_cap_cuts_at_a_line_boundary() {
     );
     assert!(out.contains("capped at 50000 bytes"), "{out}");
     assert!(out.contains("[Use offset="), "{out}");
-    // 最后一个展示行必须是完整行（1000 字节整），不是被切碎的。
+    // The last shown line must be a whole line (exactly 1000 bytes), not shredded.
     let matching: Vec<&str> = out.lines().filter(|l| l.contains("xxxx")).collect();
     let last = matching.last().copied().expect("至少一行");
     assert_eq!(
@@ -126,7 +126,7 @@ async fn the_byte_cap_cuts_at_a_line_boundary() {
     );
 }
 
-/// 二进制文件：明确拒绝并指路，不返回乱码。
+/// Binary file: refused explicitly with a pointer, no mojibake returned.
 #[tokio::test]
 async fn a_binary_file_is_refused_with_directions() {
     let registry = registry();
@@ -139,7 +139,7 @@ async fn a_binary_file_is_refused_with_directions() {
     assert!(out.contains("二进制"), "{out}");
 }
 
-/// 不存在的文件：Error 文本，如实说。
+/// Missing file: an Error text, stated honestly.
 #[tokio::test]
 async fn a_missing_file_is_an_honest_error() {
     let registry = registry();
@@ -155,7 +155,7 @@ async fn a_missing_file_is_an_honest_error() {
     assert!(out.contains("找不到"), "{out}");
 }
 
-/// 目录传给 read_file：指路到 list_dir。
+/// A directory passed to read_file: pointed at list_dir.
 #[tokio::test]
 async fn a_directory_is_redirected_to_list_dir() {
     let registry = registry();
@@ -165,7 +165,7 @@ async fn a_directory_is_redirected_to_list_dir() {
     assert!(out.contains("list_dir"), "{out}");
 }
 
-/// 内容不变短路：同会话重读同一段 → 占位符；换了范围 → 照常给内容。
+/// Unchanged-content short circuit: same session re-reads the same slice → placeholder; a different range → content as usual.
 #[tokio::test]
 async fn rereading_the_same_range_returns_a_placeholder() {
     let registry = registry();
@@ -183,7 +183,7 @@ async fn rereading_the_same_range_returns_a_placeholder() {
     );
     assert!(!second.contains("甲"), "占位符里不该重复内容：{second}");
 
-    // 换个范围：那是新的一页，照常给内容。
+    // A different range: that's a new page, content as usual.
     let third = run(
         &registry,
         &ctx,
@@ -193,13 +193,13 @@ async fn rereading_the_same_range_returns_a_placeholder() {
     .await;
     assert!(third.contains("乙"), "{third}");
 
-    // 文件变了：哈希不同，给新内容。
+    // The file changed: different hash, new content.
     std::fs::write(&file, "甲\n乙\n丙\n丁\n").unwrap();
     let fourth = run(&registry, &ctx, "read_file", json!({"path": file})).await;
     assert!(fourth.contains("丁"), "变了就该给新内容：{fourth}");
 }
 
-/// 不同会话的缓存互不影响（session 围栏 —— 和 owner 围栏同一纪律）。
+/// Caches of different sessions don't touch (session fence — same discipline as the owner fence).
 #[tokio::test]
 async fn the_read_cache_is_per_session() {
     let registry = registry();
@@ -219,8 +219,8 @@ async fn the_read_cache_is_per_session() {
     );
 }
 
-/// `~` 展开：模型常写 `~/docs/x.md`，不展开就是一条误导性的「找不到」。
-/// 没设 HOME/USERPROFILE 的环境跳过（Windows CI 不做这个假设）。
+/// `~` expansion: models often write `~/docs/x.md`; unexpanded it's a misleading "not found".
+/// Skipped in environments without HOME/USERPROFILE (Windows CI makes no such assumption).
 #[test]
 fn tilde_expands_against_home() {
     let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) else {
@@ -231,7 +231,7 @@ fn tilde_expands_against_home() {
         std::path::PathBuf::from(&home).join("docs/x.md"),
     );
     assert_eq!(fs::expand_tilde("~"), std::path::PathBuf::from(&home));
-    // 别动非 ~ 开头的路径。
+    // Leave non-~-prefixed paths alone.
     assert_eq!(
         fs::expand_tilde("相对/路径.md"),
         std::path::PathBuf::from("相对/路径.md")
@@ -242,12 +242,12 @@ fn tilde_expands_against_home() {
     );
 }
 
-/// list_dir：目录在前、文件带大小、条目计数。
+/// list_dir: dirs first, files with sizes, an entry count.
 #[tokio::test]
 async fn list_dir_puts_directories_first_with_sizes() {
     let registry = registry();
     let ctx = ctx().await;
-    // 不用 home 本身：ctx() 在那里放了 state.db，条目数会随脚手架变。
+    // Not home itself: ctx() puts state.db there, so the entry count would drift with scaffolding.
     let dir = ctx.home.join("桌");
     std::fs::create_dir(&dir).unwrap();
     std::fs::create_dir(dir.join("子目录")).unwrap();
@@ -262,7 +262,7 @@ async fn list_dir_puts_directories_first_with_sizes() {
     assert!(out.contains("[3 entries]"), "{out}");
 }
 
-/// list_dir 的 500 项上限：截断并如实标注。
+/// list_dir's 500-entry cap: truncate and label honestly.
 #[tokio::test]
 async fn list_dir_caps_at_500_entries() {
     let registry = registry();
@@ -282,7 +282,7 @@ async fn list_dir_caps_at_500_entries() {
     );
 }
 
-/// list_dir：空目录、不存在、传文件，三种都如实说。
+/// list_dir: empty dir, missing, a file passed in — all three answered honestly.
 #[tokio::test]
 async fn list_dir_edge_cases_are_honest() {
     let registry = registry();
@@ -308,8 +308,8 @@ async fn list_dir_edge_cases_are_honest() {
     assert!(out.contains("read_file"), "{out}");
 }
 
-/// 相对路径按本轮工作目录解析（会话级语义）：ctx.cwd 设了，"note.txt" 就在它
-/// 下面找 —— 不再按进程 cwd，也不会静默回退。
+/// Relative paths resolve against this turn's working directory (session-level semantics): with
+/// ctx.cwd set, "note.txt" is looked up under it — no longer process cwd, no silent fallback.
 #[tokio::test]
 async fn relative_paths_resolve_against_the_turn_cwd() {
     let registry = registry();
@@ -322,14 +322,14 @@ async fn relative_paths_resolve_against_the_turn_cwd() {
     assert!(out.contains("来自工作目录"), "{out}");
 }
 
-/// 没设 ctx.cwd 时行为不变：相对路径仍按进程 cwd（旧行为，向后兼容）。
+/// Without ctx.cwd the behavior is unchanged: relative paths still resolve against process cwd (old behavior, for compatibility).
 #[tokio::test]
 async fn without_a_turn_cwd_relative_paths_still_use_process_cwd() {
     let registry = registry();
     let ctx = ctx().await;
     std::fs::write(ctx.home.join("legacy.txt"), "旧行为").unwrap();
 
-    // 进程 cwd 不是 home，所以用绝对路径能读、裸相对路径找不到 —— 证明没被偷偷改语义。
+    // Process cwd isn't home, so absolute paths read and bare relative ones don't — proof the semantics weren't quietly changed.
     let out = run(
         &registry,
         &ctx,

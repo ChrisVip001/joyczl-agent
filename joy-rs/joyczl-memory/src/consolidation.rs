@@ -1,15 +1,15 @@
-//! Consolidation —— 把对话蒸馏成长期记忆，但只在攒够了之后。
+//! Consolidation — distills conversations into long-term memory, but only once enough accrue.
 //!
-//! 白板上的那个菱形："only consolidate after N new chats"。每条消息都跑一次
-//! 总结既浪费又吵；攒 N 轮才给总结器足够上下文，让它能分清「值得记一个月的」
-//! 和「闲聊」。
+//! The diamond on the whiteboard: "only consolidate after N new chats". Summarizing
+//! every message is wasteful and noisy; N accumulated turns give the summarizer
+//! enough context to tell "worth keeping a month" from "chit-chat".
 //!
-//! 产出两样：
-//!   * facts   → 语义记忆（"阿明喜欢早上的会议"）
-//!   * episode → 情景记忆（"2026-09-19：和阿明定了 Acme 演示"）
+//! Two outputs:
+//!   * facts   → semantic memory ("Ah Ming likes morning meetings")
+//!   * episode → episodic memory ("2026-09-19: set the Acme demo with Ah Ming")
 //!
-//! **失败不丢数据**：提炼失败就让这些行保持未提炼状态，下次再试。
-//! 标记 `consolidated = 1` 只在成功之后做 —— 顺序不能反。
+//! **Failure loses no data**: on failure the rows stay unconsolidated and are retried.
+//! Marking `consolidated = 1` happens only after success — never the reverse.
 
 use anyhow::Result;
 use chrono::Local;
@@ -47,17 +47,17 @@ pub async fn consolidate_if_due(
     every_n: i32,
 ) -> Result<usize> {
     let pending = chat.unconsolidated().await?;
-    // 一轮对话 = 2 行（user + assistant）。
+    // One turn = 2 rows (user + assistant).
     if pending.len() < every_n.max(1) as usize * 2 {
         return Ok(0);
     }
 
-    // **认领**：一条 SQL 完成「选中 + 标记」，并发调用里只有一个赢家。
-    // 输的那个拿到空列表，于是连模型都不调（见 chat.rs 的说明）。
+    // **Claim**: one SQL does "select + mark", so concurrent calls have a single
+    // winner. The loser gets an empty list and doesn't even call the model (see chat.rs).
     let claimed = chat.claim_unconsolidated().await?;
     let ids: Vec<i64> = claimed.iter().map(|(id, _, _)| *id).collect();
     if ids.is_empty() {
-        // 别人已经认领了：并发 turn、或 schedule 与 REPL 同时触发。
+        // Someone else claimed it: a concurrent turn, or schedule and REPL firing together.
         return Ok(0);
     }
     let log = claimed
@@ -71,15 +71,15 @@ pub async fn consolidate_if_due(
         system: None,
         messages: vec![Message::user_text(SUMMARIZER_PROMPT.replace("{log}", &log))],
         tools: vec![],
-        // 预算给足：这个 prompt 装着整个未提炼的日志（不像 gate 只有一条短消息）。
-        // 实测 600 会把 kimi-k2.6 截成只剩思考块（stop_reason=max_tokens、零文本）。
+        // Generous budget: this prompt carries the whole unconsolidated log (unlike
+        // gate's short message); 600 in practice truncates kimi-k2.6 to thinking only.
         max_tokens: 4096,
     };
 
     let ids: Vec<i64> = claimed.iter().map(|(id, _, _)| *id).collect();
-    // 失败的三条路径（模型挂了、JSON 读不出来、JSON 不合法）都走**退避**：
-    // 把这批行排到未来某个时刻再来。从前是「下次再来」，于是同一批坏行每轮
-    // 都被重试一次 —— 白烧模型调用，而且看起来像卡住了。
+    // All three failure paths (model down, JSON unreadable, JSON invalid) take
+    // **backoff**: reschedule the rows to a future moment. The old "next time" made
+    // the same bad rows retry every turn — burning calls, and it looked stuck.
     let text = match client.create(request).await {
         Ok(response) => response.text(),
         Err(_) => {
@@ -97,8 +97,8 @@ pub async fn consolidate_if_due(
         return Ok(0);
     };
 
-    // 写事实与情景。**任何一步失败都要把认领还回去** —— 认领是先标记后处理的，
-    // 半路出错却不归零，这批日志就永远停在「已提炼」却什么都没写进去。
+    // Write facts and episodes. **Any failure must return the claim** — claiming marks
+    // first; an error without unmarking leaves the log "consolidated" with nothing written.
     let written = match persist(&distilled, facts, episodes).await {
         Ok(written) => written,
         Err(error) => {
@@ -110,27 +110,27 @@ pub async fn consolidate_if_due(
     Ok(written)
 }
 
-/// 把提炼结果写进事实与情景。返回**新写入**的事实条数。
+/// Writes distilled results into facts and episodes. Returns the count of **new** facts.
 async fn persist(distilled: &Value, facts: &Facts, episodes: &Episodes) -> Result<usize> {
     let mut written = 0usize;
     if let Some(list) = distilled.get("facts").and_then(|f| f.as_array()) {
         for fact in list {
             let subject = fact.get("subject").and_then(|v| v.as_str()).map(str::trim);
             let content = fact.get("content").and_then(|v| v.as_str()).map(str::trim);
-            // 分类缺失或写歪了都落 `fact`（收敛在写入口，见 facts.rs）。
+            // A missing or malformed kind falls back to `fact` (funneled at the write entry, see facts.rs).
             let kind = fact.get("kind").and_then(|v| v.as_str()).unwrap_or("fact");
             if let (Some(subject), Some(content)) = (subject, content) {
                 if subject.is_empty() || content.is_empty() {
                     continue;
                 }
-                // 临时性的陈述不进长期记忆 ——「这次会话先这样」不是关于
-                // 世界的事实，记住它等于往档案里塞草稿。
+                // Temporary statements don't enter long-term memory — "leave it here for
+                // this session" isn't a fact about the world; keeping it files a draft.
                 if let Some(marker) = temporary_marker(content) {
                     eprintln!("(joy) 跳过一条临时陈述（命中 '{marker}'）：{content}");
                     continue;
                 }
-                // 重复的不算「写进去了」：written 是「这一轮新增了多少」，
-                // 把重复计进去会让账虚高，也会让人以为提炼一直在产出。
+                // Duplicates don't count as written: `written` means "how many were new
+                // this round"; counting them inflates the ledger and implies constant output.
                 let (_, is_new) = facts.add(subject, content, "consolidation", kind).await?;
                 if is_new {
                     written += 1;
@@ -155,9 +155,9 @@ async fn persist(distilled: &Value, facts: &Facts, episodes: &Episodes) -> Resul
     Ok(written)
 }
 
-/// 临时陈述的标记词。**中英并列**：模型用哪种语言提炼，就用哪种语言标记
-/// 临时性，过滤得两边都认。命中就跳过 —— 「这次会话」「暂时」「for now」
-/// 这类话是关于当下安排的，不是关于世界的事实。
+/// Markers for temporary statements. **Chinese and English side by side**: whichever
+/// language the model distills in marks temporariness, so the filter accepts both. A
+/// hit skips — "this session", "for now" talk is present arrangements, not world facts.
 const TEMPORARY_MARKERS: &[&str] = &[
     "本次会话",
     "这次会话",

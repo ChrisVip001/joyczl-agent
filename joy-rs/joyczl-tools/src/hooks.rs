@@ -1,31 +1,31 @@
-//! Hooks：在生命周期事件上跑**用户自己的命令**。
+//! Hooks: run **the user's own commands** on lifecycle events.
 //!
-//! 这是「不改循环就能加行为」的那个口子：审计、策略门禁、格式化、把工具调用
-//! 喂给外部系统 —— 都挂在事件上，而不是去 fork 一份 Joy。
+//! This is the opening for "adding behavior without changing the loop": auditing, policy
+//! gates, formatting, feeding tool calls to external systems — hung on events, not a Joy fork.
 //!
-//! 只做 shell handler（不做 http / mcp_tool / prompt / agent 四类）：
-//! 那四类各自要一套契约，而 shell 已经能表达它们（`curl`、`joy mcp`、`llm` 都是
-//! 一条命令）。少做的那部分写进了 `docs/limitations.md`。
+//! Only shell handlers (none of http / mcp_tool / prompt / agent):
+//! each of those four needs its own contract, and shell already expresses them (`curl`,
+//! `joy mcp`, `llm` are all one command). The un-done part is written into `docs/limitations.md`.
 //!
-//! 三条规矩，都是从踩过的坑里来的：
+//! Three rules, all learned from scars:
 //!
-//! 1. **exit 2 是唯一靠退出码阻断的方式**。exit 1 是
-//!    非阻塞错误：命令写错了不该让所有工具瘫痪，但**必须**在 stderr 留下痕迹。
-//! 2. **策略事件超时 fail-closed、观察事件 fail-open**。`PreToolUse`
-//!    是一个闸门 —— 它没能在时限内表态，就不该默认放行；而 `PostToolUse` 只是
-//!    旁观者，挂了不该影响已经发生的事。
-//! 3. **文件被改过就不执行**：装载时记下内容哈希，运行中一旦变了就拒绝执行新的
-//!    内容并说明原因（信任哈希校验）。改掉一个正在生效的策略钩
-//!    是那种「悄悄换了闸门」的事，宁可停下来让人看见。
+//! 1. **exit 2 is the only block-via-exit-code**. exit 1 is a
+//!    non-blocking error: a typo'd command must not paralyze all tools, but **must** leave a trace on stderr.
+//! 2. **Policy events time out fail-closed, observation events fail-open**. `PreToolUse`
+//!    is a gate — if it can't answer within the deadline, it must not default to allow;
+//!    while `PostToolUse` is only a bystander; its death must not affect what already happened.
+//! 3. **If the file changed, don't run it**: record the content hash at load; if it changes
+//!    at runtime, refuse the new content and say why (trust hash checks). Swapping a live
+//!    policy hook is "quietly changing the gate" — better to stop and be seen.
 //!
-//! 命令收到 JSON 载荷（`hook_event_name` / `session_id` / `cwd` / `tool_name` /
-//! `tool_input` / `tool_output`…）在 stdin 上；要表态就回一段 JSON 到 stdout：
+//! The command receives a JSON payload (`hook_event_name` / `session_id` / `cwd` / `tool_name` /
+//! `tool_input` / `tool_output`…) on stdin; to weigh in, reply with JSON on stdout:
 //!
 //! ```json
 //! {"decision": "block", "reason": "……"}
 //! {"updatedInput": {"command": "ls -la"}}
-//! {"updatedOutput": "改写后的工具结果"}
-//! {"additionalContext": "给模型补一句背景"}
+//! {"updatedOutput": "the rewritten tool result"}
+//! {"additionalContext": "one line of extra context for the model"}
 //! {"hookSpecificOutput": {"permissionDecision": "deny"}}
 //! ```
 
@@ -37,8 +37,8 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 
-/// 12 个事件。名字采用生态里通行的叫法 —— 用户从别的工具搬配置
-/// 过来时不必学第二套命名。
+/// The 12 events. Names follow the ecosystem's common usage — users moving config from
+/// other tools don't need to learn a second naming scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum HookEvent {
     PreToolUse,
@@ -92,7 +92,7 @@ impl HookEvent {
         Self::ALL.into_iter().find(|event| event.name() == name)
     }
 
-    /// 策略类：它没能在时限内表态时**按阻断**处理（其余按放行）。
+    /// Policy class: when it fails to answer within the deadline, treat it as **blocked** (the rest allow).
     fn is_policy(self) -> bool {
         matches!(
             self,
@@ -100,8 +100,8 @@ impl HookEvent {
         )
     }
 
-    /// 默认超时。交互敏感的事件短一些 —— 一个卡住的 `SessionStart` 会让人以为
-    /// 程序死了。
+    /// Default timeouts. Interaction-sensitive events are shorter — a stuck `SessionStart`
+    /// makes people think the program died.
     fn default_timeout(self) -> Duration {
         match self {
             HookEvent::SessionStart
@@ -115,19 +115,19 @@ impl HookEvent {
     }
 }
 
-/// 一次 hook 的结果。`blocked` 有值就是阻断（理由给模型/用户看）。
+/// The result of one hook. A `blocked` value means block (reason shown to model/user).
 #[derive(Debug, Clone, Default)]
 pub struct HookOutcome {
     pub blocked: Option<String>,
-    /// `PermissionRequest` 专用：钩子替人回答「行」（于是不必再去问）。
+    /// `PermissionRequest` only: the hook answers "yes" for the human (so no need to ask).
     pub allowed: bool,
-    /// `PreToolUse` 改写工具入参。
+    /// `PreToolUse` rewrites the tool's input args.
     pub input: Option<Value>,
-    /// `PostToolUse` 改写工具结果。
+    /// `PostToolUse` rewrites the tool's result.
     pub output: Option<String>,
-    /// 给模型补的上下文（会话开始、工具结果之后都用得上）。
+    /// Extra context for the model (useful after session start, after tool results).
     pub context: Option<String>,
-    /// 给人看的旁注（出错、拒绝执行之类），进 stderr。
+    /// A human-facing aside (errors, refusals…), goes to stderr.
     pub note: Option<String>,
 }
 
@@ -142,8 +142,8 @@ impl HookOutcome {
 
 #[derive(Debug, Clone)]
 struct Entry {
-    /// `None`/`*` = 都匹配；`a|b` = 任一；其余按整串相等（**不做正则**：不为一处
-    /// 匹配再引一个依赖，要更复杂的判断写进脚本里）。
+    /// `None`/`*` = match all; `a|b` = any; otherwise exact string equality (**no regex**:
+    /// not pulling a dependency for one match; write complex checks into your script).
     matcher: Option<String>,
     command: String,
     args: Vec<String>,
@@ -159,21 +159,21 @@ impl Entry {
     }
 }
 
-/// 装载好的 hooks。`None` 表示这个 home 没配（没配就一次都不起子进程）。
+/// Loaded hooks. `None` means this home has none configured (no subprocess ever spawned).
 pub struct Hooks {
     entries: HashMap<HookEvent, Vec<Entry>>,
     disable_all: bool,
     path: PathBuf,
-    /// 装载时的内容哈希：运行中变了就不执行（见模块文档第 3 条）。
+    /// Content hash at load time: if it changes at runtime, don't run (see module doc rule 3).
     hash: u64,
     pub(crate) count: usize,
-    /// 来自配置的默认超时（`JOY_HOOKS_TIMEOUT`）。条目自己写了 `timeout` 就以它为准。
+    /// Default timeout from config (`JOY_HOOKS_TIMEOUT`). An entry's own `timeout` wins.
     default_timeout: Option<Duration>,
 }
 
 impl Hooks {
-    /// 从 `<home>/hooks.json` 装载。读不到 / 解析不了 / 一条都没配 → `None`，
-    /// 并把原因写到 stderr（配置写错了不该静默地什么都不做）。
+    /// Load from `<home>/hooks.json`. Unreadable / unparseable / zero entries → `None`,
+    /// with the reason on stderr (a broken config must not silently do nothing).
     pub fn load(home: &Path, default_timeout: Option<Duration>) -> Option<Self> {
         let path = home.join("hooks.json");
         let text = std::fs::read_to_string(&path).ok()?;
@@ -257,7 +257,7 @@ impl Hooks {
         })
     }
 
-    /// 启动日志用的一句话。
+    /// One line for the startup log.
     pub fn summary(&self) -> String {
         if self.disable_all {
             return format!(
@@ -279,22 +279,22 @@ impl Hooks {
         )
     }
 
-    /// 配置在运行中被改过吗？（改了就拒绝执行新的内容）
+    /// Has the config changed at runtime? (If so, refuse to run the new content)
     fn changed(&self) -> bool {
         match std::fs::read_to_string(&self.path) {
             Ok(text) => hash_of(&text) != self.hash,
-            // 文件没了：也算变了 —— 说清楚比默默继续跑旧内容好。
+            // File gone: counts as changed — clarity beats silently running stale content.
             Err(_) => true,
         }
     }
 
-    /// 触发一个事件。**永不返回 Err** —— 失败是一条旁注，不是一个异常。
+    /// Fire an event. **Never returns Err** — a failure is an aside, not an exception.
     pub async fn fire(&self, event: HookEvent, payload: Value) -> HookOutcome {
         let Some(entries) = self.entries.get(&event) else {
             return HookOutcome::default();
         };
-        // 命中的对象：工具类看工具名，其余事件没有可匹配的主体，`matcher` 里写
-        // 会话或自定义标识都不合适 —— 用事件名本身，`*`/空 matcher 一律命中。
+        // Match subject: tool events use the tool name; other events have no natural subject —
+        // session ids or custom ids in `matcher` fit poorly — so use the event name; `*`/empty matches all.
         let subject = payload
             .get("tool_name")
             .and_then(Value::as_str)
@@ -314,7 +314,7 @@ impl Hooks {
                 continue;
             }
             merge(&mut outcome, self.run_one(event, entry, &payload).await);
-            // 阻断是短路：后面几条不必再跑（顺序即优先级）。
+            // Blocking short-circuits: no need to run the rest (order is priority).
             if outcome.blocked.is_some() {
                 break;
             }
@@ -340,7 +340,7 @@ impl Hooks {
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(e) => {
-                // 起不来一律 fail-open：路径写错不该让所有工具瘫痪（但要说出来）。
+                // Spawn failures always fail-open: a wrong path must not paralyze all tools (but say it).
                 let note = format!("hook '{}' 起不来（{e}）—— 跳过", entry.command);
                 eprintln!("(joy) {note}");
                 return HookOutcome::note(note);
@@ -351,10 +351,10 @@ impl Hooks {
             let line = body.to_string();
             let _ = stdin.write_all(line.as_bytes()).await;
             let _ = stdin.write_all(b"\n").await;
-            drop(stdin); // 关掉 stdin，脚本才知道读完了
+            drop(stdin); // close stdin so the script knows input ended
         }
 
-        // 优先级：条目自己的 timeout > 配置里的默认（JOY_HOOKS_TIMEOUT）> 事件默认。
+        // Priority: the entry's own timeout > the configured default (JOY_HOOKS_TIMEOUT) > event default.
         let timeout = entry
             .timeout
             .or(self.default_timeout)
@@ -395,7 +395,7 @@ impl Hooks {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
         match code {
-            // exit 2：唯一靠退出码阻断的方式。理由优先取 stdout 的 JSON，否则 stderr。
+            // exit 2: the only block-via-exit-code. Reason: stdout JSON first, else stderr.
             2 => {
                 let reason = json_reason(&stdout).unwrap_or_else(|| {
                     if stderr.is_empty() {
@@ -410,7 +410,7 @@ impl Hooks {
                 }
             }
             0 => parse_decision(&stdout, &stderr, entry, event),
-            // 其它退出码：非阻塞错误 —— 记下来，动作照常。
+            // Other exit codes: non-blocking error — note it, the action proceeds.
             other => {
                 let note = format!(
                     "hook '{}' 以退出码 {other} 结束（只有 2 才是阻断）：{}",
@@ -428,14 +428,14 @@ impl Hooks {
     }
 }
 
-/// 解析 exit 0 时的决策 JSON。不是 JSON 就当纯文本旁注。
+/// Parse the decision JSON on exit 0. Non-JSON is treated as a plain-text aside.
 fn parse_decision(stdout: &str, stderr: &str, entry: &Entry, event: HookEvent) -> HookOutcome {
     if stderr.is_empty() && stdout.is_empty() {
         return HookOutcome::default();
     }
     let parsed = serde_json::from_str::<Value>(stdout).ok();
     let Some(value) = parsed else {
-        // 纯文本：给模型当上下文（观察事件常见），策略事件只在 stderr 里提示。
+        // Plain text: context for the model (common on observation events); policy events only note on stderr.
         return HookOutcome {
             context: if stdout.is_empty() || event.is_policy() {
                 None
@@ -507,7 +507,7 @@ fn json_reason(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// 把一次结果并进总结果：**先到者优先**（顺序即优先级）。
+/// Merge one outcome into the total: **first writer wins** (order is priority).
 fn merge(into: &mut HookOutcome, one: HookOutcome) {
     if into.blocked.is_none() {
         into.blocked = one.blocked;
@@ -527,7 +527,7 @@ fn merge(into: &mut HookOutcome, one: HookOutcome) {
     }
 }
 
-/// 内容哈希。用标准库的 `DefaultHasher`：这里要的是「变没变」，不是密码学强度。
+/// Content hash. Stdlib `DefaultHasher`: we want "did it change", not cryptographic strength.
 fn hash_of(text: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();

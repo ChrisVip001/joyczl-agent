@@ -1,41 +1,41 @@
-//! 轮内工具结果预算：**组装请求前，把太大的结果换成桩**。
+//! Intra-turn tool-result budget: **stub out oversized results before assembling the request**.
 //!
-//! 为什么需要它：`run_command` 自己会把输出截到 8000 字符、`search_web` 自己截到
-//! 400，但 **MCP 工具的输出没人管**。一轮里十次 MCP 调用各回 5 万字符，就是
-//! 50 万字符进请求 —— 而 app-server 的预算只管历史（滑窗），管不到轮内。
+//! Why it is needed: `run_command` truncates its own output to 8000 characters and `search_web`
+//! to 400, but **nobody watches MCP tool output**. Ten MCP calls per turn each returning 50k
+//! characters put 500k characters into the request — and the app-server budget only covers history.
 //!
-//! 顺序的一致结论：**先处理工具结果，再谈摘要**。
-//! 工具结果有三个别人没有的性质：能落盘回查、能重跑、裁剪不需要模型调用。
+//! The agreed conclusion on ordering: **handle tool results first, then talk summarization**.
+//! Tool results alone can be spilled for later lookup, re-run, and trimmed without a model call.
 //!
-//! 三条规矩：
+//! Three rules:
 //!
-//! * **够大才动**：只处理超过 `per_result_chars` 的结果。攒了一百条小结果导致
-//!   总量超标时，给每条都建一个文件比省下的上下文更贵 —— 那种情况如实记一行
-//!   日志，不改内容。
-//! * **不重复处理**：已经是桩的（带「完整输出在」或「已截断」）直接跳过，
-//!   所以每轮跑一次是幂等的。
-//! * **自预算的工具不碰**：`run_command` 自己就落盘了，再套一层只会把路径
-//!   换来换去（它的输出永远 ≤ 8000，够不到 `per_result_chars`，这条是保险）。
+//! * **Only touch the big ones**: only results over `per_result_chars`. When a hundred small
+//!   results together exceed the cap, a file per result costs more than the context it saves —
+//!   in that case just log one honest line and change nothing.
+//! * **No reprocessing**: anything already a stub (carrying the spill marker or the truncation
+//!   marker, as matched by `is_stub`) is skipped, so running once per turn is idempotent.
+//! * **Self-budgeted tools untouched**: `run_command` already spills itself; another wrapper
+//!   just swaps paths around (its output is always ≤ 8000, below `per_result_chars`; safety net).
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use joyczl_provider::{ContentBlock, Message};
 
-/// 自己能把自己管住的工具：不参与轮内换桩。
+/// Tools that manage themselves: they do not participate in intra-turn stubbing.
 const SELF_BUDGETED: &[&str] = &["run_command"];
 
-/// 轮内工具结果的预算。两个都为 0 = 关（默认关，与「不改变既有行为」一致）。
+/// Budget for intra-turn tool results. Both 0 = off (off by default, matching "no behavior change").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolResultBudget {
-    /// 一批工具结果的字符总量上限。
+    /// Char limit for a batch of tool results.
     pub total_chars: usize,
-    /// 单条结果超过它才有资格被换成桩。
+    /// A result must exceed this to be eligible for stubbing.
     pub per_result_chars: usize,
 }
 
 impl Default for ToolResultBudget {
-    /// 默认**关着**：不改变既有行为，要开就配 `JOY_TOOL_RESULT_TOTAL_CHARS`。
+    /// Defaults to **off**: no behavior change; to enable set `JOY_TOOL_RESULT_TOTAL_CHARS`.
     fn default() -> Self {
         Self::disabled()
     }
@@ -54,22 +54,22 @@ impl ToolResultBudget {
     }
 }
 
-/// 一次换桩的结果（给日志与测试看）。
+/// Result of one stubbing pass (for logging and tests).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TrimReport {
-    /// 换成桩的结果条数。
+    /// Number of results stubbed out.
     pub trimmed: usize,
-    /// 换桩后省下的字符数。
+    /// Characters saved by stubbing.
     pub omitted_chars: usize,
-    /// 换完之后这批结果的总字符数。
+    /// Total chars of this batch after stubbing.
     pub total_chars: usize,
-    /// 该换但换不动（剩下的都不够大）：如实记下来，不假装已经达标。
+    /// Over budget but nothing left worth stubbing: recorded honestly, not faked as done.
     pub still_over_budget: bool,
 }
 
-/// 组装请求前调一次：把超预算的工具结果换成「放得下的桩」。
+/// Call once before assembling the request: stub tool results that are over budget.
 ///
-/// 返回这次动了什么。预算关着时什么都不做（默认就是关着）。
+/// Returns what changed this pass. Does nothing when the budget is off (the default).
 pub fn trim_tool_results(
     messages: &mut [Message],
     spill_dir: Option<&Path>,
@@ -94,7 +94,7 @@ pub fn trim_tool_results(
         return report;
     }
 
-    // 从最大的开始换 —— 换最少条数就能达标。
+    // Start with the largest — the fewest stubs to get under the cap.
     let mut candidates: Vec<(usize, usize, usize, Option<&str>)> = blocks
         .iter()
         .map(|(message, block)| {
@@ -142,8 +142,8 @@ pub fn trim_tool_results(
 
     report.still_over_budget = report.total_chars > budget.total_chars;
     if report.still_over_budget {
-        // 不静默：够大的都换完了还超，说明是「很多条中等结果」堆出来的 ——
-        // 给每条都建文件比省下的上下文更贵，所以到此为止。
+        // Not silent: when everything big enough is stubbed and we are still over, this is a pile
+        // of medium-sized results — a file per result costs more than the context saved, so stop.
         eprintln!(
             "(joy) [{session_id}] 轮内工具结果仍然超出预算（{} > {}）：剩下的单条都没超过 {} 字符",
             report.total_chars, budget.total_chars, budget.per_result_chars
@@ -152,16 +152,16 @@ pub fn trim_tool_results(
     report
 }
 
-/// 桩的目标大小：比门槛小一档就够（它的用途是把结果请出上下文）。
+/// Target stub size: one notch below the threshold is enough (its job is to evict the result).
 ///
-/// **下限必须远小于门槛**：门槛配得很小（评测就爱这么干）时，若下限比门槛还大，
-/// 就会出现「够格换桩、却因为桩放不下原文而换不掉」的哑火 —— 那是真踩过的。
-/// 上限 2000，是 head/tail 预览的常见量级。
+/// **The floor must be far below the threshold**: with a tiny threshold (evaluations love that),
+/// a floor at or above the threshold causes a dud — "eligible for stubbing, but the stub cannot
+/// hold the original" — a real failure seen in practice. The 2000 cap matches head/tail previews.
 fn stub_budget(budget: &ToolResultBudget) -> usize {
     budget.per_result_chars.clamp(64, 2_000)
 }
 
-/// 已经是桩了（幂等：每轮都跑一次）。
+/// Already a stub (idempotent: runs once per turn).
 fn is_stub(text: &str) -> bool {
     text.contains("完整输出在") || text.contains("已截断，省略了")
 }
@@ -195,7 +195,7 @@ fn set_result_text(messages: &mut [Message], message: usize, block: usize, text:
     }
 }
 
-/// `tool_use_id → 工具名`。工具结果本身不带名字，得从 assistant 的调用里查。
+/// `tool_use_id → tool name`. Results carry no name; look it up in the assistant's calls.
 fn tool_names(messages: &[Message]) -> HashMap<String, String> {
     let mut names = HashMap::new();
     for message in messages {

@@ -1,14 +1,14 @@
-//! search_web —— 第二个真正的工具，LOOP 的最佳演示。
+//! search_web — the second real tool, LOOP's best demo.
 //!
-//! 「查一下还剩哪几场世界杯，然后帮我排进日历」会横跨工具跑一圈：
-//! search_web（读网络）→ 推理 → create_event。白板上 LOOP 那个框转起来。
+//! "Find how many World Cup matches are left, then put them in my calendar" crosses tools:
+//! search_web (read the web) → reasoning → create_event. The LOOP box on the whiteboard spins.
 //!
-//! 两个后端：
-//!   默认   DuckDuckGo HTML —— 无 key、零配置，够 demo（常被反爬挡）
-//!   更好   Tavily —— 设了 `TAVILY_API_KEY`（或 `JOY_SEARCH_API_KEY`）就用它，
-//!          agent 友好的搜索 API，结果干净（有免费额度）
+//! Two backends:
+//!   default   DuckDuckGo HTML — no key, zero config, enough for a demo (often blocked by anti-bot)
+//!   better    Tavily — used when `TAVILY_API_KEY` (or `JOY_SEARCH_API_KEY`) is set;
+//!             an agent-friendly search API with clean results (free tier)
 //!
-//! 返回给模型的是纯文本 —— Joy 从不替模型解析 HTML，只把可读的结果摆出来。
+//! What the model gets back is plain text — Joy never parses HTML for the model, just readable results.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +21,7 @@ use crate::{opt_u32, require_str, Tool, ToolCtx};
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36";
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// 一条搜索结果：标题、摘要、链接。
+/// One search result: title, snippet, link.
 type Hit = (String, String, String);
 
 fn client() -> Result<reqwest::Client> {
@@ -82,13 +82,13 @@ fn truncate(text: &str, max: usize) -> String {
     }
 }
 
-// ---- DuckDuckGo HTML 的抠法 -------------------------------------------------
+// ---- Scraping DuckDuckGo HTML -----------------------------------------------
 //
-// 不引 regex：页面里要找的就两种模式，逐段扫描反而比正则直白。
-//   result__a" ... href="链接" ...>标题</a>
-//   result__snippet" ...>摘要</a>
+// No regex: only two patterns to find in the page; scanning segment by segment is clearer.
+//   result__a" ... href="link" ...>title</a>
+//   result__snippet" ...>snippet</a>
 
-/// HTML 转义还原 + 去标签。Tavily 的结果不含 HTML；DDG 的两处都要过这里。
+/// HTML unescape + tag strip. Tavily results carry no HTML; both DDG spots go through here.
 fn strip_html(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
@@ -98,7 +98,7 @@ fn strip_html(text: &str) -> String {
             '<' => in_tag = true,
             '>' => in_tag = false,
             '&' if !in_tag => {
-                // 实体到分号为止；认不出的原样留下。
+                // The entity runs to the semicolon; unrecognized ones are kept as-is.
                 let mut entity = String::new();
                 for e in chars.by_ref() {
                     if e == ';' {
@@ -128,7 +128,7 @@ fn unescape_entity(entity: &str) -> String {
         "nbsp" => " ".into(),
         "hellip" | "#8230" | "#x2026" => "…".into(),
         _ => {
-            // &#NN; 十进制数字码。
+            // `&#NN;` decimal numeric code.
             if let Some(num) = entity.strip_prefix('#') {
                 if let Ok(code) = num.parse::<u32>() {
                     if let Some(c) = char::from_u32(code) {
@@ -141,7 +141,7 @@ fn unescape_entity(entity: &str) -> String {
     }
 }
 
-/// 找 `marker` 之后第一个 `attr="value"` 里引号包住的值。
+/// Find the quoted value of the first `attr="value"` after `marker`.
 fn find_attr_after<'a>(page: &'a str, from: usize, attr: &str) -> Option<(usize, &'a str)> {
     let rest = &page[from..];
     let pattern = format!("{attr}=\"");
@@ -150,7 +150,7 @@ fn find_attr_after<'a>(page: &'a str, from: usize, attr: &str) -> Option<(usize,
     Some((end, &rest[at..end]))
 }
 
-/// 在 `from` 之后找 `<a ...>inner</a>` 的 inner 文本。
+/// After `from`, find the inner text of `<a ...>inner</a>`.
 fn find_link_text(page: &str, from: usize) -> Option<(usize, String)> {
     let rest = &page[from..];
     let open = rest.find('>')? + 1;
@@ -168,9 +168,9 @@ async fn duckduckgo(query: &str, max_results: u32) -> Result<Vec<Hit>> {
         .text()
         .await?;
 
-    // 每条结果都长成 `<a class="result__a" ... href="…">标题</a>`，
-    // 摘要在它后面的 `<a class="result__snippet" ...>摘要</a>` 里。
-    // 按 result__a 标记逐条推进 —— 不用正则，也不去猜页面结构。
+    // Each result looks like `<a class="result__a" ... href="…">title</a>`,
+    // with the snippet in the following `<a class="result__snippet" ...>snippet</a>`.
+    // Advance result by result on the result__a marker — no regex, no guessing page structure.
     let mut hits: Vec<Hit> = Vec::new();
     let mut cursor = 0usize;
     while hits.len() < max_results as usize {
@@ -184,13 +184,13 @@ async fn duckduckgo(query: &str, max_results: u32) -> Result<Vec<Hit>> {
         let Some((after_text, title)) = find_link_text(&page, marker) else {
             break;
         };
-        // 摘要跟在标题后面；找不到就留空，不硬凑。
+        // The snippet follows the title; if not found, leave it empty — don't force one.
         let snippet = page[after_text..]
             .find("result__snippet\"")
             .and_then(|rel| find_link_text(&page, after_text + rel))
             .map(|(_, text)| text)
             .unwrap_or_default();
-        // DDG 的结果包在一层重定向里，真正的目标在 uddg= 参数里。
+        // DDG wraps results in a redirect; the real target sits in the uddg= parameter.
         let target = href
             .find("uddg=")
             .map(|at| {
@@ -205,9 +205,9 @@ async fn duckduckgo(query: &str, max_results: u32) -> Result<Vec<Hit>> {
     Ok(hits)
 }
 
-/// URL 编码（RFC 3986 未保留字符之外全部转义）。公开给同仓库的
-/// joyczl-mcp 用 —— OAuth 的 authorize URL 和搜索跳转用的是同一条规则，
-/// 两处各手抄一份只会慢慢漂移。
+/// URL encoding (everything outside RFC 3986 unreserved chars gets escaped). Public for
+/// joyczl-mcp in the same repo — OAuth's authorize URL and search jumps share the rule;
+/// hand-copying it twice only drifts apart.
 pub fn urlencode(text: &str) -> String {
     let mut out = String::new();
     for byte in text.as_bytes() {
@@ -221,7 +221,7 @@ pub fn urlencode(text: &str) -> String {
     out
 }
 
-/// URL 解码：`%XX` 与 `+`（空格）。与 [`urlencode`] 成对。
+/// URL decode: `%XX` and `+` (space). Paired with [`urlencode`].
 pub fn urldecode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
@@ -254,7 +254,7 @@ pub fn urldecode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// 搜索后端的 key：Tavily 的 key 有两个惯用名字，都认。
+/// The search backend's key: Tavily's key has two common names; both are accepted.
 fn tavily_key() -> Option<String> {
     for name in ["TAVILY_API_KEY", "JOY_SEARCH_API_KEY"] {
         if let Ok(key) = std::env::var(name) {
@@ -292,8 +292,8 @@ pub fn search_web() -> Tool {
                     Some(key) => match tavily(&query, key, max_results).await {
                         Ok(hits) => Ok(("Tavily".to_string(), hits)),
                         Err(e) => {
-                            // 有 key 的路径失败就直说 —— DDG 兜底反而会用
-                            // 一个已知的坏后端再赌一次。
+                            // If the keyed path fails, say so — falling back to DDG would
+                            // just gamble again on a known-bad backend.
                             return Ok(format!(
                                 "Web search failed ({e}). Answer from what you know, or ask the user."
                             ));
@@ -332,27 +332,27 @@ pub fn search_web() -> Tool {
 }
 
 // ---------------------------------------------------------------------------
-// fetch_url —— 抓一个网页的正文给模型看。
+// fetch_url — fetch a page's body for the model.
 //
-// search_web 拿回的是「有哪些结果」，fetch_url 拿回的是「这一页说了什么」。
-// 三件事在实现里不可省：
+// search_web returns "what results exist"; fetch_url returns "what this page says".
+// Three things the implementation must not skip:
 //
-// * **SSRF 防护**：模型是被注入的目标 —— 一个被操纵的 fetch 就是内网探测。
-//   解析后的每个 IP（**每一跳重定向都重查**）落在 loopback / 内网 /
-//   link-local（含 169.254.169.254 这类 metadata 端点）/ 保留段就拒绝。
-// * **外站内容是不可信输入**：正文过 `report::as_external`（声明头 + 转义）。
-// * **封顶**：下载 2MB、正文 50k 字符，超了明说，不静默截断。
+// * **SSRF protection**: the model is the injection target — a manipulated fetch is intranet
+//   reconnaissance. Refuse when any resolved IP (**re-checked every redirect hop**) lands in
+//   loopback / private / link-local (incl. 169.254.169.254 metadata endpoints) / reserved ranges.
+// * **Off-site content is untrusted input**: the body goes through `report::as_external` (header + escaping).
+// * **Caps**: 2MB download, 50k chars of body; say so when exceeded, never silently truncate.
 // ---------------------------------------------------------------------------
 
-/// 下载字节上限。
+/// Download byte cap.
 const FETCH_MAX_BYTES: usize = 2 * 1024 * 1024;
-/// 返回给模型的正文字符上限。
+/// Char cap for the body returned to the model.
 const FETCH_MAX_CHARS: usize = 50_000;
-/// 最多跟几跳重定向。每一跳都重新过 SSRF 检查。
+/// Max redirect hops. Every hop re-runs the SSRF check.
 const FETCH_MAX_REDIRECTS: usize = 5;
 
-/// 这些网段不允许抓。IPv6 的 ULA（fc00::/7）与链路本地（fe80::/10）用位判断
-/// —— `is_unique_local` / `is_unicast_link_local` 还没稳定，不引 feature 门。
+/// These ranges may not be fetched. IPv6 ULA (fc00::/7) and link-local (fe80::/10) are
+/// bit-tested — `is_unique_local` / `is_unicast_link_local` aren't stable yet; no feature gate.
 pub(crate) fn is_disallowed_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
@@ -372,9 +372,9 @@ pub(crate) fn is_disallowed_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
-/// 校验 URL：scheme + 主机解析出来的**每个** IP（一个坏就全拒 —— 混合解析
-/// 正是 DNS rebinding 的形状）。`allow_private` 只给测试用（本机起 HTTP
-/// 服务器当靶子）；工具本体永远 false。
+/// Validate a URL: scheme + **every** IP the host resolves to (one bad → reject all — mixed
+/// resolution is exactly the shape of DNS rebinding). `allow_private` is for tests only
+/// (a local HTTP server as target); the tool itself always passes false.
 pub(crate) async fn check_url(url: &reqwest::Url, allow_private: bool) -> Result<()> {
     match url.scheme() {
         "http" | "https" => {}
@@ -386,8 +386,8 @@ pub(crate) async fn check_url(url: &reqwest::Url, allow_private: bool) -> Result
     let Some(host) = url.host_str() else {
         anyhow::bail!("URL 里没有主机名");
     };
-    // DNS 解析是阻塞调用，丢进 blocking 线程。解析失败就报错 —— 「解析不了
-    // 的主机」不该默认放行。
+    // DNS resolution is a blocking call; ship it to the blocking pool. Resolution failure is
+    // an error — "host that doesn't resolve" must not pass by default.
     let host = host.to_string();
     let resolved = tokio::task::spawn_blocking(move || {
         use std::net::ToSocketAddrs;
@@ -412,7 +412,7 @@ pub(crate) async fn check_url(url: &reqwest::Url, allow_private: bool) -> Result
     Ok(())
 }
 
-/// 块级标签渲染成换行；行内标签（a/span/strong…）不换。
+/// Block-level tags render as newlines; inline tags (a/span/strong…) don't.
 const BLOCK_TAGS: &[&str] = &[
     "address",
     "article",
@@ -453,12 +453,12 @@ const BLOCK_TAGS: &[&str] = &[
     "ul",
 ];
 
-/// HTML → 纯文本：剥标签、剔 script/style 与注释、解码常见实体、折叠空白。
-/// 手写的状态机（约 90 行）—— 不引 html2text 这类依赖，质量对「给模型读」
-/// 足够（兜底路径就是这个做法）。
+/// HTML → plain text: strip tags, drop script/style and comments, decode common entities,
+/// collapse whitespace. A hand-written state machine (~90 lines) — no html2text dependency;
+/// quality is enough "for the model to read" (the fallback path is exactly this).
 pub(crate) fn html_to_text(html: &str) -> String {
-    // `to_ascii_lowercase` 保字节长度：标签名都是 ASCII，多字节字符原样，
-    // 于是 lower 与原文的索引一一对应，可以放心用下标切片。
+    // `to_ascii_lowercase` preserves byte length: tag names are ASCII, multibyte chars stay,
+    // so lower and the original align index for index — safe to slice by index.
     let lower = html.to_ascii_lowercase();
     let bytes = lower.as_bytes();
     let mut out = String::with_capacity(html.len() / 2 + 16);
@@ -466,7 +466,7 @@ pub(crate) fn html_to_text(html: &str) -> String {
     let mut skip_until: Option<&'static str> = None;
 
     while i < bytes.len() {
-        // script/style 的正文整段跳过：那不是给读者看的。
+        // The bodies of script/style are skipped whole: they're not for the reader.
         if let Some(closer) = skip_until {
             match lower[i..].find(closer) {
                 Some(at) => {
@@ -537,7 +537,7 @@ pub(crate) fn html_to_text(html: &str) -> String {
         }
     }
 
-    // 折叠空白：网页排版制造的空行与缩进对模型没有信息量，只烧 token。
+    // Collapse whitespace: layout-made blank lines and indentation carry no information, just burn tokens.
     let mut collapsed = String::new();
     let mut blank = true;
     for line in out.lines() {
@@ -556,7 +556,7 @@ pub(crate) fn html_to_text(html: &str) -> String {
     collapsed
 }
 
-/// 常见命名实体 + 数字实体（`&#234;` / `&#xEA;`）。
+/// Common named entities + numeric entities (`&#234;` / `&#xEA;`).
 fn decode_entity(entity: &str) -> Option<String> {
     let named: &str = match entity {
         "amp" => "&",
@@ -612,7 +612,7 @@ pub fn fetch_url() -> Tool {
     }
 }
 
-/// `allow_private` 只给测试用（本机起 HTTP 服务器当靶子）；工具本体永远 false。
+/// `allow_private` is for tests only (a local HTTP server as target); the tool always passes false.
 pub(crate) async fn execute_fetch(url_text: &str, allow_private: bool) -> Result<String> {
     let mut url = reqwest::Url::parse(url_text)
         .map_err(|e| anyhow::anyhow!("URL 解析不了（{url_text}）：{e}"))?;
@@ -621,8 +621,8 @@ pub(crate) async fn execute_fetch(url_text: &str, allow_private: bool) -> Result
     let client = reqwest::Client::builder()
         .user_agent(UA)
         .timeout(TIMEOUT)
-        // 重定向自己跟：每一跳都要重新过 SSRF 检查（reqwest 的重定向策略
-        // 回调是同步的，做不了 DNS 解析）。
+        // Follow redirects ourselves: every hop must re-run the SSRF check (reqwest's
+        // redirect policy callback is sync; it can't do DNS resolution).
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
 
@@ -659,7 +659,7 @@ pub(crate) async fn execute_fetch(url_text: &str, allow_private: bool) -> Result
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        // 流式读，到字节预算就停 —— 不给大文件吃内存的机会。
+        // Stream the read, stop at the byte budget — no chance for big files to eat memory.
         let mut body: Vec<u8> = Vec::new();
         let mut response = response;
         while let Some(chunk) = response

@@ -3,7 +3,7 @@
 export type ModelRemoveResponse = {
   removed: boolean;
   /**
-   * 删的是当前那套时，active 会跟着清空。
+   * When the active profile is removed, active is cleared along with it.
    */
   activeId: string | null;
 };

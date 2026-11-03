@@ -1,25 +1,25 @@
-//! 只读的文件工具：`read_file`（分页读文本）与 `list_dir`（列目录）。
+//! Read-only file tools: `read_file` (paged text reads) and `list_dir` (directory listing).
 //!
-//! 在这两个工具出现之前，Joy 的模型读文件只有一条路：`JOY_EXEC=1` 之后再
-//! `run_command cat` —— 把「看一眼文件」绑在「执行命令」的闸门上。读取没有
-//! 副作用（共识：只读零摩擦，批准只留给写和执行），
-//! 所以这两个工具**默认注册、不走闸门**。
+//! Before these two existed, the model had one way to read a file: flip `JOY_EXEC=1`, then
+//! `run_command cat` — binding "peek at a file" to the "run a command" gate. Reads have no
+//! side effects (consensus: read-only is zero-friction; approval is for writes and execution),
+//! so these two tools are **registered by default and skip the gate**.
 //!
-//! 两条设计：
+//! Two designs:
 //!
-//! * **分页续读协议**（pi）：双限 —— 2000 行、50KB，在**行边界**上截，绝不
-//!   切半行；截断时附 `[Use offset=N to continue.]`，模型能自主翻页而不是
-//!   猜测内容被截掉的部分。
-//! * **内容不变短路**：同一会话里重读同一文件的同一段，返回
-//!   「没变」占位符。一轮里反复读同一个文件是模型最常见的浪费，这个占位符
-//!   把第二次起的读取成本降到接近零。哈希在内存里、只做缓存用，不落盘。
+//! * **Paged-resume protocol**: dual caps — 2000 lines, 50KB, cut on **line boundaries**,
+//!   never mid-line; truncation appends `[Use offset=N to continue.]` so the model can
+//!   page by itself instead of guessing at the cut part.
+//! * **Unchanged-content short circuit**: re-reading the same slice of the same file in the
+//!   same session returns an "unchanged" placeholder — repeat reads of one file are the
+//!   model's most common waste; this drops the cost to near zero. Hash in memory, cache only.
 //!
-//! 错误路径（都按「工具错误是 `Error:` 文本」的契约走）：
+//! Error paths (all follow the "tool errors are `Error:` text" contract):
 //!
-//! * 文件不存在 / 不是文件 → 如实说；
-//! * 非 UTF-8 或含 NUL → 明确说「二进制」，并指出要看原始字节该用
-//!   `run_command`（那扇门有它自己的闸门）；
-//! * 读一半 IO 出错 → 报错，绝不把半截内容当好结果。
+//! * missing / not a file → say so honestly;
+//! * non-UTF-8 or containing NUL → call it "binary" and point out that raw bytes need
+//!   `run_command` (that door has its own gate);
+//! * mid-read IO error → error out; never present half the content as a good result.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -33,17 +33,17 @@ use serde_json::{json, Value};
 
 use crate::Tool;
 
-/// 单次最多读多少行：2000。
+/// Max lines per read: 2000.
 pub const READ_MAX_LINES: u32 = 2_000;
-/// 单次最多返回多少字节。在**行边界**上截 —— 切半行会让模型引用不存在的行号。
+/// Max bytes per response. Cut on a **line boundary** — half a line would make the model cite wrong line numbers.
 pub const READ_MAX_BYTES: usize = 50_000;
-/// 目录列表最多多少项。目录树不是给模型散步用的，500 项足够定位。
+/// Max entries in a directory listing. The tree isn't for the model to stroll; 500 is enough.
 pub const LIST_MAX_ENTRIES: usize = 500;
 
-/// `~` 展开：模型经常写 `~/docs/x.md`，不展开就是一条误导性的「找不到」。
-/// 只认 `HOME` / `USERPROFILE`，不引依赖。
-/// 相对路径的解析基（会话级 working-directory 语义）：
-/// 本轮工作目录优先，没设就保持现状（进程 cwd）。绝对路径原样返回。
+/// `~` expansion: models often write `~/docs/x.md`; unexpanded it's a misleading "not found".
+/// Only `HOME` / `USERPROFILE` are honored; no dependencies.
+/// The base for resolving relative paths (session-level working-directory semantics):
+/// this turn's working directory first; if unset, keep the status quo (process cwd). Absolute paths pass through.
 fn resolve_against_cwd(ctx: &crate::ToolCtx, path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         return path;
@@ -73,8 +73,8 @@ pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// 流式扫一遍文件：跳到 `offset`、收集到 `limit`/字节上限，同时数出总行数。
-/// 一次遍历完成收集与计数 —— 大文件也不必整读进内存。
+/// Stream-scan a file: jump to `offset`, collect up to `limit`/the byte cap, count total lines.
+/// One pass does both — even large files never load fully into memory.
 fn scan_lines(path: PathBuf, offset: u32, limit: u32) -> Result<(Vec<String>, u64, u64, bool)> {
     let file = std::fs::File::open(&path)?;
     let reader = std::io::BufReader::new(file);
@@ -102,7 +102,7 @@ fn scan_lines(path: PathBuf, offset: u32, limit: u32) -> Result<(Vec<String>, u6
             continue;
         }
         if n - offset as u64 >= limit as u64 {
-            continue; // 行数够了，但继续数完总行数（页脚要「of Z」）
+            continue; // enough lines, but keep counting total (the footer needs "of Z")
         }
         if byte_capped {
             continue;
@@ -116,7 +116,7 @@ fn scan_lines(path: PathBuf, offset: u32, limit: u32) -> Result<(Vec<String>, u6
         let rendered_line = format!("{n:>6}\t{line}");
         let needed = rendered_line.len() + 1;
         if bytes_used + needed > READ_MAX_BYTES && !rendered.is_empty() {
-            // 到字节上限：停在**这一行之前**（行边界），后面继续数总行数。
+            // At the byte cap: stop **before this line** (line boundary), keep counting total lines.
             byte_capped = true;
             continue;
         }
@@ -128,8 +128,8 @@ fn scan_lines(path: PathBuf, offset: u32, limit: u32) -> Result<(Vec<String>, u6
 }
 
 pub fn read_file() -> Tool {
-    // 会话级「读过什么」：(session, 路径, offset, limit) -> 内容摘要。
-    // 只活在进程内：重启后自然清空，第一次重读照常给全文。
+    // Session-level "what was read": (session, path, offset, limit) -> content digest.
+    // Lives only in-process: cleared on restart, so the first re-read gets the full text again.
     let cache: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
     Tool {
         name: "read_file".to_string(),
@@ -174,7 +174,7 @@ async fn execute_read(
     let limit = crate::opt_u32(args, "limit", READ_MAX_LINES)?.clamp(1, READ_MAX_LINES);
 
     if !path.is_file() {
-        // 目录也挡在这里：给一句「想列目录用哪个工具」的实话。
+        // Directories are blocked here too: with an honest "use that tool to list directories".
         if path.is_dir() {
             return Err(anyhow!("{raw} 是目录，不是文件 —— 列目录用 list_dir。"));
         }
@@ -211,7 +211,7 @@ async fn execute_read(
         }
     }
 
-    // 内容不变短路：同会话、同路径、同范围，读出同一段 → 占位符。
+    // Unchanged-content short circuit: same session, path, range, same content → placeholder.
     let mut hasher = DefaultHasher::new();
     out.hash(&mut hasher);
     let digest = hasher.finish();
@@ -274,7 +274,7 @@ async fn execute_list(ctx: &crate::ToolCtx, args: &Value) -> Result<String> {
         .map_err(|e| anyhow!("列 {raw} 时出错：{e}"))?
     {
         let name = entry.file_name().to_string_lossy().into_owned();
-        // 不跟随符号链接判类型（坏链不该让整个列表失败），大小取得到就要。
+        // Don't follow symlinks to decide type (a bad link must not fail the listing); take the size when available.
         let mut is_dir = entry.file_type().await?.is_dir();
         let mut size = 0u64;
         if let Ok(meta) = entry.metadata().await {

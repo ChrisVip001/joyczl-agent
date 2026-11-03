@@ -1,8 +1,8 @@
-//! send_message —— 只出草稿，从不真发。
+//! send_message — drafts only, never actually sends.
 //!
-//! local-first 的硬规矩：每条「消息」变成 outbox/ 里的一个文件，
-//! 用户读过、改过、自己发。接真渠道（邮件、Slack）是个好社区贡献 ——
-//! 但在那之前，一个能替用户发消息的助理是个安全隐患。
+//! The local-first hard rule: every "message" becomes a file in outbox/, which the user
+//! reads, edits, and sends themselves. Wiring up real channels (email, Slack) is a good
+//! community contribution — until then, an assistant that sends for you is a hazard.
 
 use std::sync::Arc;
 
@@ -31,8 +31,8 @@ pub fn send_message() -> Tool {
                 let body = require_str(&args, "body")?;
 
                 let stamp = Utc::now().format("%Y%m%dT%H%M%S");
-                // 收件人变成文件名的一部分：只留字母数字，其余换成 -，
-                // 名字里带斜杠、冒号也翻不出目录。
+                // The recipient becomes part of the filename: keep only alphanumerics,
+                // replace the rest with -, so a slash or colon cannot traverse directories.
                 let safe_to: String = to
                     .chars()
                     .map(|c| if c.is_alphanumeric() { c } else { '-' })

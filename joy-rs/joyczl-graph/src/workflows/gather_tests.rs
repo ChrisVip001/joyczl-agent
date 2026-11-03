@@ -1,8 +1,8 @@
-//! gather 图的测试。
+//! Tests for the gather graph.
 //!
-//! 全部用脚本化的桩 —— 模型在这层不存在（synthesize 的桩就是一段字符串）。
-//! 钉三件事：propose 路径走到 draft_digest、quiet 路径提前收工、
-//! 单个 scan 挂掉时用诚实文字兜底而不是让整趟空转。
+//! All scripted stubs — the model doesn't exist at this layer (synthesize's stub is
+//! a string). Pinned: the propose path reaches draft_digest, the quiet path wraps
+//! up early, and a dead scan degrades to honest text instead of idling the whole run.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,12 +12,12 @@ use super::{
 };
 use crate::{run_graph, Boxed, State, DEFAULT_MAX_STEPS};
 
-/// 把一个现成的结果包成 scan 的签名 —— 测试里最常用的桩。
+/// Wraps a ready-made result into a scan's signature — the most common test stub.
 fn scan<T: Send + 'static>(value: Result<T, String>) -> Boxed<T> {
     Box::pin(async move { value })
 }
 
-/// 有事发生：PR 与日历都有数 —— 应当走 draft_digest。
+/// Something is happening: PRs and calendar both have data — should reach draft_digest.
 #[tokio::test]
 async fn with_pending_work_it_drafts_a_digest() {
     let github: GithubScanFn = Arc::new(|| scan(Ok(("Open PRs:\n- #12 fix loop".into(), 1, 0))));
@@ -29,7 +29,7 @@ async fn with_pending_work_it_drafts_a_digest() {
     let synth: SynthFn = Arc::new(move |state| {
         let digest = synth_digest.clone();
         Box::pin(async move {
-            // prompt 真的把四个 scan 的产出缝进去了。
+            // The prompt really stitches in the four scans' output.
             assert!(state.str("gh_text").unwrap().contains("#12"));
             let text = "DIGEST: 今天只有一件事。";
             *digest.lock().unwrap() = text.to_string();
@@ -65,8 +65,8 @@ async fn with_pending_work_it_drafts_a_digest() {
     assert!(!digest.lock().unwrap().is_empty());
 }
 
-/// 全部安静：路由器走 quiet，draft_digest 根本不跑 ——
-/// 「没东西就别打扰人」是路由器的职责，不是模型的。
+/// All quiet: the router takes quiet and draft_digest never runs —
+/// "don't bother people when there's nothing" is the router's job, not the model's.
 #[tokio::test]
 async fn a_quiet_day_ends_before_the_draft() {
     let github: GithubScanFn = Arc::new(|| scan(Ok((String::new(), 0, 0))));
@@ -96,8 +96,8 @@ async fn a_quiet_day_ends_before_the_draft() {
     assert_eq!(report.state.str("digest"), Some("（都安静。）"));
 }
 
-/// 单个 scan 挂掉：它的键变成诚实的 "unavailable (…)" 文字，
-/// 整张图照常出摘要 —— 沉默是最坏的失败方式。
+/// One scan dies: its key becomes the honest "unavailable (…)" text, and the
+/// graph still produces a digest — silence is the worst failure mode.
 #[tokio::test]
 async fn a_failed_scan_becomes_honest_text_not_silence() {
     let github: GithubScanFn = Arc::new(|| scan(Err("gh CLI 超时".to_string())));
@@ -106,7 +106,7 @@ async fn a_failed_scan_becomes_honest_text_not_silence() {
     let memory: MemoryScanFn = Arc::new(|| scan(Ok(String::new())));
     let synth: SynthFn = Arc::new(|state| {
         Box::pin(async move {
-            // 失败的 scan 以文字进 prompt —— 模型会照实说「那部分没拿到」。
+            // The failed scan enters the prompt as text — the model will say that part was unavailable.
             assert!(
                 state.str("gh_text").unwrap().contains("unavailable"),
                 "{:?}",
@@ -129,7 +129,7 @@ async fn a_failed_scan_becomes_honest_text_not_silence() {
     assert_eq!(report.state.str("digest"), Some("尽力而为的晨报。"));
 }
 
-/// 路由器直接可测：计数进，标签出 —— 不需要模型，也不需要图。
+/// The router is directly testable: counts in, label out — no model, no graph.
 #[test]
 fn the_router_reads_counts_not_prose() {
     let mut state = State::new();
@@ -142,7 +142,7 @@ fn the_router_reads_counts_not_prose() {
     assert_eq!(needs_action(&state), "propose");
 }
 
-/// 拓扑（dashboard 画图的数据）：节点齐全，四个 scan 都汇进 synthesize。
+/// The topology (data for the dashboard's drawing): all nodes present, all four scans converge on synthesize.
 #[test]
 fn the_topology_describes_the_shape() {
     let topology = gather_topology();
@@ -160,7 +160,7 @@ fn the_topology_describes_the_shape() {
     }
 }
 
-/// 每个 scan 只写自己名下的键 —— 这条约定拿这份清单核对。
+/// Every scan writes only the keys under its own name — checked against the checklist.
 #[test]
 fn scan_ownership_lists_are_disjoint() {
     let mut seen: Vec<&str> = Vec::new();
@@ -177,8 +177,8 @@ fn scan_ownership_lists_are_disjoint() {
     }
 }
 
-/// synthesize 的请求里没有 tools —— 「只提议，绝不行动」是结构保证，
-/// 不是 prompt 里的一句嘱咐。
+/// The synthesize request carries no tools — "propose only, never act" is a
+/// structural guarantee, not a plea in the prompt.
 #[test]
 fn the_synth_request_carries_no_tools() {
     let mut state = State::new();

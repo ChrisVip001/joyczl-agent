@@ -2,7 +2,7 @@
 
 export type MemoryForgetResponse = {
   /**
-   * 实际删掉多少条。0 表示本来就没有这个主题的记忆。
+   * How many were actually deleted. 0 means there was no memory of this subject to begin with.
    */
   removed: number;
 };

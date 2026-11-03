@@ -1,8 +1,8 @@
-//! 引擎的机械部分 —— 纯函数节点，零模型、零网络。
+//! The engine's mechanics — pure-function nodes, zero model, zero network.
 //!
-//! 这些钉住的是下游全都依赖的契约：执行顺序（`path`）、一波之内的真并发、
-//! 写键不相交的规矩、两道循环护栏、出错排空、以及 dashboard 要渲染的
-//! 观察者事件序列。
+//! These pin the contracts everything downstream depends on: execution order
+//! (`path`), true concurrency within a wave, the disjoint-write-keys rule, both
+//! loop guardrails, error draining, and the observer events the dashboard renders.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,7 +12,7 @@ use serde_json::json;
 use super::nodes::{fn_node, key_router};
 use super::*;
 
-/// 用 Arc<Mutex<Vec<_>>> 收集事件 —— 观察者是 Sync 的，测试里也是这样。
+/// Collects events with Arc<Mutex<Vec<_>>> — the observer is Sync, so are the tests.
 type Events = Arc<std::sync::Mutex<Vec<GraphEvent>>>;
 
 fn collect_events() -> (Events, Observer) {
@@ -56,7 +56,7 @@ fn ended(events: &Events) -> (i64, i32, Vec<String>, Option<String>) {
     panic!("没有 graph_end 事件");
 }
 
-/// 纯计算节点。
+/// A pure compute node.
 fn pure(name: &str, f: impl Fn(&State) -> NodeWrites + Send + Sync + 'static) -> Node {
     Node::new(name, "fn", fn_node(f))
 }
@@ -160,7 +160,7 @@ async fn fanout_runs_concurrently_and_fanin_waits_for_all() {
             "fn",
             Arc::new(move |_ctx: NodeCtx| {
                 Box::pin(async move {
-                    // 每个分支写自己的键，先等 150ms。
+                    // Each branch writes its own key, after waiting 150ms.
                     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                     Ok(writes([(key, json!(key))]))
                 })
@@ -169,7 +169,7 @@ async fn fanout_runs_concurrently_and_fanin_waits_for_all() {
         .unwrap();
         g.entry(&[key]).unwrap();
     }
-    // fan-in 等三个都点着，然后才看得到三个键。
+    // fan-in waits for all three to fire before the three keys become visible.
     g.add_node(pure("join", |s| {
         writes([(
             "joined",
@@ -191,7 +191,7 @@ async fn fanout_runs_concurrently_and_fanin_waits_for_all() {
         .await
         .expect("能跑");
     let elapsed = started.elapsed();
-    assert_eq!(report.state.str("joined"), Some("xyz")); // fan-in 看到了三个键
+    assert_eq!(report.state.str("joined"), Some("xyz")); // fan-in saw all three keys
     assert!(
         elapsed.as_millis() < 350,
         "三个 150ms 的节点应当是并排跑的，实际用了 {elapsed:?}"
@@ -274,7 +274,7 @@ async fn parallel_key_collision_is_fatal() {
     g.add_node(pure("right", |_| writes([("same", json!(2))])))
         .unwrap();
     g.entry(&["left", "right"]).unwrap();
-    // 同一波里两个节点写同一个键 —— 这是图的 bug，静默丢一次写比报错糟得多。
+    // Two same-wave nodes writing one key is a graph bug; dropping a write silently is worse.
     let error = run_graph(g, State::new(), None, DEFAULT_MAX_STEPS)
         .await
         .expect_err("两个节点撞键必须报错");
@@ -283,7 +283,7 @@ async fn parallel_key_collision_is_fatal() {
 
 #[tokio::test]
 async fn sequential_overwrite_is_allowed() {
-    // 顺序执行时后一个节点覆盖前一个的键完全正常（并行才禁止）。
+    // In sequential execution a later node overwriting an earlier key is fine (only parallel is banned).
     let report = run_graph(
         linear_graph(),
         State::from_value(json!({"a": 99})).unwrap(),
@@ -360,13 +360,13 @@ async fn node_error_without_on_error_drains_to_end() {
     let report = run_graph(g, State::new(), Some(observer), DEFAULT_MAX_STEPS)
         .await
         .expect("能跑");
-    assert!(!report.state.has("ran")); // 下游被饿死，运行干净地结束
+    assert!(!report.state.has("ran")); // downstream starved, the run ends cleanly
     assert!(ended(&events).3.is_some());
 }
 
 #[tokio::test]
 async fn observer_event_sequence_is_pinned() {
-    // 钉死事件种类与顺序 —— dashboard 的图视图就照这个渲染。
+    // Pins the event kinds and order — the dashboard's graph view renders from this.
     let (events, observer) = collect_events();
     run_graph(
         routed_graph(),
@@ -411,8 +411,8 @@ fn describe_reports_every_node_and_edge() {
         .filter(|e| e.conditional)
         .map(|e| (e.src.as_str(), e.dst.as_str()))
         .collect();
-    // 同一个路由器的几条目标边谁先谁后不属于契约（实现里是按键名排序的），
-    // 所以只钉「是这几条」。
+    // The order of a router's target edges isn't part of the contract (the
+    // implementation sorts by key), so only "these are the edges" is pinned.
     conditional.sort_unstable();
     let statik: Vec<(&str, &str)> = topology
         .edges
@@ -456,7 +456,7 @@ async fn reserved_underscore_keys_never_merge_or_leak() {
 
 #[tokio::test]
 async fn inner_events_come_out_tagged_with_their_node() {
-    // 节点内部的事件（loop 的 llm / tool / text）要能被追到是哪个节点发的。
+    // Internal node events (loop's llm / tool / text) must be traceable to their node.
     let mut g = Graph::new("tagged");
     g.add_node(Node::new(
         "agent",
@@ -507,7 +507,7 @@ fn state_round_trips_through_json() {
 
 #[tokio::test]
 async fn errors_from_a_previous_run_are_kept() {
-    // state 是可以复用的：上一次留下的 errors 不该被悄悄清掉。
+    // State is reusable: errors left by the previous run must not be silently cleared.
     let state = State::from_value(json!({"errors": {"old": "earlier"}})).unwrap();
     let report = run_graph(linear_graph(), state, None, DEFAULT_MAX_STEPS)
         .await

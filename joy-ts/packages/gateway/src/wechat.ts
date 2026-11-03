@@ -6,62 +6,62 @@ import type { Responder } from "./bridge.ts";
 import { splitMessage } from "./text.ts";
 import { decryptMessage, encryptMessage, signatureOf } from "./wechat-crypto.ts";
 
-// 调用方和测试照旧只认这一个模块（跟 telegram / discord 一样）。
+// Callers and tests keep pointing at this one module (same as telegram / discord).
 export type { Responder } from "./bridge.ts";
 export { splitMessage } from "./text.ts";
 
 /**
- * 客服消息里一段文本的字符上限。
+ * Character cap for one text segment of a customer-service message.
  *
- * 官方文档没写这个数 —— 翻遍了「发送客服消息」那页也只有 `content` 是
- * 「文本内容」。微信实际是按 **2048 字节** 卡的，而一个汉字占 3 字节，
- * 所以压在 600 字符就是 1800 字节，留了余量。
+ * The official docs never state this number — the "send customer-service message" page only
+ * says `content` is "text content". WeChat actually enforces **2048 bytes**, and a CJK char is
+ * 3 bytes, so 600 chars = 1800 bytes, with headroom.
  *
- * 保守一点是有理由的：被动回复只能回**一条**，所以超过一条的回答本来就
- * 得走客服消息，而客服消息有额度（48 小时 5 条）—— 少切一条省一份额度，
- * 但切短了被拒，整段就白发了。
+ * The conservatism has a reason: passive replies can return **one** message only, so any longer
+ * reply already goes via customer-service messages, which have a quota (5 per 48 hours) — fewer
+ * chunks save quota, but a rejected chunk wastes the whole reply.
  */
 export const MESSAGE_LIMIT = 600;
 
 /**
- * 被动回复的时限：微信给 5 秒。
+ * The passive-reply deadline: WeChat gives 5 seconds.
  *
- * 超了它会重试（一共三次），三次都没回就把用户那句话丢掉。1 秒留给网络
- * 和微信那头，所以自己掐在 4 秒。
+ * Past it WeChat retries (three times total), then drops the user's message. 1 second goes to
+ * the network and WeChat's side, so we cut ourselves off at 4.
  *
- * **这条时限决定了整个适配器的形状**：Joy 跑一轮要多久？带工具调用的那几
- * 轮远超 5 秒。所以主流路径不是「被动回复」，而是「先回 `success` 把微信
- * 打发走，再拿客服消息把答复推回去」。被动回复只在答得快的时候才用得上。
+ * **This deadline shapes the whole adapter**: how long does a Joy turn take? Turns with tool
+ * calls far exceed 5 seconds. So the main path isn't "passive reply" but "reply `success` first,
+ * then push the answer as customer-service messages". Passive replies only fit fast answers.
  */
 export const DEFAULT_REPLY_BUDGET_MS = 4000;
 
-/** 请求体的上限。微信的消息就几 KB，给到 128K 是防着有人拿它打内存。 */
+/** Request body cap. WeChat messages are a few KB; 128K guards against memory-attack abuse. */
 const MAX_BODY = 128 * 1024;
 
 export interface WeChatAdapterOptions {
-  /** 服务器配置里填的那个 Token。 */
+  /** The Token filled in under server configuration. */
   token: string;
   appId: string;
   /**
-   * 安全 / 兼容模式才有；明文模式不用。
+   * Only for safe / compatible mode; plain mode doesn't use it.
    *
-   * 留空就是明文模式 —— 微信那边选了什么模式，这里就得跟着是什么，
-   * 配错的表现是「验证 URL 失败」或者「收到一堆解不开的密文」。
+   * Empty means plain mode — whatever mode WeChat's side chose, this must match; a mismatch
+   * shows up as "URL verification failed" or "a pile of undecryptable ciphertext".
    */
   encodingAesKey?: string;
   /**
-   * 客服消息要它。**不给就退化成「只在 4 秒内答得完才回话」**。
+   * Customer-service messages need it. **Without it, degrade to "only replies that finish in 4s"**.
    *
-   * 另外它还有个前提：客服接口**只有认证过的公众号能调**，未认证的个人
-   * 订阅号会一直报 48001。这是微信那边的门槛，不是这里能绕过去的。
+   * It also has a prerequisite: the customer-service API is **for verified accounts only**;
+   * unverified personal subscription accounts keep getting 48001 — WeChat's gate, not ours.
    */
   appSecret?: string;
   port?: number;
-  /** 回调路径。微信那边填的 URL 的 path 部分。 */
+  /** Callback path. The path part of the URL filled in on WeChat's side. */
   path?: string;
   /**
-   * 谁可以用。写用户的 OpenID。**不填就是谁都能用** —— 关注了公众号的人
-   * 都能使唤它，花的是你的模型额度。
+   * Who may use it. Users' OpenIDs. **Unset means anyone** — every follower of the account can
+   * command it, spending your model quota.
    */
   allow?: readonly string[];
   replyBudgetMs?: number;
@@ -69,7 +69,7 @@ export interface WeChatAdapterOptions {
   onLog?: (text: string) => void;
 }
 
-/** 从微信那口固定形状的 XML 里取一个字段。 */
+/** Take one field out of WeChat's fixed-shape XML. */
 export function tag(xml: string, name: string): string {
   const cdata = new RegExp(
     `<${name}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${name}>`,
@@ -80,16 +80,16 @@ export function tag(xml: string, name: string): string {
 }
 
 /**
- * 塞进 CDATA 之前先把 `]]>` 拆开。
+ * Break up `]]>` before it goes into CDATA.
  *
- * 不处理的话，一句包含 `]]>` 的答复会把整段 XML 弄坏 —— 微信那边报的是
- * 「回复失败」，而你会对着一段看起来没问题的文本找半天。
+ * Unhandled, a reply containing `]]>` corrupts the whole XML — WeChat reports "reply failed",
+ * and you'd stare at a perfectly healthy-looking text for hours.
  */
 function cdata(text: string): string {
   return `<![CDATA[${text.replaceAll("]]>", "]]]]><![CDATA[>")}]]>`;
 }
 
-/** 等到点为止：`work` 先完成就给它，`ms` 到了就给 `undefined`。 */
+/** Wait until the deadline: `work` finishing first wins; at `ms`, `undefined` wins. */
 async function within<T>(
   ms: number,
   work: Promise<T>,
@@ -101,20 +101,20 @@ async function within<T>(
   try {
     return await Promise.race([work, deadline]);
   } finally {
-    // 不清理的话，这个定时器会白等着把进程多吊几秒。
+    // UnCleaned, this timer would idle around, keeping the process alive a few seconds extra.
     clearTimeout(timer);
   }
 }
 
 /**
- * 微信适配器。
+ * The WeChat adapter.
  *
- * 跟 Telegram、Discord 最大的不同：**没有能连出去的路**。微信不给长轮询、
- * 也不给 WebSocket，只能当个 HTTP 服务器等着被推。所以这是三个平台里唯一
- * 需要「公网可达 + 一个地址」的 —— 本地跑要配内网穿透。
+ * The biggest difference from Telegram and Discord: **no outbound connection**. WeChat offers
+ * neither long polling nor WebSocket; you can only be an HTTP server waiting to be pushed — the
+ * only one of the three needing "public reachability + one address"; local runs need a tunnel.
  *
- * 于是形状也不一样：那两家的适配器是「连上去，一条一条收」，这里是
- * 「起个服务器，收一个请求，**5 秒内**给个交代」。
+ * The shape differs accordingly: those two adapters "connect and receive one by one"; here it's
+ * "start a server, take one request, account for it **within 5 seconds**".
  */
 export class WeChatAdapter {
   readonly #token: string;
@@ -135,11 +135,11 @@ export class WeChatAdapter {
   #accessTokenPending: Promise<string> | undefined;
 
   /**
-   * 刚见过的 `MsgId`。
+   * Recently seen `MsgId`s.
    *
-   * 微信在 5 秒没等到回复时会**把同一个请求再发一遍**（一共三次）。不去重
-   * 的话，同一条消息会问 Joy 三轮、推三份回答给用户 —— 而且因为它们几乎
-   * 同时回来，用户看到的是一堆重复。
+   * When WeChat gets no reply within 5 seconds it **re-sends the same request** (three times
+   * total). Without dedup, one message asks Joy three times and pushes three replies — arriving
+   * nearly together, they read to the user as a pile of duplicates.
    */
   readonly #seen = new Set<string>();
 
@@ -157,11 +157,11 @@ export class WeChatAdapter {
     this.#allow = new Set((options.allow ?? []).map((entry) => entry.trim()));
   }
 
-  /** 起服务器，一直转到 `stop()`。 */
+  /** Start the server, looping until `stop()`. */
   async run(): Promise<void> {
     const server = createServer((request, response) => {
-      // 一个请求的处理整段兜住。没兜住的话，一次没预料到的异常会变成
-      // 未捕获的拒绝 —— Node 默认因此把进程带走，而它管着所有人的会话。
+      // Wrap the whole request handling. Unwrapped, one surprise exception becomes an unhandled
+      // rejection — Node takes the process down by default, and it serves everyone's sessions.
       void this.#serve(request, response).catch((error: unknown) => {
         this.#onLog(
           `这个请求没处理完：${error instanceof Error ? error.message : String(error)}`,
@@ -194,10 +194,10 @@ export class WeChatAdapter {
   }
 
   /**
-   * 实际在听的端口。
+   * The port actually being listened on.
    *
-   * 给 `port: 0`（让系统随便挑一个）用 —— 测试要靠它问出挑中了哪个，
-   * 不然就只能先猜一个端口号，撞上了就是查半天才找得到的随机失败。
+   * For `port: 0` (let the system pick) — tests need it to learn which port was chosen, else
+   * they'd guess one, and a collision becomes a random failure that takes ages to trace.
    */
   get port(): number {
     const address = this.#server?.address();
@@ -205,7 +205,7 @@ export class WeChatAdapter {
     return typeof address === "object" ? address.port : this.#port;
   }
 
-  /** 一个请求进来：先看是哪一种，再分给对应的处理。 */
+  /** One request in: identify the kind first, then dispatch to the matching handler. */
   async #serve(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://localhost");
     if (url.pathname !== this.#path) {
@@ -214,8 +214,8 @@ export class WeChatAdapter {
       return;
     }
 
-    // GET 只有一件事：「服务器配置」那一步微信来验这个地址是不是你的。
-    // 它不看你的业务，只看你回的那串 echostr 对不对。
+    // GET has one job: during "server configuration" WeChat verifies this address is yours.
+    // It ignores your business logic; only your echo of `echostr` matters.
     if (request.method === "GET") {
       const query = url.searchParams;
       const signature = query.get("signature") ?? "";
@@ -240,8 +240,8 @@ export class WeChatAdapter {
 
     const xml = await this.#plainXml(request, url.searchParams);
     if (xml === undefined) {
-      // 验签没过或者解不开。这时候**不能**回 `success` —— 那等于告诉
-      // 微信「我收到了」，而其实这条我们根本没处理。
+      // Signature failed or decryption failed. **Do not** reply `success` here — that tells
+      // WeChat "received", when in fact we never processed this one.
       response.writeHead(403);
       response.end();
       return;
@@ -250,11 +250,11 @@ export class WeChatAdapter {
   }
 
   /**
-   * 把入站正文规约成明文 XML。
+   * Normalize the inbound body into plaintext XML.
    *
-   * 三种模式在这一步之后**就没有区别了** —— 明文模式直接就是它；兼容模式
-   * 明文密文都带，拿密文解出来跟明文等价；安全模式只有密文。所以后面所有
-   * 逻辑只认明文 XML，不必到处分三种情况写。
+   * After this step the three modes **have no difference** — plain mode is already it;
+   * compatible mode carries both, and decrypting the ciphertext equals the plaintext; safe mode
+   * has ciphertext only. All later logic deals with plaintext XML alone, no three-way branches.
    */
   async #plainXml(
     request: IncomingMessage,
@@ -278,8 +278,8 @@ export class WeChatAdapter {
       return body;
     }
 
-    // **这一步要用 `msg_signature`，不能用 `signature`。** 文档专门叮嘱过：
-    // 安全模式下判「这条是不是真的从微信来的」，只认它。
+    // **This step must use `msg_signature`, not `signature`.** The docs say so explicitly:
+    // in safe mode, deciding "did this really come from WeChat" accepts only that one.
     const encrypt = tag(body, "Encrypt");
     if (
       signatureOf(this.#token, timestamp, nonce, encrypt) !==
@@ -319,8 +319,8 @@ export class WeChatAdapter {
 
     if (msgId !== "") {
       if (this.#seen.has(msgId)) {
-        // 微信的重试。第一次已经收下了，这里只要让它别再发 —— 再答一遍
-        // 就是第二条重复的话，而且两条几乎同时到，用户看到的是一堆重影。
+        // WeChat's retry. The first attempt was accepted; just make it stop resending — another
+        // reply is a second duplicate, and arriving almost together they read as ghosts.
         this.#onLog(`微信又把 ${msgId} 推了一遍（5 秒没等到答复），跳过。`);
         this.#end(response, "success");
         return;
@@ -329,7 +329,7 @@ export class WeChatAdapter {
     }
 
     if (this.#allow.size > 0 && !this.#allow.has(openid)) {
-      // 不搭理，也不回一句「你没权限」—— 那等于告诉陌生人这个号是活的。
+      // Ignore silently, and don't reply "no permission" — that tells a stranger the account is alive.
       this.#onLog(`忽略了不在白名单里的人：${openid}`);
       this.#end(response, "success");
       return;
@@ -343,15 +343,15 @@ export class WeChatAdapter {
             explain(error),
           );
 
-    // 4 秒内答得完就用被动回复，答不完先回 `success`。
+    // If it finishes within 4s, use the passive reply; otherwise send `success` first.
     const settled = await within(
       this.#budgetMs,
       pending.then((reply) => splitMessage(reply, MESSAGE_LIMIT)),
     );
 
-    // 被动回复只能回**一条**，所以只有切成一条时才走这儿。多段回答不走
-    // 「第一段就地回、剩下的推客服消息」—— 那会让顺序变成两处拼出来的，
-    // 而这种小聪明在出问题时极难查。
+    // A passive reply can be **one** message only, so this path runs only for a single chunk.
+    // Multi-chunk replies don't do "first chunk inline, rest via customer service" — that makes
+    // the ordering a joint product of two places, and such cleverness is murder to debug.
     if (settled !== undefined && settled.length === 1) {
       this.#end(
         response,
@@ -360,7 +360,7 @@ export class WeChatAdapter {
       return;
     }
 
-    // 先把微信打发走 —— 它那 5 秒的钟还在走，而 Joy 那边可能还要几十秒。
+    // Send WeChat away first — its 5-second clock is still running, and Joy may need tens of seconds.
     this.#end(response, "success");
 
     const chunks = settled ?? splitMessage(await pending, MESSAGE_LIMIT);
@@ -368,8 +368,8 @@ export class WeChatAdapter {
       try {
         await this.#sendCustom(openid, chunk);
       } catch (error) {
-        // 一条发不出去就停下：后面几条一样会失败，而三条一样的错比一条
-        // 有用的错难读得多。这里最常见的因由是账号没认证。
+        // One failed send, stop: the rest would fail identically, and three identical errors are
+        // far harder to read than one useful one. The usual cause is an unverified account.
         this.#onLog(
           `客服消息没发出去：${error instanceof Error ? error.message : String(error)}`,
         );
@@ -379,11 +379,11 @@ export class WeChatAdapter {
   }
 
   /**
-   * 被动回复的正文。
+   * The passive reply body.
    *
-   * 加密模式下回包也得是密文，而且外面那层 `<xml>` 里装的是
-   * `Encrypt / MsgSignature / TimeStamp / Nonce` —— 不是消息本身。
-   * `Nonce` 回填微信 URL 上那个就行（文档明说的），`TimeStamp` 用当前时间。
+   * In encrypted mode the reply must be ciphertext too, and the outer `<xml>` carries
+   * `Encrypt / MsgSignature / TimeStamp / Nonce` — not the message itself. `Nonce` echoes the
+   * one on WeChat's URL (the docs say so), `TimeStamp` is the current time.
    */
   #replyXml(
     reply: string,
@@ -392,7 +392,7 @@ export class WeChatAdapter {
     nonce: string,
   ): string {
     const time = Math.floor(Date.now() / 1000);
-    // `ToUserName` 和 `FromUserName` 是**对调**的：回给谁、谁回的。
+    // `ToUserName` and `FromUserName` are **swapped**: who it goes to, and who replies.
     const inner =
       "<xml>" +
       `<ToUserName>${cdata(openid)}</ToUserName>` +
@@ -430,15 +430,15 @@ export class WeChatAdapter {
 
   #remember(msgId: string): void {
     this.#seen.add(msgId);
-    // 只留最近的一批：这是个「刚见过没有」的判定，不是历史记录。微信的重试
-    // 都在几秒内，200 条足够，而且 Set 记着插入顺序，淘汰的就是最老的。
+    // Keep only the recent batch: a "just seen or not" check, not history. WeChat's retries land
+    // within seconds; 200 entries suffice, and Set keeps insertion order, so eviction is oldest.
     if (this.#seen.size > 200) {
       const oldest = this.#seen.values().next().value;
       if (oldest !== undefined) this.#seen.delete(oldest);
     }
   }
 
-  /** 拿 `access_token`，带缓存。 */
+  /** Fetch `access_token`, cached. */
   async #getAccessToken(): Promise<string> {
     const secret = this.#appSecret;
     if (secret === undefined) {
@@ -450,8 +450,8 @@ export class WeChatAdapter {
       return this.#accessToken;
     }
 
-    // 并发时只发一次请求：微信那边**每取一把新的，旧的立刻作废**，
-    // 所以同时来的两句「去取」会让先取到的那把当场失效。
+    // Only one request under concurrency: WeChat **invalidates the old token the moment a new
+    // one is fetched**, so two simultaneous "go fetch" calls kill the first token on the spot.
     this.#accessTokenPending ??= this.#fetchToken(secret).finally(() => {
       this.#accessTokenPending = undefined;
     });
@@ -474,14 +474,14 @@ export class WeChatAdapter {
     }
 
     this.#accessToken = body.access_token;
-    // 提前五分钟作废：卡在到期的边儿上取，请求发出去的时候可能刚好过期。
+    // Invalidate 5 minutes early: fetching right at expiry risks the token dying mid-request.
     this.#accessTokenUntil =
       Date.now() + ((body.expires_in ?? 7200) - 300) * 1000;
     return body.access_token;
   }
 
   async #sendCustom(openid: string, content: string): Promise<void> {
-    // 一次就够，不会循环：`attempt` 到 1 之后无论什么错都抛出去。
+    // One retry suffices, no loop: once `attempt` reaches 1, any error is thrown out.
     for (let attempt = 0; ; attempt += 1) {
       const token = await this.#getAccessToken();
       const response = await this.#fetch(
@@ -503,8 +503,8 @@ export class WeChatAdapter {
       };
       if (body.errcode === 0) return;
 
-      // 40001 / 42001 都是「这把 token 不算数了」。缓存里那把可能是别处
-      // 取过的，也可能刚好卡在过期的边界 —— 清掉再来一次，别让用户白等。
+      // 40001 / 42001 both mean "this token doesn't count". The cached one may have been fetched
+      // elsewhere, or sits on the expiry edge — clear it and retry once; don't make users wait.
       if (
         attempt === 0 &&
         (body.errcode === 40001 || body.errcode === 42001)
@@ -518,7 +518,7 @@ export class WeChatAdapter {
   }
 }
 
-/** 把请求体读全。超长就直接放弃 —— 微信的消息就几 KB。 */
+/** Read the whole request body. Overlong: give up — WeChat messages are a few KB. */
 async function readBody(request: IncomingMessage): Promise<string | undefined> {
   const chunks: Buffer[] = [];
   let size = 0;

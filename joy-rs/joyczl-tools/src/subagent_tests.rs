@@ -1,4 +1,4 @@
-//! 子代理工具的契约：结论怎么回来、失败怎么说、递归派生怎么被结构性地挡住。
+//! Subagent tool contracts: how conclusions come back, how failures are worded, how recursive delegation is structurally blocked.
 
 use std::sync::{Arc, Mutex};
 
@@ -7,7 +7,7 @@ use serde_json::json;
 use super::subagent::{delegate_task, SubagentRunner, NAME};
 use super::{BoxFut, ToolRegistry};
 
-/// 一次委派被调用时的入参（断言透传用）。
+/// The arguments a delegation was called with (for pass-through assertions).
 #[derive(Debug, Clone)]
 struct Seen {
     task: String,
@@ -15,7 +15,7 @@ struct Seen {
     schema: Option<serde_json::Value>,
 }
 
-/// 一次假委派：记下收到的任务，返回写死的答案。
+/// A fake delegation: records the task received, returns a canned answer.
 struct Fake {
     answer: Result<String, String>,
     seen: Mutex<Vec<Seen>>,
@@ -61,7 +61,7 @@ async fn ctx() -> super::ToolCtx {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     super::ToolCtx {
         cwd: None,
         approval: None,
@@ -76,7 +76,7 @@ async fn ctx() -> super::ToolCtx {
     }
 }
 
-/// 结论回来时要带个标签：父轮看到的是工具输出，得知道这是「别人说的」。
+/// Conclusions come back labeled: the parent sees tool output and must know it's "someone else speaking".
 #[tokio::test]
 async fn a_delegation_returns_the_summary_with_a_label() {
     let runner = Fake::ok("十点有会。");
@@ -98,7 +98,7 @@ async fn a_delegation_returns_the_summary_with_a_label() {
     assert_eq!(seen[0].schema, None, "没给 schema 就是 None");
 }
 
-/// 委派失败是**文本**，不是错误 —— 与这一层所有工具一致。
+/// A failed delegation is **text**, not an error — consistent with every tool in this layer.
 #[tokio::test]
 async fn a_failed_delegation_is_still_text() {
     let tool = delegate_task(Fake::failing("模型调用失败：boom"));
@@ -110,7 +110,7 @@ async fn a_failed_delegation_is_still_text() {
     assert!(out.contains("boom"), "{out}");
 }
 
-/// 递归派生是**结构性**挡住的：子代理拿到的工具表里根本没有 `delegate_task`。
+/// Recursive delegation is **structurally** blocked: the subagent's tool table simply has no `delegate_task`.
 #[test]
 fn the_child_tool_table_has_no_delegate_task() {
     let mut registry = ToolRegistry::new();
@@ -123,12 +123,12 @@ fn the_child_tool_table_has_no_delegate_task() {
         "子代理的表里不能有它：{:?}",
         child.names()
     );
-    // 父轮那份不受影响（`without` 是复制，不是就地删）。
+    // The parent's copy is untouched (`without` clones, doesn't delete in place).
     assert!(registry.names().contains(&NAME));
     assert!(child.names().iter().all(|name| *name != NAME));
 }
 
-/// 任务描述是必填的 —— 缺了它 schema 会先挡下（模型据此能改对）。
+/// The task description is required — the schema stops it first (the model can fix it accordingly).
 #[tokio::test]
 async fn the_task_is_required() {
     let mut registry = ToolRegistry::new();
@@ -137,7 +137,7 @@ async fn the_task_is_required() {
     assert!(out.starts_with("Error:") && out.contains("task"), "{out}");
 }
 
-/// `result_schema` 原样透传给 runner（工具层不解释它），结论回来时带「转述」声明。
+/// `result_schema` is passed through to the runner untouched (the tool layer doesn't interpret it); conclusions come back with the "paraphrase" banner.
 #[tokio::test]
 async fn a_result_schema_is_passed_through_and_the_report_is_labelled() {
     let runner = Fake::ok("十点有会。");

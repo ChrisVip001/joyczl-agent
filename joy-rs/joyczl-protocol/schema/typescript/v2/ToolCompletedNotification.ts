@@ -5,7 +5,7 @@ export type ToolCompletedNotification = {
   turnId: string;
   tool: string;
   /**
-   * 工具回给模型看的文本。失败的详细信息也在这里 —— 不中断 turn。
+   * The text the tool returned to the model. Failure details live here too — the turn is not aborted.
    */
   output: string;
   status: ToolStatus;

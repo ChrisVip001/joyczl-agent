@@ -1,8 +1,10 @@
-//! `joy memory` —— 记忆的本地维护命令。
+//! `joy memory` — local maintenance commands for memory.
 //!
-//! `joy memory reindex` 给还没有向量的事实补上向量（`JOY_EMBEDDINGS=1`
-//! 那条腿的入场券）。开关打开之前的记忆、以及写入时 embedding 服务恰好
-//! 不可用的事实，都靠它补齐 —— 不补也不会丢，只是暂时只有关键词那条腿。
+//! `joy memory reindex` backfills vectors for facts that don't have one yet
+//! (the ticket into the `JOY_EMBEDDINGS=1` leg). Memory written before the flag
+//! was enabled, and facts whose embedding service happened to be down at write
+//! time, are caught up here — skipping it loses nothing, they just stay on the
+//! keyword leg for now.
 
 use anyhow::Result;
 use joyczl_provider::embed::Embedder;

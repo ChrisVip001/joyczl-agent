@@ -1,19 +1,21 @@
-//! triage 图工作流 —— flag 打开时，每句话的前门。
+//! The triage graph workflow — the front door of every message when the flag is on.
 //!
-//! 检索门用小模型问了一个很窄的问题（「这句话需要记忆吗」）。triage 把那
-//! 个想法从一道门推广成一个结构：两件事**同时**发生（小模型给消息分类；
-//! 今天的日历从磁盘读出来），然后由代码路由器挑路：
+//! The retrieval gate asked a very narrow question with a small model ("does this
+//! message need memory?"). Triage generalizes that idea from one gate into a
+//! structure: two things happen **at once** (the small model classifies; today's
+//! calendar is read from disk), then a code router picks the path:
 //!
 //! ```text
 //! START ── classify ──────┐
-//!      └── check_calendar ┴─► route:  quick → quick_reply（小模型）→ END
-//!                                     full  → full_agent（THE loop）→ END
+//!      └── check_calendar ┴─► route:  quick → quick_reply (small model) → END
+//!                                     full  → full_agent (THE loop) → END
 //! ```
 //!
-//! 「谢谢！」永远不会吵醒大模型。「周六安排个游泳」跑的是跟平时一字不差
-//! 的 loop —— 只是作为图里的一个节点。用户不选模式；这张图**就是**那个
-//! 选择。而且每道缝都失败开放：分类器坏了、引擎坏了，任何情况 → 都由
-//! 普通 loop 回答，跟 flag 关着时一样。
+//! "Thanks!" never wakes the big model. "Plan a swim on Saturday" runs the exact
+//! same loop as always — just as a node in the graph. The user picks no mode;
+//! this graph **is** the choice. And every seam fails open: classifier broken,
+//! engine broken, any situation → answered by the plain loop, exactly as when
+//! the flag is off.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -46,15 +48,15 @@ Today's calendar: {calendar}
 
 User message: {message}"#;
 
-/// 注入的四个可调用体：测试能脚本化它们，dashboard 用桩建图只为 describe()，
-/// app-server 则把真的 client / loop 绑上去。
+/// The four injected callables: tests script them, the dashboard builds a stubbed
+/// graph just for describe(), and app-server binds the real client / loop.
 pub type ClassifyFn = Arc<dyn Fn(String) -> Boxed<(String, String)> + Send + Sync>;
 pub type CalendarFn = Arc<dyn Fn() -> String + Send + Sync>;
 pub type QuickFn = Arc<dyn Fn(State) -> Boxed<String> + Send + Sync>;
 pub type FullFn = Arc<dyn Fn(NodeCtx) -> Boxed<NodeWrites> + Send + Sync>;
 
-/// 返回 (route, reason)。失败开放到 "full"：triage 坏掉的代价必须是延迟，
-/// 绝不能是能力 —— 跟 `retrieval_gate` 同一条镜像规则。
+/// Returns (route, reason). Fails open to "full": a broken triage must cost latency,
+/// never capability — the same mirror rule as `retrieval_gate`.
 pub async fn classify_message(
     client: &dyn Provider,
     small_model: &str,
@@ -67,7 +69,7 @@ pub async fn classify_message(
             TRIAGE_PROMPT.replace("{message}", message),
         )],
         tools: Vec::new(),
-        // 会思考的模型得先想一会儿才吐出那段 JSON。
+        // A reasoning model needs a moment to think before emitting that JSON.
         max_tokens: 600,
     };
     let response = match client.create(request).await {
@@ -112,8 +114,8 @@ pub async fn classify_message(
     )
 }
 
-/// 今天的事件，直接从 `<home>/calendar.ics` 读 —— 一次本地文件读，
-/// 这正是它能跟分类器那次网络调用并排跑的原因。
+/// Today's events, read straight from `<home>/calendar.ics` — one local file read,
+/// which is exactly why it can run alongside the classifier's network call.
 pub fn todays_events(home: &Path) -> String {
     let ics = home.join("calendar.ics");
     let Ok(text) = std::fs::read_to_string(&ics) else {
@@ -182,7 +184,7 @@ pub fn build_triage_graph(
         }),
     ))?;
 
-    // 这个节点就是「一整轮 loop」。它调的是不带图时同一个 full_turn。
+    // This node is "an entire loop". It calls the same full_turn as without a graph.
     let full = full_fn.clone();
     g.add_node(Node::new(
         "full_agent",
@@ -192,7 +194,7 @@ pub fn build_triage_graph(
 
     g.entry(&["classify", "check_calendar"])?;
 
-    // 什么都不做，只等**两条**并行分支都到齐 —— 然后路由器才开始做决定。
+    // Does nothing but wait for **both** parallel branches to arrive — then the router decides.
     g.add_node(Node::new("gather", "fn", fn_node(|_| NodeWrites::new())))?;
     g.add_edge("classify", "gather")?;
     g.add_edge("check_calendar", "gather")?;
@@ -207,7 +209,7 @@ pub fn build_triage_graph(
     Ok(g)
 }
 
-/// 拓扑即数据，给 dashboard 用 —— 用桩建图，从不运行。
+/// Topology as data, for the dashboard — builds the graph with stubs, never runs it.
 pub fn triage_topology() -> Topology {
     let noop_classify: ClassifyFn =
         Arc::new(|_m| Box::pin(async { Ok(("full".to_string(), String::new())) }));
@@ -216,7 +218,7 @@ pub fn triage_topology() -> Topology {
     let noop_full: FullFn = Arc::new(|_c| Box::pin(async { Ok(NodeWrites::new()) }));
     match build_triage_graph(noop_classify, noop_calendar, noop_quick, noop_full) {
         Ok(graph) => graph.describe(),
-        // 走到这里说明图本身写错了，而那张图是写死在这个文件里的。
+        // Reaching here means the graph itself is wrong — and it is hard-coded in this file.
         Err(error) => panic!("triage 图写错了：{error}"),
     }
 }

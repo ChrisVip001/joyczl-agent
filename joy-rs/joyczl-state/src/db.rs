@@ -1,4 +1,4 @@
-//! 打开 state.db 并跑到最新 schema。
+//! Open state.db and migrate it to the latest schema.
 
 use std::path::Path;
 use std::time::Duration;
@@ -7,10 +7,10 @@ use anyhow::{Context, Result};
 use sqlx::migrate::MigrateDatabase;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-/// 迁移脚本在编译期被读进来，所以二进制自带 schema，不依赖运行时找文件。
+/// Migration scripts are read in at compile time: the binary carries its schema, no runtime file lookup.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
-/// 打开（必要时创建）`path` 处的 state.db，并跑完所有迁移。
+/// Open (creating if needed) the state.db at `path`, and run all migrations.
 pub async fn open(path: &Path) -> Result<SqlitePool> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -19,8 +19,8 @@ pub async fn open(path: &Path) -> Result<SqlitePool> {
         }
     }
 
-    // sqlite:// 后面必须是绝对路径，否则相对路径会被当成相对于当前工作目录
-    // 解析 —— 而 app-server 的工作目录不该决定数据库在哪。
+    // After sqlite:// must be an absolute path, or the relative path resolves against the
+    // current working directory — and the app-server's cwd must not decide where the DB is.
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -34,19 +34,19 @@ pub async fn open(path: &Path) -> Result<SqlitePool> {
             .with_context(|| format!("创建数据库失败：{url}"))?;
     }
 
-    // 并发参数必须挂在**连接选项**上，不能事后 `PRAGMA`：
-    // `PRAGMA busy_timeout` 是 per-connection 的，而 `execute(&pool)` 只作用于
-    // 恰好接到那条查询的连接 —— 池里另外 7 个连接仍是默认值。实测踩过：设了
-    // 3000，读回来是 sqlx 的默认 5000，而注释一直写着 3000。
+    // Concurrency knobs must sit on the **connect options**, not a later `PRAGMA`:
+    // `PRAGMA busy_timeout` is per-connection, and `execute(&pool)` only hits whichever
+    // connection happens to take that query — the other 7 in the pool keep the default.
+    // Bitten in practice: set 3000, read back sqlx's default 5000, while the comment said 3000.
     //
-    // 10 秒等锁：**多进程**同时写时（REPL、dashboard 的 app-server 子进程、
-    // `joy mcp serve`、`joy schedule` 可以同时开着同一个 state.db），排队比
-    // 直接报 "database is locked" 好。SQLite 官方建议 10s。
+    // 10s lock wait: with **multiple processes** writing at once (REPL, the dashboard's
+    // app-server subprocess, `joy mcp serve`, `joy schedule` can hold the same state.db),
+    // queuing beats "database is locked" errors. SQLite's own recommendation is 10s.
     let options = SqliteConnectOptions::new()
         .filename(&absolute)
         .create_if_missing(false)
         .busy_timeout(Duration::from_secs(10))
-        // WAL：读不阻塞写，dashboard 一边轮询一边聊天不会被卡住。
+        // WAL: reads never block writes; the dashboard can poll while a chat is running.
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
 
     let pool = SqlitePoolOptions::new()

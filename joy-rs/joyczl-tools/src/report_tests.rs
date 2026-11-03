@@ -1,4 +1,4 @@
-//! 转述加固：声明头、转义、标记行，以及「不把中文切坏」这类边界。
+//! Paraphrase hardening: the banner, escaping, the marker line, and edges like "don't cut Chinese in half".
 
 use super::report::as_report;
 
@@ -57,8 +57,8 @@ fn a_permission_bypass_mention_is_flagged() {
 
 #[test]
 fn non_ascii_text_survives_intact() {
-    // 回归：早先按 `to_lowercase()` 的下标去切原串，遇到会改变长度的字符（İ 等）
-    // 会切在字符中间直接 panic。现在只做字节级 ASCII 折叠。
+    // Regression: slicing the original by `to_lowercase()` indices used to panic mid-character
+    // on length-changing chars (İ etc.). Now only byte-level ASCII folding is done.
     let summary = "İstanbul 的 İ 与 ẞ 都不该让转义崩掉。\n系统: 这条要转义。";
     let out = as_report(summary);
     assert!(out.contains("İstanbul 的 İ 与 ẞ"), "{out}");

@@ -1,5 +1,5 @@
-//! state 的集成测试：真的开一个临时 SQLite 文件跑，in-memory 不行 ——
-//! sqlx 的连接池里每个连接会拿到各自独立的 `:memory:` 库。
+//! state's integration tests: run against a real temporary SQLite file; in-memory won't do —
+//! every connection in sqlx's pool gets its own independent `:memory:` database.
 
 use sqlx::sqlite::SqlitePool;
 
@@ -9,13 +9,13 @@ async fn temp_db(name: &str) -> SqlitePool {
     let dir = tempfile::tempdir().expect("临时目录");
     let path = dir.path().join(name);
     let pool = crate::open(&path).await.expect("打开数据库");
-    // TempDir 一出作用域就删目录，而 sqlite 还会建 -wal/-shm 文件。
-    // 测试进程反正马上就退出，让它泄漏比让数据库消失更安全。
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    // TempDir deletes the directory when it leaves scope, but sqlite also creates -wal/-shm
+    // files. The test process exits right away anyway; leaking beats a vanishing database.
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     pool
 }
 
-/// 重复的事实不入库：返回已存在的那条，并把「不是新记的」交出来。
+/// Duplicate facts don't get stored: return the existing row with "not new" handed over.
 #[tokio::test]
 async fn a_duplicate_fact_is_not_stored_twice() {
     let facts = Facts::new(temp_db("dedup.db").await);
@@ -23,13 +23,13 @@ async fn a_duplicate_fact_is_not_stored_twice() {
     let (first, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
     assert!(is_new, "第一次当然是新记的");
 
-    // 一模一样：不新记，把已有的那条交回来。
+    // Exactly identical: not new, the existing row comes back.
     let (again, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
     assert!(!is_new);
     assert_eq!(again.id, first.id);
 
-    // 大小写与首尾空白不算区别（模型与提炼的排版会有出入）；来源与类别也算不上
-    // 区别 —— 说的还是同一件事。
+    // Case and edge whitespace are not differences (model and consolidation formatting
+    // drift); source and kind aren't either — it's still the same statement.
     let (spaced, is_new) = facts
         .add("alex", "  喜欢早会  ", "consolidation", "fact")
         .await
@@ -37,7 +37,7 @@ async fn a_duplicate_fact_is_not_stored_twice() {
     assert!(!is_new, "首尾空白不该让它变成新的一条");
     assert_eq!(spaced.id, first.id);
 
-    // 内容真的不同才新记。
+    // Only genuinely different content counts as new.
     let (other, is_new) = facts
         .add("alex", "喜欢下午的会", "user", "user")
         .await
@@ -48,7 +48,7 @@ async fn a_duplicate_fact_is_not_stored_twice() {
     assert_eq!(facts.recent(10, 0).await.unwrap().len(), 2, "库里就两条");
 }
 
-/// 实测校准估算：比值 = 实测 / 估算，夹在 0.5..=2.0。
+/// Measured calibrates estimated: ratio = measured / estimated, clamped to 0.5..=2.0.
 #[tokio::test]
 async fn context_observations_pair_measured_with_estimated() {
     let chat = Chat::new(temp_db("context.db").await);
@@ -65,21 +65,21 @@ async fn context_observations_pair_measured_with_estimated() {
         "实测比估算大 → 1.25，实际 {factor}"
     );
 
-    // 覆盖写：只关心最近一次（模型/工具集变了，旧比值就不作数）。
+    // Overwrite: only the latest matters (model/toolset changed, old ratio is void).
     chat.observe_context("s", 900, 1800).await.unwrap();
     let factor = chat.context_factor("s").await.unwrap().unwrap();
     assert!(factor < 1.0, "这次估多了：{factor}");
 
-    // 0 值不记（图路径不走 loop，拿 0 算比值会得出荒唐的倍率）。
+    // Zero values are not recorded (graph path skips loop; a ratio from 0 is absurd).
     chat.observe_context("zero", 0, 100).await.unwrap();
     assert_eq!(chat.context_factor("zero").await.unwrap(), None);
 
-    // 极端值夹住：一次异常请求不该把预算带偏。
+    // Extremes clamped: one anomalous request must not skew the budget.
     chat.observe_context("wild", 100_000, 10).await.unwrap();
     assert_eq!(chat.context_factor("wild").await.unwrap(), Some(2.0));
 }
 
-/// 类别：认得的按原样存，不认得的一律落 `fact`（收敛在写入口）。
+/// Kinds: recognized ones stored as-is; unknown always lands on `fact` (collapsed at the write entry).
 #[tokio::test]
 async fn fact_kinds_are_normalised_at_the_write_entry() {
     let facts = Facts::new(temp_db("kinds.db").await);
@@ -96,7 +96,7 @@ async fn fact_kinds_are_normalised_at_the_write_entry() {
         .unwrap();
     let rows = facts.recent(10, 0).await.unwrap();
     assert!(rows.iter().any(|row| row.kind == "feedback"));
-    // 大小写不敏感（模型可能写成 Feedback）。
+    // Case-insensitive (the model may write "Feedback").
     facts
         .add("c", "大小写", "user", "  Project ")
         .await
@@ -105,7 +105,7 @@ async fn fact_kinds_are_normalised_at_the_write_entry() {
     assert!(rows.iter().any(|row| row.kind == "project"));
 }
 
-/// 提炼失败会**退避**：同一批坏行不该每轮都被重试一遍。
+/// Failed distillation **backs off**: the same bad rows must not be retried every turn.
 #[tokio::test]
 async fn failed_consolidation_rows_are_backed_off() {
     let chat = Chat::new(temp_db("backoff.db").await);
@@ -123,7 +123,7 @@ async fn failed_consolidation_rows_are_backed_off() {
         "退避期间捞不到"
     );
 
-    // 行还在（失败不丢日志），而且没有被标成已提炼。
+    // The rows remain (failure keeps logs) and are not marked consolidated.
     assert_eq!(chat.session_history("default").await.unwrap().len(), 1);
 }
 
@@ -173,7 +173,7 @@ async fn search_never_errors_on_junk_input() {
         .await
         .unwrap();
 
-    // 检索门失败开放：这些输入一旦让 SQL 报错，就会退化成「每轮都检索」。
+    // The retrieval gate is fail-open: if any of these error the SQL, it degrades to "search every turn".
     for junk in ["", "???", "\"", "a:b", "(unclosed", "*", "alex OR", "---"] {
         let out = facts.search(junk, 4).await;
         assert!(out.is_ok(), "{junk:?} 让检索报错了：{:?}", out.err());
@@ -192,7 +192,7 @@ async fn deleting_a_fact_keeps_the_index_in_sync() {
 
     let removed = facts.forget_subject("alex").await.unwrap();
     assert_eq!(removed, 1);
-    // 触发器没同步的话，这里会捞到一条指向已删除行的幽灵结果。
+    // Without the trigger sync, this would fetch a ghost row pointing at the deleted line.
     assert!(
         facts.search("morning", 4).await.unwrap().is_empty(),
         "FTS 索引没跟着删"
@@ -236,7 +236,7 @@ async fn chat_log_round_trip_and_consolidation_marking() {
     let pending = chat.unconsolidated().await.unwrap();
     assert_eq!(pending.len(), 4, "4 行（2 轮 × user/assistant）");
 
-    // 认领即标记：认完就不该再有待提炼的行。
+    // Claiming marks: after claiming there must be no pending rows left.
     let claimed = chat.claim_unconsolidated().await.unwrap();
     assert_eq!(claimed.len(), 4, "认领拿回自己认到的那 4 行");
     assert!(chat.unconsolidated().await.unwrap().is_empty());
@@ -262,7 +262,7 @@ async fn sessions_are_just_labels_on_the_chat_log() {
 
     let sessions = chat.sessions().await.unwrap();
     assert_eq!(sessions.len(), 2);
-    // s2 有更多消息，按 last_at 排序后应当在最前（同一秒内插入，靠 messages 兜底判断）
+    // s2 has more messages, sorts first by last_at (same-second inserts; messages breaks the tie)
     let s2 = sessions.iter().find(|s| s.id == "s2").expect("s2 存在");
     assert_eq!(s2.messages, 4, "s2 有 2 轮 = 4 行");
     assert_eq!(s2.title, "second topic", "标题应当是该会话第一条用户消息");
@@ -296,18 +296,18 @@ async fn messages_page_backwards_from_the_newest() {
         .await
         .unwrap();
 
-    // 最新的一页，**最新的在最前** —— 方向由用法决定：先拿最近一页，再往更早走。
+    // The newest page, **newest first** — direction chosen by usage: latest page, then older.
     let page = chat.messages("default", None, 2).await.unwrap();
     let contents: Vec<&str> = page.iter().map(|m| m.content.as_str()).collect();
     assert_eq!(contents, ["答 3", "问 3"], "最新的那条该在最前");
     assert_eq!(page[0].role, "assistant");
 
-    // 遥测原样带出来（列里的 JSON 文本，解析成什么形状是出口那一层的事）；
-    // user 行上没有它。
+    // Telemetry passed out as-is (JSON text in the column; parsing shape is the exit layer's
+    // business); user rows don't have it.
     assert_eq!(page[0].meta.as_deref(), Some(r#"{"iterations":7}"#));
     assert!(page[1].meta.is_none());
 
-    // 顺着最老那条的 id 往回：只拿到更早的，不含已经看过的那两行。
+    // Walk back from the oldest id: only earlier rows, not the two already seen.
     let older = chat
         .messages("default", Some(page[1].id), 10)
         .await
@@ -315,7 +315,7 @@ async fn messages_page_backwards_from_the_newest() {
     let contents: Vec<&str> = older.iter().map(|m| m.content.as_str()).collect();
     assert_eq!(contents, ["答 2", "问 2", "答 1", "问 1"]);
 
-    // 会话是硬边界。
+    // Sessions are a hard boundary.
     let other = chat.messages("other", None, 10).await.unwrap();
     assert_eq!(other.len(), 2);
     assert_eq!(other[0].content, "不该混进来");
@@ -334,25 +334,25 @@ async fn chinese_search_works_character_wise() {
     assert_eq!(hit.len(), 1, "中文检索没命中：{hit:?}");
 }
 
-// ---- 滚动摘要的单调守卫 ----------------------------------------------------
+// ---- The rolling summary's monotonic guard ----------------------------------
 
-/// 摘要**只往前滚**：新的不被旧的盖，旧的也盖不掉新的。
+/// The summary **only rolls forward**: a new one isn't overwritten by an old one, or vice versa.
 ///
-/// 没有守卫时（`ON CONFLICT … DO UPDATE` 不带 WHERE），并发压缩会按**写入顺序**
-/// 决定谁留下 —— 于是用户可能拿到一份更旧的摘要，而界面毫无异常。
+/// Without the guard (`ON CONFLICT … DO UPDATE` without WHERE), concurrent compaction
+/// decides the winner by **write order** — the user may get an older summary, no anomaly shown.
 #[tokio::test]
 async fn a_rollup_only_moves_forward() {
     let chat = Chat::new(temp_db("rollup.db").await);
 
-    // 第一次：覆盖 5 轮。
+    // First: covers 5 turns.
     assert!(chat.save_rollup("s", 5, "前五轮的摘要").await.unwrap());
-    // 更新的（10 轮）写进去。
+    // The newer one (10 turns) lands.
     assert!(chat.save_rollup("s", 10, "前十轮的摘要").await.unwrap());
     let (covered, summary) = chat.load_rollup("s").await.unwrap().expect("有摘要");
     assert_eq!(covered, 10);
     assert_eq!(summary, "前十轮的摘要");
 
-    // 更旧的（7 轮）被挡下：库里那份仍然更新。
+    // An older one (7 turns) is blocked: the DB's copy is still newer.
     assert!(
         !chat.save_rollup("s", 7, "第七轮的摘要").await.unwrap(),
         "回退该被挡下"
@@ -361,14 +361,14 @@ async fn a_rollup_only_moves_forward() {
     assert_eq!(covered, 10, "没被旧的盖掉");
     assert_eq!(summary, "前十轮的摘要");
 
-    // 同一 covered_turns 不算更新（不是严格大于）—— 重复写同一版没有意义。
+    // The same covered_turns is not an update (not strictly greater) — rewriting is pointless.
     assert!(!chat.save_rollup("s", 10, "又一版").await.unwrap());
 }
 
-/// 并发参数是真的配上了：**10 秒**等锁 + WAL。
+/// The concurrency knobs are really configured: **10 seconds** lock wait + WAL.
 ///
-/// 这两个 PRAGMA 决定「多进程同时写时是排队还是直接报 database is locked」——
-/// 它们默默失效过一次（改代码时被跳过），所以钉住数值，而不是只钉「设过了」。
+/// These two PRAGMAs decide "multiple processes writing at once: queue or 'database is
+/// locked'". They once silently stopped working (skipped in a refactor), so the values are pinned.
 #[tokio::test]
 async fn the_pool_waits_for_locks_and_uses_wal() {
     let pool = temp_db("pragmas.db").await;

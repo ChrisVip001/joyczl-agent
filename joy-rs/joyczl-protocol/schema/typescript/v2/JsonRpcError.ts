@@ -5,7 +5,7 @@ import type { RequestId } from "./RequestId";
 export type JsonRpcError = {
   jsonrpc: string;
   /**
-   * 解析不了 id 时（比如请求本身就是坏 JSON）为 null。
+   * null when the id cannot be parsed (e.g. the request itself is bad JSON).
    */
   id: RequestId | null;
   error: ErrorObject;

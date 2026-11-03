@@ -3,7 +3,7 @@
 export type SessionSummary = {
   id: string;
   /**
-   * 会话标题 = 第一条用户消息的前 60 个字。
+   * Session title = the first 60 characters of the first user message.
    */
   title: string;
   messages: number;

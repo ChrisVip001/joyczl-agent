@@ -1,4 +1,4 @@
-//! 轮内预算的四条纪律：够大才动、从大到小、幂等、自预算的不碰。
+//! Intra-turn budget rules: big ones only, largest first, idempotent, self-budgeted untouched.
 
 use joyczl_provider::{ContentBlock, Message, Role};
 
@@ -71,22 +71,22 @@ fn the_largest_results_are_stubbed_until_it_fits() {
         result("3", 1_000),
     ];
 
-    // 预算 1 万：换掉最大的那条还超，于是接着换第二条 —— 直到装得下。
+    // Budget 10k: stubbing the largest still leaves us over, so the second goes too — until it fits.
     let report = trim_tool_results(&mut messages, None, &budget(10_000, 30_000), "s");
 
     assert_eq!(report.trimmed, 2, "两条都得换成桩才装得下：{report:?}");
     assert!(!report.still_over_budget);
     assert!(result_text(&messages, 1).contains("已截断"), "第一条该换掉");
     assert!(result_text(&messages, 3).contains("已截断"), "第二条该换掉");
-    // 小的那条原样保留 —— 给一千字符建一个文件不值（它也没到门槛）。
+    // The small one is kept as-is — a file for a thousand chars is not worth it (below the threshold).
     assert_eq!(result_text(&messages, 5), "x".repeat(1_000));
     assert!(report.total_chars <= 10_000, "{report:?}");
 }
 
 #[test]
 fn it_stops_as_soon_as_the_batch_fits() {
-    // 装得下就停手：`if total <= max: break` —— 一旦装得下
-    // 就停手，不会顺手把「本来还能留着的」也换掉。
+    // Fits, so stop: `if total <= max: break` — once it fits, stop, and do not also stub
+    // results that could have stayed.
     let mut messages = vec![
         call("1", "mcp__x__huge"),
         result("1", 100_000),
@@ -103,7 +103,7 @@ fn it_stops_as_soon_as_the_batch_fits() {
 
 #[test]
 fn small_results_are_never_stubbed_even_when_the_total_is_over() {
-    // 100 条各 1000 字符 = 10 万，超预算 5 万；但每一条都没到 3 万的门槛。
+    // 100 results of 1000 chars each = 100k, over the 50k budget; but none reaches the 30k threshold.
     let mut messages = Vec::new();
     for i in 0..100 {
         messages.push(call(&i.to_string(), "mcp__x__chatty"));
@@ -119,7 +119,7 @@ fn small_results_are_never_stubbed_even_when_the_total_is_over() {
 
 #[test]
 fn a_self_budgeted_tool_is_left_to_the_tool_itself() {
-    // run_command 自己会落盘并截到 8000；再套一层只会把路径换来换去。
+    // run_command spills and truncates to 8000 itself; another wrapper just swaps paths around.
     let mut messages = vec![call("1", "run_command"), result("1", 40_000)];
     let report = trim_tool_results(&mut messages, None, &budget(10_000, 5_000), "s");
     assert_eq!(report.trimmed, 0);

@@ -2,7 +2,7 @@
 
 export type ConfigReadParams = {
   /**
-   * 只取这几个 key；不给就全量返回。
+   * Fetch only these keys; absent = return everything.
    */
   keys?: Array<string> | null;
 };

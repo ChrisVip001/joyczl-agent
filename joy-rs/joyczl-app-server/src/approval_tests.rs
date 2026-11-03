@@ -1,7 +1,7 @@
-//! 批准的全链路：一路真跑到「命令在沙箱里执行了」。
+//! The full approval chain: run all the way to "the command executed inside the sandbox".
 //!
-//! 这里刻意用**真 Server + 真沙箱**（有沙箱的机器上）：批准机制的价值全在
-//! 「问之前不跑、答了之后才跑」这一条因果上，假掉哪一半都测不出来。
+//! This deliberately uses a **real Server + real sandbox** (on machines that have one): the value of the
+//! approval mechanism lives entirely in the causality "not before being asked, only after being answered" — fake either half and the test cannot detect it.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use joyczl_provider::Resolved;
 
 use crate::{run_turn, EventSink, Frame, Server};
 
-/// 没登记过的请求号 → 如实回 false（「你的回答没人听」），不是报错。
+/// An unregistered request number → an honest false ("nobody heard your answer"), not an error.
 #[tokio::test]
 async fn answering_an_unknown_request_is_false_not_an_error() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -23,11 +23,11 @@ async fn answering_an_unknown_request_is_false_not_an_error() {
     assert!(!server.answer_approval("no-such-turn", "ap-1", true, false));
 }
 
-/// 一轮对话里 `run_command` 需要批准：通知出去、被回答之后命令才真的跑。
+/// In a turn, `run_command` needs approval: the notification goes out and the command really runs only after being answered.
 #[tokio::test]
 async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
     if !joyczl_tools::exec::sandbox_available() {
-        return; // 与其它沙箱测试一致：没沙箱的机器（CI）跳过
+        return; // Consistent with the other sandbox tests: skip on machines without a sandbox (CI)
     }
 
     let dir = tempfile::tempdir().expect("临时目录");
@@ -37,7 +37,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
         api_key: Some("test-key".to_string()),
         model: Some("test-model".to_string()),
         small_model: Some("test-model".to_string()),
-        // 开执行工具，但放行表**不匹配** echo —— 于是它必须走批准那条路。
+        // Exec enabled, but the allow table does **not** match echo — so it must take the approval path.
         exec_enabled: true,
         exec_allow: vec!["ls *".to_string()],
         approval: "on-request".to_string(),
@@ -62,7 +62,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
 
     let (sink, mut rx) = EventSink::channel();
 
-    // 扮演终端/驾驶舱：见到批准请求就回答「同意」。这就是 REPL 做的事。
+    // Play the terminal/cockpit: answer "approve" as soon as an approval request appears. That is what the REPL does.
     let answerer = tokio::spawn({
         let server = server.clone();
         async move {
@@ -102,7 +102,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
     .await
     .expect("这一轮该跑完");
 
-    drop(sink); // 关掉通道，让回答任务收工
+    drop(sink); // Close the channel so the answerer task can finish
     let (asked, tool_output) = answerer.await.expect("回答任务");
     let (preview, accepted) = asked.expect("该有批准请求");
     assert_eq!(preview, "echo approved-ok", "问的必须是那条命令本身");
@@ -116,7 +116,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
     assert!(output.contains("退出码 0"), "{output}");
 }
 
-/// `JOY_APPROVAL=never`（默认）：没人问，命令直接拒 —— 从前的行为不变。
+/// `JOY_APPROVAL=never` (the default): nobody is asked, the command is refused outright — the old behavior unchanged.
 #[tokio::test]
 async fn without_on_request_the_command_is_simply_refused() {
     if !joyczl_tools::exec::sandbox_available() {

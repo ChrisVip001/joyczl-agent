@@ -1,8 +1,8 @@
-//! JSON-RPC 2.0 信封。
+//! JSON-RPC 2.0 envelope.
 //!
-//! app-server 用 JSON-RPC over stdio 通信：Rust 进程持有 loop / memory / tools /
-//! state.db，所有前端（CLI、dashboard、TS 网关、Python SDK）都是它的客户端。
-//! 这样 state.db 只存在于一个进程里，跨线程共享 SQLite 的那类问题从根上消失。
+//! The app-server speaks JSON-RPC over stdio: the Rust process owns loop /
+//! memory / tools / state.db; every frontend (CLI, dashboard, TS gateway, Python
+//! SDK) is its client, so state.db lives in one process — cross-thread SQLite issues vanish.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,14 +10,14 @@ use crate::{JsonSchema, TS};
 
 pub const JSONRPC_VERSION: &str = "2.0";
 
-/// 请求 id：JSON-RPC 允许数字或字符串。
+/// Request id: JSON-RPC allows a number or a string.
 ///
-/// 数字这一支是 `i32` 而不是 `u64`：`u64` 会被 ts-rs 映射成 TypeScript 的
-/// `bigint`，而 `JSON.parse` 出来的是 `number` —— 客户端拿到 `1` 却被告知类型是
-/// `bigint`，这是那种不报错、只在运行时对不上的 bug。跨语言边界只用 `i32`，
-/// 跟 v2.rs 的规矩是同一条。
-// Hash 不是线协议的一部分，是客户端要用的：发出去的每条请求都得在
-// 「id → 等应答的那个人」表里占一行，所以它得能当 HashMap 的 key。
+/// The number arm is `i32`, not `u64`: ts-rs maps `u64` to TypeScript `bigint`,
+/// while `JSON.parse` yields `number` — the client receives `1` typed as
+/// `bigint`: the kind of bug that never errors but only fails at runtime. Only `i32`
+/// crosses language boundaries — the same rule as v2.rs.
+// Hash is not part of the wire protocol; it is for client use: every outgoing
+// request takes a row in the "id → who awaits the reply" table, so it must be a HashMap key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(untagged)]
 #[ts(export_to = "v2/")]
@@ -33,7 +33,7 @@ pub enum RequestId {
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
     pub id: RequestId,
-    /// 形如 `turn/start`、`<resource>/<method>`，resource 用单数。
+    /// Shaped like `turn/start`, `<resource>/<method>`, resource in singular.
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
@@ -48,7 +48,7 @@ pub struct JsonRpcRequest {
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub id: RequestId,
-    /// 具体结构由 method 决定，解码方按 `*Response` 类型自行 narrow。
+    /// The concrete shape depends on method; decoders narrow it to the matching `*Response` type themselves.
     #[ts(type = "unknown")]
     pub result: serde_json::Value,
 }
@@ -59,7 +59,7 @@ pub struct JsonRpcResponse {
 #[ts(export_to = "v2/")]
 pub struct JsonRpcError {
     pub jsonrpc: String,
-    /// 解析不了 id 时（比如请求本身就是坏 JSON）为 null。
+    /// null when the id cannot be parsed (e.g. the request itself is bad JSON).
     pub id: Option<RequestId>,
     pub error: ErrorObject,
 }
@@ -77,7 +77,7 @@ pub struct ErrorObject {
     pub data: Option<serde_json::Value>,
 }
 
-/// 服务端主动推送（SSE / stdio 上就是一帧一帧的事件）。
+/// Server-initiated push (on SSE / stdio this is simply frame after frame of events).
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -91,7 +91,7 @@ pub struct JsonRpcNotification {
     pub params: Option<serde_json::Value>,
 }
 
-/// 服务端回的任意一帧：应答或错误。
+/// Any frame the server sends back: a response or an error.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(untagged)]
 #[ts(export_to = "v2/")]
@@ -100,18 +100,18 @@ pub enum JsonRpcMessage {
     Error(JsonRpcError),
 }
 
-/// 标准错误码，外加 Joy 自己的一段。
+/// The standard error codes, plus Joy's own range.
 pub mod codes {
     pub const PARSE_ERROR: i32 = -32700;
     pub const INVALID_REQUEST: i32 = -32600;
     pub const METHOD_NOT_FOUND: i32 = -32601;
     pub const INVALID_PARAMS: i32 = -32602;
     pub const INTERNAL_ERROR: i32 = -32603;
-    /// 模型 / provider 出错（key 无效、限流、模型不存在…）
+    /// Model / provider failure (invalid key, rate limit, unknown model…)
     pub const PROVIDER_ERROR: i32 = -32000;
-    /// 工具执行失败；错误作为文本回给模型，不中断 turn。
+    /// Tool execution failed; the error goes back to the model as text, without aborting the turn.
     pub const TOOL_ERROR: i32 = -32001;
-    /// 方法在协议里存在，但当前阶段还没实现。刻意区别于 METHOD_NOT_FOUND：
-    /// 「还没做」和「你拼错了」对调用方是完全不同的两件事。
+    /// The method exists in the protocol but is not implemented yet. Deliberately
+    /// distinct from METHOD_NOT_FOUND: "not built yet" and "you typo'd it" differ completely.
     pub const NOT_IMPLEMENTED: i32 = -32002;
 }

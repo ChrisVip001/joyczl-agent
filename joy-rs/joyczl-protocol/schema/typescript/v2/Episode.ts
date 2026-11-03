@@ -3,7 +3,7 @@
 export type Episode = {
   id: number;
   /**
-   * ISO 8601 日期。
+   * ISO 8601 date.
    */
   happenedAt: string;
   summary: string;

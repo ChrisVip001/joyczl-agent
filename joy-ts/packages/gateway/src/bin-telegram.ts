@@ -17,8 +17,8 @@ const allow = (process.env["TELEGRAM_ALLOW"] ?? "")
   .filter((entry) => entry !== "");
 
 if (allow.length === 0) {
-  // 不设白名单是能用的，但那是「把这个 bot 敞给所有人」的意思 ——
-  // 而花的是你的模型额度。这种默认值必须自己说出来，不能等出事才发现。
+  // Usable without an allowlist, but that means "open this bot to everyone" — and it spends
+  // your model quota. Such a default must announce itself, not wait for an incident.
   console.error(
     "注意：没设 TELEGRAM_ALLOW，这个 bot 谁都能用，消耗的是你的模型额度。\n" +
       "      只给自己用的话，填你的数字 id 或 @用户名。",
@@ -31,8 +31,8 @@ const adapter = new TelegramAdapter(
   async (conversation, text) => (await bridge.ask(conversation, text)).reply,
 );
 
-// Ctrl-C 是关这个进程的正常方式，不是异常退出：先把长轮询停下来，
-// 再关 app-server 的 stdin —— 它会写完排着的帧再退。
+// Ctrl-C is the normal way to stop this process, not an abnormal exit: stop long polling first,
+// then close app-server's stdin — it finishes writing queued frames and exits.
 const shutdown = (): void => {
   adapter.stop();
   bridge.close();

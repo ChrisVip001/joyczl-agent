@@ -2,13 +2,13 @@
 import type { Message } from "./Message";
 
 /**
- * 消息**最新的在最前** —— 跟对话本身的方向相反，因为「往上翻」才是
- * 这个方法的用法：先拿最近一页，再顺着 `nextCursor` 往更早的地方走。
+ * Messages with the **newest first** — opposite to the conversation's direction,
+ * because "paging back" is the point: take the latest page, then follow `nextCursor` into the past.
  */
 export type SessionMessagesResponse = {
   data: Array<Message>;
   /**
-   * 还有更早的才给：把它当下一次的 cursor。null = 到底了。
+   * Present only when older messages exist: pass it as the next cursor. null = the end.
    */
   nextCursor: string | null;
 };

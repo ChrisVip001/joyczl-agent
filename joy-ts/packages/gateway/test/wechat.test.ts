@@ -13,13 +13,13 @@ const APPID = "wxba5fad812f8e6fb9";
 const AES_KEY = "A".repeat(43);
 const ACCOUNT = "gh_abc123";
 
-/** 假的微信 API：只认取 token 和发客服消息这两个地址。 */
+/** A fake WeChat API: knows only the token fetch and the customer-service send. */
 class FakeApi {
   readonly sent: string[] = [];
   tokenRequests = 0;
-  /** 下一次发客服消息被拒。未认证的号就是这么回事：48001。 */
+  /** The next customer-service send is refused. What an unverified account gets: 48001. */
   #refuseNext = 0;
-  /** 下一次发客服消息说「你这把 token 不算数了」—— 真机上一天总要遇上几次。 */
+  /** The next send says "this token doesn't count" — happens a few times a day on real phones. */
   #expireNext = 0;
 
   refuseOnce(): void {
@@ -62,7 +62,7 @@ class FakeApi {
   };
 }
 
-/** 微信推过来的一条文本消息。 */
+/** One text message pushed by WeChat. */
 function incoming(openid: string, content: string, msgId: string): string {
   return (
     "<xml>" +
@@ -79,7 +79,7 @@ function incoming(openid: string, content: string, msgId: string): string {
 const NONCE = "415670741";
 const TIMESTAMP = "1714112445";
 
-/** 明文模式的查询串。 */
+/** Query string for plain mode. */
 function plainQuery(): string {
   return new URLSearchParams({
     signature: signatureOf(TOKEN, TIMESTAMP, NONCE),
@@ -88,7 +88,7 @@ function plainQuery(): string {
   }).toString();
 }
 
-/** 加密模式（安全模式）的请求体与查询串。 */
+/** Request body and query string for encrypted (safe) mode. */
 function encrypted(xml: string): { body: string; query: string } {
   const encrypt = encryptMessage(xml, {
     encodingAesKey: AES_KEY,
@@ -101,8 +101,8 @@ function encrypted(xml: string): { body: string; query: string } {
       `<Encrypt><![CDATA[${encrypt}]]></Encrypt>` +
       "</xml>",
     query: new URLSearchParams({
-      // 安全模式下这个 `signature` 是给不了什么的，文档也说别用它 ——
-      // 这里故意填一串假的，证明实现确实没看它。
+      // In safe mode this `signature` proves nothing and the docs say not to use it — a fake
+      // value is filled here on purpose, proving the implementation really ignores it.
       signature: "deadbeef",
       timestamp: TIMESTAMP,
       nonce: NONCE,
@@ -121,7 +121,7 @@ interface Harness {
   stop: () => Promise<void>;
 }
 
-/** 起一个真的 HTTP 服务器（端口让系统挑），并在它退出前收尾。 */
+/** Start a real HTTP server (system-picked port) and tear it down before exit. */
 async function start(
   options: {
     encodingAesKey?: string;
@@ -174,7 +174,7 @@ async function start(
   };
 }
 
-/** 一直等到条件成立，或者超时。 */
+/** Wait until the condition holds, or time out. */
 async function until(
   what: string,
   ok: () => boolean,
@@ -192,7 +192,7 @@ async function post(base: string, query: string, body: string): Promise<string> 
   return await response.text();
 }
 
-// ---- 服务器配置那一步 --------------------------------------------------------
+// ---- The server-configuration step --------------------------------------------------------
 
 test("验证 URL：签名对就把 echostr 原样回过去", async () => {
   const harness = await start();
@@ -225,7 +225,7 @@ test("验证 URL：签名不对就 403，不是「随便给点什么都行」", 
   );
 });
 
-// ---- 答得快：就地被动回复 ----------------------------------------------------
+// ---- Fast answers: passive reply in place ----------------------------------------------------
 
 test("答得快：直接在响应里回，一次 API 都不调", async () => {
   const harness = await start({ reply: () => "我看过了" });
@@ -236,7 +236,7 @@ test("答得快：直接在响应里回，一次 API 都不调", async () => {
   );
 
   assert.match(body, /<Content><!\[CDATA\[我看过了\]\]><\/Content>/);
-  // 回给谁、谁回的 —— 这两个是**对调**的。
+  // Who it goes to, and who replies — these two are **swapped**.
   assert.equal(tag(body, "ToUserName"), "openid-1");
   assert.equal(tag(body, "FromUserName"), ACCOUNT);
   assert.equal(tag(body, "MsgType"), "text");
@@ -255,7 +255,7 @@ test("答得快但回答很长：就不走被动了，那段要切成几条", as
     incoming("openid-1", "详细讲讲", "1002"),
   );
 
-  // 被动回复只能回**一条**，所以切成两条的回答只能走客服消息。
+  // A passive reply is **one** message only, so a two-chunk answer must go via customer service.
   assert.equal(body, "success");
   await until("客服消息发出去", () => harness.api.sent.length === 2);
   assert.equal(harness.api.sent[0]!.length, MESSAGE_LIMIT);
@@ -264,7 +264,7 @@ test("答得快但回答很长：就不走被动了，那段要切成几条", as
   await harness.stop();
 });
 
-// ---- 答得慢：先打发走微信，再推客服消息 --------------------------------------
+// ---- Slow answers: send WeChat away first, then push customer-service messages --------------------------------------
 
 test("答得慢：先回 success 把微信打发走，再把答复推回去", async () => {
   const harness = await start({
@@ -281,8 +281,8 @@ test("答得慢：先回 success 把微信打发走，再把答复推回去", as
     incoming("openid-1", "帮我算个东西", "1003"),
   );
 
-  // 微信只等 5 秒。Joy 那边还在跑，这边必须已经给了交代 —— 否则它会
-  // 把同一条再推两遍，用户看到的就是三份一模一样的回答。
+  // WeChat waits only 5 seconds. Joy is still running; an answer must already be given here —
+  // otherwise it pushes the same request twice more, and the user sees three identical replies.
   assert.equal(body, "success");
   await until("客服消息推回去", () => harness.api.sent.length === 1);
   assert.deepEqual(harness.api.sent, ["想好了"]);
@@ -303,7 +303,7 @@ test("微信把同一条再推一遍：不重问 Joy，也不重发", async () =
   const query = plainQuery();
   const xml = incoming("openid-1", "帮我算个东西", "1004");
   assert.equal(await post(harness.base, query, xml), "success");
-  // 第二遍、第三遍：微信那 5 秒没等到答复时就是这么干的。
+  // Second and third pushes: what WeChat does when its 5 seconds pass without a reply.
   assert.equal(await post(harness.base, query, xml), "success");
   assert.equal(await post(harness.base, query, xml), "success");
 
@@ -338,7 +338,7 @@ test("客服消息被拒（未认证的号）：说清楚，网关不能跟着�
 });
 
 test("客服接口说「这把 token 不算数了」：自己重取一把再来，别让用户白等", async () => {
-  // 得让它走客服消息那条路 —— 答得快的话根本不会去取 token。
+  // It must take the customer-service path — a fast answer never fetches a token at all.
   const harness = await start({
     replyBudgetMs: 50,
     reply: async () => {
@@ -360,7 +360,7 @@ test("客服接口说「这把 token 不算数了」：自己重取一把再来�
   await harness.stop();
 });
 
-// ---- 白名单 ------------------------------------------------------------------
+// ---- Allowlist ------------------------------------------------------------------
 
 test("不在白名单里：不搭理，也不告诉他自己没权限", async () => {
   const harness = await start({ allow: ["openid-yes"] });
@@ -377,7 +377,7 @@ test("不在白名单里：不搭理，也不告诉他自己没权限", async ()
   await harness.stop();
 });
 
-// ---- 加密模式 ----------------------------------------------------------------
+// ---- Encrypted mode ----------------------------------------------------------------
 
 test("加密模式：解得开，回包也是加密的", async () => {
   const harness = await start({ encodingAesKey: AES_KEY, reply: () => "收到" });
@@ -386,7 +386,7 @@ test("加密模式：解得开，回包也是加密的", async () => {
 
   const encrypt = tag(reply, "Encrypt");
   assert.notEqual(encrypt, "", "加密模式下回包得是密文");
-  // 把回包解回来 —— 这一步同时钉住了「回包的明文结构」和「AppID 对得上」。
+  // Decrypt the reply — pinning both "the reply's plaintext layout" and "the AppID matches".
   const inner = decryptMessage(encrypt, {
     encodingAesKey: AES_KEY,
     appId: APPID,

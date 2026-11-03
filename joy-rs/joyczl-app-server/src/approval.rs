@@ -1,11 +1,11 @@
-//! 批准问话的服务端一端。
+//! The server side of the approval question.
 //!
-//! `joyczl-tools` 只有 `ApprovalBroker` 这个 trait（工具层不认识协议与 Server）；
-//! 这里是它的实现：发一条 `approvalRequested` 通知、把回答通道登记进等待表、
-//! 然后**等**。等不到（超时、连接断了、太晚）就是拒绝 —— 默认拒绝是地基。
+//! `joyczl-tools` only knows the `ApprovalBroker` trait (the tool layer knows neither protocol nor
+//! Server); this is its implementation: emit one `approvalRequested` notification, register the answer
+//! channel into the waiting table, then **wait**. No answer (timeout, lost connection, too late) means rejection — default-deny is the foundation.
 //!
-//! 等待表按 turn_id 分桶，与 `turns`（取消令牌表）同一副形状：一轮结束就整桶
-//! 摘掉，不会有「上一轮的问题还在等一个永远不会来的回答」。
+//! The waiting table is bucketed by turn_id, the same shape as `turns` (the cancellation-token table):
+//! a finished turn removes the whole bucket, so there is never "last turn's question still waiting for an answer that will never come".
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,15 +18,15 @@ use tokio::sync::oneshot;
 
 use crate::{narrow, EventSink};
 
-/// 一个正在等人回答的问题。
+/// One question currently waiting for a human answer.
 pub(crate) struct Waiting {
-    /// 回答送回这里。
+    /// The answer comes back here.
     pub(crate) tx: oneshot::Sender<bool>,
-    /// 被问的那条命令 —— `remember` 要把它写进放行表，所以得留着。
+    /// The command that was asked about — `remember` needs it for the allow table, so it is kept.
     pub(crate) command: String,
 }
 
-/// turn_id → request_id → 在等的问题。
+/// turn_id → request_id → the waiting question.
 pub(crate) type Pending = Arc<Mutex<HashMap<String, HashMap<String, Waiting>>>>;
 
 pub(crate) struct Bridge {
@@ -34,9 +34,9 @@ pub(crate) struct Bridge {
     pub(crate) sink: EventSink,
     pub(crate) turn_id: String,
     pub(crate) timeout_secs: i64,
-    /// 屏幕外的人也该知道「在等批准」——旁路，没有就不发。
+    /// People off-screen should also know "approval is being awaited" — a side path; absent means nothing is sent.
     pub(crate) notify: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
-    /// 审计台账（M3b）：四态结果都落一行。
+    /// Audit ledger (M3b): all four outcome states each leave one row.
     pub(crate) logbook: joyczl_state::Approvals,
 }
 
@@ -55,7 +55,7 @@ impl ApprovalBroker for Bridge {
             );
         }
 
-        // 台账要在这三个值被 move 进通知之后还能用 —— 先留副本。
+        // The ledger still needs these three values after they are moved into the notification — keep copies first.
         let tool = request.tool.clone();
         let args_preview = request.args_preview.clone();
         let reason = request.reason.clone();
@@ -87,14 +87,14 @@ impl ApprovalBroker for Bridge {
         let timeout = Duration::from_secs(self.timeout_secs.max(1) as u64);
 
         Box::pin(async move {
-            // 超时按拒绝算。这里**必须**有超时：一个永远等下去的批准请求会把
-            // 一轮对话永久挂住，而工具层的超时兜不住「服务端在等」这件事。
-            // 四态结果顺手落审计台账（M3b）：写失败不拦主路 —— 台账是影子，
-            // 因果由 oneshot 通道保证。
+            // Timeout counts as rejection. A timeout here is **mandatory**: an approval request that waits
+            // forever would hang a whole conversation permanently, and the tool layer's timeout cannot cover
+            // "the server is waiting". The four-state outcome is also logged to the audit ledger (M3b):
+            // a write failure does not block the main path — the ledger is a shadow; causality is the oneshot's.
             let outcome = match tokio::time::timeout(timeout, rx).await {
                 Ok(Ok(true)) => "approved",
                 Ok(Ok(false)) => "denied",
-                Ok(Err(_)) => "voided", // 发送端被丢 = turn 结束作废
+                Ok(Err(_)) => "voided", // Sender dropped = voided because the turn ended
                 Err(_) => "timeout",
             };
             if let Err(e) = logbook
@@ -111,7 +111,7 @@ impl ApprovalBroker for Bridge {
                 eprintln!("(joy) 审批审计没记上（{outcome}）：{e}");
             }
             let approved = outcome == "approved";
-            // 无论结果如何都撤掉登记 —— 不然表会一直长。
+            // Deregister no matter the outcome — otherwise the table grows forever.
             if let Ok(mut table) = pending.lock() {
                 if let Some(per_turn) = table.get_mut(&turn_id) {
                     per_turn.remove(&request_id);
@@ -128,7 +128,7 @@ impl ApprovalBroker for Bridge {
     }
 }
 
-/// 请求号：进程内单调就够（一轮里的问题本来就不多）。
+/// Request number: in-process monotonicity is enough (a turn has few questions anyway).
 fn next_request_id() -> u64 {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
     COUNTER.fetch_add(1, Ordering::Relaxed)

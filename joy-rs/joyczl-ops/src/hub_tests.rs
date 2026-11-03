@@ -1,7 +1,7 @@
-//! hub 的测试：用户表、常量时间验证、名字的路径安全。
+//! Hub tests: user table, constant-time verification, name path safety.
 //!
-//! 懒加载 `Hub::client` 会起真子进程 —— 那条路由冒烟覆盖（与单用户模式的
-//! spawn 是同一行代码），这里只测纯逻辑。
+//! The lazily loading `Hub::client` spawns a real subprocess — that route is smoke-covered
+//! (the same line of code as single-user mode's spawn); only pure logic is tested here.
 
 use super::hub::{generate_token, lru_victim, stale_entries, valid_user, Hub, Users};
 
@@ -9,7 +9,7 @@ fn temp() -> tempfile::TempDir {
     tempfile::tempdir().expect("临时目录")
 }
 
-/// 存进去的读得回来；文件是 0600（unix）。
+/// What is stored reads back; the file is 0600 (unix).
 #[test]
 fn the_user_table_round_trips() {
     let dir = temp();
@@ -38,7 +38,7 @@ fn the_user_table_round_trips() {
     }
 }
 
-/// 同名 add 是覆盖，不是追加 —— 换 token 靠它。
+/// Adding the same name is an overwrite, not an append — that is how tokens rotate.
 #[test]
 fn adding_the_same_user_replaces_the_token() {
     let mut users = Users::load(temp().path().join("users.json").as_path()).expect("空表");
@@ -49,8 +49,8 @@ fn adding_the_same_user_replaces_the_token() {
     assert_eq!(users.verify("新").as_deref(), Some("alice"));
 }
 
-/// verify 是常量时间比较的语义：哪怕只差一个字节也对不上。
-/// trim 是 resolve（Bearer 头解析）的事，verify 本身是精确匹配。
+/// verify has constant-time-compare semantics: even one byte off means no match.
+/// trim is resolve's job (Bearer header parsing); verify itself is an exact match.
 #[test]
 fn verification_agrees_with_equality() {
     let mut users = Users::load(temp().path().join("users.json").as_path()).expect("空表");
@@ -63,7 +63,7 @@ fn verification_agrees_with_equality() {
     );
 }
 
-/// 坏名字拒载 —— 装一个 `../` 等于给路径穿越开门。
+/// Bad names refuse to load — loading a `../` opens the door to path traversal.
 #[test]
 fn a_bad_name_refuses_to_load() {
     let dir = temp();
@@ -73,7 +73,7 @@ fn a_bad_name_refuses_to_load() {
     assert!(error.to_string().contains("不合格"), "{error}");
 }
 
-/// 名字的规矩：能进来的都是安全路径段。
+/// Name rules: whatever gets in is a safe path segment.
 #[test]
 fn user_names_must_be_safe_path_segments() {
     assert!(valid_user("alice"));
@@ -88,7 +88,7 @@ fn user_names_must_be_safe_path_segments() {
     assert!(!valid_user("a".repeat(33).as_str()));
 }
 
-/// hub 打开时空 users.json 是配置错误，不是「等第一个用户」。
+/// An empty users.json at hub open is a config error, not "wait for the first user".
 #[test]
 fn an_empty_hub_is_a_configuration_error() {
     let dir = temp();
@@ -104,7 +104,7 @@ fn an_empty_hub_is_a_configuration_error() {
     assert_eq!(hub.home("alice"), dir.path().join("alice"));
 }
 
-/// resolve：头形状不对/空 token → None；对上 → 用户。
+/// resolve: malformed header / empty token → None; a match → the user.
 #[test]
 fn resolve_walks_the_bearer_header() {
     let dir = temp();
@@ -118,7 +118,7 @@ fn resolve_walks_the_bearer_header() {
     assert_eq!(hub.resolve(Some("Bearer t-a")).as_deref(), Some("alice"));
 }
 
-/// user_count 只做统计；users 的锁不外泄（内部不变式，顺手钉住）。
+/// user_count only counts; the users lock never leaks (internal invariant, pinned here).
 #[test]
 fn the_hub_reports_its_user_count() {
     let dir = temp();
@@ -129,17 +129,17 @@ fn the_hub_reports_its_user_count() {
     .expect("造表");
     let hub = Hub::open(dir.path()).expect("开 hub");
     assert_eq!(hub.user_count(), 2);
-    // hub 模块本身也被引用，防止 unused 警告的另一种方式：断言模块路径存在。
+    // Another way to avoid an unused warning for the hub module: assert the module path exists.
     let _ = valid_user("x");
 }
 
-// ---- BYOK 的隔离是结构性的 ------------------------------------------
+// ---- BYOK isolation is structural ------------------------------------------
 //
-// 密钥隔离不靠「记得别泄漏」，靠路径：每个用户的 home 是独立目录、独立的
-// app-server 子进程、各自的 models.json 与钥匙串。这两条测试钉住结构本身。
+// Key isolation relies on paths, not "remembering not to leak": each user's home is its
+// own directory, app-server subprocess, models.json and keychain. These tests pin it.
 
-/// 两个用户的 home 是根目录下两个不相交的目录 —— 这是「A 的 key 不出现在
-/// B 的任何路径」的全部物理基础。
+/// Two users' homes are two disjoint directories under the root — the entire physical basis
+/// of "A's key never appears in any of B's paths".
 #[test]
 fn two_users_never_share_a_home() {
     let dir = temp();
@@ -155,12 +155,12 @@ fn two_users_never_share_a_home() {
     assert_ne!(alice, bob);
     assert!(alice.starts_with(dir.path()) && bob.starts_with(dir.path()));
     assert!(!alice.starts_with(&bob) && !bob.starts_with(&alice));
-    // 名字规矩保证目录名就是用户名 —— 没有 `../` 能溜进路径。
+    // Name rules guarantee the directory name is the username — no `../` can slip into a path.
     assert_eq!(alice.file_name().and_then(|n| n.to_str()), Some("alice"));
 }
 
-/// users.json 是准入账本，只存 token：它**永远**不该出现模型密钥的形状。
-/// （密钥住在各用户 home 的钥匙串/secrets.json —— M1 的领地。）
+/// users.json is the admission ledger, tokens only: it must **never** contain the shape of
+/// a model key. (Keys live in each home's keychain/secrets.json — M1 territory.)
 #[test]
 fn the_users_file_stores_tokens_never_model_keys() {
     let dir = temp();
@@ -179,10 +179,10 @@ fn the_users_file_stores_tokens_never_model_keys() {
     );
 }
 
-// ---- 资源池的三条策略 --------------------
+// ---- Three pool policies --------------------
 //
-// 判定是纯函数，直接喂快照；(user, last_used, idle) 的 idle = 只有池自己
-// 持有（Arc::strong_count == 1）—— 正在服务请求的实例天然 pin 住。
+// The decisions are pure functions fed snapshots; idle in (user, last_used, idle) means only
+// the pool holds it (Arc::strong_count == 1) — an instance serving a request is pinned.
 
 fn snapshot(pairs: &[(&str, u64, bool)]) -> Vec<(String, std::time::Instant, bool)> {
     let now = std::time::Instant::now();
@@ -198,7 +198,7 @@ fn snapshot(pairs: &[(&str, u64, bool)]) -> Vec<(String, std::time::Instant, boo
         .collect()
 }
 
-/// LRU 只在「闲」的中挑最久未用的；正被用着的哪怕更老也不动（pin）。
+/// LRU picks the oldest unused among the idle; a pinned one stays even if older.
 #[test]
 fn lru_evicts_the_oldest_idle_and_never_a_pinned_one() {
     let entries = snapshot(&[
@@ -206,34 +206,34 @@ fn lru_evicts_the_oldest_idle_and_never_a_pinned_one() {
         ("b", 5_000, true),
         ("c", 20_000, false),
     ]);
-    // c 最老但 pin 住 —— 被关的是 a（闲中最久）。
+    // c is oldest but pinned — the victim is a (the longest-idle among the idle).
     assert_eq!(lru_victim(&entries).as_deref(), Some("a"));
 
     let all_pinned = snapshot(&[("a", 10_000, false), ("b", 5_000, false)]);
-    // 全 pin：软上限 —— 宁可超开，不把请求变成错误。
+    // All pinned: soft cap — rather over-open than turn a request into an error.
     assert_eq!(lru_victim(&all_pinned), None);
 
     let empty: Vec<(String, std::time::Instant, bool)> = Vec::new();
     assert_eq!(lru_victim(&empty), None);
 }
 
-/// 闲置清扫：超期的闲者入名单；0 秒 = 策略关闭；刚开机（checked_sub 落空）
-/// 不关 —— 宁可多留，不可误关。
+/// Idle sweep: expired idle entries join the list; 0 secs = policy off; just booted
+/// (checked_sub fails) closes nothing — better to keep too much than close wrongly.
 #[test]
 fn stale_sweep_respects_the_deadline_and_never_evicts_on_boot() {
-    // b 闲了 30 秒，阈值 20 秒 → 该关；a 刚用过 → 留；c pin → 留。
+    // b idle 30s over a 20s threshold → close; a just used → keep; c pinned → keep.
     let entries = snapshot(&[("a", 100, true), ("b", 30_000, true), ("c", 40_000, false)]);
     let now = std::time::Instant::now();
     assert_eq!(stale_entries(&entries, 20, now), vec!["b".to_string()]);
 
-    // 阈值 0 = 策略关闭。
+    // Threshold 0 = policy off.
     assert!(stale_entries(&entries, 0, now).is_empty());
 
-    // 阈值大过开机时长：checked_sub 落空 → 空名单（不 panic、不误关）。
+    // Threshold larger than uptime: checked_sub fails → empty list (no panic, no wrong close).
     assert!(stale_entries(&entries, u64::MAX / 2, now).is_empty());
 }
 
-/// 池的真实接线：小上限下第三个用户挤掉第一个（真 spawn，真驱逐）。
+/// The pool's real wiring: a small cap makes a third user evict the first (real spawn, real eviction).
 #[tokio::test]
 async fn the_pool_caps_open_instances() {
     let dir = temp();
@@ -249,12 +249,12 @@ async fn the_pool_caps_open_instances() {
     let _b = hub.client("b").await.expect("b");
     assert_eq!(hub.open_count(), 2);
 
-    // 第三个进来：满 → 挤掉一个。a/b/c 的 Arc 都还捏在测试手里（pin），
-    // 全 pin 时软上限生效 —— 池允许超开而不是关掉正在用的。
+    // A third comes in: full → evict one. The Arcs of a/b/c are still held by the test
+    // (pinned), so the soft cap applies — the pool over-opens rather than closing in-use.
     let _c = hub.client("c").await.expect("c");
     assert!(hub.open_count() >= 2, "池至少保住 2 个");
 
-    // 放下 a/b/c 的句柄后，下一次取用会先做清扫：满 → 挤掉最久未用的闲者。
+    // After dropping the a/b/c handles, the next fetch sweeps first: full → evict oldest idle.
     drop(_a);
     drop(_b);
     drop(_c);

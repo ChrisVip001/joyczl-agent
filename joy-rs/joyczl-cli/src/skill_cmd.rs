@@ -1,19 +1,19 @@
-//! `joy skill` —— 技能的查看、携带与安装。
+//! `joy skill` — viewing, carrying, and installing skills.
 //!
-//! `joy skill list`                      看 Joy 装载了哪些技能（含版本）
-//! `joy skill export --to claude,codex`  把技能复制给别的 agent（同一份 SKILL.md 格式）
-//! `joy skill install <url|路径>`        装一个别人的技能（校验 frontmatter，重名拒绝）
-//! `joy skill update [索引]`             按索引把已装的技能升到新版本
-//!                                       （索引默认 <home>/skills/index.json，
-//!                                        也可以给本地路径或 http(s) 地址）
+//! `joy skill list`                      shows which skills Joy has loaded (with versions)
+//! `joy skill export --to claude,codex`  copies skills to other agents (same SKILL.md format)
+//! `joy skill install <url|path>`        installs another's skill (frontmatter + name checks)
+//! `joy skill update [index]`            upgrades installed skills to new versions per
+//!                                       the index (defaults to <home>/skills/index.json,
+//!                                       or a local path or http(s) URL)
 //!
-//! install 与 update 的分工值得说清楚：**install 从不覆盖**（技能是指令，
-//! 装之前先读一遍，重名就拒绝），**update 按版本替换**（老版本先备份进
-//! `.backup/`，新版本先落 `.staging/` 再原子换过去）。
+//! The install/update split is worth stating: **install never overwrites** (skills
+//! are instructions — read before installing, reject on name clash); **update
+//! replaces by version** (old backed up to `.backup/`, new staged in `.staging/`).
 //!
-//! export 的规矩：**对方手里被改过的副本默认保留** —— 那可能是人家在
-//! 另一个 agent 里做的修改，--force 才覆盖。install 的规矩：**从不覆盖
-/// 已有技能**；技能是 markdown 指令，装之前先读一遍。
+//! export's rule: **a modified copy on the other side is kept by default** — it may
+//! be their edits inside another agent; --force overwrites. install's rule: **never
+/// overwrite an existing skill**; skills are markdown instructions, read before installing.
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -55,8 +55,8 @@ fn list(home: &Path) -> Result<()> {
             .as_deref()
             .map(|v| format!(" v{v}"))
             .unwrap_or_default();
-        // 两个策略字段直接印出来：装上之后最常见的疑问是「它为什么没被触发」，
-        // 而答案就在这两条里（不隐式触发 / 依赖不在）。
+        // Both policy fields print directly: the top question after install is "why
+        // wasn't it triggered" — the answer is here (no implicit trigger / deps absent).
         let mut notes = Vec::new();
         if !skill.allow_model_invocation {
             notes.push("只走 $名字 显式引用".to_string());
@@ -109,8 +109,8 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
         i += 1;
     }
 
-    // claude → ~/.claude（或 ./.claude），codex → ~/.codex。--project 落在
-    // 当前目录下，给「这个项目专用的技能」用。
+    // claude → ~/.claude (or ./.claude), codex → ~/.codex. --project lands under
+    // the current directory, for "skills specific to this project".
     let base: PathBuf = if project {
         std::env::current_dir()?
     } else {
@@ -148,8 +148,8 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
 }
 
 async fn install(home: &Path, source: &str) -> Result<()> {
-    // GitHub 页面 / Gist 的网页地址转成原始内容地址 —— 人复制来的多半是
-    // 浏览器地址栏里那个。
+    // GitHub page / Gist web URLs convert to raw content URLs — what people copy
+    // is mostly what sits in the browser address bar.
     let text = if source.starts_with("http://") || source.starts_with("https://") {
         let raw = raw_url(source);
         println!("拉取 {raw}");
@@ -170,7 +170,7 @@ async fn install(home: &Path, source: &str) -> Result<()> {
     Ok(())
 }
 
-/// GitHub blob 页与 Gist 页 → 原始内容地址。别的 URL 原样返回。
+/// GitHub blob and Gist pages → raw content URLs. Other URLs returned as-is.
 fn raw_url(url: &str) -> String {
     if url.contains("github.com") && url.contains("/blob/") {
         return url
@@ -189,9 +189,9 @@ fn dirs_home() -> Result<PathBuf> {
     })?))
 }
 
-/// 按索引更新：解析索引 → 逐条取回内容 → 校验 → 版本比对 → 备份 + 原子替换。
-/// 取回、校验、替换都在 `joyczl_memory::install`，这里只负责把索引找出来、
-/// 把网络接上去。
+/// Update per index: parse index → fetch each entry → validate → compare versions
+/// → backup + atomic replace. Fetching, validating and replacing live in
+/// `joyczl_memory::install`; this only finds the index and wires up the network.
 async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
     let default_index = home.join("skills").join("index.json");
     let source = index_arg
@@ -239,8 +239,8 @@ fn is_http(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
-/// 取一份技能内容。网页地址先转成原始内容地址（跟 install 同一条规矩：
-/// 人手复制来的多半是浏览器地址栏里那个）。
+/// Fetches one skill's content. Web URLs are converted to raw content URLs first
+/// (same rule as install: what people copy is the browser address bar URL).
 async fn fetch(url: &str) -> Result<String, String> {
     let raw = raw_url(url);
     let response = reqwest::Client::new()

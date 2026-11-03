@@ -1,11 +1,11 @@
-//! judge —— 裁判不是选手。
+//! judge — the referee is not a contestant.
 //!
-//! 确定性 eval 只能断言「工具有没有按序发出」；「答得好不好」没有唯一
-//! 正确答案，那就按 MT-Bench / Chatbot-Arena 的市场做法：一个 LLM 按
-//! rubric 给 0-10 分加一句话理由。**裁判必须不是被考的那个模型**，
-//! 否则是自己给自己打分 —— 默认用 small model，`JOY_JUDGE_MODEL` 可换。
+//! Deterministic evals can only assert "were tools emitted in order"; "was the answer
+//! good" has no single right answer, so follow MT-Bench / Chatbot-Arena practice: one
+//! LLM scores 0-10 by rubric plus a one-line reason. **The referee must not be the
+//! model under test**, or it grades itself — small model by default, `JOY_JUDGE_MODEL` overrides.
 //!
-//! 需要真 key。没 key 时整个 judge 跳过并如实说明 —— 它出分，不拦发版。
+//! Needs a real key. Without one the whole judge skips with an honest note — it scores, it doesn't block release.
 
 use anyhow::Result;
 use joyczl_provider::{CreateRequest, Message, Provider};
@@ -32,7 +32,7 @@ Judge criteria for this case:
 Reply with ONLY a JSON object, no prose:
 {{"score": <int 0-10>, "reason": "<one short sentence>"}}"#;
 
-/// 给一轮真实回答打分。返回 (score, reason)。
+/// Scores one real answer. Returns (score, reason).
 pub async fn grade(
     client: &dyn Provider,
     model: &str,
@@ -49,7 +49,7 @@ pub async fn grade(
             system: None,
             messages: vec![Message::user_text(prompt)],
             tools: Vec::new(),
-            // 打分是几句话的事，但推理模型得先想一会儿。
+            // Scoring is a few sentences, but reasoning models need a moment to think.
             max_tokens: 600,
         })
         .await
@@ -58,7 +58,7 @@ pub async fn grade(
 }
 
 fn parse_score(text: &str) -> Result<(i64, String)> {
-    // 裁判可能前后带说明 —— 抠出那对大括号（跟检索门同一套宽容）。
+    // The referee may add prose around it — extract that brace pair (same leniency as the retrieval gate).
     let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) else {
         anyhow::bail!("裁判没回 JSON：{text}");
     };

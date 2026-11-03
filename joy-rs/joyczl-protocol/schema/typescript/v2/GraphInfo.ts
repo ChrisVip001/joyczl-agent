@@ -6,7 +6,7 @@ export type GraphInfo = {
   route: GraphRouteKind;
   reason: string;
   /**
-   * 实际走过的节点名，顺序即执行顺序。
+   * The node names actually traversed, in execution order.
    */
   path: Array<string>;
 };

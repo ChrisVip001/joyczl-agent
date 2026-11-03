@@ -1,11 +1,11 @@
-//! 多套模型配置的**运行时**：`model/profiles` / `model/save` / `model/remove`。
+//! The **runtime** of multiple model profiles: `model/profiles` / `model/save` / `model/remove`.
 //!
-//! 存储与凭据后端在 `joyczl-config` 的 `models.rs`；这里只管三件事：校验、
-//! 套到当前 Settings、重解析 provider。**改完立刻生效**，不用重启 —— 这正是
-//! 「多模型切换」的意义。
+//! Storage and the credentials backend live in `joyczl-config`'s models.rs; this module handles three
+//! things: validation, applying to the current Settings, and re-resolving the provider. **Takes effect
+//! immediately**, no restart — that is the whole point of "multi-model switching".
 //!
-//! 一条纪律：**这些方法只有人能调**。模型没有对应工具，也拿不到密钥 ——
-//! 它若能让 Joy 自己换 provider，就等于能把自己接到别的服务器上。
+//! One discipline: **only a human can call these methods**. The model has no corresponding tools and
+//! cannot reach the keys — if it could make Joy switch providers itself, it could plug itself into another server.
 
 use joyczl_config::models as cfg;
 use joyczl_protocol::{
@@ -17,7 +17,7 @@ use std::sync::{Mutex, RwLock};
 
 use crate::Server;
 
-/// Server 持有的两份状态：配置本身 + 凭据后端。
+/// The two pieces of state the Server holds: the config itself + the credentials backend.
 pub(crate) type Models = Arc<RwLock<cfg::ModelsFile>>;
 pub(crate) type Secrets = Arc<Mutex<cfg::SecretStore>>;
 
@@ -31,8 +31,8 @@ pub(crate) fn new_secrets() -> Secrets {
     Arc::new(Mutex::new(cfg::SecretStore::auto()))
 }
 
-/// 启动时套用：`<home>/models.json` 里若配了当前那套，它就覆盖环境变量给的
-/// provider/model —— 界面上选过的，比启动时手敲的环境变量更晚、说话更响。
+/// Apply at boot: if the currently active profile is configured in `<home>/models.json`, it overrides the
+/// provider/model from env vars — what was picked in the UI speaks later and louder than startup env vars.
 pub(crate) fn apply_at_boot(settings: &mut joyczl_config::Settings, secrets: &Secrets) {
     let file = cfg::load_models(&settings.home);
     let home = settings.home.clone();
@@ -50,14 +50,14 @@ fn views(file: &cfg::ModelsFile) -> Vec<ModelProfileView> {
             model: p.model.clone(),
             small_model: p.small_model.clone(),
             base_url: p.base_url.clone(),
-            // 只给指针，不给密钥本身。
+            // Only the pointer, never the key itself.
             key_source: p.key_source.clone(),
             active: active == Some(p.id.as_str()),
         })
         .collect()
 }
 
-/// `provider / model`：界面上「当前是哪个模型」的一句话。
+/// `provider / model`: the one-liner for "which model is current" in the UI.
 fn current_label(settings: &joyczl_config::Settings) -> Option<String> {
     let provider = &settings.provider;
     if provider.is_empty() {
@@ -69,7 +69,7 @@ fn current_label(settings: &joyczl_config::Settings) -> Option<String> {
     })
 }
 
-/// 补丁字段：给了就用（空串 = 清除），没给就沿用原来的。
+/// Patch semantics for fields: given means use it (empty string = clear), absent means keep the old.
 fn pick(incoming: Option<String>, existing: Option<String>) -> Option<String> {
     match incoming {
         Some(value) if value.trim().is_empty() => None,
@@ -78,14 +78,14 @@ fn pick(incoming: Option<String>, existing: Option<String>) -> Option<String> {
     }
 }
 
-/// provider 必须是 `joyczl-provider` 表里的一家：表本身就是「预适配主流厂商」
-/// 的清单，不在表里的 id 打不出请求（除非另给 base_url）。
+/// The provider must be one of `joyczl-provider`'s table: the table itself is the list of
+/// "pre-adapted mainstream vendors"; an id outside the table cannot produce a request (unless base_url is given).
 fn validate_provider(provider: &str, base_url: Option<&str>) -> Result<(), String> {
     if joyczl_provider::PROVIDERS.iter().any(|p| p.id == provider) {
         return Ok(());
     }
     if base_url.is_some() {
-        // 自建/代理端点：provider 只当「用哪种 wire 格式」使。
+        // Self-hosted / proxy endpoint: the provider is only "which wire format to use".
         return Ok(());
     }
     let known: Vec<&str> = joyczl_provider::PROVIDERS.iter().map(|p| p.id).collect();
@@ -96,9 +96,9 @@ fn validate_provider(provider: &str, base_url: Option<&str>) -> Result<(), Strin
 }
 
 impl Server {
-    /// 调度状态快照（迁移 0012）：`joy schedule` 登记的全部任务。
-    /// 调度器是独立进程，这里只是同一张表的只读视图；读失败返回空列表
-    /// 并说明（面板不该因为一个读错误变成坏页）。
+    /// Schedule state snapshot (migration 0012): all tasks registered by `joy schedule`.
+    /// The scheduler is a separate process; this is only a read-only view of the same table; a read
+    /// failure returns an empty list with a note (a panel must not turn into a broken page over one read error).
     pub async fn schedule_list(&self) -> ScheduleListResponse {
         let schedules = joyczl_state::Schedules::new(self.pool.clone());
         match schedules.list().await {
@@ -121,8 +121,8 @@ impl Server {
         }
     }
 
-    /// 审批审计（迁移 0011）：最近 100 条「问了才跑」的记录，新的在前。
-    /// 读失败返回空列表并说明 —— 同 usage_summary 的口径。
+    /// Approval audit (migration 0011): the last 100 "asked before running" records, newest first.
+    /// A read failure returns an empty list with a note — the same stance as usage_summary.
     pub async fn approval_log(&self) -> ApprovalLogResponse {
         match self.approval_log.recent(100).await {
             Ok(rows) => ApprovalLogResponse {
@@ -148,10 +148,10 @@ impl Server {
         }
     }
 
-    /// 用量汇总（迁移 0010）：per-model 聚合 + 总数。只记账不强制 —— 没有配额、
-    /// 没有限速；BYOK 模式下钱记在用户自己的厂商账单上。hub 模式下这就是
-    /// per-user 记账（每个用户一个 home 一个台账）。读失败返回空汇总并说明
-    /// —— 报错会把一个「看数字」的方法变成「坏一整轮」的方法。
+    /// Usage summary (migration 0010): per-model aggregation + totals. Bookkeeping only, never enforced —
+    /// no quota, no rate limit; in BYOK mode the money sits on the user's own vendor bill. In hub mode this
+    /// is per-user accounting (one home, one ledger per user). A read failure returns an empty summary with
+    /// a note — an error would turn a "look at numbers" method into a "break a whole turn" method.
     pub async fn usage_summary(&self) -> UsageSummaryResponse {
         match self.usage.summary().await {
             Ok(summary) => UsageSummaryResponse {
@@ -190,8 +190,8 @@ impl Server {
         }
     }
 
-    /// 新增/改一套；`make_active`（默认 true）时顺带切过去。只带 `id` +
-    /// `make_active` 就是「切换」—— 不该逼用户为了切换重发一次密钥。
+    /// Add/update a profile; when `make_active` (default true), switch to it as well. Sending only `id` +
+    /// `make_active` means "switch" — the user must not be forced to re-send a key just to switch.
     pub fn model_save(&self, p: ModelSaveParams) -> Result<ModelSaveResponse, String> {
         let id = p.id.trim().to_string();
         if id.is_empty() {
@@ -201,7 +201,7 @@ impl Server {
         let mut file = self.models.write().expect("models 锁不该中毒");
         let existing = cfg::find(&file, &id).cloned();
 
-        // provider：新建必填，改已有时不给就沿用。
+        // provider: required when creating; when editing, absent means keep the old.
         let provider = match (p.provider.as_deref(), existing.as_ref()) {
             (Some(v), _) => v.trim().to_string(),
             (None, Some(e)) => e.provider.clone(),
@@ -213,7 +213,7 @@ impl Server {
         };
         validate_provider(&provider, p.base_url.as_deref())?;
 
-        // 凭据：给了就存（优先钥匙串），没给就保留原来的指针。
+        // Credentials: if given, store them (keychain first); if absent, keep the old pointer.
         let home = self.settings().home.clone();
         let key_stored_in = match (p.api_key.as_deref(), p.key_env.as_deref()) {
             (Some(key), _) if !key.trim().is_empty() => {
@@ -232,8 +232,8 @@ impl Server {
         let key_source =
             (!key_stored_in.is_empty() && key_stored_in != "none").then(|| key_stored_in.clone());
 
-        // 补丁语义：没给的字段保留原来的（与 config/write 同一个约定），
-        // 给空串才是清除。否则「只带 id 切一下」会把模型、端点全洗掉。
+        // Patch semantics: absent fields keep the old values (same convention as config/write);
+        // an empty string is what clears. Otherwise "send just the id to switch" would wash away model and endpoint.
         let existing_fields = existing.unwrap_or(cfg::ModelProfile {
             id: id.clone(),
             provider: provider.clone(),
@@ -259,7 +259,7 @@ impl Server {
         }
         let active = file.active.as_deref() == Some(id.as_str());
 
-        // 落盘失败就不动内存 —— 「改了但不记得」比「没改成」更撒谎。
+        // If persisting fails, memory is left untouched — "changed but not remembered" lies harder than "not changed".
         cfg::save_models(&home, &file).map_err(|e| format!("写 models.json 失败：{e}"))?;
         let current = self.reapply(&file);
         drop(file);
@@ -283,10 +283,10 @@ impl Server {
         let mut file = self.models.write().expect("models 锁不该中毒");
         let removed = cfg::remove(&mut file, &p.id);
         if removed {
-            // 凭据跟着走：留一个没人引用的密钥在钥匙串里是垃圾。
+            // Credentials go with it: leaving an unreferenced key in the keychain is garbage.
             //
-            // 这把锁必须**在 reapply 之前放开** —— reapply 自己也要锁
-            // secrets，而 std Mutex 不可重入（同一个线程再锁一次就是死锁）。
+            // This lock must be **released before reapply** — reapply itself locks
+            // secrets too, and std Mutex is not reentrant (locking it again on the same thread deadlocks).
             {
                 let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
                 store.remove(&home, &p.id);
@@ -299,8 +299,8 @@ impl Server {
         ModelRemoveResponse { removed, active_id }
     }
 
-    /// 把当前那套套进 Settings 并**重解析** provider：切换是立刻生效的。
-    /// 解析失败不致命 —— 记下原因，turn 会把「缺 key」说清楚。
+    /// Apply the active profile into Settings and **re-resolve** the provider: switching takes effect immediately.
+    /// A resolution failure is not fatal — record the reason; the turn will spell out "missing key".
     fn reapply(&self, file: &cfg::ModelsFile) -> Option<String> {
         let mut settings = self.settings();
         {
@@ -318,7 +318,7 @@ impl Server {
         let label = current_label(&settings);
         self.set_settings(settings);
         self.set_resolved(resolved);
-        // profile 刚被改过/删过：按档位缓存的解析结果全部作废，下一轮重解析。
+        // The profile was just edited/deleted: all tier-cached resolutions are invalidated; re-resolve next turn.
         self.route_cache
             .lock()
             .expect("route 缓存锁不该中毒")

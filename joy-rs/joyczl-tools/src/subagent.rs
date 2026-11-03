@@ -1,17 +1,17 @@
-//! 子代理：把一件独立的活交出去跑，只把结论带回来。
+//! Subagent: hand off a self-contained piece of work and bring back only the conclusion.
 //!
-//! 这一层**不认识** Server、loop、provider —— 它只有一个 trait，实现由
-//! `joyczl-app-server` 注入（依赖方向不能反过来：loop 依赖 tools）。
+//! This layer **knows nothing about** Server, loop, or provider — it has only a trait,
+//! injected by `joyczl-app-server` (dependency direction must not reverse: loop → tools).
 //!
-//! 三条设计边界：
+//! Three design boundaries:
 //!
-//! 1. **只回摘要**。子代理的完整消息列表不回传 —— 那会把父的上下文撑爆，
-//!    而「把上下文交出去又整个拿回来」等于没省。
-//! 2. **不能再派生**。实现方构造子代理的工具表时会显式去掉 `delegate_task`
-//!    （显式禁止递归派生）。递归派生是那种「平时看不出来、
-//!    一旦有人试就烧穿配额」的东西。
-//! 3. **不参与交互批准**。子代理不该阻塞在人类输入上：它拿不到批准通道，
-//!    需要批准的动作直接按「拒绝」处理（见 `docs/limitations.md`）。
+//! 1. **Summary only**. The subagent's full message list is not returned — that would
+//!    blow up the parent's context; handing it out and getting it all back saves nothing.
+//! 2. **No further delegation**. The implementer explicitly removes `delegate_task` when
+//!    building the subagent's tool table (recursive delegation is forbidden) — the kind
+//!    of thing that "looks harmless until someone tries it and burns through quota".
+//! 3. **No interactive approval**. A subagent must not block on human input: it gets no
+//!    approval channel, and actions needing approval are treated as "denied" outright.
 
 use std::sync::Arc;
 
@@ -19,29 +19,29 @@ use serde_json::{json, Value};
 
 use crate::{require_str, BoxFut, Tool, ToolCtx};
 
-/// 工具名。实现方要把它从子代理的工具表里去掉，所以名字得是公开的常量 ——
-/// 让两边拼字符串迟早会拼歪。
+/// Tool name. The implementer must remove it from the subagent's tool table, so it has
+/// to be a public constant — letting both sides assemble the string invites drift.
 pub const NAME: &str = "delegate_task";
 
-/// 执行一次委派。实现放在 app-server（它才有 Server、模型与工具表）。
+/// Run one delegation. Implementation lives in app-server (it has Server, model, tools).
 pub trait SubagentRunner: Send + Sync {
-    /// 跑一件活，返回**结论文本**。失败返回一句给人看的原因。
+    /// Run one task, returning the **conclusion text**; on failure, a human reason.
     ///
-    /// `result_schema` 给了就要求结论是符合它的 JSON：校验与「重试一次」都是
-    /// 实现方的责任（工具层不认识校验器，也不该认识）。仍不合规时回散文并在
-    /// 文本里写明原因 —— 一次没按格式回话，不该让整件活白跑。
+    /// If `result_schema` is given, the conclusion must conform to it: validation and
+    /// the "retry once" are the implementer's job (the tool layer knows no validators);
+    /// if it still fails, return prose and say why — one bad format shouldn't waste it.
     fn run(
         &self,
         task: String,
         max_iterations: Option<i32>,
         result_schema: Option<Value>,
-        // 父轮的工作目录（子代理跟父任务在同一个目录里干活）。
+        // The parent turn's working directory (the subagent works alongside the parent).
         parent_cwd: Option<std::path::PathBuf>,
     ) -> BoxFut;
 }
 
-/// 注册进工具表的 `delegate_task`。只有 `JOY_DELEGATE=1` 时才会被注册 ——
-/// 没开的时候模型连它的名字都看不见（与 `run_command` 同一条规矩）。
+/// The `delegate_task` registered into the tool table. Only registered when `JOY_DELEGATE=1`
+/// — when off, the model cannot even see its name (same rule as `run_command`).
 pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
     Tool {
         name: NAME.to_string(),
@@ -85,7 +85,7 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                     .run(task, max_iterations, result_schema, _ctx.cwd.clone())
                     .await
                 {
-                    // 子代理的话是**转述**：过一遍转义与声明头，别让它看起来像系统消息。
+                    // Subagent output is **paraphrased**: escape + report header, so it never reads as system text.
                     Ok(summary) => Ok(crate::report::as_report(&summary)),
                     Err(why) => Ok(format!("Error: 子代理没跑成：{why}")),
                 }

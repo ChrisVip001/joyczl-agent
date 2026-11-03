@@ -1,5 +1,5 @@
-//! `joy mcp serve` 的协议面测试：握手、工具清单、五个记忆工具的行为，
-//! 以及「哪些失败是 RPC 错误、哪些是结果里的文本」。
+//! Protocol-face tests for `joy mcp serve`: handshake, tool list, the behavior of the five
+//! memory tools, and "which failures are RPC errors and which are text inside the result".
 
 use serde_json::{json, Value};
 
@@ -10,7 +10,7 @@ async fn server() -> MemoryServer {
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     MemoryServer::new(
         joyczl_state::Facts::new(pool.clone()),
         joyczl_state::Episodes::new(pool),
@@ -24,7 +24,7 @@ async fn call(server: &MemoryServer, method: &str, params: Value) -> Value {
         .expect("带 id 的请求必有应答")
 }
 
-/// tools/call 的文本结果（content[0].text）。
+/// The text result of tools/call (content[0].text).
 fn text(response: &Value) -> String {
     response["result"]["content"][0]["text"]
         .as_str()
@@ -65,7 +65,7 @@ async fn tools_list_exposes_only_the_memory_tools() {
             "memory_episodes"
         ]
     );
-    // 只暴露记忆：不出现任何「让 Joy 去动手」的工具。
+    // Memory only: no tool that "makes Joy act" ever appears.
     assert!(!names
         .iter()
         .any(|n| n.contains("send") || n.contains("event")));
@@ -93,7 +93,7 @@ async fn remember_then_search_round_trips_through_the_memory_tables() {
         text(&found).contains("喜欢早上的会议"),
         "写进去的必须搜得到：{found}"
     );
-    // 来源如实标注成 mcp —— 这条事实是从别人的 agent 写进来的。
+    // Source honestly marked as mcp — this fact was written by someone else's agent.
     assert_eq!(found["result"]["isError"], Value::Null, "不该是错误");
 }
 
@@ -167,7 +167,7 @@ async fn a_notification_gets_no_response() {
 async fn protocol_errors_and_tool_failures_take_different_paths() {
     let server = server().await;
 
-    // 不认识的工具：RPC 错误（调用方拼错了名字，这是协议层面的错）。
+    // Unknown tool: RPC error (the caller mistyped the name; that is a protocol-level fault).
     let unknown = call(
         &server,
         "tools/call",
@@ -176,7 +176,7 @@ async fn protocol_errors_and_tool_failures_take_different_paths() {
     .await;
     assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
 
-    // 不认识的方法：同样是 RPC 错误，且说得出名字。
+    // Unknown method: also an RPC error, and it names the method.
     let method = call(&server, "turn/start", json!({})).await;
     assert_eq!(method["error"]["code"], -32601);
     assert!(method["error"]["message"]
@@ -184,7 +184,7 @@ async fn protocol_errors_and_tool_failures_take_different_paths() {
         .unwrap_or_default()
         .contains("turn/start"));
 
-    // 参数没给够：结果里的文本 + isError，调用方读得到原因。
+    // Missing args: text in the result + isError; the caller can read why.
     let bad_args = call(
         &server,
         "tools/call",

@@ -1,20 +1,20 @@
-//! MCP 远程服务器的 OAuth —— 浏览器授权流，以及 token 住在哪。
+//! OAuth for MCP remote servers — the browser authorization flow, and where tokens live.
 //!
-//! 按 MCP 的 authorization 规范实现的标准浏览器授权流：
+//! The standard browser authorization flow per the MCP authorization spec:
 //!
 //! ```text
-//! 1. 发现     GET /.well-known/oauth-protected-resource  → authorization_servers[0]
-//!             GET /.well-known/oauth-authorization-server → 各端点
-//! 2. 注册     POST registration_endpoint（动态客户端注册，DCR）
-//! 3. 授权     打开浏览器 → /authorize?...&code_challenge=<PKCE S256>
-//!             本地 127.0.0.1:41765/callback 接住重定向
-//! 4. 换 token POST token_endpoint（authorization_code + code_verifier）
-//! 5. 落盘     <home>/mcp-auth/<server>.json，0600，先写临时文件再改名
+//! 1. discover   GET /.well-known/oauth-protected-resource  → authorization_servers[0]
+//!              GET /.well-known/oauth-authorization-server → the endpoints
+//! 2. register   POST registration_endpoint (dynamic client registration, DCR)
+//! 3. authorize  open the browser → /authorize?...&code_challenge=<PKCE S256>
+//!              a local 127.0.0.1:41765/callback catches the redirect
+//! 4. exchange   POST token_endpoint (authorization_code + code_verifier)
+//! 5. persist    <home>/mcp-auth/<server>.json, 0600, write a temp file then rename
 //! ```
 //!
-//! 没有秘密经过人的剪贴板或配置文件 —— 这就是 auth_env 之外的另一条路
-//! 存在的理由。port 固定而不是随机的：redirect URI 在 DCR 时登记给了
-//! 授权服务器，下次跑还得是同一个，随机端口等于每次都重注册。
+//! No secret ever passes through a clipboard or a config file — that is why this second path
+//! beside auth_env exists. The port is fixed, not random: the redirect URI registered at DCR
+//! must be the same next run; a random port would mean re-registering every time.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -22,18 +22,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-// URL 编解码与 joyczl-tools 的 search_web 共用同一份实现 ——
-// authorize URL 的转义规则和搜索跳转是同一条，不该有两份。
+// URL codec shared with joyczl-tools' search_web —
+// the authorize URL's escaping and the search redirect are the same rule; no two copies.
 use joyczl_tools::web::{urldecode, urlencode};
 
-/// 回调固定端口与路径（理由见模块注释）。
+/// Fixed callback port and path (why: see the module comment).
 pub const CALLBACK_PORT: u16 = 41765;
 pub const CALLBACK_PATH: &str = "/callback";
-/// 人读授权页的时间：是分钟不是秒。
+/// Time a human needs to read the authorization page: minutes, not seconds.
 pub const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 pub const AUTH_DIR: &str = "mcp-auth";
 
-/// 服务器名要变成文件名 —— 用户给的，不干净。
+/// A server name becomes a filename — user-provided, not clean.
 pub fn sanitise(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -47,8 +47,8 @@ pub fn sanitise(name: &str) -> String {
         .collect()
 }
 
-/// 一个服务器的凭证文件。一服务器一文件：两家的注册互不相干，一个文件
-/// 坏了只损失一条连接，而不是全部。
+/// One server's credential file. One file per server: two registrations are unrelated, and
+/// one corrupt file costs one connection, not all of them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoredAuth {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,7 +62,7 @@ pub struct StoredTokens {
     pub access_token: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
-    /// Unix 秒。没有就当永不过期 —— 服务器自己会在 401 里提醒我们。
+    /// Unix seconds. Missing = never expires — the server itself will remind us with a 401.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
 }
@@ -84,8 +84,8 @@ impl TokenStore {
         &self.path
     }
 
-    /// 读。截断的、手改坏的文件都当「没有」：代价是重新登录一次，
-    /// 而不是让整个 harness 起不来。
+    /// Read. Truncated or hand-mangled files all count as "absent": the cost is one more
+    /// sign-in, not a harness that refuses to start.
     pub fn load(&self) -> StoredAuth {
         std::fs::read_to_string(&self.path)
             .ok()
@@ -93,8 +93,8 @@ impl TokenStore {
             .unwrap_or_default()
     }
 
-    /// 写。先写临时文件、chmod 0600、再改名 —— 中途被杀不会留下半个
-    /// 好文件的位置，秘密也从不短暂地世界可读。
+    /// Write. Temp file first, chmod 0600, then rename — being killed mid-way leaves no
+    /// half-good file in place, and the secret is never briefly world-readable.
     pub fn save(&self, auth: &StoredAuth) -> Result<(), String> {
         use std::io::Write;
         if let Some(parent) = self.path.parent() {
@@ -140,7 +140,7 @@ impl StoredTokens {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                // 提前 60 秒判过期：请求飞过去的路上也别踩线。
+                // Expire 60 seconds early: don't step over the line while the request flies.
                 now >= at - 60
             }
             None => false,
@@ -150,7 +150,7 @@ impl StoredTokens {
 
 // ---- PKCE ------------------------------------------------------------------
 
-/// base64url，无填充。 alphabet 表见 RFC 4648 §5。
+/// base64url, no padding. Alphabet per RFC 4648 §5.
 pub fn base64url_nopad(bytes: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::new();
@@ -173,9 +173,9 @@ pub fn base64url_nopad(bytes: &[u8]) -> String {
     out
 }
 
-/// PKCE 的 verifier：43-128 个未保留字符。用系统熵源（/dev/urandom）；
-/// 拿不到就用时间 + 地址混合 —— 弱一些，但比固定值强，且只在这种
-/// 平台上才会走到。
+/// The PKCE verifier: 43-128 unreserved characters. Uses the system entropy source
+/// (/dev/urandom); if unavailable, mixes time + address — weaker, but better than a fixed
+/// value, and only reachable on such platforms.
 pub fn pkce_verifier() -> String {
     let mut bytes = [0u8; 48];
     let filled = std::fs::File::open("/dev/urandom").and_then(|mut f| {
@@ -183,7 +183,7 @@ pub fn pkce_verifier() -> String {
         f.read_exact(&mut bytes)
     });
     if filled.is_err() {
-        // 兜底熵：时间纳秒 + 栈地址，搅一搅。
+        // Fallback entropy: time in nanoseconds + stack address, stirred.
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -205,7 +205,7 @@ pub fn pkce_challenge(verifier: &str) -> String {
     base64url_nopad(&digest)
 }
 
-// ---- 端点发现与登录 --------------------------------------------------------
+// ---- Endpoint discovery and sign-in ----------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct AuthEndpoints {
@@ -228,10 +228,10 @@ fn origin(url: &str) -> String {
     format!("{prefix}{authority}")
 }
 
-/// 从服务器 URL 一路发现授权端点。先问资源元数据（MCP 规范的走法），
-/// 问不到就把服务器自己当授权服务器（很多实现就是这么部署的）。
+/// Discover authorization endpoints from the server URL. Ask the resource metadata first
+/// (the MCP-spec way); if it fails, treat the server itself as the authorization server.
 pub async fn discover(client: &reqwest::Client, server_url: &str) -> Result<AuthEndpoints, String> {
-    // 资源元数据：先按规范的无路径名，再按带路径的变体。
+    // Resource metadata: first the spec's pathless form, then the path-carrying variant.
     let candidates = [
         format!(
             "{}{}/.well-known/oauth-protected-resource",
@@ -308,7 +308,7 @@ fn path_of(url: &str) -> String {
     }
 }
 
-/// 动态客户端注册（DCR）。client_info 存下来，下次登录不再重注册。
+/// Dynamic client registration (DCR). client_info is stored; next sign-in skips re-registering.
 pub async fn register_client(
     client: &reqwest::Client,
     registration_endpoint: &str,
@@ -334,8 +334,8 @@ pub async fn register_client(
         .map_err(|e| format!("注册应答不是 JSON：{e}"))
 }
 
-/// 本地回调：监听一次、接住重定向、返回查询参数。
-/// `open_browser` 是注入的 —— 测试不开真浏览器。
+/// Local callback: listen once, catch the redirect, return the query params.
+/// `open_browser` is injected — tests never open a real browser.
 async fn catch_callback(
     open_browser: &dyn Fn(&str),
     authorize_url: &str,
@@ -356,8 +356,8 @@ async fn catch_callback(
             }
             accepted = listener.accept() => {
                 let (mut socket, _) = accepted.map_err(|e| format!("回调连接收不到：{e}"))?;
-                // 只读到 HTTP 头结束为止 —— 浏览器握着连接不放，
-                // read_to_string 会等到天荒地老。
+                // Read only until the HTTP headers end — the browser holds the connection
+                // open, and read_to_string would wait until the end of time.
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 1024];
@@ -412,8 +412,8 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
-/// 完整的一次登录：发现 → （注册）→ 授权 → 换 token → 落盘。
-/// 返回 access_token，调用方拿它连服务器。
+/// One full sign-in: discover → (register) → authorize → exchange → persist.
+/// Returns the access_token; the caller uses it to connect.
 pub async fn sign_in(
     client: &reqwest::Client,
     home: &Path,
@@ -425,7 +425,7 @@ pub async fn sign_in(
     let endpoints = discover(client, server_url).await?;
     let redirect_uri = format!("http://127.0.0.1:{CALLBACK_PORT}{CALLBACK_PATH}");
 
-    // 客户端信息：注册过的直接用；没有而服务器支持 DCR 就现在注册。
+    // Client info: use the registered one; if absent and the server supports DCR, register now.
     let client_info = match store.load().client_info {
         Some(info) => info,
         None => {
@@ -464,8 +464,8 @@ pub async fn sign_in(
             .map(|(_, v)| v.clone())
     };
     if let Some(error) = get("error") {
-        // 服务器说了不。用它的原话：access_denied 和 invalid_client 会把人
-        // 带去完全不同的地方。
+        // The server said no. Use its own words: access_denied and invalid_client lead to
+        // completely different places.
         let detail = get("error_description")
             .map(|d| format!(" — {d}"))
             .unwrap_or_default();
@@ -524,8 +524,8 @@ fn tokens_from_response(token: &serde_json::Value) -> Result<StoredTokens, Strin
     })
 }
 
-/// 连接前的取 token：有且没过期就用；过期且有 refresh_token 就刷新；
-/// 都没有就报「去登录」。刷新成功会把新 token 落盘。
+/// Get the token before connecting: use it if present and unexpired; refresh if expired with
+/// a refresh_token; otherwise report "go sign in". A successful refresh persists the new token.
 pub async fn ensure_access_token(
     home: &Path,
     server_name: &str,

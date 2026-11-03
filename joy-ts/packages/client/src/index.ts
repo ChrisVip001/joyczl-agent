@@ -5,6 +5,6 @@ export { APP_SERVER_COMMAND, StdioTransport, findJoyBinary } from "./transport.t
 export type { StdioTransportOptions, Transport } from "./transport.ts";
 
 export { CODES, METHODS } from "./protocol.ts";
-// 生成的 63 个类型整个重导出去：调用方从 `@joy/client` 就能拿到协议里的
-// 任何一样东西，不需要知道生成物躺在仓库的哪个角落。
+// The 63 generated types are re-exported in full: callers get anything in the protocol straight
+// from `@joy/client`, without knowing which corner of the repo the artifacts live in.
 export type * from "./protocol.ts";

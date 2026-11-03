@@ -1,4 +1,4 @@
-//! 待办清单的契约：三条硬边界、整表替换、版本号单调、以及「读」的那一半。
+//! Todo list contracts: three hard boundaries, whole-table replace, monotonic revision, and the "read" half.
 
 use std::sync::Arc;
 
@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::todo::{todo_write, TodoBoard, MAX_CONTENT_CHARS, MAX_ITEMS};
 
-/// 一个最小可用的工具环境（清单本身与 ctx 无关，但 handler 要 session_id）。
+/// A minimal working tool environment (the list itself needs no ctx, but the handler wants session_id).
 async fn ctx(session: &str) -> super::ToolCtx {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path().to_path_buf();
@@ -36,7 +36,7 @@ async fn call(board: &Arc<TodoBoard>, session: &str, args: serde_json::Value) ->
     }
 }
 
-/// 写进去再读回来：整表替换，版本号加一。
+/// Write then read back: whole-table replace, revision +1.
 #[tokio::test]
 async fn writing_replaces_the_whole_list_and_bumps_the_revision() {
     let board = Arc::new(TodoBoard::new());
@@ -54,7 +54,7 @@ async fn writing_replaces_the_whole_list_and_bumps_the_revision() {
     assert!(first.contains("in_progress: 写测试"), "{first}");
     assert!(first.contains("pending: 改实现"), "{first}");
 
-    // 第二次是**整表替换**：没列出来的项就不在了。
+    // The second write is a **whole-table replace**: items not listed are gone.
     let second = call(
         &board,
         "s1",
@@ -67,7 +67,7 @@ async fn writing_replaces_the_whole_list_and_bumps_the_revision() {
     assert!(second.contains("1 项"), "{second}");
 }
 
-/// 省略 `todos` = 只读回全量。
+/// Omitting `todos` = read the full list back only.
 #[tokio::test]
 async fn omitting_todos_reads_the_list_back() {
     let board = Arc::new(TodoBoard::new());
@@ -85,7 +85,7 @@ async fn omitting_todos_reads_the_list_back() {
     assert!(read.contains("pending: 甲"), "{read}");
 }
 
-/// 清单按会话隔离：别人的表不是我的表。
+/// Lists are isolated per session: someone else's table isn't mine.
 #[tokio::test]
 async fn lists_are_per_session() {
     let board = Arc::new(TodoBoard::new());
@@ -106,7 +106,7 @@ async fn lists_are_per_session() {
     assert!(a.contains("甲的活") && !a.contains("乙的活"), "{a}");
 }
 
-/// 三条硬边界：项数、内容、同时只能一个 in_progress。
+/// Three hard boundaries: item count, content, and only one in_progress at a time.
 #[tokio::test]
 async fn the_three_hard_limits_are_enforced() {
     let board = Arc::new(TodoBoard::new());
@@ -147,7 +147,7 @@ async fn the_three_hard_limits_are_enforced() {
     assert!(out.contains("只能有一项 in_progress"), "{out}");
 }
 
-/// 校验不过时**一个字都不改**：半写进去的清单比没写更坏。
+/// When validation fails, **nothing changes**: a half-written list is worse than none.
 #[tokio::test]
 async fn a_rejected_write_leaves_the_old_list_alone() {
     let board = Arc::new(TodoBoard::new());
@@ -175,7 +175,7 @@ async fn a_rejected_write_leaves_the_old_list_alone() {
     assert!(after.contains("pending: 好的"), "{after}");
 }
 
-/// 不认识的 status 要指出是哪一项、收到了什么。
+/// An unknown status must name the item and what was received.
 #[tokio::test]
 async fn an_unknown_status_says_which_item_and_what_was_seen() {
     let board = Arc::new(TodoBoard::new());
@@ -190,7 +190,7 @@ async fn an_unknown_status_says_which_item_and_what_was_seen() {
     assert!(out.contains("in_progress"), "要把认得的列出来：{out}");
 }
 
-/// 注入用的那一段：固定标题 + 一行一项（压缩之后也认得出）。
+/// The injected block: fixed header + one line per item (recognizable even after compaction).
 #[test]
 fn the_injection_has_a_stable_header() {
     let board = TodoBoard::new();

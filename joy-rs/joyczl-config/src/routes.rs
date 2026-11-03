@@ -1,34 +1,34 @@
-//! `<home>/model-routes.json` —— 按任务档位自动选模型的路由表。
+//! `<home>/model-routes.json` — the routing table that auto-picks models by task tier.
 //!
-//! 用户给「任务档位」配模型（每个档位指向一个现成 profile 的 id），而不是给
-//! 每个模型贴标签 —— profile 本身保持原样（provider + model + key 一应俱全），
-//! 路由只做「档位 → profile id」的查表。
+//! Users configure models for "task tiers" (each tier points to an existing profile id),
+//! instead of tagging each model — profiles stay as they are (provider + model + key all
+//! intact); routing is just a "tier → profile id" table lookup.
 //!
-//! 三条纪律：
-//! * **fixed 是默认**：文件不存在、损坏、mode 缺省 —— 全部按 fixed 处理，
-//!   行为与没有这个文件时完全一致（失败开放）。
-//! * **查表失败回落 active**：引用了已删除的 profile、mode 写错 —— 不炸轮次，
-//!   在 route_reason 里如实说原因。
-//! * **每轮重读**：与 `schedule.rs` 的 `load_jobs` 同一模式 —— 改文件即生效，
-//!   不需要重启。
+//! Three disciplines:
+//! * **fixed is the default**: missing file, corruption, absent mode — all treated as
+//!   fixed, behavior identical to the file not existing (fail-open).
+//! * **Failed lookup falls back to active**: a deleted profile referenced, a mistyped
+//!   mode — never blows up the turn; route_reason reports the cause honestly.
+//! * **Re-read every turn**: same pattern as `load_jobs` in `schedule.rs` — edits take
+//!   effect immediately, no restart needed.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// 三个任务档位：
-/// * `fast` —— 答一句、改个错字（默认不单独配：落到 chat 那套）；
-/// * `chat` —— 日常对话 + 工具活；
-/// * `reasoning` —— 长推理、大上下文。
+/// The three task tiers:
+/// * `fast` — answer a question, fix a typo (not configured separately by default: falls to chat);
+/// * `chat` — everyday conversation + tool work;
+/// * `reasoning` — long reasoning, large context.
 pub const TIERS: [&str; 3] = ["fast", "chat", "reasoning"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RouteMode {
-    /// 用 active profile，路由完全不介入（默认）。
+    /// Use the active profile; routing does not intervene at all (default).
     #[default]
     #[serde(rename = "fixed")]
     Fixed,
-    /// 每轮按任务特征选档位。
+    /// Pick a tier per turn based on task characteristics.
     #[serde(rename = "auto")]
     Auto,
 }
@@ -37,8 +37,8 @@ pub enum RouteMode {
 pub struct RouteFile {
     #[serde(default)]
     pub mode: RouteMode,
-    /// tier → profile id。缺项按缺省规则补（chat=active、reasoning=chat、
-    /// fast=chat）；引用了不存在的 id 由解析层回落并说明。
+    /// tier → profile id. Missing entries follow the defaults (chat=active,
+    /// reasoning=chat, fast=chat); a nonexistent id is resolved by the parser with a fallback.
     #[serde(default)]
     pub routes: HashMap<String, String>,
 }
@@ -47,8 +47,8 @@ pub fn routes_path(home: &Path) -> PathBuf {
     home.join("model-routes.json")
 }
 
-/// 读路由表。文件不存在、JSON 损坏、字段类型不对 —— 一律回默认（fixed），
-/// 绝不让一个坏配置文件挡住对话。
+/// Read the routing table. Missing file, broken JSON, wrong field types — always return
+/// the default (fixed); a bad config file must never block the conversation.
 pub fn load_routes(home: &Path) -> RouteFile {
     std::fs::read_to_string(routes_path(home))
         .ok()

@@ -1,4 +1,4 @@
-//! 语义记忆：关于用户、关于人、关于项目的长期事实。
+//! Semantic memory: long-term facts about the user, people, and projects.
 
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
@@ -10,20 +10,20 @@ pub struct FactRow {
     pub id: i64,
     pub subject: String,
     pub content: String,
-    /// `user` = 用户直接说的；`consolidation` = 从对话里提炼的。
+    /// `user` = said directly by the user; `consolidation` = distilled from conversation.
     pub source: String,
-    /// 这条事实**关于什么**（`user` / `feedback` / `project` / `reference` /
-    /// `fact`）。分类不出来的落 `fact`，永远不丢。
+    /// What this fact is **about** (`user` / `feedback` / `project` / `reference` /
+    /// `fact`). Anything unclassifiable falls to `fact`, never lost.
     pub kind: String,
     pub created_at: Option<String>,
 }
 
-/// 记忆的类别。`fact` 是兜底：分类不出来、或者老行，都在这里。
+/// The kinds of memory. `fact` is the fallback: unclassifiable or old rows live here.
 pub const KINDS: [&str; 5] = ["fact", "user", "feedback", "project", "reference"];
 
-/// 把外来的类别收敛到已知的那几个 —— 未知的一律当 `fact`。
+/// Collapse foreign kinds into the known ones — unknown always becomes `fact`.
 ///
-/// 收敛放在**写入口**：库里只会有这五种，读的地方不必各自容错。
+/// Collapsing happens at the **write entry**: the DB only holds these five; readers never re-check.
 pub fn normalise_kind(kind: &str) -> &'static str {
     let trimmed = kind.trim().to_lowercase();
     KINDS
@@ -33,8 +33,8 @@ pub fn normalise_kind(kind: &str) -> &'static str {
         .unwrap_or("fact")
 }
 
-/// `all_with_embedding` 的原始行：FactRow 的五个字段 + 向量文本
-/// （`None` = 这一列还是 NULL，虽然查询已经过滤过，留着类型诚实）。
+/// The raw row for `all_with_embedding`: FactRow's five fields + the vector text
+/// (`None` = the column is still NULL; the query already filters it; kept for type honesty).
 type FactWithEmbedding = (
     i64,
     String,
@@ -55,14 +55,14 @@ impl Facts {
         Self { pool }
     }
 
-    /// 写一条事实，返回写进去的完整行（含 id 和 created_at）——
-    /// 这样调用方不必为了拿 id 再查一次。
-    /// 记一条事实。返回 `(那条事实, 是不是新记的)`。
+    /// Write one fact, returning the full stored row (with id and created_at) —
+    /// callers need not query again just for the id.
+    /// Record a fact. Returns `(the fact, whether it is new)`.
     ///
-    /// **重复的不入库**（迁移 0008 立的唯一索引：`(subject, lower(trim(content)))`）：
-    /// 已经有了就返回**已存在的那条**，并把 `false` 交出来让调用方自己决定怎么说。
-    /// 「重复」不是错误 —— 提炼每 N 轮跑一次、模型也常重复说同一件事，把它当错误
-    /// 只会把噪声变成故障。
+    /// **Duplicates never enter the DB** (unique index from migration 0008: `(subject,
+    /// lower(trim(content)))`): if it exists, return **the existing row** with `false`,
+    /// letting the caller decide what to say.
+    /// "Duplicate" is not an error — consolidation reruns and models repeat themselves; it's noise.
     pub async fn add(
         &self,
         subject: &str,
@@ -85,7 +85,7 @@ impl Facts {
         if let Some(row) = inserted {
             return Ok((row, true));
         }
-        // 撞上了已有的那条：读回来交出去（调用方要的是「这条事实」，不是「我新写的」）。
+        // Collided with an existing row: read it back and hand it over (the caller wants the fact).
         let existing = sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
              FROM facts
@@ -99,8 +99,8 @@ impl Facts {
         Ok((existing, false))
     }
 
-    /// 存一条事实的向量（JSON 数组文本）。算不出来就不算 —— 这一列是
-    /// 加分项，不是事实的一部分。
+    /// Store a fact's vector (JSON array text). If it can't be computed, skip — this column
+    /// is a bonus, not part of the fact.
     pub async fn set_embedding(&self, id: i64, vector: &[f32]) -> Result<()> {
         let json = serde_json::to_string(vector)?;
         sqlx::query("UPDATE facts SET embedding = ? WHERE id = ?")
@@ -111,8 +111,8 @@ impl Facts {
         Ok(())
     }
 
-    /// 所有带向量的行。个人规模下全表扫描 + Rust 侧算余弦完全够用
-    /// （见 0005 迁移里的理由），不值得为它引一个向量扩展。
+    /// All rows with vectors. At personal scale a full scan + cosine in Rust is plenty
+    /// (see migration 0005's reasoning); not worth a vector extension.
     pub async fn all_with_embedding(&self) -> Result<Vec<(FactRow, Vec<f32>)>> {
         let rows: Vec<FactWithEmbedding> = sqlx::query_as(
             "SELECT id, subject, content, source, kind, created_at, embedding
@@ -122,7 +122,7 @@ impl Facts {
         .await?;
         let mut out = Vec::new();
         for (id, subject, content, source, kind, created_at, embedding) in rows {
-            // 解析不了的向量当没有：它不该让整次检索失败。
+            // Unparsable vectors count as absent: they must not fail the whole retrieval.
             let Some(vector) = embedding.and_then(|raw| serde_json::from_str(&raw).ok()) else {
                 continue;
             };
@@ -141,7 +141,7 @@ impl Facts {
         Ok(out)
     }
 
-    /// 还没算过向量的事实（`joy memory reindex` 用）。
+    /// Facts without a computed vector yet (used by `joy memory reindex`).
     pub async fn missing_embedding(&self, limit: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
@@ -153,12 +153,12 @@ impl Facts {
         .map_err(Into::into)
     }
 
-    /// 关键词检索。`bm25()` 越小越相关，所以升序取前 `top_k`。
+    /// Keyword search. Lower `bm25()` = more relevant, so take the top `top_k` ascending.
     ///
-    /// 两级：先走 FTS5（trigram），没命中再退回 LIKE 子串扫描 ——
-    /// 后者接住 FTS 切不出三元组的短查询词（中文两字词很常见）。
+    /// Two tiers: FTS5 (trigram) first, falling back to a LIKE substring scan on no hits —
+    /// the latter catches short query terms FTS can't trigram (two-char CJK words are common).
     ///
-    /// 查询串是空的（全是标点）时返回空结果而不是报错 —— 检索门失败开放靠这个。
+    /// An empty query (all punctuation) returns empty results, not errors — the retrieval gate's fail-open depends on it.
     pub async fn search(&self, query: &str, top_k: u32) -> Result<Vec<FactRow>> {
         if let Some(expr) = to_match_expr(query) {
             let hits = sqlx::query_as::<_, FactRow>(
@@ -208,8 +208,8 @@ impl Facts {
         .map_err(Into::into)
     }
 
-    /// 全部事实按主题归拢（MEMORY.md 镜像用）—— 人看的时候，
-    /// 同一主题的事实待在一起才像一份记忆。
+    /// All facts grouped by subject (for the MEMORY.md mirror) — when a human reads,
+    /// facts on the same subject belong together to look like a memory.
     pub async fn all_by_subject(&self, limit: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
@@ -221,7 +221,7 @@ impl Facts {
         .map_err(Into::into)
     }
 
-    /// 忘记某个主题下的全部事实。触发器会同步清掉 FTS 索引。
+    /// Forget all facts under a subject. A trigger keeps the FTS index in sync.
     pub async fn forget_subject(&self, subject: &str) -> Result<u64> {
         let done = sqlx::query("DELETE FROM facts WHERE subject = ?")
             .bind(subject)
@@ -230,8 +230,8 @@ impl Facts {
         Ok(done.rows_affected())
     }
 
-    /// 改一条事实的正文（manage_memory 用）。返回是否真的改了：
-    /// id 不存在就 false，让调用方如实告诉模型。
+    /// Change a fact's content (manage_memory). Returns whether it really changed:
+    /// a missing id is false, so the caller can tell the model honestly.
     pub async fn update(&self, id: i64, content: &str) -> Result<bool> {
         let done = sqlx::query("UPDATE facts SET content = ? WHERE id = ?")
             .bind(content)
@@ -241,7 +241,7 @@ impl Facts {
         Ok(done.rows_affected() > 0)
     }
 
-    /// 按编号删一条事实。触发器会同步清掉 FTS 索引。
+    /// Delete one fact by id. A trigger keeps the FTS index in sync.
     pub async fn delete(&self, id: i64) -> Result<bool> {
         let done = sqlx::query("DELETE FROM facts WHERE id = ?")
             .bind(id)

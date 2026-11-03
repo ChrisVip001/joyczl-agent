@@ -1,4 +1,4 @@
-//! 批准闸门的契约：**默认拒绝、只翻放行表那一关、没人答就是拒绝**。
+//! Approval gate contracts: **deny by default, only the allowlist gate can be asked, no answer means denial**.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,7 +17,7 @@ fn policy(allow: &[&str], approval: bool) -> ExecPolicy {
     }
 }
 
-/// 一个记下问题、按剧本回答的 broker。
+/// A broker that records questions and answers by script.
 struct Fake {
     answer: bool,
     seen: Mutex<Vec<ApprovalRequest>>,
@@ -40,7 +40,7 @@ impl ApprovalBroker for Fake {
     }
 }
 
-/// 没匹配放行表：`never` 是拒绝，`on-request` 是问一句。
+/// No allowlist match: `never` denies, `on-request` asks once.
 #[test]
 fn on_request_turns_a_denial_into_a_question() {
     let deny = vet("echo hi", &policy(&["ls *"], false));
@@ -53,7 +53,7 @@ fn on_request_turns_a_denial_into_a_question() {
     assert!(reason.contains("放行"), "拒因要留给模型看：{reason}");
 }
 
-/// **硬拒名单不可协商**：开了批准也照样拒，连问都不问。
+/// **The hard-deny list is non-negotiable**: approval on or not, it's refused without even asking.
 #[test]
 fn a_hard_denied_command_is_never_negotiable() {
     for command in [
@@ -69,11 +69,11 @@ fn a_hard_denied_command_is_never_negotiable() {
     }
 }
 
-/// 沙箱不可用也是不可协商的（它排在放行表之后、批准之前就返回）。
+/// Sandbox unavailable is also non-negotiable (it returns after the allowlist, before approval).
 #[test]
 fn the_sandbox_gate_is_not_negotiable_either() {
     if sandbox_available() {
-        // 这台机器有沙箱：把命令放行，验证它走到 Allow（这条闸门没事可做）。
+        // This machine has a sandbox: allow the command and verify it reaches Allow (this gate has nothing to do here).
         assert!(matches!(
             vet("echo hi", &policy(&["echo*"], true)),
             Gate::Allow
@@ -87,7 +87,7 @@ fn the_sandbox_gate_is_not_negotiable_either() {
     assert!(why.contains("沙箱"), "{why}");
 }
 
-/// 批准了就跑，拒绝就不跑，而且**拒绝是文本**（工具层永不 Err）。
+/// Approved it runs, denied it doesn't, and **the denial is text** (the tool layer never Errs).
 #[tokio::test]
 async fn approval_decides_whether_the_command_runs() {
     if !sandbox_available() {
@@ -124,8 +124,8 @@ async fn approval_decides_whether_the_command_runs() {
     assert!(!output.contains("nope"), "拒绝就是没跑：{output}");
 }
 
-/// 没有批准通道（子代理、`JOY_APPROVAL=never`、库调用方）：**直接拒绝**，
-/// 而且说清怎么才能有人回答问题。
+/// No approval channel (subagent, `JOY_APPROVAL=never`, library callers): **denied outright**,
+/// and it says how someone could be around to answer.
 #[tokio::test]
 async fn without_a_broker_it_refuses_and_says_why() {
     if !sandbox_available() {

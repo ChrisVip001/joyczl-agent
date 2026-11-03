@@ -5,19 +5,19 @@ import type { SessionSummary } from "./SessionSummary";
 import type { SettingsView } from "./SettingsView";
 
 /**
- * 驾驶舱首屏要的全部东西，一次取齐。
+ * Everything the dashboard's first screen needs, fetched in one shot.
  *
- * 它不是某个 RPC 的应答，而是 `joy dashboard` 那个 HTTP 端点
- * （`GET /api/data`）的载荷。**为什么定义在协议 crate 里**：因为判断标准
- * 只有一条 —— 它跨语言。浏览器那一侧要按它做类型检查，手抄一遍就又会
- * 漂移，而这正是整个工程在消灭的东西。
+ * It is not the response to any RPC but the payload of the `joy dashboard` HTTP
+ * endpoint (`GET /api/data`). **Why it lives in the protocol crate**: the only
+ * criterion is that it crosses languages. The browser side type-checks against it, and hand-copying
+ * it would drift again — exactly what this whole effort exists to eliminate.
  *
- * 字段都直接复用协议里的类型：驾驶舱不做二次建模，它就是这些数据的
- * 一个视图。
+ * Fields reuse protocol types directly: the dashboard does no second modeling —
+ * it is just a view over these data.
  */
 export type DashboardData = {
   /**
-   * ISO 8601，毫秒精度。页面上显示「数据是什么时候的」。
+   * ISO 8601, millisecond precision. The page shows "when is this data from".
    */
   generatedAt: string;
   config: SettingsView;

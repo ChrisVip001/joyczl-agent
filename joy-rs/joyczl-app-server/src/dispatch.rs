@@ -1,8 +1,8 @@
-//! 方法分发：JSON-RPC method → 一句 state 操作 / 一轮 turn。
+//! Method dispatch: JSON-RPC method → one state operation / one turn.
 //!
-//! 每个方法做的事都很少：解析 `*Params` → 调对应的 crate → 装成 `*Response`。
-//! turn 是唯一复杂的那条路径，它的流程在 turn.rs 里 —— 它的通知和应答
-//! 顺序必须由它自己控制，所以不走「返回值」这条路。
+//! Each method does very little: parse `*Params` → call the corresponding crate → wrap into `*Response`.
+//! The turn is the only complex path, and its flow lives in turn.rs — its notification and response
+//! ordering must be controlled by itself, so it does not take the "return value" route.
 
 use joyczl_protocol::{
     codes, methods, ApprovalLogParams, ApprovalRespondParams, ApprovalRespondResponse,
@@ -21,15 +21,15 @@ use serde_json::Value;
 
 use crate::{narrow, turn, EventSink, Server};
 
-/// 一个方法的产出：要么是应答体（由 handle 包装送出），
-/// 要么声明「我自己送」（turn —— 它要在应答之前发完所有通知）。
+/// The product of one method: either a response body (wrapped and sent by handle),
+/// or a declaration "I send it myself" (turn — it must finish all notifications before the response).
 enum Outcome {
     Value(Value),
     SelfSent,
 }
 
-/// 处理一条请求。**永远会有一个应答送出去**：业务错误走 JSON-RPC 的
-/// error 对象，不会让进程退出，也不会让客户端等到超时。
+/// Handle one request. **A response is always sent out**: business errors go through JSON-RPC's
+/// error object; they neither exit the process nor leave the client waiting until timeout.
 pub async fn handle(server: &Server, request: JsonRpcRequest, sink: EventSink) {
     let id = request.id.clone();
     let message = match dispatch(server, &request.method, request.params.as_ref(), &id, &sink).await
@@ -39,7 +39,7 @@ pub async fn handle(server: &Server, request: JsonRpcRequest, sink: EventSink) {
             id,
             result,
         }),
-        Ok(Outcome::SelfSent) => return, // 应答已经发出去了
+        Ok(Outcome::SelfSent) => return, // The response has already been sent
         Err(error) => JsonRpcMessage::Error(JsonRpcError {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id: Some(id),
@@ -57,7 +57,7 @@ async fn dispatch(
     sink: &EventSink,
 ) -> Result<Outcome, ErrorObject> {
     match method {
-        // ---- 记忆 ----------------------------------------------------------
+        // ---- Memory ----------------------------------------------------------
         methods::MEMORY_SEARCH => {
             let p: MemorySearchParams = parse(params, method)?;
             let top_k = p.top_k.unwrap_or(DEFAULT_TOP_K);
@@ -97,7 +97,7 @@ async fn dispatch(
             let p: MemoryListEpisodesParams = parse(params, method)?;
             let limit = p.limit.unwrap_or(EPISODE_LIMIT);
             let rows = server.episodes.recent(limit).await.map_err(internal)?;
-            // 没有游标：recent 就是「最近 N 条」，下一页无从谈起（见协议里的说明）。
+            // No cursor: recent is simply "the most recent N rows"; a next page makes no sense (see the protocol docs).
             respond(MemoryListEpisodesResponse {
                 data: rows.into_iter().map(to_episode).collect(),
                 next_cursor: None,
@@ -130,7 +130,7 @@ async fn dispatch(
             })
         }
 
-        // ---- 会话 ----------------------------------------------------------
+        // ---- Sessions ----------------------------------------------------------
         methods::SESSION_LIST => {
             let p: SessionListParams = parse(params, method)?;
             let limit = p.limit.unwrap_or(DEFAULT_LIMIT) as usize;
@@ -156,8 +156,8 @@ async fn dispatch(
 
         methods::SESSION_NEW => {
             let p: SessionNewParams = parse(params, method)?;
-            // 会话只是 chat_log 上的一个标签，所以「新建」不建任何东西，
-            // 只是发一个新标签。第一条消息写进来时它才真正存在。
+            // A session is just a label on chat_log, so "new" creates nothing,
+            // it only issues a new label. It truly exists once the first message is written into it.
             let session_id = p
                 .session_id
                 .filter(|s| !s.trim().is_empty())
@@ -175,9 +175,9 @@ async fn dispatch(
                 .await
                 .map_err(internal)?;
 
-            // 游标按**取回来的原始行**算，不按过滤后的条数：`to_message` 会
-            // 丢掉不认识的角色，若拿过滤后的长度判断「还有没有下一页」，
-            // 丢掉一行就会让翻页提前到头。
+            // The cursor is computed from the **raw rows fetched**, not the filtered count: `to_message`
+            // drops unrecognized roles; if "is there a next page" were judged from the filtered length,
+            // one dropped row would end pagination one page early.
             let next_cursor = (rows.len() as u32 == limit)
                 .then(|| rows.last().map(|row| row.id.to_string()))
                 .flatten();
@@ -188,7 +188,7 @@ async fn dispatch(
             })
         }
 
-        // ---- 配置 ----------------------------------------------------------
+        // ---- Config ----------------------------------------------------------
         methods::CONFIG_READ => {
             let _p: ConfigReadParams = parse(params, method)?;
             respond(ConfigReadResponse {
@@ -208,11 +208,11 @@ async fn dispatch(
             respond(ConfigWriteResponse { config: view })
         }
 
-        // ---- 模型 ----------------------------------------------------------
-        // ---- 模型配置（只有人能改：模型没有这些能力） -----------------------
+        // ---- Models ----------------------------------------------------------
+        // ---- Model config (only a human can change it: the model has no such capability) -------
         methods::MODEL_PROFILES => {
-            // 无参方法：客户端常顺手传个 {}，而单元结构体收不了 map ——
-            // 这里自己判一下，非空就明确拒绝（而不是报一句看不懂的 serde 错）。
+            // Parameterless method: clients habitually pass {} anyway, and a unit struct cannot take a
+            // map — check here ourselves and reject non-empty input explicitly (instead of an unreadable serde error).
             if let Some(value) = params {
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
@@ -244,7 +244,7 @@ async fn dispatch(
         }
 
         methods::USAGE_SUMMARY => {
-            // 无参方法：客户端常顺手传个 {}（见 model/profiles 的同一段注释）。
+            // Parameterless method: clients habitually pass {} anyway (see the same note under model/profiles).
             if let Some(value) = params {
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
@@ -259,7 +259,7 @@ async fn dispatch(
         }
 
         methods::SCHEDULE_LIST => {
-            // 无参方法：见 model/profiles 的同一段注释。
+            // Parameterless method: see the same note under model/profiles.
             if let Some(value) = params {
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
@@ -274,7 +274,7 @@ async fn dispatch(
         }
 
         methods::APPROVAL_LOG => {
-            // 无参方法：见 model/profiles 的同一段注释。
+            // Parameterless method: see the same note under model/profiles.
             if let Some(value) = params {
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
@@ -290,8 +290,8 @@ async fn dispatch(
 
         methods::MODEL_LIST => {
             let p: ModelListParams = parse(params, method)?;
-            // 目录就是 PROVIDERS 这张表：主模型是 id，flagship / fast 是
-            // 它的两个展示位。没有 cursor —— 目录就 11 行，翻页是无中生有。
+            // The catalog is just the PROVIDERS table: the main model is the id, and flagship / fast are
+            // its two display slots. No cursor — the catalog is 11 rows; pagination would be invention.
             let data = joyczl_provider::PROVIDERS
                 .iter()
                 .filter(|info| p.provider.as_deref().is_none_or(|want| info.id == want))
@@ -309,32 +309,32 @@ async fn dispatch(
             })
         }
 
-        // ---- turn ----------------------------------------------------------
+        // ---- Turn ----------------------------------------------------------
         methods::TURN_START => {
             let p: TurnStartParams = parse(params, method)?;
-            // turn 的应答由 run_turn 自己送 —— 它要在应答之前发完所有通知。
+            // The turn's response is sent by run_turn itself — it must finish all notifications before the response.
             turn::run_turn(server, p, request_id.clone(), sink).await?;
             Ok(Outcome::SelfSent)
         }
 
         methods::TURN_INTERRUPT => {
             let p: TurnInterruptParams = parse(params, method)?;
-            // 拨下取消令牌就立刻应答 —— 真正的收兵（半截回复落库、
-            // turnCompleted 通知）由正在跑的那轮自己完成。
+            // Flip the cancellation token and answer immediately — the real wind-down (persisting the
+            // half-written reply, the turnCompleted notification) is done by the running turn itself.
             let interrupted = server.interrupt_turn(&p.turn_id);
             respond(TurnInterruptResponse { interrupted })
         }
 
         methods::GOAL_SET => {
             let p: GoalSetParams = parse(params, method)?;
-            // 只有人能到这里：模型没有这个工具，也没有别的方法能碰目标表。
+            // Only a human can reach here: the model has no such tool, and no other method touches the goal table.
             respond(server.goal_set(&p.session_id, p.condition.as_deref()))
         }
 
         methods::APPROVAL_RESPOND => {
             let p: ApprovalRespondParams = parse(params, method)?;
-            // 太晚送达（已超时、那一轮已经结束）不是错误 —— 如实回一个
-            // accepted: false，客户端才知道「我的回答没人听」。
+            // Delivered too late (timed out, that turn already ended) is not an error — answer an honest
+            // accepted: false, so the client knows "nobody heard my answer".
             let accepted =
                 server.answer_approval(&p.turn_id, &p.request_id, p.approved, p.remember);
             respond(ApprovalRespondResponse { accepted })
@@ -348,24 +348,24 @@ async fn dispatch(
     }
 }
 
-/// 把 `*Response` 装进 JSON-RPC 应答。
+/// Wrap a `*Response` into a JSON-RPC response.
 fn respond<T: serde::Serialize>(value: T) -> Result<Outcome, ErrorObject> {
     let encoded = serde_json::to_value(value).map_err(internal)?;
     Ok(Outcome::Value(encoded))
 }
 
-// ---- 参数与结果 ------------------------------------------------------------
+// ---- Params and results ------------------------------------------------------------
 
-/// 情景记忆默认返回的条数：比语义记忆少，因为「想起最近发生了什么」
-/// 不需要很多条，多了反而稀释上下文。
+/// Default number of episodic memories returned: fewer than semantic memory, because "recall what
+/// happened recently" does not need many items — more would dilute the context.
 const EPISODE_HITS: u32 = 3;
-/// 列情景记忆的默认条数。跟 `EPISODE_HITS` 不同：那个是「塞进 prompt 的
-/// 检索命中」，多了会稀释上下文；这个是给人看的列表，少了才奇怪。
+/// Default number of rows for listing episodic memory. Different from `EPISODE_HITS`: that one is
+/// "retrieval hits stuffed into the prompt", where more dilutes context; this is a list for humans, where fewer would be odd.
 const EPISODE_LIMIT: u32 = 20;
 const DEFAULT_TOP_K: u32 = 4;
 const DEFAULT_LIMIT: u32 = 50;
 
-/// 没传 params 时按 `{}` 解析，这样全是 Option 的 `*Params` 能走 Default。
+/// When params is absent, parse as `{}` so all-Option `*Params` can take the Default path.
 fn parse<T: DeserializeOwned>(params: Option<&Value>, method: &str) -> Result<T, ErrorObject> {
     let value = params.cloned().unwrap_or_else(|| serde_json::json!({}));
     serde_json::from_value(value).map_err(|e| ErrorObject {
@@ -391,7 +391,7 @@ fn new_session_id() -> String {
     format!("s{millis}")
 }
 
-// ---- 存储行 → 协议类型 -----------------------------------------------------
+// ---- Storage rows → protocol types -----------------------------------------------------
 
 fn to_fact(row: joyczl_state::FactRow) -> joyczl_protocol::Fact {
     joyczl_protocol::Fact {
@@ -423,10 +423,10 @@ fn to_session(row: joyczl_state::SessionRow) -> joyczl_protocol::SessionSummary 
     }
 }
 
-/// `chat_log` 的一行 → 协议里的一条消息。
+/// One row of `chat_log` → one protocol message.
 ///
-/// 返回 `Option`：`MessageRole` 是个闭集，认不出来的角色**不往协议里搬**
-/// （硬塞一个值进去就得撒谎，前端那个穷尽的 `switch` 也就白写了）。
+/// Returns an `Option`: `MessageRole` is a closed set; roles it cannot recognize are **not carried
+/// into the protocol** (forcing a value in would be a lie, and would waste the frontend's exhaustive `switch`).
 fn to_message(row: joyczl_state::MessageRow) -> Option<joyczl_protocol::Message> {
     let role = match row.role.as_str() {
         "user" => MessageRole::User,
@@ -438,8 +438,8 @@ fn to_message(row: joyczl_state::MessageRow) -> Option<joyczl_protocol::Message>
         role,
         content: row.content,
         at: iso(row.at),
-        // 解不出来就当没有：这一列是遥测，形状将来变了、或者某行是手写的
-        // 脏数据，都不该让整页历史读不出来。
+        // If it cannot be parsed, treat it as absent: this column is telemetry; whether the shape changed
+        // later or a row holds hand-written dirty data, none of it should make the whole history unreadable.
         meta: row
             .meta
             .as_deref()
@@ -447,18 +447,18 @@ fn to_message(row: joyczl_state::MessageRow) -> Option<joyczl_protocol::Message>
     })
 }
 
-// ---- 时间 ------------------------------------------------------------------
+// ---- Time ------------------------------------------------------------------
 
-/// SQLite 的 `datetime('now')` → 协议要的 ISO 8601。
+/// SQLite's `datetime('now')` → the ISO 8601 the protocol wants.
 ///
-/// 库里存的是 `2026-09-19 16:46:49`：UTC，但没有时区标记，也不是 ISO 的 `T`
-/// 分隔。浏览器拿到它时，`new Date("2026-09-19 16:46:49")` 会当成**本地时间**
-/// —— 东八区就整整偏 8 小时。所以在出口这儿补上 `Z`，让它变成一个没有歧义的
-/// 时刻。**转换只做在这一处**：库里存的原样不动，出去的一律是 ISO。
+/// The db stores `2026-09-19 16:46:49`: UTC, but without a timezone marker and not ISO's `T`
+/// separator. When a browser gets it, `new Date("2026-09-19 16:46:49")` is treated as **local time** —
+/// in UTC+8 a full 8-hour shift. So `Z` is appended at this outlet, making it an unambiguous instant.
+/// **The conversion happens only here**: what is stored stays untouched; everything going out is ISO.
 ///
-/// `datetime('now')` 本身就是 UTC，所以补 `Z` 是对的，不是猜的。
+/// `datetime('now')` is itself UTC, so appending `Z` is correct, not a guess.
 ///
-/// 认不出来就原样返回 —— 这只是一层格式化，不该有能力让整个方法报错。
+/// Unrecognizable input is returned as-is — only a formatting layer; it must not be able to make the whole method error out.
 fn iso(at: String) -> String {
     chrono::NaiveDateTime::parse_from_str(&at, "%Y-%m-%d %H:%M:%S")
         .map(|naive| {
@@ -469,7 +469,7 @@ fn iso(at: String) -> String {
         .unwrap_or(at)
 }
 
-/// 见 `iso`。这几个时间列在库里是可空的。
+/// See `iso`. These time columns are nullable in the db.
 fn iso_opt(at: Option<String>) -> Option<String> {
     at.map(iso)
 }

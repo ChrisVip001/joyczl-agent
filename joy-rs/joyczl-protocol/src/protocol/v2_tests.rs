@@ -1,8 +1,8 @@
-//! v2 协议的 wire format 断言。
+//! Wire-format assertions for the v2 protocol.
 //!
-//! 这些是**普通单测**（不带 `#[ignore]`），`cargo test` 就会跑。
-//! 生成物对不对由 export_tests 管，这里管的是「序列化出来的字节长什么样」——
-//! 也就是前端和 Python SDK 实际会收到的东西。
+//! These are **ordinary unit tests** (no `#[ignore]`); `cargo test` runs them.
+//! export_tests owns artifact correctness; this file owns "what the serialized bytes look like" —
+//! i.e. what the frontend and the Python SDK actually receive.
 
 use super::v2::*;
 
@@ -24,7 +24,7 @@ fn notification_is_tagged_with_type() {
 
 #[test]
 fn every_notification_variant_has_a_stable_tag() {
-    // 判别式一旦变了，所有前端的 switch 都会静默掉进 default 分支。
+    // If the discriminant ever changes, every frontend switch silently falls into its default branch.
     let cases: Vec<(ServerNotification, &str)> = vec![
         (
             ServerNotification::TurnStarted(TurnStartedNotification {
@@ -83,7 +83,7 @@ fn params_are_camel_case_on_the_wire() {
         cwd: None,
     };
     let v: serde_json::Value = serde_json::to_value(&p).expect("序列化");
-    // Option 在 *Params 上也会出现（值为 null），这样前端能区分「没传」和「空」。
+    // Option fields also appear on *Params (as null), so the frontend can tell "not sent" from "empty".
     assert!(v.as_object().expect("object").contains_key("sessionId"));
     assert!(v["sessionId"].is_null());
     assert_eq!(v["message"], "hi");
@@ -123,7 +123,7 @@ fn message_role_and_page_cursor_are_camel_case_on_the_wire() {
         assert_eq!(v, wire);
     }
 
-    // 历史那一路的载荷：`sessionId` + 游标。
+    // The history-path payload: `sessionId` + cursor.
     let p = SessionMessagesParams {
         session_id: "default".into(),
         cursor: Some("42".into()),
@@ -144,7 +144,7 @@ fn message_role_and_page_cursor_are_camel_case_on_the_wire() {
 
 #[test]
 fn settings_patch_default_leaves_everything_unset() {
-    // 全 null 的 patch 写进去必须什么都不改。
+    // An all-null patch written in must change nothing.
     let v: serde_json::Value = serde_json::to_value(SettingsPatch::default()).expect("序列化");
     let obj = v.as_object().expect("object");
     assert!(

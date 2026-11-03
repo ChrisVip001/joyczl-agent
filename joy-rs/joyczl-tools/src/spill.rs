@@ -1,35 +1,35 @@
-//! 超长文本的**落盘**与**能放得下的预览**。
+//! **Spilling** oversized text to disk, plus **a preview that actually fits**.
 //!
-//! 两处调用方，同一套规矩：`exec.rs`（命令输出超 8000 字符）与
-//! `joyczl-loop` 的轮内工具结果预算（一批结果总量超阈值）。
+//! Two callers, one set of rules: `exec.rs` (command output over 8000 chars) and
+//! the in-turn tool-result budget in `joyczl-loop` (a batch over the threshold).
 //!
-//! 三条不变式：
+//! Three invariants:
 //!
-//! 1. **预览必须真的放得下**：先按最坏情况把省略说明的字数预留进去，再算
-//!    head/tail 的预算 —— 替换之后仍然超限，这个桩就没有意义。
-//! 2. **只切完整行**：半个行（尤其半句 JSON、半条日志）比少一行更难读，模型
-//!    还会以为那就是全部。首行本身就超预算时如实说明，不硬塞。
-//! 3. **落盘失败不影响结果**：桩照样成立（只是没有路径可回查），绝不因为写不进
-//!    磁盘就把一次成功的调用变成错误。
+//! 1. **The preview must really fit**: reserve the worst-case length of the omission notice
+//!    first, then budget head/tail — if it still overflows after the swap, the stub is pointless.
+//! 2. **Cut at whole lines only**: half a line (half a JSON, half a log entry) reads worse
+//!    than one fewer line, and the model may take it as everything — say so honestly then.
+//! 3. **A failed spill doesn't affect the result**: the stub still stands (just no path to
+//!    look up); never turn a successful call into an error because the write failed.
 
 use std::path::Path;
 
-/// 落盘后的桩：替换文本 + 完整原文的位置。
+/// The stub after spilling: replacement text + where the full original lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stub {
-    /// 替换后的文本，**字符数不超过调用方给的预算**。
+    /// The replacement text, **at most as many chars as the caller's budget**.
     pub text: String,
-    /// 完整原文相对 home 的路径（落盘失败或没给目录时为 `None`）。
+    /// Path of the full original relative to home (`None` if spilling failed or no dir given).
     pub path: Option<String>,
-    /// 省掉了多少字符、多少行（给测试与日志看）。
+    /// How many chars and lines were omitted (for tests and logs).
     pub omitted_chars: usize,
     pub omitted_lines: usize,
 }
 
-/// 把完整原文写到 `<dir>/<日期>/<tag>-<时刻>-<pid>.txt`，返回**相对 home 的路径**。
+/// Writes the full original to `<dir>/<date>/<tag>-<time>-<pid>.txt`; returns the **path relative to home**.
 ///
-/// 相对路径好读，也不把用户的绝对路径泄漏进上下文。任何一步失败都返回 `None`
-/// —— 调用方按「没落盘」继续。
+/// A relative path reads well and keeps the user's absolute paths out of the context. Any
+/// failing step returns `None` — the caller continues as "nothing was spilled".
 pub fn spill_text(dir: &Path, text: &str, tag: &str) -> Option<String> {
     let now = chrono::Local::now();
     let day = now.format("%Y%m%d").to_string();
@@ -38,11 +38,11 @@ pub fn spill_text(dir: &Path, text: &str, tag: &str) -> Option<String> {
     std::fs::create_dir_all(&folder).ok()?;
     let file = folder.join(format!("{tag}-{stamp}-{}.txt", std::process::id()));
     std::fs::write(&file, text).ok()?;
-    // 相对 home（spill 的父目录）：读起来就是「去 spill/… 看」。
+    // Relative to home (spill's parent): reads as "go look under spill/…".
     //
-    // 分隔符统一成 `/`：这个字符串是**写给模型看**的，而 Windows 上 `display()`
-    // 给的是反斜杠 —— 同一句话在两种平台长得不一样，测试也就跟着分成两套。
-    // 统一的 `/` 在 Windows 上照样能 join 回来（系统 API 两种都认）。
+    // Separator normalized to `/`: this string is **written for the model**, and on Windows
+    // `display()` gives backslashes — the same sentence looks different per platform, and
+    // tests fork into two sets. A unified `/` still joins back on Windows (both are accepted).
     let relative = dir
         .parent()
         .and_then(|home| file.strip_prefix(home).ok())
@@ -50,27 +50,27 @@ pub fn spill_text(dir: &Path, text: &str, tag: &str) -> Option<String> {
     Some(relative.display().to_string().replace('\\', "/"))
 }
 
-/// 给超长文本做一个放得下的桩。文本本来就不超预算时返回 `None`。
+/// Build a fitting stub for oversized text. Returns `None` if the text is already within budget.
 ///
-/// `dir` 为 `None` 时不落盘（桩里也就不会出现路径）。
+/// With `dir = None` nothing is spilled (so no path appears in the stub).
 pub fn stub(dir: Option<&Path>, text: &str, budget_chars: usize, tag: &str) -> Option<Stub> {
     let total = text.chars().count();
     if total <= budget_chars || budget_chars == 0 {
         return None;
     }
 
-    // 先落盘**完整原文**：这一步必须在切之前（顺序反了存下去的会是切过的那份）。
+    // Spill the **full original** first — before cutting (reversed order would save the cut copy).
     let path = dir.and_then(|dir| spill_text(dir, text, tag));
 
     let lines: Vec<&str> = text.lines().collect();
     let total_lines = lines.len();
 
-    // 省略说明按最坏情况定长预留：先算一个上界（行数、字符数都按全量估计），
-    // 再据此算 head/tail 预算。说明短一点没关系，**总长绝不超预算**。
+    // Reserve the omission notice at a worst-case fixed length: compute an upper bound first
+    // (lines and chars at full size), then budget head/tail. Shorter is fine — **never over budget**.
     let notice = notice_for(total_lines, total, path.as_deref());
     let notice_len = notice.chars().count();
     if notice_len + 2 >= budget_chars {
-        // 预算小到连说明都放不下：只留说明，并如实说这是全部。
+        // Budget too small even for the notice: keep just the notice, saying honestly this is all.
         let mut text = notice;
         text.truncate_chars(budget_chars);
         return Some(Stub {
@@ -81,7 +81,7 @@ pub fn stub(dir: Option<&Path>, text: &str, budget_chars: usize, tag: &str) -> O
         });
     }
 
-    let remaining = budget_chars - notice_len - 2; // 两个换行
+    let remaining = budget_chars - notice_len - 2; // two newlines
     let head_budget = remaining.div_ceil(2);
     let tail_budget = remaining / 2;
 
@@ -116,25 +116,25 @@ pub fn stub(dir: Option<&Path>, text: &str, budget_chars: usize, tag: &str) -> O
     })
 }
 
-/// 省略说明。带路径与不带路径两种措辞 —— 后者绝不能出现「完整输出在」这种
-/// 指向不存在文件的说法。
+/// The omission notice. Two wordings, with and without a path — the latter must never say
+/// "full output at" pointing at a file that doesn't exist.
 fn notice_for(omitted_lines: usize, total_chars: usize, path: Option<&str>) -> String {
     match path {
         Some(path) => format!(
             "…（结果共 {total_chars} 字符，已截断，省略了 {omitted_lines} 行；完整输出在 {path}）"
         ),
-        // 没落盘就**不提路径** —— 「完整输出在 …」而文件不存在，比不写更坏。
+        // No spill means **no path mention** — "full output at …" without the file is worse than silence.
         None => format!("…（结果共 {total_chars} 字符，已截断，省略了 {omitted_lines} 行）"),
     }
 }
 
-/// 从开头取完整行，直到快要超预算。
+/// Take whole lines from the start, until the budget is nearly exceeded.
 fn take_head_lines(lines: &[&str], budget: usize) -> (String, usize, usize) {
     let mut out = String::new();
     let mut used = 0usize;
     let mut taken = 0usize;
     for line in lines {
-        let cost = line.chars().count() + 1; // 换行也算
+        let cost = line.chars().count() + 1; // the newline counts too
         if used + cost > budget {
             break;
         }
@@ -145,11 +145,11 @@ fn take_head_lines(lines: &[&str], budget: usize) -> (String, usize, usize) {
         used += cost;
         taken += 1;
     }
-    // 一行都没放下：如实交白卷，让调用方只留省略说明。
+    // Not a single line fit: return an honest blank so the caller keeps only the omission notice.
     (out, taken, used)
 }
 
-/// 从末尾取完整行，直到快要超预算。
+/// Take whole lines from the end, until the budget is nearly exceeded.
 fn take_tail_lines(lines: &[&str], budget: usize) -> (String, usize, usize) {
     let mut picked: Vec<&str> = Vec::new();
     let mut used = 0usize;
@@ -166,7 +166,7 @@ fn take_tail_lines(lines: &[&str], budget: usize) -> (String, usize, usize) {
     (picked.join("\n"), taken, used)
 }
 
-/// 按字符数截断（只在预算小到连说明都放不下时用）。
+/// Truncate by char count (only when the budget can't even fit the notice).
 trait TruncateChars {
     fn truncate_chars(&mut self, max: usize);
 }

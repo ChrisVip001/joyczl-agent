@@ -1,7 +1,7 @@
 import { JoyBridge } from "./bridge.ts";
 import { WeChatAdapter } from "./wechat.ts";
 
-/** 少一个就跑不起来的那几个。缺了就说清去哪儿拿，别只报个变量名。 */
+/** The few without which nothing starts. When one is missing, say where to get it, not just the name. */
 function required(name: string, hint: string): string {
   const value = process.env[name]?.trim();
   if (value === undefined || value === "") {
@@ -30,8 +30,8 @@ const allow = (process.env["WECHAT_ALLOW"] ?? "")
   .filter((entry) => entry !== "");
 
 if (allow.length === 0) {
-  // 不设是能用的，但那是「让所有关注者都能使唤它」的意思 —— 而花的是你的
-  // 模型额度。这种默认值必须自己说出来，不能等出事才发现。
+  // Usable unset, but that means "every follower can command it" — and it spends your model
+  // quota. Such a default must announce itself, not wait for an incident.
   console.error(
     "注意：没设 WECHAT_ALLOW，关注这个号的人谁都能用，消耗的是你的模型额度。\n" +
       "      只给自己用的话，填你的 OpenID（在公众平台的用户列表里能看到）。",
@@ -39,8 +39,8 @@ if (allow.length === 0) {
 }
 
 if (appSecret === undefined) {
-  // 这条不是「可选功能没开」，而是「一半的消息会没有下文」—— 得说清楚，
-  // 不然现象看着像 Joy 不回话。
+  // This isn't "an optional feature is off" but "half the messages will have no reply" — it must
+  // be spelled out, or the symptom looks like Joy refusing to answer.
   console.error(
     "注意：没设 WECHAT_APP_SECRET。微信只给 5 秒，超了它就把用户那句丢掉，\n" +
       "      而 Joy 跑一轮（尤其带工具调用）通常远超 5 秒 —— 所以没有它的话，\n" +
@@ -76,9 +76,9 @@ const adapter = new WeChatAdapter(
   async (conversation, text) => (await bridge.ask(conversation, text)).reply,
 );
 
-// Ctrl-C 是关这个进程的正常方式，不是异常退出：先停掉服务器（微信会在
-// 下一次请求上收到连接被拒，这正是我们希望它知道的），再关 app-server 的
-// stdin —— 它会写完排着的帧再退。
+// Ctrl-C is the normal way to stop this process, not an abnormal exit: stop the server first
+// (WeChat gets connection refused on its next request — exactly what we want it to learn), then
+// close app-server's stdin — it finishes writing queued frames and exits.
 const shutdown = (): void => {
   adapter.stop();
   bridge.close();

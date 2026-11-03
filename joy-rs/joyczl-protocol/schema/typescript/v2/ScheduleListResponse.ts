@@ -3,7 +3,7 @@ import type { ScheduleStateRow } from "./ScheduleStateRow";
 
 export type ScheduleListResponse = {
   /**
-   * 按名字排序的全部任务；一个都没登记过为空数组。
+   * All jobs sorted by name; an empty array when none was ever registered.
    */
   jobs: Array<ScheduleStateRow>;
 };

@@ -1,31 +1,31 @@
-//! 原始对话日志，以及「会话」这个轻量概念。
+//! The raw conversation log, and the lightweight concept of a "session".
 //!
-//! 会话不是一张表，只是 chat_log 上的一个 `session_id` 标签。所以「新建会话」
-//! 不建任何东西，换一个标签就行；而 consolidation 仍然能跨会话读到所有未提炼的行。
+//! A session is not a table, just a `session_id` tag on chat_log. So "creating a session"
+//! creates nothing — switching tags is enough; consolidation still reads un-distilled rows.
 
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
 
-/// chat_log 的一行。会话历史的本体。
+/// One row of chat_log. The body of session history.
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct MessageRow {
-    /// 行号。**也是翻页的游标** —— 比时间戳可靠：同一轮的两行是同一秒写进去的。
+    /// Row number. **Also the paging cursor** — timestamps lie: one turn's two rows share a second.
     pub id: i64,
     pub role: String,
     pub content: String,
-    /// `created_at` 的原样：SQLite 的 `datetime('now')`，UTC，空格分隔。
-    /// 转成协议要的 ISO 8601 是出口那边的事（见 app-server 里的 `iso`）——
-    /// 这一层只管把库里存的东西原样交出来。
+    /// `created_at` as-is: SQLite's `datetime('now')`, UTC, space-separated.
+    /// Converting to the protocol's ISO 8601 is the exit side's job (see `iso` in
+    /// app-server) — this layer only hands over what the DB stores, untouched.
     pub at: String,
-    /// 这一轮的遥测 JSON，只有 assistant 行上有。也原样带出去：
-    /// 它该被解析成什么形状，是协议层的事。
+    /// This turn's telemetry JSON, only on assistant rows. Also passed out as-is: what
+    /// shape it should be parsed into is the protocol layer's business.
     pub meta: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
     pub id: String,
-    /// 标题 = 该会话第一条用户消息。
+    /// Title = the session's first user message.
     pub title: String,
     pub messages: i64,
     pub started_at: Option<String>,
@@ -42,8 +42,8 @@ impl Chat {
         Self { pool }
     }
 
-    /// 记一轮对话。`meta` 是这一轮的遥测 JSON（gate/graph/iterations/…），
-    /// 只挂在 assistant 行上 —— 重开一个旧会话时还能看到当时是哪个脑子答的。
+    /// Record one exchange. `meta` is the turn's telemetry JSON (gate/graph/iterations/…),
+    /// hung only on the assistant row — reopening an old session still shows which brain answered.
     pub async fn append_exchange(
         &self,
         user: &str,
@@ -73,11 +73,11 @@ impl Chat {
         Ok(())
     }
 
-    /// 待提炼的行（按时间顺序）。consolidation 的原料与阈值判断用。
+    /// Rows pending distillation (in time order). Consolidation's input and threshold check.
     pub async fn unconsolidated(&self) -> Result<Vec<(i64, String, String)>> {
         let rows = sqlx::query_as::<_, (i64, String, String)>(
-            // 只取**到点了**的行：提炼失败的那批会带着 `consolidation_next_at`
-            // 排到未来，时间没到就不该再被捞出来（否则每轮都白烧一次模型调用）。
+            // Only rows that are **due**: a failed batch carries a future `consolidation_next_at`
+            // and must not be re-fetched early (else every turn burns a model call for nothing).
             "SELECT id, role, content FROM chat_log
              WHERE consolidated = 0
                AND (consolidation_next_at IS NULL OR consolidation_next_at <= datetime('now'))
@@ -88,19 +88,19 @@ impl Chat {
         Ok(rows)
     }
 
-    /// **认领**一批待提炼的行：一条 SQL 完成「选中 + 标记」，返回自己认到的那批。
+    /// **Claim** a batch of pending rows: one SQL does "select + mark", returning the claimed batch.
     ///
-    /// 为什么不是「读一批 → 提炼 → 再标记」：那个顺序里，两个并发 turn（REPL
-    /// 一轮 + dashboard 一轮、或 schedule 与用户同时触发）会**同时**看到「到期」，
-    /// 于是同一批日志被提炼两遍 —— 白烧一次模型调用、`consolidation_tries`
-    /// 多加一次。事实倒是不会重复（写入口有去重闸，那是另一道、更慢的防线）。
+    /// Why not "read a batch → distill → then mark": in that order, two concurrent turns
+    /// (a REPL turn + a dashboard turn, or schedule and user firing together) both see
+    /// "due" **at the same time**, and the same logs get distilled twice — a wasted model
+    /// call and an extra `consolidation_tries` (dedup at the write entry is a slower gate).
     ///
-    /// 认领是原子的：输的那个拿到空列表，于是它**连模型都不调**。代价是
-    /// 「先标记后处理」，所以每条失败路径都必须 `mark_consolidation_failed`
-    /// 把认领还回去。
+    /// Claiming is atomic: the loser gets an empty list and **never calls the model**. The
+    /// cost is "mark first, process after", so every failure path must
+    /// `mark_consolidation_failed` to hand the claim back.
     pub async fn claim_unconsolidated(&self) -> Result<Vec<(i64, String, String)>> {
-        // 与 `unconsolidated` 同一个 WHERE（到点才捞），只是把 SELECT 换成
-        // UPDATE … RETURNING：标记与取回之间没有空档。
+        // Same WHERE as `unconsolidated` (only due rows), just SELECT swapped for
+        // UPDATE … RETURNING: no gap between marking and taking.
         let rows = sqlx::query_as::<_, (i64, String, String)>(
             "UPDATE chat_log SET consolidated = 1
              WHERE id IN (
@@ -116,12 +116,12 @@ impl Chat {
         Ok(rows)
     }
 
-    /// 提炼失败：**把认领还回去**，并按指数退避排到未来。
+    /// Distillation failed: **hand the claim back** and schedule into the future with exponential backoff.
     ///
-    /// 认领（`claim_unconsolidated`）是先标记后处理的，所以失败时必须归零
-    /// `consolidated` —— 否则这批日志被标成「已提炼」却什么都没写进去，那是
-    /// 真的丢数据。1 分钟起、每次翻倍、上限 1 小时：一条永远提炼不出来的
-    /// 记录不该让每一轮都重试它，但也不该被彻底放弃（模型可能只是这会儿抖动）。
+    /// Claiming marks first and processes after, so on failure `consolidated` must be reset
+    /// to zero — otherwise the logs are marked "distilled" while nothing was written: real
+    /// data loss. 1 min start, doubling, 1 hour cap: a never-distillable record must not be
+    /// retried every turn, nor abandoned (the model may just be flaky right now).
     pub async fn mark_consolidation_failed(&self, ids: &[i64]) -> Result<()> {
         for id in ids {
             let tries: i64 =
@@ -146,11 +146,11 @@ impl Chat {
         Ok(())
     }
 
-    // （「标记为已提炼」不再是单独一步：`claim_unconsolidated` 在认领的那一刻
-    //  就已经标记了。从前那个 `mark_consolidated` 随之删除 —— 留着它就是给
-    //  「已经标过了再标一遍」留一扇门。）
+    // ("Mark as consolidated" is no longer a separate step: `claim_unconsolidated` marked
+    //  them at claim time. The old `mark_consolidated` was deleted with it — keeping it
+    //  would leave a door open for "mark it again after it's already marked".)
 
-    /// 一个旧会话的 (用户, 助手) 轮次，按顺序 —— 切回旧会话时用来重建工作记忆。
+    /// An old session's (user, assistant) turns in order — rebuilds working memory on switch-back.
     pub async fn session_history(&self, session_id: &str) -> Result<Vec<(String, String)>> {
         let rows = sqlx::query_as::<_, (String, String)>(
             "SELECT role, content FROM chat_log WHERE session_id = ? ORDER BY id",
@@ -175,10 +175,10 @@ impl Chat {
         Ok(pairs)
     }
 
-    /// 记一次「实测 × 估算」的配对（用 provider 回报的 usage 校准本地估算）。
+    /// Record one "measured × estimated" pair (calibrating local estimates with provider usage).
     ///
-    /// 两个数都不为正时什么都不记 —— 图路径（不走 loop）就是这种情况，
-    /// 拿 0 去算比值会得出一个荒唐的倍率。
+    /// When neither number is positive, record nothing — the graph path (not going through
+    /// loop) is exactly that; a ratio computed from 0 would be an absurd multiple.
     pub async fn observe_context(
         &self,
         session_id: &str,
@@ -204,10 +204,10 @@ impl Chat {
         Ok(())
     }
 
-    /// 最近一次的实测/估算比值，夹在 `0.5..=2.0`。
+    /// The latest measured/estimated ratio, clamped to `0.5..=2.0`.
     ///
-    /// 夹住是刻意的：一次异常请求（比如 1 token 的探针）能把比值推到天上，
-    /// 而预算被那样一个数带偏，比不校准更糟。没有记录时返回 `None`（不校准）。
+    /// Clamping is deliberate: one anomalous request (say, a 1-token probe) can push the
+    /// ratio sky-high — a budget skewed by that is worse than no calibration. No record → `None`.
     pub async fn context_factor(&self, session_id: &str) -> Result<Option<f64>> {
         let row = sqlx::query_as::<_, (i64, i64)>(
             "SELECT observed_input_tokens, estimated_input_tokens
@@ -224,10 +224,10 @@ impl Chat {
         }))
     }
 
-    /// 这个会话的滚动摘要：(覆盖了多少轮, 摘要)。
+    /// This session's rolling summary: (how many turns covered, the summary).
     ///
-    /// 没有摘要、或表里那行读不出来，都当「还没有」—— 摘要只是省 token 的
-    /// 手段，坏了顶多让 prompt 多塞几轮原文，不该让一轮对话起不来。
+    /// No summary, or an unreadable row, both count as "none yet" — the summary is only a
+    /// token-saving device; broken, it at most pads the prompt with raw turns.
     pub async fn load_rollup(&self, session_id: &str) -> Result<Option<(i32, String)>> {
         let row = sqlx::query_as::<_, (i64, String)>(
             "SELECT covered_turns, summary FROM context_rollups WHERE session_id = ?",
@@ -238,14 +238,14 @@ impl Chat {
         Ok(row.map(|(covered, summary)| (covered as i32, summary)))
     }
 
-    /// 覆盖滚动摘要。同一会话一行，**只往前滚**。
+    /// Overwrite the rolling summary. One row per session, **only rolled forward**.
     ///
-    /// 返回「这次写进去了吗」。`false` = 被单调守卫挡下：库里已经有一份
-    /// `covered_turns` 更大（也就是更新）的摘要，于是这一份被丢弃。
+    /// Returns "did this write land". `false` = blocked by the monotonic guard: the DB
+    /// already holds a summary with a larger (i.e. newer) `covered_turns`; this one is dropped.
     ///
-    /// 为什么需要守卫：压缩在两个并发 turn 里可能同时发生（同一会话没有串行
-    /// 保护，见 docs/limitations.md），后写的那个不一定更新 —— 没有守卫时，
-    /// 用户会拿到一份**更旧**的摘要，而且界面毫无异常。
+    /// Why the guard: compaction can happen in two concurrent turns at once (no
+    /// serialization per session, see docs/limitations.md), and the later writer doesn't
+    /// necessarily win — without it, users would get an **older** summary, no anomaly shown.
     pub async fn save_rollup(
         &self,
         session_id: &str,
@@ -253,9 +253,9 @@ impl Chat {
         summary: &str,
     ) -> Result<bool> {
         let result = sqlx::query(
-            // `WHERE excluded.covered_turns > context_rollups.covered_turns`：
-            // 只接受更新的。冲突行上这个条件不成立时，DO UPDATE 什么都不做
-            // （SQLite 的既定语义），于是 rows_affected() = 0。
+            // `WHERE excluded.covered_turns > context_rollups.covered_turns`: accept only
+            // newer ones. When that condition fails on the conflict row, DO UPDATE does
+            // nothing (SQLite's defined semantics), so rows_affected() = 0.
             "INSERT INTO context_rollups (session_id, covered_turns, summary, updated_at)
              VALUES (?, ?, ?, datetime('now'))
              ON CONFLICT(session_id) DO UPDATE SET
@@ -272,15 +272,15 @@ impl Chat {
         Ok(result.rows_affected() > 0)
     }
 
-    /// 一个会话的消息，**最新的在最前**。
+    /// One session's messages, **newest first**.
     ///
-    /// 方向跟对话本身相反是有原因的：这个方法要么拿「最近的一页」，
-    /// 要么拿「比某条更早的一页」—— 两种用法都是从新往旧走。
-    /// 排给人在屏幕上看的那一份（自下而上）是展示层的事。
+    /// The direction is the reverse of the conversation itself, on purpose: this method
+    /// either fetches "the most recent page" or "the page earlier than some id" — both
+    /// walk from new to old; arranging it for humans on screen is the display layer's job.
     ///
-    /// `before` 是「只取比这条 id 更早的」，不给就是最新的那一页。
-    /// 默认给 `i64::MAX` 而不是拼两句 SQL：`id < ?` 一个表达式就够，
-    /// 也不用引入 `(? IS NULL OR ...)` 那种要 bind 两遍的写法。
+    /// `before` means "only rows earlier than this id"; absent = the newest page.
+    /// Defaulting to `i64::MAX` instead of two SQL strings: `id < ?` is one expression,
+    /// avoiding the `(? IS NULL OR ...)` shape that binds twice.
     pub async fn messages(
         &self,
         session_id: &str,
@@ -302,7 +302,7 @@ impl Chat {
         .map_err(Into::into)
     }
 
-    /// 所有会话，最近有消息的排在最前。
+    /// All sessions, the most recently messaged first.
     pub async fn sessions(&self) -> Result<Vec<SessionRow>> {
         #[derive(sqlx::FromRow)]
         struct Raw {

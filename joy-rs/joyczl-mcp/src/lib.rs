@@ -1,10 +1,10 @@
-//! MCP 连接器 —— 把任何 Model Context Protocol 服务器插成 Joy 自己的工具。
+//! MCP connector — plug any Model Context Protocol server in as a Joy tool.
 //!
-//! loop 与 MCP 同在一个 async 运行时，没有跨运行时的桥接问题：工具
-//! handler 返回的就是 future，所以这里就是「连上、
-//! 列工具、调用时把 JSON 递过去」。
+//! loop and MCP live in the same async runtime; there is no cross-runtime bridge problem:
+//! a tool handler returns a future, so this is just "connect, list tools, pass the JSON
+//! through on call".
 //!
-//! 配置：`<home>/mcp.json`，两种传输按配置的形状挑（见 `config.rs`）：
+//! Config: `<home>/mcp.json`; the transport is picked by the configured entry's shape (see `config.rs`):
 //!
 //! ```json
 //! {"servers": [
@@ -13,12 +13,12 @@
 //! ]}
 //! ```
 //!
-//! 每个服务器的工具注册成 `<服务器>_<工具>`（名字会压到模型厂商肯收的形状，
-//! 但回给服务器的永远是原名）。**连不上的服务器跳过并留一句警告，Joy 照样
-//! 启动** —— 一个配错的服务器不该让整个助理起不来，跟工具执行失败不该让
-//! 一轮对话崩掉是同一条规矩。
+//! Each server's tools are registered as `<server>_<tool>` (the name is squeezed into a
+//! shape model vendors accept; the original name always goes back to the server).
+//! **Unreachable servers are skipped with a warning and Joy still starts** — a misconfigured
+//! server must not keep the whole assistant down, just as a tool failure must not crash a turn.
 //!
-//! 没有 `mcp.json` 就等于没配 MCP：不读文件、不起进程、不连网。
+//! Without `mcp.json` MCP is simply not configured: no file read, no process, no network.
 
 pub mod config;
 pub mod oauth;
@@ -47,8 +47,8 @@ mod oauth_tests;
 #[path = "mcp_server_tests.rs"]
 mod mcp_server_tests;
 
-/// 一条已经连上、握过手的连接。调用要排队，所以里面是一把 async 锁。
-/// 熔断参数：**连续 3 次失败开 60 秒断路器**。
+/// A connection that is up and handshaken. Calls queue, so inside is an async lock.
+/// Breaker params: **3 consecutive failures open a 60-second circuit breaker**.
 #[derive(Debug, Clone, Copy)]
 pub struct BreakerPolicy {
     pub failures: u32,
@@ -64,20 +64,20 @@ impl Default for BreakerPolicy {
     }
 }
 
-/// 一台服务器的健康账。**按连接隔离**：一台挂了不该拖累另一台。
+/// One server's health account. **Isolated per connection**: one down must not drag another.
 #[derive(Debug, Default)]
 struct Breaker {
     consecutive_failures: u32,
-    /// 断路器开到这个时刻（`None` = 关着）。
+    /// The breaker is open until this instant (`None` = closed).
     open_until: Option<std::time::Instant>,
 }
 
 impl Breaker {
-    /// 现在还能不能敲它的门。开着的话返回还要等多久。
+    /// Can we knock now? When open, returns how much longer to wait.
     fn blocked_for(&mut self, now: std::time::Instant) -> Option<std::time::Duration> {
         match self.open_until {
             Some(until) if until > now => Some(until - now),
-            // 冷却到了：**半开** —— 放一次探针过去，成不成看这一次。
+            // Cooldown over: **half-open** — let one probe through; that probe decides.
             Some(_) => {
                 self.open_until = None;
                 None
@@ -88,7 +88,7 @@ impl Breaker {
 
     fn record(&mut self, ok: bool, policy: &BreakerPolicy, now: std::time::Instant) {
         if ok {
-            // 一次成功就清零：这是我们唯一能拿到的「它缓过来了」的证据。
+            // One success resets the count: the only proof of recovery we can ever get.
             self.consecutive_failures = 0;
             self.open_until = None;
             return;
@@ -108,7 +108,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    /// 造一条连接。`policy` 可注入，是为了让熔断的测试不必真等 60 秒。
+    /// Build a connection. `policy` is injectable so breaker tests need not wait 60s.
     pub fn with_policy(name: &str, transport: Transport, policy: BreakerPolicy) -> Self {
         Self {
             name: name.to_string(),
@@ -118,11 +118,11 @@ impl Connection {
         }
     }
 
-    /// 调一次工具。**永不返回 Err** —— 失败的文本是给模型读的，
-    /// 跟 `ToolRegistry::execute` 同一条规矩。
+    /// Call a tool. **Never returns Err** — the failure text is for the model to read,
+    /// same rule as `ToolRegistry::execute`.
     pub async fn call(&self, tool: &str, args: Value) -> String {
-        // 熔断：连续失败到阈值就先别敲门了 —— 一台挂掉的服务器会让每一轮
-        // 都白等一个超时，而模型还在那儿一遍遍地试。
+        // Breaker: once failures hit the threshold, stop knocking — a dead server makes
+        // every turn wait out a timeout while the model keeps trying again and again.
         let now = std::time::Instant::now();
         if let Some(remaining) = self.breaker.lock().await.blocked_for(now) {
             return format!(
@@ -169,15 +169,15 @@ impl Connection {
     }
 }
 
-/// 一个连上的服务器：它的连接 + 它报上来的工具。
+/// A connected server: its connection + the tools it reported.
 struct Server {
     name: String,
     connection: Arc<Connection>,
     tools: Vec<ToolMeta>,
 }
 
-/// MCP 的入口。`connect` 永不失败（失败变成警告），所以 app-server 可以
-/// 无条件地在启动时调一次，配没配都一样。
+/// MCP's entry point. `connect` never fails (failures become warnings), so the app-server
+/// can call it once at startup unconditionally, configured or not.
 #[derive(Default)]
 pub struct McpClient {
     servers: Vec<Server>,
@@ -185,17 +185,17 @@ pub struct McpClient {
 }
 
 impl McpClient {
-    /// 读 `config_path` 并把里面每个服务器接上。没有这个文件就什么也不做。
+    /// Read `config_path` and connect every server inside. No file, nothing to do.
     pub async fn connect(config_path: &Path) -> McpClient {
         let mut client = McpClient::default();
         if !config_path.exists() {
-            return client; // 没配就是没配，不是错误
+            return client; // not configured, not an error
         }
         let config = match Config::read(config_path) {
             Ok(config) => config,
             Err(error) => {
-                // 配置文件写坏了要看得见 —— 静默地「一个工具都没有」会让人
-                // 以为服务器挂了。
+                // A broken config file must be visible — silently "no tools at all" makes
+                // people think the server is down.
                 client.warnings.push(error);
                 return client;
             }
@@ -215,8 +215,8 @@ impl McpClient {
             return;
         }
         let name = spec.name.clone();
-        // 配置本身的毛病在读配置时就报掉，报的话术是「你哪里写错了」，
-        // 而不是后面那种「连不上」。
+        // Problems with the config itself are reported at read time, phrased as "what you
+        // wrote wrong", not the later "cannot connect" kind.
         let lookup = |key: &str| std::env::var(key).ok();
         let mut target = match config::resolve(spec, &lookup) {
             Ok(target) => target,
@@ -227,8 +227,8 @@ impl McpClient {
             }
         };
 
-        // oauth 服务器：bearer 从 mcp-auth 的 token 库里来，不在配置里。
-        // 没登录过就警告 + 指路，Joy 照样启动。
+        // OAuth servers: the bearer comes from mcp-auth's token store, not the config.
+        // Never logged in → warn + point the way; Joy still starts.
         if spec.oauth.unwrap_or(false) {
             let url = spec.url.clone().unwrap_or_default();
             match oauth::ensure_access_token(auth_root, &name, &url).await {
@@ -263,7 +263,7 @@ impl McpClient {
         }
     }
 
-    /// 打开传输、握手、列工具。三步都带超时：卡住的服务器不该拖住启动。
+    /// Open transport, handshake, list tools — all with a timeout; a stuck server must not stall startup.
     async fn open(
         &self,
         name: &str,
@@ -293,17 +293,17 @@ impl McpClient {
         self.servers.iter().map(|s| s.name.as_str()).collect()
     }
 
-    /// 注册用的工具，按配置顺序。
+    /// Tools for registration, in config order.
     pub fn tools(&self) -> Vec<Tool> {
         let mut out = Vec::new();
-        // 已经发出去的名字：两台服务器（或名字只差一个标点的两台）可能塌成同一个
-        // 名字 —— 重名的加序号，谁也不覆盖谁。
+        // Names already handed out: two servers (or two differing by one punctuation mark)
+        // can collapse into the same name — numbered suffixes; nobody overwrites anybody.
         let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
         for server in &self.servers {
             for meta in &server.tools {
                 let connection = server.connection.clone();
-                // `tname` 是服务器**自己**的名字，没被改过：上面那个改名
-                // 只是模型怎么称呼它，绝不是回线上时写的那个名字。
+                // `tname` is the server's **own** name, never rewritten: the renaming above
+                // is only what the model calls it, never the name written back on the wire.
                 let tname = meta.name.clone();
                 let (name, renamed) =
                     config::model_safe_name_unique(&server.name, &meta.name, &mut taken);
@@ -332,7 +332,7 @@ impl McpClient {
         out
     }
 
-    /// 直接调一次（测试与排障用；正常路径是注册成工具让模型调）。
+    /// Direct call (tests and debugging; the normal path registers it as a tool for the model).
     pub async fn call(&self, server: &str, tool: &str, args: Value) -> String {
         match self.servers.iter().find(|s| s.name == server) {
             Some(found) => found.connection.call(tool, args).await,

@@ -1,7 +1,7 @@
-//! HTTP 面的鉴权测试：token 三态、绑定校验、常量时间比较。
+//! Auth tests for the HTTP face: token three states, binding validation, constant-time compare.
 //!
-//! 直接打 `router()`（serve 起真监听是集成冒烟的事），app-server 用
-//! client_tests 的同一套 fake —— 自动应答器把协议请求全回 `{}`。
+//! Hits `router()` directly (serve with a real listener is integration smoke territory);
+//! the app-server uses the same fake as client_tests — an auto-responder answers `{}`.
 
 use std::sync::Arc;
 
@@ -13,8 +13,8 @@ use tower::ServiceExt;
 use crate::client::client_tests::fake;
 use crate::{constant_time_eq, router, validate_binding, Gate};
 
-/// 起一个自动应答器：按方法给最小合法应答。**必须回** —— fake 一端断开
-/// 后 `app.request` 还是会永远等（连接关了不等于应答到了），oneshot 就挂死。
+/// Start an auto-responder: minimal valid answers per method. **Must answer** — with the
+/// fake end gone, `app.request` would wait forever (closed link is not an answer).
 fn auto_respond(fake: crate::client::client_tests::Fake) {
     tokio::spawn(async move {
         let mut fake = fake;
@@ -37,7 +37,7 @@ fn auto_respond(fake: crate::client::client_tests::Fake) {
     });
 }
 
-/// 打一个请求，返回状态码。
+/// Fire one request, return the status code.
 async fn status_of(router: axum::Router, path: &str, auth: Option<&str>) -> StatusCode {
     let mut builder = Request::builder().uri(path);
     if let Some(token) = auth {
@@ -50,7 +50,7 @@ async fn status_of(router: axum::Router, path: &str, auth: Option<&str>) -> Stat
     response.status()
 }
 
-/// 配了 token：不带 / 带错 → 401；带对 → 放行。
+/// Token configured: missing / wrong → 401; correct → pass.
 #[tokio::test]
 async fn a_token_gates_the_api() {
     let (app, fake) = fake();
@@ -75,7 +75,7 @@ async fn a_token_gates_the_api() {
         StatusCode::OK,
         "对 token 该放行"
     );
-    // Bearer 前缀都不能少 —— 直接把裸 token 放进头里也不行。
+    // Even the Bearer prefix is required — a bare token in the header is not enough.
     let response = router
         .oneshot(
             Request::builder()
@@ -89,7 +89,7 @@ async fn a_token_gates_the_api() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
-/// 没配 token：本机默认全放行（现状不变，驾驶舱体验不受影响）。
+/// No token configured: everything passes locally by default (unchanged behavior).
 #[tokio::test]
 async fn without_a_token_the_api_is_open() {
     let (app, fake) = fake();
@@ -102,8 +102,8 @@ async fn without_a_token_the_api_is_open() {
     );
 }
 
-/// token 只盖 /api/*：静态文件没有数据，不该被 401 挡住（页面本身要能加载，
-/// 令牌由页面 JS 带在请求头里）。
+/// Token covers /api/* only: static files carry no data and must not be blocked by 401
+/// (the page itself must load; the token is sent by the page JS in request headers).
 #[tokio::test]
 async fn static_files_are_not_gated() {
     let (app, _fake) = fake();
@@ -124,7 +124,7 @@ async fn static_files_are_not_gated() {
     assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
-/// 绑定校验：非回环 + 没 token = 拒绝；其余组合都有出路。
+/// Binding validation: non-loopback + no token = reject; other combinations all have a way.
 #[test]
 fn a_non_loopback_host_needs_a_token() {
     assert!(validate_binding("127.0.0.1", None).is_ok());
@@ -139,7 +139,7 @@ fn a_non_loopback_host_needs_a_token() {
     assert!(error.to_string().contains("JOY_OPS_TOKEN"), "{error}");
 }
 
-/// 常量时间比较：等、不等、长度不同，语义与 == 一致。
+/// Constant-time compare: equal, unequal, different lengths — same semantics as ==.
 #[test]
 fn constant_time_comparison_agrees_with_equality() {
     assert!(constant_time_eq(b"abc", b"abc"));

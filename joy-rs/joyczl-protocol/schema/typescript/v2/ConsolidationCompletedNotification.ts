@@ -2,7 +2,7 @@
 
 export type ConsolidationCompletedNotification = {
   /**
-   * 这一批提炼出多少条新 fact；0 表示没到期或没提炼出东西。
+   * How many new facts this batch distilled; 0 means not due yet or nothing surfaced.
    */
   newFacts: number;
 };

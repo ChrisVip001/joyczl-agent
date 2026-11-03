@@ -1,5 +1,5 @@
-// 由 ts-rs 生成物汇总而来，别手改。
-// 生成逻辑：joyczl-protocol/src/export.rs 的 write_barrel。
+// Assembled from the ts-rs generated files — do not edit by hand.
+// Generation logic: write_barrel in joyczl-protocol/src/export.rs.
 export type * from "./RequestId";
 export type * from "./JsonRpcRequest";
 export type * from "./JsonRpcResponse";

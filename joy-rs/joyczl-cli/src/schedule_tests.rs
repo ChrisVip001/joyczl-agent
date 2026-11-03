@@ -1,4 +1,4 @@
-//! 定时任务的匹配与装载：cron 语义、同一分钟只触发一次、两条声明来源。
+//! Matching and loading of scheduled jobs: cron semantics, once per minute, two sources.
 
 use std::collections::HashMap;
 
@@ -30,7 +30,7 @@ fn every_minute_matches_everything() {
 
 #[test]
 fn a_daily_time_matches_only_that_minute() {
-    // 2026-09-21 是周一。
+    // 2026-09-21 is a Monday.
     assert!(cron_matches("0 8 * * *", at(2026, 9, 21, 8, 0)));
     assert!(!cron_matches("0 8 * * *", at(2026, 9, 21, 8, 1)));
     assert!(!cron_matches("0 8 * * *", at(2026, 9, 21, 9, 0)));
@@ -38,17 +38,17 @@ fn a_daily_time_matches_only_that_minute() {
 
 #[test]
 fn steps_ranges_and_lists_all_work() {
-    // 每 15 分钟。
+    // Every 15 minutes.
     assert!(cron_matches("*/15 * * * *", at(2026, 9, 21, 0, 30)));
     assert!(!cron_matches("*/15 * * * *", at(2026, 9, 21, 0, 31)));
-    // 工作日 9 点到 17 点整点。
+    // Weekdays, on the hour 9:00-17:00.
     assert!(cron_matches("0 9-17 * * 1-5", at(2026, 9, 21, 9, 0)));
     assert!(cron_matches("0 9-17 * * 1-5", at(2026, 9, 25, 17, 0)));
     assert!(
         !cron_matches("0 9-17 * * 1-5", at(2026, 9, 26, 9, 0)),
         "周六不该触发"
     );
-    // 列表，含周日的 7 形式。
+    // List form, including Sunday-as-7.
     assert!(cron_matches("0 8,20 * * *", at(2026, 9, 21, 20, 0)));
     assert!(!cron_matches("0 8,20 * * *", at(2026, 9, 21, 12, 0)));
     assert!(cron_matches("0 0 * * 7", at(2026, 9, 27, 0, 0)), "周日");
@@ -72,13 +72,13 @@ fn the_same_minute_only_fires_once() {
     fired.insert("brief".to_string(), "2026-09-21T08:00".to_string());
     let second = due_now(&jobs, at(2026, 9, 21, 8, 0), &fired);
     assert!(second.is_empty(), "同一分钟不该触发第二次");
-    // 下一分钟（含 8:00 的每日任务）自然也不触发。
+    // The next minute (including the 8:00 daily job) naturally doesn't fire either.
     let later = due_now(&jobs, at(2026, 9, 21, 8, 1), &fired);
     assert!(later.is_empty());
 }
 
-/// 真触发一次：进程内起 Server、装上 scripted 模型、跑一轮，断言回复
-/// 落进了 outbox —— 定时任务的最后一公里（run_turn → 文件）值得钉住。
+/// A real firing: in-process Server, scripted model, one turn; assert the reply
+/// lands in the outbox — the last mile (run_turn → file) is worth pinning.
 #[tokio::test]
 async fn firing_runs_a_turn_and_writes_the_reply_to_the_outbox() {
     use std::sync::Arc;
@@ -97,7 +97,7 @@ async fn firing_runs_a_turn_and_writes_the_reply_to_the_outbox() {
     server.install_provider(Resolved {
         provider_id: "mock".to_string(),
         client: Arc::new(Mock::new(vec![
-            // 检索门，然后 loop 的应答。
+            // The retrieval gate, then the loop's reply.
             Mock::text(r#"{"retrieve": false, "query": "", "reason": "routine"}"#),
             Mock::text("打卡完成。"),
         ])),
@@ -118,7 +118,7 @@ async fn firing_runs_a_turn_and_writes_the_reply_to_the_outbox() {
         "要写明触发来源：{written}"
     );
 
-    // 定时会话与用户会话分开：这次执行的历史落在 schedule:tick 里。
+    // Scheduled sessions are separate from user sessions: this run's history lands in schedule:tick.
     let sessions = server.chat().sessions().await.expect("会话列表");
     assert!(
         sessions.iter().any(|s| s.id == "schedule:tick"),
@@ -130,7 +130,7 @@ async fn firing_runs_a_turn_and_writes_the_reply_to_the_outbox() {
 fn jobs_load_from_both_skills_and_the_json_file() {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path();
-    // 一条带 schedule 的技能。
+    // A skill with a schedule.
     let skill_dir = home.join("skills").join("weekly-review");
     std::fs::create_dir_all(&skill_dir).unwrap();
     std::fs::write(
@@ -138,7 +138,7 @@ fn jobs_load_from_both_skills_and_the_json_file() {
         "---\nname: weekly-review\ndescription: summarize the week\nschedule: 0 8 * * 1\n---\n步骤",
     )
     .unwrap();
-    // 一条不带 schedule 的技能：不该变成任务。
+    // A skill without a schedule: must not become a job.
     let plain = home.join("skills").join("plain");
     std::fs::create_dir_all(&plain).unwrap();
     std::fs::write(
@@ -146,7 +146,7 @@ fn jobs_load_from_both_skills_and_the_json_file() {
         "---\nname: plain\ndescription: nothing scheduled\n---\n步骤",
     )
     .unwrap();
-    // schedules.json 里两条（一条坏的）。
+    // Two entries in schedules.json (one broken).
     std::fs::write(
         home.join("schedules.json"),
         r#"{"jobs":[
@@ -168,10 +168,10 @@ fn jobs_load_from_both_skills_and_the_json_file() {
     );
 }
 
-// ---- 7x24：状态落盘与补跑窗口 ---------------------------------------------
+// ---- 7x24: state persistence and catch-up windows ------------------------------------------
 
-/// 旧状态文件读得回来（一次性导入的来源）；坏文件当没有 ——
-/// 它只承载去重信息，丢了顶多同分钟重复一次，不该让调度器起不来。
+/// The legacy state file reads back (one-time import source); a broken file counts
+/// as absent — it only carries dedup info; losing it costs at most one duplicate.
 #[test]
 fn the_legacy_state_file_is_readable_but_only_once() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -186,13 +186,13 @@ fn the_legacy_state_file_is_readable_but_only_once() {
         Some("2026-10-27T08:00")
     );
 
-    // 坏文件当没有。
+    // A broken file counts as absent.
     std::fs::write(dir.path().join("schedules-state.json"), "{半截").expect("写坏文件");
     assert!(load_legacy_state(dir.path()).is_empty());
 }
 
-/// schedules.json 的每作业策略字段：catch_up 与 delivery 都解析得动，
-/// 不认识的 delivery 按 outbox 兜底（不静默 —— stderr 说一声）。
+/// schedules.json's per-job policy fields: catch_up and delivery both parse; an
+/// unknown delivery falls back to outbox (not silently — stderr says so).
 #[test]
 fn per_job_policy_fields_are_parsed() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -220,22 +220,22 @@ fn per_job_policy_fields_are_parsed() {
     assert_eq!(wrong.delivery, Delivery::Outbox, "不认识的值兜底");
 }
 
-/// 停机窗口里错过了一次 → 补最新那次；没错过 → 不补；三天前错过只补最新的。
+/// A miss in the downtime window → catch up the latest; no miss → nothing; three days back → latest only.
 #[test]
 fn a_missed_fire_is_caught_up_once() {
     let daily = job("晨报", "0 8 * * *");
 
-    // 停机窗口 7:00-9:00 覆盖了 8:00 → 补 8:00。
+    // Downtime window 7:00-9:00 covers 8:00 → catch up 8:00.
     let missed = last_missed(&daily, at(2026, 10, 27, 7, 0), at(2026, 10, 27, 9, 0));
     assert_eq!(missed, Some(at(2026, 10, 27, 8, 0)));
 
-    // 窗口里没有触发点 → 不补。
+    // No trigger in the window → no catch-up.
     assert_eq!(
         last_missed(&daily, at(2026, 10, 27, 9, 0), at(2026, 10, 27, 9, 30)),
         None
     );
 
-    // 起点本身算错过（上次触发 7:59，8:00 的点属于「错过」而非「已触发」）。
+    // The start itself counts as missed (last fired 7:59; the 8:00 point is "missed", not "fired").
     let missed = last_missed(&daily, at(2026, 10, 26, 7, 59), at(2026, 10, 27, 8, 30));
     assert_eq!(
         missed,
@@ -244,7 +244,7 @@ fn a_missed_fire_is_caught_up_once() {
     );
 }
 
-/// 每分钟任务在长停机窗口里也只交出最后一个错过的分钟。
+/// A per-minute job yields only the last missed minute even in a long downtime window.
 #[test]
 fn an_every_minute_job_yields_only_the_latest_missed_minute() {
     let frequent = job("心跳", "* * * * *");
@@ -252,7 +252,7 @@ fn an_every_minute_job_yields_only_the_latest_missed_minute() {
     assert_eq!(missed, Some(at(2026, 10, 27, 0, 0)));
 }
 
-/// 账本行的形状：七个字段一个不缺；status 是 ok/empty/error 之一。
+/// Ledger line shape: all seven fields present; status is one of ok/empty/error.
 #[test]
 fn the_run_log_line_has_all_the_fields() {
     let line = super::run_log_line("晨报", "2026-10-30T08:00", "ok", "", 42, true);
@@ -288,7 +288,7 @@ fn the_run_log_line_has_all_the_fields() {
     assert_eq!(parsed["delivered"], false);
 }
 
-/// 账本追加：新行跟旧行、写失败不炸（打不开的目录只该留 stderr 话音）。
+/// Ledger append: new line after old ones; write failure doesn't blow up (a closed dir only notes stderr).
 #[test]
 fn the_run_log_appends_and_never_panics() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -307,6 +307,6 @@ fn the_run_log_appends_and_never_panics() {
     assert!(lines[0].contains("\"name\":\"a\""), "旧行还在");
     assert!(lines[1].contains("\"status\":\"empty\""), "新行在后");
 
-    // 打不开的路径：只 stderr，不 panic、不返回错误 —— 账本是旁路。
+    // Unopenable path: stderr only, no panic, no error — the ledger is a side path.
     super::append_run_log(dir.path().join("不存在目录").as_path(), "x");
 }

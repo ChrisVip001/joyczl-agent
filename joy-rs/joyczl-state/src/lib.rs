@@ -1,16 +1,16 @@
-//! `joyczl-state` —— Joy 记得住的一切，都在这一个 SQLite 文件里。
+//! `joyczl-state` — everything Joy remembers lives in this one SQLite file.
 //!
-//! 三语言工程里这条 crate 是**独占**的：只有 app-server 打开 state.db。
-//! 前端、网关、SDK 想读写记忆，一律走 JSON-RPC，不许自己开数据库连接。
-//! 于是「跨线程共享 sqlite 连接」这类问题从根上不存在 ——
-//! 连接由单一进程持有，天然没有并发争用。
+//! In the three-language project this crate is **exclusive**: only the app-server opens
+//! state.db. Frontend, gateway and SDK go through JSON-RPC only and may not open their own
+//! database connections. So "sharing a sqlite connection across threads" does not exist at
+//! the root — one process holds the connection; no concurrency contention by nature.
 //!
-//! 分层：
-//!   * `db`        打开 / 迁移
-//!   * `facts`     语义记忆（FTS5 检索）
-//!   * `episodes`  情景记忆
-//!   * `chat`      原始对话日志 + 会话（会话只是 chat_log 上的一个标签）
-//!   * `fts`       把人类输入变成安全的 FTS5 查询串
+//! Layers:
+//!   * `db`        open / migrate
+//!   * `facts`     semantic memory (FTS5 retrieval)
+//!   * `episodes`  episodic memory
+//!   * `chat`      raw conversation log + sessions (a session is just a tag on chat_log)
+//!   * `fts`       turn human input into a safe FTS5 query string
 
 pub mod approvals;
 pub mod calendar;

@@ -1,24 +1,24 @@
-//! 节点的常见形状。
+//! Common node shapes.
 //!
-//! 一切本来就是 `NodeFn`（state 进去，要合并的键出来），`Node::new` 就能包
-//! 住任何闭包 —— 专门的「包装器」只是把调用变长了一行。
+//! Everything was already `NodeFn` (state in, keys-to-merge out) and `Node::new`
+//! wraps any closure — dedicated "wrappers" only made the call one line longer.
 //!
-//! 真正值得留下的是 `agent_node` 想说的那件事：一个节点可以是**一整轮
-//! loop**。图不替代 loop —— 它安排 loop 被调用的位置，以及它周围还发生
-//! 什么。triage 的 `full_agent` 就是这么接的（见 `workflows::triage`），
-//! 而且它调用的就是不带图时同一个 `full_turn`，所以「loop 当节点」和
-//! 「loop 当默认」永远不会走散。
+//! What's truly worth keeping is what `agent_node` says: a node can be **an entire
+//! loop**. The graph doesn't replace the loop — it arranges where the loop is
+//! called and what else happens around it. triage's `full_agent` is wired exactly
+//! that way (see `workflows::triage`), and it calls the very same `full_turn` as
+//! without a graph, so "loop as node" and "loop as default" can never drift apart.
 //!
-//! 同理没留下的还有 `llm_node`：它把 prompt 模板和 state 用 `format` 缝在
-//! 一起，而需要它的两个地方（triage 的 classify、quick_reply）都得自己解
-//! 析返回值或自己挑模型，手写反而更短。
+//! Likewise not kept: `llm_node` — it stitched a prompt template and state together
+//! with `format`, while both places needing it (triage's classify, quick_reply) had
+//! to parse the return value or pick a model themselves; handwriting was shorter.
 
 use std::sync::Arc;
 
 use crate::{NodeCtx, NodeFn, NodeWrites, RouteFn, State};
 
-/// 本家路由器：读 state 里的一个键，把它当作路由标签返回
-/// （键不存在或是空字符串就用 `default`）。模型写这个键，这段代码读它。
+/// First-party router: reads a state key and returns it as the route label (missing
+/// or empty → `default`). The model writes the key; this code reads it.
 pub fn key_router(key: &'static str, default: &'static str) -> RouteFn {
     Arc::new(move |state: &State| match state.str(key) {
         Some(value) if !value.is_empty() => value.to_string(),
@@ -26,10 +26,10 @@ pub fn key_router(key: &'static str, default: &'static str) -> RouteFn {
     })
 }
 
-/// 逃生口：任何 `state 进 → 键出来` 的**纯**函数都能直接当节点，
-/// 不用手写 `Box::pin`。读文件、查库、算数这类同步活儿就用它。
-/// 要 await（调模型、调工具）的节点还得自己装箱 —— 那时候装箱是必须的，
-/// 不是仪式。
+/// The escape hatch: any **pure** `state in → keys out` function can be a node
+/// directly, no hand-written `Box::pin`. Use it for sync work — file reads, DB
+/// queries, arithmetic. Nodes that need await (model/tool calls) still box
+/// themselves — there boxing is necessary, not ceremony.
 pub fn fn_node<F>(f: F) -> NodeFn
 where
     F: Fn(&State) -> NodeWrites + Send + Sync + 'static,

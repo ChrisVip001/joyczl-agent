@@ -1,8 +1,8 @@
-//! 驾驶舱的三个端点。
+//! The three dashboard endpoints.
 //!
-//! 只有三个，因为驾驶舱该做的事就这么三件：**看个大概**、**翻旧账**、**说话**。
-//! 一切都是从 app-server 的读方法和 `turn/start` 翻过来的，
-//! 这里不新增任何业务 —— 新增业务的地方在协议那一侧。
+//! Only three, because that is all a dashboard does: **see the picture**, **dig history**,
+//! **talk**. Everything is translated from app-server reads and `turn/start`; no business
+//! logic is added here — new business belongs on the protocol side.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -27,24 +27,24 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::AppServer;
 
-/// 首屏只取最近这么多条。驾驶舱不是数据库客户端 —— 它要让人一眼看到
-/// 「现在是什么状态」，翻页是另一件事（协议里的 cursor 就是为那天留的）。
+/// The first screen fetches only this many recent entries: the dashboard must show "the
+/// state right now" at a glance; paging is another matter (the protocol cursor is for that).
 const SESSION_LIMIT: u32 = 20;
 const FACT_LIMIT: u32 = 30;
 const EPISODE_LIMIT: u32 = 20;
 
-/// 还没被浏览器读走的通知最多攒多少。用**无界**通道是有意的：
-/// 有界的话，浏览器读得慢就会让转发任务卡在 send 上，从而来不及消费
-/// 广播通道 —— 中间那些 `textDelta` 会被丢掉，还可能把 `turnCompleted`
-/// 一起丢掉，那一轮 SSE 就永远不结束了。无界的上限是一整轮对话的通知量，
-/// 一轮结束通道就跟着销毁。
+/// How many not-yet-consumed notifications may pile up. **Unbounded** on purpose: bounded
+/// would stall the forwarding task on send, leaving the broadcast channel unconsumed —
+/// intermediate `textDelta`s get dropped, possibly along with `turnCompleted`, and that
+/// SSE turn would never end. The unbounded cap is one full turn's worth of notifications,
+/// and the channel is torn down when the turn ends.
 const TURN_BUFFER: usize = 1024;
 
-/// `GET /api/data` —— 首屏要的一切，一次取齐。
+/// `GET /api/data` — everything the first screen needs, fetched in one go.
 ///
-/// 合成一个端点而不是让前端并发发四个请求：app-server 一次只处理一条
-/// 请求（stdio 上就是一个循环），四个并发请求到了那儿还是排队。合成一个
-/// 还顺带给了前端一个「这些数字是同一时刻的」保证。
+/// One endpoint instead of four concurrent frontend requests: the app-server handles one
+/// request at a time (over stdio it is just a loop), so four requests queue there anyway.
+/// Composing one also guarantees "these numbers are from the same moment".
 pub async fn data(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match collect(&app).await {
         Ok(data) => Json(data).into_response(),
@@ -76,15 +76,15 @@ async fn collect(app: &AppServer) -> Result<DashboardData, ErrorObject> {
     })
 }
 
-/// `GET /api/session?sessionId=…&cursor=…&limit=…` —— 一个会话说过的话。
+/// `GET /api/session?sessionId=…&cursor=…&limit=…` — what one session said.
 ///
-/// 为什么它不在 `/api/data` 里：那一屏是**概览**，每 15 秒整个重刷一次，
-/// 说的是「现在什么状态」。而这是一段**历史** —— 按会话取、按页往上翻，
-/// 翻页的时候不该连配置和记忆一起重取。
+/// Why not in `/api/data`: that screen is an **overview**, fully refreshed every 15 seconds,
+/// answering "what is the state now". This is **history** — per session, paged upward;
+/// paging should not re-fetch config and memory along with it.
 ///
-/// 查询参数直接用协议里的 `SessionMessagesParams`（**没有第二个形状**），
-/// 所以 URL 上就是 `sessionId` / `cursor` / `limit` 这三个名字；哪个是必填的
-/// 也由那个类型说了算，不在这儿重新写一遍。
+/// Query params reuse the protocol's `SessionMessagesParams` (**no second
+/// shape**), so the URL carries exactly `sessionId` / `cursor` / `limit`;
+/// which one is required is decided by that type, not rewritten here.
 pub async fn session(
     Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<SessionMessagesParams>,
@@ -99,11 +99,11 @@ pub async fn session(
     }
 }
 
-/// `POST /api/approval` —— 回答一次「要不要执行」。
-/// `POST /api/goal` —— 设或清一个目标（`condition` 缺省/为空 = 清除）。
+/// `POST /api/approval` — answer one "should this run".
+/// `POST /api/goal` — set or clear a goal (missing/empty `condition` = clear).
 ///
-/// 与 turn 走同一条路：app-server 是子进程，`goal/set` 也是它的一个方法。
-/// **驾驶舱不是唯一入口**：终端里的 `/goal` 与它是同一件事。
+/// Same path as turn: the app-server is a subprocess, `goal/set` one of its methods.
+/// **The dashboard is not the only entry point**: the terminal's `/goal` is the same thing.
 pub async fn goal(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<GoalSetParams>,
@@ -119,14 +119,14 @@ pub async fn goal(
 }
 
 ///
-/// 载荷是协议里的 `ApprovalRespondParams`。**不是 SSE**：这是一问一答，
-/// 答完就没了。太晚送达时返回 `accepted: false`（那一轮早已不等了），
-/// 前端据此知道自己的点击没人听，而不是以为批准生效了。
-/// 已配置的多套模型 + 当前那套（**不含密钥**，只有「key 存在哪」的指针）。
+/// The payload is the protocol's `ApprovalRespondParams`. **Not SSE**: one question, one
+/// answer, then gone. Too late → `accepted: false` (the turn stopped waiting long ago);
+/// the frontend knows its click went unheard instead of assuming the approval took effect.
+/// Configured model profiles + the current one (**no keys**, only a "where is the key" ptr).
 ///
-/// 与 `/api/goal` 同一条纪律：这些是**只有人能改**的东西 —— 模型没有
-/// `model/*` 工具，也拿不到密钥。
-/// 用量台账（迁移 0010）：per-model 聚合 + 总数。只记账不强制。
+/// Same discipline as `/api/goal`: these are **human-only** settings — the model has no
+/// `model/*` tools and cannot reach the keys.
+/// Usage ledger (migration 0010): per-model aggregates + totals. Bookkeeping, not enforcing.
 pub async fn usage(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<UsageSummaryResponse>(methods::USAGE_SUMMARY, json!({}))
@@ -137,7 +137,7 @@ pub async fn usage(Extension(app): Extension<Arc<AppServer>>) -> Response {
     }
 }
 
-/// 审批审计（迁移 0011）：最近 100 条「问了才跑」，新的在前。
+/// Approval audit (migration 0011): the last 100 "asked before running", newest first.
 pub async fn approvals(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<ApprovalLogResponse>(methods::APPROVAL_LOG, json!({}))
@@ -148,7 +148,7 @@ pub async fn approvals(Extension(app): Extension<Arc<AppServer>>) -> Response {
     }
 }
 
-/// 调度状态快照（迁移 0012）：每任务的 last_fired/claimed/catch_up/delivery。
+/// Schedule status snapshot (migration 0012): per-task last_fired/claimed/catch_up/delivery.
 pub async fn schedules(Extension(app): Extension<Arc<AppServer>>) -> Response {
     match app
         .request::<ScheduleListResponse>(methods::SCHEDULE_LIST, json!({}))
@@ -159,23 +159,23 @@ pub async fn schedules(Extension(app): Extension<Arc<AppServer>>) -> Response {
     }
 }
 
-/// 单个上传文件的上限：20MB。
+/// Cap for a single uploaded file: 20MB.
 const UPLOAD_MAX_BYTES: usize = 20 * 1024 * 1024;
 
-/// 扩展名白名单：1-8 位字母数字。双扩展、路径段、奇怪字符都不进路径。
+/// Extension whitelist: 1-8 alphanumeric chars; no double extensions or weird chars.
 fn safe_extension(name: &str) -> Option<String> {
     let ext = std::path::Path::new(name).extension()?.to_str()?;
     let ok = !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric());
     ok.then(|| ext.to_ascii_lowercase())
 }
 
-/// `POST /api/upload?name=<原始文件名>` —— body 是文件原始字节。
+/// `POST /api/upload?name=<original filename>` — body is the raw file bytes.
 ///
-/// 通道选 octet-stream 而不是 multipart：单文件用不着 multipart 的信封，
-/// 还避开了解析器这个安全雷区（零 feature、零传递依赖）。
-/// 落盘名**完全由服务端生成**（与 spill 同一条纪律：用户输入进不了路径），
-/// 原始名只取扩展名过白名单。返回相对 home 的路径 —— 前端把它注进消息，
-/// 模型用 read_file 自己读（「引用优先」：引用与读取解耦）。
+/// octet-stream instead of multipart: a single file needs no multipart envelope, and it
+/// avoids the parser, a security minefield (zero features, zero transitive deps). The
+/// on-disk name is **generated entirely server-side** (spill's discipline: user input
+/// never enters a path); only the extension survives, through the whitelist. Returns a
+/// home-relative path — the frontend injects it; the model reads it via read_file itself.
 pub async fn upload(
     Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -205,8 +205,8 @@ pub async fn upload(
         .get("name")
         .and_then(|n| safe_extension(n))
         .unwrap_or_else(|| "bin".to_string());
-    // home 走协议取（AppServer 是子进程句柄，没有本地字段）——上传是低频操作，
-    // 多一次往返无所谓，换来的是 ops 层继续保持「只通过协议说话」的纪律。
+    // Home comes from the protocol (AppServer is a subprocess handle, no local field) —
+    // upload is rare; an extra round trip keeps ops "protocol-only" discipline intact.
     let config: ConfigReadResponse = match app.request(methods::CONFIG_READ, json!({})).await {
         Ok(config) => config,
         Err(error) => return failed(StatusCode::BAD_GATEWAY, error),
@@ -224,7 +224,7 @@ pub async fn upload(
             },
         );
     }
-    // 名字里只有服务端生成的成分：时间戳 + 纳秒后缀 —— 撞名不可能，覆盖不了旧文件。
+    // Only server-generated parts: timestamp + nanosecond suffix — no collisions, no overwrite.
     let name = format!(
         "file-{}-{:x}.{ext}",
         now.format("%H%M%S"),
@@ -248,8 +248,8 @@ pub async fn upload(
     Json(json!({ "path": format!("uploads/{date}/{name}") })).into_response()
 }
 
-/// 目录浏览的应答。ops 本地的 UI 视图（与 /api/upload 的应答同一待遇）：
-/// 不进协议 —— SDK 与终端都用不到「浏览服务端目录」这件事。
+/// The directory-browsing response. An ops-local UI view (as with /api/upload's response):
+/// not in the protocol — neither the SDK nor the terminal needs "browse server directories".
 #[derive(serde::Serialize)]
 pub struct FsListing {
     pub path: String,
@@ -263,8 +263,8 @@ pub struct FsEntry {
     pub path: String,
 }
 
-/// 列一个目录下的**子目录**（只读、只列目录 —— 选工作目录用不到文件）。
-/// 独立成纯函数是为了能直接单测，不必起一个 app-server。
+/// List the **subdirectories** of a directory (read-only, dirs only — picking a workdir has
+/// no use for files). A pure function so it can be unit-tested without booting an app-server.
 pub fn list_dirs(raw: &str, include_hidden: bool) -> Result<FsListing, String> {
     let path = std::path::PathBuf::from(raw);
     if !path.is_absolute() {
@@ -282,8 +282,8 @@ pub fn list_dirs(raw: &str, include_hidden: bool) -> Result<FsListing, String> {
                 return None;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            // 点开头默认藏，开关打开才露出；
-            // 构建噪音（node_modules/target）无论开关都藏 —— 点进去没有意义。
+            // Dot-prefixed entries hidden by default, shown only when the switch is on;
+            // build noise (node_modules/target) hidden regardless — stepping in is pointless.
             if (name.starts_with('.') && !include_hidden)
                 || name == "node_modules"
                 || name == "target"
@@ -307,7 +307,7 @@ pub fn list_dirs(raw: &str, include_hidden: bool) -> Result<FsListing, String> {
     })
 }
 
-/// 浏览的起点：用户主目录，退化到进程 cwd。
+/// Where browsing starts: the user's home directory, falling back to process cwd.
 fn default_browse_root() -> String {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -315,12 +315,12 @@ fn default_browse_root() -> String {
         .unwrap_or_else(|_| "/".to_string())
 }
 
-/// `GET /api/fs?path=<目录>` —— 服务端目录浏览（驾驶舱选工作目录用）。
+/// `GET /api/fs?path=<dir>` — server-side directory browsing (dashboard picks a workdir).
 ///
-/// 为什么在服务端：浏览器的文件夹选择器**拿不到绝对路径**（File System
-/// Access API 只给句柄不给路径），而工作目录恰恰需要绝对路径 —— 所以
-/// 「像桌面应用那样选文件夹」必须由知道文件系统的这一侧来做
-/// （Jupyter、VS Code server 的做法）。只读、只列目录。
+/// Why server-side: the browser folder picker **cannot get absolute paths** (the File
+/// System Access API gives handles, not paths), while a workdir needs exactly an absolute
+/// path — so "pick a folder like a desktop app" falls to the filesystem-aware side (the
+/// Jupyter / VS Code server approach). Read-only, directories only.
 pub async fn fs_browse(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
@@ -347,11 +347,11 @@ pub async fn fs_browse(
     }
 }
 
-/// 在 parent 下建一个子目录，返回新目录的绝对路径。独立成纯函数是为了能直接单测。
+/// Create a subdirectory under parent, returning its absolute path. Pure fn for unit tests.
 ///
-/// 名字纪律与 upload 的扩展名白名单同一条：**用户输入进不了路径形状** ——
-/// 不许分隔符、不许 `..`、不许点开头（建出来的目录不该默认隐身）、
-/// 长度封顶 64。
+/// Same name discipline as upload's extension whitelist: **user input never
+/// enters the path shape** — no separators, no `..`, no dot prefix (a created
+/// directory should not be invisible by default), capped at 64 chars.
 pub fn create_subdir(parent_raw: &str, name: &str) -> Result<String, String> {
     let parent = std::path::PathBuf::from(parent_raw);
     if !parent.is_absolute() {
@@ -376,8 +376,8 @@ pub fn create_subdir(parent_raw: &str, name: &str) -> Result<String, String> {
     Ok(target.to_string_lossy().to_string())
 }
 
-/// `POST /api/fs/mkdir?path=<父目录>&name=<目录名>` —— 选择器里的
-/// 「新建文件夹」。只读浏览之外唯一的一个写动作，名字过白名单。
+/// `POST /api/fs/mkdir?path=<parent>&name=<name>` — the picker's "new folder" button; the
+/// only write action besides read-only browsing. Names go through the whitelist.
 pub async fn fs_mkdir(Query(params): Query<std::collections::HashMap<String, String>>) -> Response {
     let parent = params.get("path").cloned().unwrap_or_default();
     let name = params.get("name").cloned().unwrap_or_default();
@@ -394,7 +394,7 @@ pub async fn fs_mkdir(Query(params): Query<std::collections::HashMap<String, Str
     }
 }
 
-/// 「最近使用」的应答（ops 本地视图，同 /api/fs 的待遇）。
+/// The "recents" response (ops-local view, same treatment as /api/fs).
 fn recents_response(home: &std::path::Path) -> Response {
     Json(json!({
         "paths": joyczl_config::workspaces::load_workspaces(home).paths,
@@ -402,7 +402,7 @@ fn recents_response(home: &std::path::Path) -> Response {
     .into_response()
 }
 
-/// `GET /api/fs/recents` —— 最近用过的目录（选工作目录的快捷入口）。
+/// `GET /api/fs/recents` — recently used directories (quick entry for picking a workdir).
 pub async fn fs_recents(Extension(app): Extension<Arc<AppServer>>) -> Response {
     let config: ConfigReadResponse = match app.request(methods::CONFIG_READ, json!({})).await {
         Ok(config) => config,
@@ -411,8 +411,8 @@ pub async fn fs_recents(Extension(app): Extension<Arc<AppServer>>) -> Response {
     recents_response(std::path::Path::new(&config.config.home))
 }
 
-/// `POST /api/fs/recents?path=<目录>` —— 选择器里「选这个目录」时记一笔
-/// （轮次还没跑也要记：用户的意图在这里就已经表达了）。
+/// `POST /api/fs/recents?path=<dir>` — record a picker choice (recorded even before a turn
+/// runs: the user's intent is already expressed here).
 pub async fn fs_recents_record(
     Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
@@ -442,7 +442,7 @@ pub async fn model_profiles(Extension(app): Extension<Arc<AppServer>>) -> Respon
     }
 }
 
-/// 新增/改一套（顺带切成当前），或只带 `id` + `makeActive` 切换。
+/// Add/update a profile (and make it current), or just switch via `id` + `makeActive`.
 pub async fn model_save(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ModelSaveParams>,
@@ -457,7 +457,7 @@ pub async fn model_save(
     }
 }
 
-/// 删一套（连它的凭据一起）。
+/// Remove a profile (along with its credentials).
 pub async fn model_remove(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ModelRemoveParams>,
@@ -477,7 +477,7 @@ pub async fn approval(
     Json(params): Json<ApprovalRespondParams>,
 ) -> Response {
     let payload = serde_json::to_value(&params).expect("ApprovalRespondParams 一定能序列化");
-    // 与 turn 走同一条路：app-server 是子进程，回答也是它的一个方法。
+    // Same path as turn: the app-server is a subprocess, answering is one of its methods.
     match app
         .request::<ApprovalRespondResponse>(methods::APPROVAL_RESPOND, payload)
         .await
@@ -487,15 +487,15 @@ pub async fn approval(
     }
 }
 
-/// `POST /api/turn` —— 说一句话，看它怎么回。
+/// `POST /api/turn` — say a sentence, watch what comes back.
 ///
-/// 载荷就是协议里的 `TurnStartParams`（**没有第二个形状**），
-/// 应答是一条 SSE 流：`data:` 后面跟着 `ServerNotification` 的 JSON，
-/// 跟 stdio 上收到的是同一种东西。
+/// The payload is the protocol's `TurnStartParams` (**no second shape**); the
+/// response is an SSE stream: `data:` followed by the JSON of a
+/// `ServerNotification`, the same thing received over stdio.
 ///
-/// 为什么是 SSE 而不是 WebSocket：这条路上只有「服务端 → 浏览器」这一个
-/// 方向，发消息本来就是一次普通的 POST。双向的通道会带来一堆这里用不上的
-/// 状态管理，而且浏览器原生的 EventSource 只能 GET，发不了这个 POST。
+/// Why SSE and not WebSocket: this path has one direction only, "server → browser", and
+/// sending a message is already an ordinary POST. Duplex would drag in useless state
+/// management, and the browser-native EventSource only does GET — it cannot send this POST.
 pub async fn turn(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<TurnStartParams>,
@@ -530,11 +530,11 @@ pub async fn turn(
         .into_response()
 }
 
-/// 把「这一轮」的通知一条条转给浏览器。两条输入：订阅到的通知，和请求的应答。
+/// Forward this turn's notifications to the browser one by one (subscriptions + response).
 ///
-/// 请求的应答（`turn/start` 的返回值）多数时候**没人关心** —— `turnCompleted`
-/// 已经把回复、用量、遥测全带回来了。但请求也可能直接失败（模型没配好、
-/// 参数不对），那时它带的是唯一的一句话，必须让页面上看见。
+/// The request's response (the `turn/start` return) is usually **ignored by everyone** —
+/// `turnCompleted` already carries back reply, usage and telemetry. But the request may
+/// fail outright (bad model config or params); then it is the only word, and must be shown.
 async fn forward(
     app: &AppServer,
     payload: serde_json::Value,
@@ -552,7 +552,7 @@ async fn forward(
             result = &mut request, if !answered => {
                 answered = true;
                 if let Err(error) = result {
-                    // 交给页面之后就收工：这一轮根本没跑起来。
+                    // Once handed to the page, we're done: this turn never ran.
                     let _ = tx.send(crate::as_notification(error)).await;
                     break;
                 }
@@ -560,8 +560,8 @@ async fn forward(
             received = events.recv() => {
                 let notification = match received {
                     Ok(notification) => notification,
-                    // 被追上了：中间的通知没跟上。已经收到的内容不回滚，但要说
-                    // 一句，否则页面上是「莫名其妙少了一段」。
+                    // Lapped: intermediate notifications fell behind. Received content is
+                    // kept, but it must be said, or the page shows "a chunk mysteriously gone".
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
                         eprintln!("(joy) 通知推得太快，这一轮丢了 {missed} 条");
                         continue;
@@ -570,15 +570,15 @@ async fn forward(
                 };
 
                 let Some(id) = belongs(&notification, &session_id, turn_id.as_deref()) else {
-                    // 别人的一轮（网关那边另一个会话跑起来了）。广播是给所有
-                    // 订阅者的，过滤只能在这里做。
+                    // Someone else's turn (another session started on the gateway side). The
+                    // broadcast reaches all subscribers; filtering can only happen here.
                     continue;
                 };
                 turn_id = Some(id);
 
                 let last = matches!(notification, ServerNotification::TurnCompleted(_));
                 if tx.send(notification).await.is_err() {
-                    // 浏览器把标签页关了：这一轮不用再推了，它自己会跑完。
+                    // The browser closed the tab: stop pushing; the turn finishes on its own.
                     break;
                 }
                 if last {
@@ -589,12 +589,12 @@ async fn forward(
     }
 }
 
-/// 这条通知属于这一轮吗？是的话返回它的 turnId。
+/// Does this notification belong to this turn? If so, return its turnId.
 ///
-/// 第一帧 `turnStarted` 只能靠 sessionId 认（那时还不知道 turnId），
-/// 之后每一帧都带 turnId —— 认 id 就不会把「另一个会话刚好也在跑」搞混。
-/// `consolidationCompleted` 和 `graph*` 没有 turnId，它们只在已经认下
-/// 这一轮之后才转发。
+/// The first frame, `turnStarted`, can only be recognized by sessionId (no turnId yet);
+/// every later frame carries a turnId — id matching avoids mixing in "another session that
+/// happens to be running". `consolidationCompleted` and `graph*` have no turnId; they are
+/// forwarded only after this turn has already been claimed.
 fn belongs(
     notification: &ServerNotification,
     session_id: &str,
@@ -614,7 +614,7 @@ fn belongs(
     }
 }
 
-/// 通知里带的 turnId。没有这个字段的那几种返回 None（见 `belongs`）。
+/// The turnId carried in a notification. Variants without that field return None (see `belongs`).
 fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
     use ServerNotification as N;
     match notification {
@@ -636,11 +636,11 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
     }
 }
 
-/// 通知通道 → SSE 帧。
+/// Notification channel → SSE frames.
 ///
-/// 每一帧就是一条通知的 JSON（`data: {...}`），前端 `JSON.parse` 之后按
-/// `type` 字段分流 —— 跟 `ServerNotification` 的判别式完全对上，
-/// 前端不需要第二套 schema。
+/// Each frame is the JSON of one notification (`data: {...}`); the frontend `JSON.parse`s
+/// it and dispatches on the `type` field — an exact match for `ServerNotification`'s
+/// discriminant, so the frontend needs no second schema.
 fn bytes_stream(
     rx: mpsc::Receiver<ServerNotification>,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
@@ -651,11 +651,11 @@ fn bytes_stream(
     })
 }
 
-/// 出错时返回协议自己的 `ErrorObject`，一个字都不改。
+/// On error, return the protocol's own `ErrorObject`, untouched.
 ///
-/// 状态码不是 200：`fetch` 那边能一眼看出「这一趟没成」，
-/// 而 body 里还是那个熟悉的 `{code, message}` —— 页面直接显示 message 就够，
-/// app-server 写的那些话本来就是给用户看的。
+/// The status code is not 200: on the `fetch` side "this trip failed" is obvious at a
+/// glance, while the body is still the familiar `{code, message}` — the page can just show
+/// the message; what app-server wrote was meant for users in the first place.
 fn failed(status: StatusCode, error: ErrorObject) -> Response {
     (status, Json(error)).into_response()
 }

@@ -1,8 +1,8 @@
-//! 后台作业：起、读、列、停，以及 owner 围栏。
+//! Background jobs: start, read, list, stop, and the owner fence.
 //!
-//! 起真进程的用例要沙箱（`run_command` 那条纪律：没有沙箱就不执行任何命令），
-//! 所以它们在没沙箱的机器上直接返回 —— 与 exec 的测试同一套跳过方式。
-//! 环溢出那条是纯函数，任何平台都跑。
+//! The cases that start real processes need the sandbox (`run_command`'s discipline: no sandbox, no
+//! command runs), so they return immediately on machines without one — the same skip style as exec's tests.
+//! The ring-overflow case is a pure function and runs on any platform.
 
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ async fn jobs(allow: &[&str]) -> (Arc<Jobs>, tempfile::TempDir) {
     )
 }
 
-/// 起一个作业、读一截、等它结束、结果落到 outbox。
+/// Start a job, read a chunk, wait for it to finish, and land the result in the outbox.
 #[tokio::test]
 async fn a_job_runs_reads_and_lands_in_the_outbox() {
     if !joyczl_tools::exec::sandbox_available() {
@@ -48,22 +48,22 @@ async fn a_job_runs_reads_and_lands_in_the_outbox() {
         .await
         .expect("起得来");
 
-    // 等它结束（wait 有界，命令很短）。
+    // Wait for it to finish (wait is bounded; the command is short).
     let read = jobs.output("s1", &id, 0, true).await.expect("读得到");
     assert!(!read.running, "echo 两条应该已经跑完：{read:?}");
     assert_eq!(read.exit_code, Some(0), "{read:?}");
     assert!(read.text.contains("第一行"), "{read:?}");
     assert!(read.text.contains("第二行"), "{read:?}");
 
-    // cursor 接着上次：没有新东西了。
+    // The cursor continues from last time: nothing new.
     let again = jobs
         .output("s1", &id, read.cursor, false)
         .await
         .expect("读得到");
     assert!(again.text.is_empty(), "接着读不该重复给：{again:?}");
 
-    // 收尾落盘（进程退出后仍可回查）。文件名带 **pid**：job id 是进程内自增的，
-    // 两个 Joy 进程会生成同名 `j1.txt` 互相覆盖。
+    // Completion spill (still queryable after the process exits). The filename carries the **pid**:
+    // job ids are per-process counters, and two Joy processes would overwrite each other's `j1.txt`.
     let outbox = dir
         .path()
         .join("outbox")
@@ -75,7 +75,7 @@ async fn a_job_runs_reads_and_lands_in_the_outbox() {
     assert!(text.contains("第一行"), "环里剩下的内容该在里面：{text}");
 }
 
-/// 别的会话拿到 id 也读不到、停不了。
+/// Another session cannot read or stop a job even with its id.
 #[tokio::test]
 async fn another_session_cannot_touch_the_job() {
     if !joyczl_tools::exec::sandbox_available() {
@@ -92,7 +92,7 @@ async fn another_session_cannot_touch_the_job() {
     assert_eq!(jobs.list("mine").len(), 1);
 }
 
-/// 停掉一个还在跑的：立刻算停，之后列表里显示已结束。
+/// Stop one that is still running: counted as stopped immediately, and the list shows it ended afterwards.
 #[tokio::test]
 async fn a_running_job_can_be_killed() {
     if !joyczl_tools::exec::sandbox_available() {
@@ -104,7 +104,7 @@ async fn a_running_job_can_be_killed() {
         .await
         .expect("起得来");
 
-    // 先确认它真的还在跑（sleep 30 不会立刻结束）。
+    // First confirm it really is still running (sleep 30 does not end right away).
     let read = jobs.output("s1", &id, 0, false).await.expect("读得到");
     assert!(read.running, "{read:?}");
 
@@ -112,11 +112,11 @@ async fn a_running_job_can_be_killed() {
     assert!(!jobs.kill("s1", &id).await.expect("再停一次"), "已经停了");
 }
 
-/// 环溢出：丢最旧的、记下丢了多少、读的时候如实说。
+/// Ring overflow: drop the oldest, record how much was dropped, and say so on read.
 #[test]
 fn an_overflowing_ring_drops_the_oldest_and_says_so() {
     let mut ring = Ring::new(8);
-    ring.push(b"0123456789"); // 10 字节进 8 字节的环 → 丢前 2 个
+    ring.push(b"0123456789"); // 10 bytes into an 8-byte ring → the first 2 are dropped
 
     let (text, cursor, lossy) = ring.read_from(0);
     assert!(lossy, "从 0 读就是要丢东西的");
@@ -124,7 +124,7 @@ fn an_overflowing_ring_drops_the_oldest_and_says_so() {
     assert_eq!(cursor, 10, "cursor 是绝对位置");
     assert_eq!(ring.total(), 10);
 
-    // 从「现在」往后读：不丢东西，也不会重复给。
+    // Reading forward from "now": nothing dropped, nothing repeated.
     let (text, cursor, lossy) = ring.read_from(cursor);
     assert!(text.is_empty() && !lossy);
     ring.push(b"ab");
@@ -133,7 +133,7 @@ fn an_overflowing_ring_drops_the_oldest_and_says_so() {
     assert!(!lossy, "接着读不该被算成丢失");
 }
 
-/// 一次写进去的比整个环还大：只留最后 cap 个字节。
+/// A single write larger than the whole ring: only the last cap bytes are kept.
 #[test]
 fn a_single_huge_write_keeps_only_the_tail() {
     let mut ring = Ring::new(4);
@@ -144,9 +144,9 @@ fn a_single_huge_write_keeps_only_the_tail() {
     assert_eq!(cursor, 10);
 }
 
-// ---- 7x24：台账、崩溃对账、历史回查 ---------------------------------------
+// ---- Always-on: ledger, crash reconciliation, history lookback ---------------------------------------
 
-/// 起一个真 job，结束后台账里是 completed；被 kill 的是 killed。
+/// Start a real job; when it ends the ledger says completed; a killed one says killed.
 #[tokio::test]
 async fn the_ledger_records_how_jobs_end() {
     if !joyczl_tools::exec::sandbox_available() {
@@ -169,7 +169,7 @@ async fn the_ledger_records_how_jobs_end() {
     policy.timeout_secs = 10;
     let jobs: Arc<Jobs> = Arc::new(Jobs::new(policy, dir.path().to_path_buf(), rows.clone()));
 
-    // 跑完的：completed。
+    // Finished run: completed.
     let id = jobs.spawn("s1", "echo 好", None).await.expect("起得来");
     let _ = jobs.output("s1", &id, 0, true).await.expect("读得到");
     let row = rows.get(&id).await.expect("查台账").expect("该有这一行");
@@ -178,10 +178,10 @@ async fn the_ledger_records_how_jobs_end() {
     let log = std::fs::read_to_string(row.log_path.expect("该有日志路径")).expect("日志读得回");
     assert!(log.contains("好"), "输出该随写随落：{log}");
 
-    // 被停的：killed，不是 failed —— 「失败」和「被人叫停」是两回事。
+    // Killed one: killed, not failed — "failed" and "stopped by someone" are two different things.
     let id2 = jobs.spawn("s1", "sleep 30", None).await.expect("起得来");
     assert!(jobs.kill("s1", &id2).await.expect("停得掉"));
-    // 等收尾 task 把台账写上。
+    // Wait for the finishing task to write the ledger.
     for _ in 0..50 {
         if let Ok(Some(row)) = rows.get(&id2).await {
             if row.status == "killed" {
@@ -194,8 +194,8 @@ async fn the_ledger_records_how_jobs_end() {
     assert_eq!(row2.status, "killed", "{row2:?}");
 }
 
-/// 崩溃对账：上次进程死时还挂着的 running 行 → interrupted；历史能列出、
-/// 输出能回读；**不自动重跑**。
+/// Crash reconciliation: a running row left hanging when the last process died → interrupted; history
+/// can be listed, output read back; **never auto-rerun**.
 #[tokio::test]
 async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -204,7 +204,7 @@ async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
         .expect("打开库");
     let rows = joyczl_state::Jobs::new(pool);
 
-    // 模拟上一次进程：起了一行 running，输出写了一半，然后死了。
+    // Simulate the last process: started one running row, wrote half the output, then died.
     let log_path = dir.path().join("jobs").join("999-j1.log");
     std::fs::create_dir_all(log_path.parent().unwrap()).expect("建日志目录");
     std::fs::write(&log_path, "跑到一半的输出").expect("写半截输出");
@@ -217,7 +217,7 @@ async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
     .await
     .expect("记台账");
 
-    // 新进程启动：对账。
+    // New process starts: reconcile.
     let jobs = Jobs::new(
         ExecPolicy {
             allow: vec![],
@@ -237,18 +237,18 @@ async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
     assert_eq!(row.status, "interrupted", "挂着的就是中断了：{row:?}");
     assert!(row.finished_at.is_some(), "补上收尾时间：{row:?}");
 
-    // 历史列表看得见（owner 围栏照旧）。
+    // The history list is visible (owner fence as usual).
     assert_eq!(jobs.list("s1").len(), 1, "owner 该看得见");
     assert!(jobs.list("someone-else").is_empty(), "别人的历史不该看得见");
 
-    // 输出回读：半截输出还在，跑不回去但读得回来。
+    // Output read-back: the half-written output is still there; it cannot run again but it can be read.
     let read = jobs
         .output("s1", &"j1".to_string(), 0, false)
         .await
         .expect("历史作业该读得到");
     assert!(!read.running);
     assert!(read.text.contains("跑到一半"), "{read:?}");
-    // 别人读不到 —— 消息与活作业同一个口径。
+    // Others cannot read it — same wording as for live jobs.
     assert!(jobs
         .output("someone-else", &"j1".to_string(), 0, false)
         .await

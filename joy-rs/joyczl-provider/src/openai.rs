@@ -1,11 +1,11 @@
-//! OpenAI 兼容端点的适配器。
+//! Adapter for OpenAI-compatible endpoints.
 //!
-//! loop 说 Anthropic 的方言，这里是两种 wire format 之间的全部翻译 ——
-//! 两个方向的转换都是纯函数，编译器保证两边字段对得上。
+//! loop speaks Anthropic's dialect; this file is the entire translation between the two
+//! wire formats — both directions are pure functions, and the compiler keeps fields aligned.
 //!
-//! Gemini 思考模型会在 tool_call 上带 `thought_signature`，下一轮必须原样
-//! 回传否则 400。它进 `ContentBlock::ToolUse` 的 `extra` 字段，这里在
-//! `extra_content` 与 `extra` 之间来回搬 —— 别的 wire 看不到它。
+//! Gemini thinking models attach `thought_signature` to tool_call; the next turn must pass
+//! it back verbatim or 400. It goes into `ContentBlock::ToolUse`'s `extra` field, shuttled
+//! here between `extra_content` and `extra` — other wires never see it.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -25,7 +25,7 @@ pub struct Client {
     http: HttpClient,
     base_url: String,
     api_key: String,
-    /// 限流/临时故障时最多重试几次（`JOY_LLM_RETRIES`）。
+    /// Max retries on rate limits / transient faults (`JOY_LLM_RETRIES`).
     max_retries: u32,
 }
 
@@ -45,9 +45,9 @@ impl Client {
         }
     }
 
-    /// 给请求带上 key —— 除非本来就没有。本地端点（Ollama / LM Studio /
-    /// vLLM）不需要 key：一个空的 `Authorization: Bearer ` 头比不带头更糟，
-    /// 有些网关会因此回 401，而不是「忽略」。
+    /// Attach the key to a request — unless there is none. Local endpoints (Ollama /
+    /// LM Studio / vLLM) need no key: an empty `Authorization: Bearer ` header is worse
+    /// than none — some gateways answer 401 instead of "ignoring" it.
     fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if self.api_key.is_empty() {
             builder
@@ -56,8 +56,8 @@ impl Client {
         }
     }
 
-    /// 发一次请求（限流/临时故障会退避重试），返回**还没读 body** 的应答 ——
-    /// 流式那条路要自己接着读。
+    /// Send one request (retrying on rate limits / transient faults); returns the response
+    /// **with its body unread** — the streaming path reads it on its own.
     async fn send(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
         let url = format!("{}/chat/completions", self.base_url);
         crate::retry::with_retries(self.max_retries, || async {
@@ -66,7 +66,7 @@ impl Client {
         .await
     }
 
-    /// 一次性调用用的包装：把 body 读成文本（非 2xx 已经在 `send` 里变成错误）。
+    /// Wrapper for one-shot calls: reads the body as text (non-2xx already became an error in `send`).
     async fn post(&self, body: &Value) -> Result<String, ProviderError> {
         let response = self.send(body).await?;
         response.text().await.map_err(ProviderError::from)
@@ -99,9 +99,9 @@ impl Client {
         let body = to_openai(&request);
         let text = match self.post(&body).await {
             Ok(text) => text,
-            // 旧端点只认 max_tokens，不认 max_completion_tokens。只在错误
-            // 真的是关于这个参数时才换名字重发 —— 见过别的失败被这次重试
-            // 盖住，留下一条「用 max_completion_tokens」的迷惑信息。
+            // Older endpoints only know max_tokens, not max_completion_tokens. Retry under the
+            // other name only when the error is truly about this parameter — seen other failures
+            // masked by this retry, leaving a confusing "use max_completion_tokens" message.
             Err(ProviderError::Http {
                 status: 400,
                 body: why,
@@ -118,9 +118,9 @@ impl Client {
         from_openai(&text)
     }
 
-    /// SSE 流式。tool 调用的参数按 index 分片到达，攒齐后再解析。
-    /// `include_usage` 让最后一个 chunk 带上用量 —— 不加的话流式拿不到
-    /// token 数，trace 上的花费就是 0。
+    /// SSE streaming. Tool-call arguments arrive in fragments by index, parsed once complete.
+    /// `include_usage` makes the last chunk carry usage — without it streaming has no token
+    /// counts, and the cost on a trace would read 0.
     async fn stream_inner(
         &self,
         request: CreateRequest,
@@ -130,8 +130,8 @@ impl Client {
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
 
-        // 重试只覆盖「拿到应答」这一步：一旦开始读流，中途断开就不再重发 ——
-        // 重发会把已经吐给用户的那半截话变成两遍。
+        // Retries only cover "getting the response": once the stream starts, a drop is not
+        // resent — resending would duplicate the half answer already shown to the user.
         let response = self.send(&body).await?;
 
         let mut tools: BTreeMap<i64, PartialCall> = BTreeMap::new();
@@ -148,7 +148,7 @@ impl Client {
             let value: Value = serde_json::from_str(&data)
                 .map_err(|e| ProviderError::Parse(format!("SSE 载荷不是 JSON：{e}")))?;
 
-            // 用量在最后一个 chunk 上，而那个 chunk 的 choices 是空的。
+            // Usage rides on the last chunk, whose choices array is empty.
             if let Some(u) = value.get("usage") {
                 if !u.is_null() {
                     usage.input_tokens =
@@ -229,8 +229,8 @@ impl Client {
     }
 }
 
-/// 一条 tool 调用流式攒齐前的样子。参数是分片到达的，
-/// `arguments` 要一路追加到最后才能解析。
+/// A tool call as accumulated during streaming, before completion. Arguments arrive in
+/// fragments; `arguments` must be appended all the way to the end before parsing.
 #[derive(Default)]
 struct PartialCall {
     id: String,
@@ -239,7 +239,7 @@ struct PartialCall {
     extra: Option<Value>,
 }
 
-/// Anthropic 形状 → OpenAI 形状。
+/// Anthropic shape → OpenAI shape.
 pub fn to_openai(request: &CreateRequest) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     if let Some(system) = &request.system {
@@ -249,7 +249,7 @@ pub fn to_openai(request: &CreateRequest) -> Value {
     for message in &request.messages {
         match message.role {
             Role::Assistant => {
-                // 文本 + tool 调用合成一条 assistant 消息。
+                // Text + tool calls merged into a single assistant message.
                 let text = message.text();
                 let calls: Vec<Value> = message
                     .content
@@ -269,8 +269,8 @@ pub fn to_openai(request: &CreateRequest) -> Value {
                                     "arguments": serde_json::to_string(input).unwrap_or_default(),
                                 },
                             });
-                            // Gemini 思考模型的 thought_signature —— 上一轮带回来
-                            // 的必须原样送回去，否则下一轮 400。
+                            // Gemini thinking models' thought_signature — what came back from
+                            // the last turn must be sent back verbatim, or the next turn 400s.
                             if let Some(extra) = extra {
                                 call["extra_content"] = extra.clone();
                             }
@@ -291,8 +291,8 @@ pub fn to_openai(request: &CreateRequest) -> Value {
                 messages.push(entry);
             }
             Role::User => {
-                // OpenAI 要求每个 tool 结果单独一条 tool 消息。带 tool 结果的
-                // 消息里的纯文本（模型其实看不见）一并丢弃。
+                // OpenAI requires each tool result as its own tool message. Plain text in a
+                // message carrying tool results (invisible to the model) is dropped with it.
                 let has_tool_results = message
                     .content
                     .iter()
@@ -343,13 +343,13 @@ pub fn to_openai(request: &CreateRequest) -> Value {
     body
 }
 
-/// OpenAI 形状 → Anthropic 形状。
+/// OpenAI shape → Anthropic shape.
 pub fn from_openai(text: &str) -> Result<CreateResponse, ProviderError> {
     let value: Value = serde_json::from_str(text)
         .map_err(|e| ProviderError::Parse(format!("应答不是合法 JSON：{e}")))?;
 
-    // OpenRouter 限流时回 200 + error body、没有 choices：把它的消息端出来，
-    // 别在下面取 choices[0] 时崩掉。
+    // OpenRouter answers rate limits with 200 + an error body and no choices: surface its
+    // message instead of crashing below when taking choices[0].
     if let Some(error) = value.get("error") {
         return Err(ProviderError::Api(error.to_string()));
     }

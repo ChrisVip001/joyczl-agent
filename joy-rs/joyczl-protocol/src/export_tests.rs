@@ -1,11 +1,11 @@
-//! 协议导出的驱动测试。
+//! Driver test for the protocol export.
 //!
-//! 被 `#[ignore]`：它会写文件，不能跟普通单测一起跑。
-//! 由 `just write-app-server-schema`（→ scripts/write_schema.py）触发。
+//! `#[ignore]`d: it writes files and cannot run with ordinary unit tests.
+//! Triggered by `just write-app-server-schema` (→ scripts/write_schema.py).
 //!
-//! 写到哪由 `JOYCZL_SCHEMA_OUT` 决定。这里**只管生成**：排版（prettier）和
-//! 漂移比对都在 Python 侧做 —— 因为排版发生在生成之后，在 Rust 里比对会
-//! 拿未排版的产物去比已排版的提交物，永远不相等。
+//! Where to write is decided by `JOYCZL_SCHEMA_OUT`. This **only generates**:
+//! formatting (prettier) and drift comparison live on the Python side — formatting
+//! happens after generation, so comparing raw Rust output to formatted commits never matches.
 
 use std::fs;
 
@@ -39,8 +39,8 @@ fn write_schema_fixtures() {
     let json_text = serde_json::to_string_pretty(&schema).expect("schema 序列化");
     fs::write(json_out.join("v2.json"), &json_text).expect("写 v2.json");
 
-    // 常量单独一份 JSON：JSON Schema 装不下值，而 Python 侧要拿方法名和错误码。
-    // 跟 v2.json 一样是生成物、一样 check-in、一样被漂移检查盯着。
+    // Constants as a separate JSON: JSON Schema cannot hold values, and the Python side needs the method names and error codes.
+    // Like v2.json: a generated artifact, checked in, and watched by the drift check.
     let consts = generate_consts_json();
     let consts_text = serde_json::to_string_pretty(&consts).expect("常量序列化");
     fs::write(json_out.join("consts.json"), &consts_text).expect("写 consts.json");

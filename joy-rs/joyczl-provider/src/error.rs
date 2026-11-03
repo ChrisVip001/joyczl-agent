@@ -1,46 +1,46 @@
-//! provider 的错误。刻意区分「我这边的问题」和「模型那边的问题」。
+//! Provider errors. Deliberately distinguishes "our side's problem" from "the model side's".
 
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
-    /// 模型那边回了非 2xx。body 原样带上 —— 限流、模型名写错、key 无效，
-    /// 各家的提示都在 body 里，丢掉它排查就只能靠猜。
+    /// The model side answered non-2xx. The body is carried verbatim — rate limits, bad
+    /// model names, invalid keys: every vendor's hints live in the body; dropping it = guesswork.
     #[error("HTTP {status}: {body}")]
     Http {
         status: u16,
         body: String,
-        /// `Retry-After` 头（秒）。429 时常有，有这个就按服务端说的等。
+        /// The `Retry-After` header (seconds). Common on 429; if present, wait as the server says.
         retry_after_secs: Option<u64>,
     },
 
-    /// 网络层挂了：超时、DNS、连接被拒。
+    /// The network layer failed: timeout, DNS, connection refused.
     #[error("网络错误: {0}")]
     Network(#[from] reqwest::Error),
 
-    /// provider 说「这次请求超出上下文窗口」。单独成一类，因为它是**唯一**
-    /// 值得上层「压缩后重试一次」的错误 —— 别的错误重试只会得到同样的错误。
+    /// The provider says "this request exceeds the context window". Its own variant: it is
+    /// the **only** error worth "compact and retry once" upstream — retrying others is futile.
     #[error("上下文超出窗口（HTTP {status}）：{body}")]
     ContextOverflow { status: u16, body: String },
 
-    /// 2xx 但内容不对（比如 OpenRouter 限流时回 200 + error body、没有 choices）。
+    /// 2xx but wrong content (e.g. OpenRouter rate limits return 200 + error body, no choices).
     #[error("{0}")]
     Api(String),
 
-    /// 应答格式与预期不符。
+    /// The response format did not match expectations.
     #[error("应答解析失败: {0}")]
     Parse(String),
 }
 
 impl ProviderError {
-    /// 从一次 HTTP 应答造错误：先认一认是不是「上下文溢出」。
+    /// Build an error from an HTTP response: first check whether it is a "context overflow".
     ///
-    /// 所有 `status >= 400` 的地方都走这里，于是「认出溢出」只有一处实现。
+    /// Every `status >= 400` goes through here, so "detecting overflow" has one implementation.
     pub fn from_http(status: u16, body: String) -> Self {
         Self::from_http_retry(status, body, None)
     }
 
-    /// 同上，但带上服务端在 `Retry-After` 里要求的等待秒数（429 常见）。
+    /// Same, but carries the seconds the server demanded in `Retry-After` (common on 429).
     pub fn from_http_retry(status: u16, body: String, retry_after_secs: Option<u64>) -> Self {
         if looks_like_context_overflow(status, &body) {
             Self::ContextOverflow { status, body }
@@ -53,16 +53,16 @@ impl ProviderError {
         }
     }
 
-    /// 是「上下文溢出」吗？（`full_turn` 靠它决定要不要压缩后重试）
+    /// Is this a "context overflow"? (`full_turn` uses it to decide on compact-and-retry)
     pub fn is_context_overflow(&self) -> bool {
         matches!(self, ProviderError::ContextOverflow { .. })
     }
 
-    /// **值得退避重试吗？** 只有两类：限流（429）与服务端临时故障（5xx），
-    /// 加上网络层抖动。
+    /// **Worth a backoff retry?** Only two classes: rate limiting (429) and transient server
+    /// faults (5xx), plus network-layer jitter.
     ///
-    /// 别的错误重试只会以同样方式再失败一次 —— 白等一倍时间，还多花一次配额。
-    /// 尤其不要重试「上下文溢出」：那是要压上下文，不是要再撞一次。
+    /// Retrying other errors only fails again the same way — doubled wait, one more quota.
+    /// Especially never retry "context overflow": that calls for compacting, not slamming again.
     pub fn retryable(&self) -> bool {
         match self {
             ProviderError::Http { status, .. } => *status == 429 || *status >= 500,
@@ -71,7 +71,7 @@ impl ProviderError {
         }
     }
 
-    /// 服务端要求的等待时长（`Retry-After`），没给就是 `None`。
+    /// The wait the server demanded (`Retry-After`); `None` when not given.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
             ProviderError::Http {
@@ -83,11 +83,11 @@ impl ProviderError {
     }
 }
 
-/// 从错误体里认出「上下文溢出」。
+/// Detect "context overflow" from an error body.
 ///
-/// 两道门槛：先看状态码（只有 400 / 413 / 422 是真的在说「这次请求太大」，
-/// 别处的同一个词多半是巧合 —— 误判会白花一次压缩），再看短语表（各家措辞
-/// 不同）。认不出来最多是少一次重试，错误照常冒给用户，不会有别的后果。
+/// Two gates: status code first (only 400 / 413 / 422 genuinely mean "request too large";
+/// the same phrase elsewhere is usually coincidence — a false positive wastes a compaction),
+/// then the phrase list (vendors word it differently). Missing one costs at most a retry.
 pub fn looks_like_context_overflow(status: u16, body: &str) -> bool {
     if !matches!(status, 400 | 413 | 422) {
         return false;

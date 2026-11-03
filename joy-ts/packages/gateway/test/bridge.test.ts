@@ -13,7 +13,7 @@ interface SentRequest {
   params: Record<string, unknown>;
 }
 
-/** 站在服务端那一侧的假传输：收请求、吐通知、给应答。 */
+/** A fake transport on the server's side: take requests, emit notifications, return replies. */
 class FakeServer implements Transport {
   readonly written: SentRequest[] = [];
   closeCalled = false;
@@ -35,14 +35,14 @@ class FakeServer implements Transport {
     this.closeCalled = true;
   }
 
-  /** 给第 `index` 条请求发回应答。 */
+  /** Reply to request number `index`. */
   reply(index: number, result: unknown): void {
     const request = this.written[index];
     assert.ok(request !== undefined, `第 ${index} 条请求还没写出去`);
     this.#onLine?.(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
   }
 
-  /** 给第 `index` 条请求回错误。 */
+  /** Return an error for request number `index`. */
   fail(index: number, code: number, message: string): void {
     const request = this.written[index];
     assert.ok(request !== undefined, `第 ${index} 条请求还没写出去`);
@@ -110,14 +110,14 @@ function completed(
   };
 }
 
-/** 让排着的 microtask 跑完 —— 用来观察「第二条请求出去了没有」。 */
+/** Let queued microtasks run — used to observe "has the second request gone out yet". */
 function tick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
 test("会话 id 由平台身份派生，网关因此不需要记任何映射", () => {
   assert.equal(sessionIdFor("telegram:42"), "telegram:42");
-  // 同一个人下次连上来还是同一段对话，重启也不变 —— 因为压根没存过什么。
+  // The same person reconnecting lands on the same conversation, across restarts — nothing was stored.
   assert.equal(sessionIdFor("telegram:42"), "telegram:42");
 });
 
@@ -186,7 +186,7 @@ test("同一段对话连发两条：第二条必须等第一条走完", async ()
 test("不同对话之间互不影响", async () => {
   const { bridge, server } = setup();
 
-  // 两个人同时说话：排队是按对话分的，不该互相卡住。
+  // Two people speak at once: queues are per conversation and must not block each other.
   const alice = bridge.ask("telegram:1", "我是甲");
   const bob = bridge.ask("telegram:2", "我是乙");
   await tick();
@@ -213,7 +213,7 @@ test("一轮失败：错误穿透出去，残骸不留到下一轮", async () =>
   await tick();
   server.notify(started("t1"));
   server.notify(completed("t1", "第一轮的答复"));
-  // 通知串走完了，应答却是错的 —— 收着的那份必须扔掉。
+  // The notification stream finished but the response was an error — the stored copy must be dropped.
   server.fail(0, CODES.INTERNAL_ERROR, "写库失败");
   await assert.rejects(first, /写库失败/);
 
@@ -255,7 +255,7 @@ test("进度：工具开跑说一声，工具失败也值得说一声", async ()
     status: "error",
     durationMs: 1,
   });
-  // 工具成功是常态，不该打扰用户；失败才报 —— 下一句解释通常就跟它有关。
+  // Successful tools are normal, not worth interrupting the user; failures are — the next explanation follows.
   server.notify({ type: "toolStarted", turnId: "t1", tool: "http_get", args: {} });
   server.notify({
     type: "toolCompleted",
@@ -265,7 +265,7 @@ test("进度：工具开跑说一声，工具失败也值得说一声", async ()
     status: "ok",
     durationMs: 20,
   });
-  // 这条不带 turnId，归不到任何一段对话 —— 该被无声丢掉，不能猜着播报。
+  // This one carries no turnId and belongs to no conversation — silently dropped, never guessed.
   server.notify({ type: "consolidationCompleted", newFacts: 2 });
   server.notify(completed("t1", "查到了"));
   server.reply(0, { turnId: "t1" });

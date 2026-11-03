@@ -1,13 +1,13 @@
-//! 审批审计台账（迁移 0011）：模型问过什么、结果如何。
+//! The approval audit ledger (migration 0011): what the model asked, and how it ended.
 //!
-//! 与用量台账（M2d）同一条纪律：**写失败不拦主路** —— 审批的因果由
-//! oneshot 通道保证，台账只是事后可查的影子。四态 outcome（approved /
-//! denied / timeout / voided）都从等待 future 的收尾处出，写入口唯一。
+//! Same discipline as the usage ledger (M2d): **write failures never block the main path** —
+//! approval causality is guaranteed by the oneshot channel; the ledger is only a queryable
+//! shadow. The four-state outcome (approved / denied / timeout / voided) comes from one place.
 
 use anyhow::Result;
 use sqlx::{FromRow, SqlitePool};
 
-/// 审计行。
+/// One audit row.
 #[derive(Debug, Clone, FromRow)]
 pub struct ApprovalLogRow {
     pub turn_id: String,
@@ -19,7 +19,7 @@ pub struct ApprovalLogRow {
     pub decided_at: String,
 }
 
-/// 审批审计台账。
+/// The approval audit ledger.
 #[derive(Clone)]
 pub struct Approvals {
     pool: SqlitePool,
@@ -30,8 +30,8 @@ impl Approvals {
         Self { pool }
     }
 
-    /// 记一条结果。outcome 就是四态字符串，由调用方出 —— 拆枚举是过度设计，
-    /// 这张表的读者是人和 SQL。
+    /// Log one outcome. The outcome is the four-state string, produced by the caller — an
+    /// enum would be over-design; this table's readers are humans and SQL.
     pub async fn log(
         &self,
         turn_id: &str,
@@ -56,7 +56,7 @@ impl Approvals {
         Ok(())
     }
 
-    /// 最近的记录，新的在前。
+    /// Most recent records, newest first.
     pub async fn recent(&self, limit: i64) -> Result<Vec<ApprovalLogRow>> {
         let rows = sqlx::query_as::<_, ApprovalLogRow>(
             "SELECT turn_id, request_id, tool, args_preview, reason, outcome, decided_at
@@ -83,7 +83,7 @@ mod tests {
         (Approvals::new(pool), dir)
     }
 
-    /// 四态都落得进去；新的在前；空表返回空。
+    /// All four outcomes persist; newest first; empty table returns empty.
     #[tokio::test]
     async fn the_log_records_all_four_outcomes() {
         let (log, _dir) = db().await;

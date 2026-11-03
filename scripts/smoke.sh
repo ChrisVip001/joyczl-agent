@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# app-server 的端到端冒烟测试：真的起一个 joy app-server，从 stdin 喂
-# JSON-RPC，检查每种应答。比单测更靠近真实用法 —— 单测证明 state 对，
-# 这个证明「协议 + 传输 + state」这条链路通。
+# End-to-end smoke test for app-server: really start a joy app-server, feed it JSON-RPC from
+# stdin, and check every kind of reply. Closer to real usage than unit tests — unit tests prove
+# the state is right; this proves the "protocol + transport + state" chain works.
 #
 #   ./scripts/smoke.sh
 #
-# 需要 cargo build 过（它直接用 target/debug/joy）。
+# Requires a prior cargo build (it uses target/debug/joy directly).
 
 set -euo pipefail
 
@@ -26,9 +26,9 @@ fi
 
 cd "$WORK"
 
-# 一个会话里连着问：写入 → 检索 → 忘掉 → 配置 → 未实现 → 未知方法 → 坏 JSON。
-# 注意：这个环境里没有 API key，所以 turn/start 应当报 PROVIDER_ERROR，
-# 且错误信息要告诉用户怎么办 —— 而其它方法必须照常工作。
+# Ask several things in one session: write → retrieve → forget → config → unimplemented →
+# unknown method → bad JSON. Note: no API key here, so turn/start should report PROVIDER_ERROR,
+# with a message telling the user what to do — while all other methods must keep working.
 OUTPUT=$(printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"memory/remember","params":{"subject":"阿明","content":"阿明喜欢早上的会议"}}' \
   '{"jsonrpc":"2.0","id":2,"method":"memory/search","params":{"query":"早上"}}' \
@@ -41,7 +41,7 @@ OUTPUT=$(printf '%s\n' \
 
 echo "$OUTPUT" | sed 's/^/  /'
 
-# ---- 断言 ----
+# ---- Assertions ----
 fail() { echo "✗ $1" >&2; exit 1; }
 
 echo "$OUTPUT" | grep -q '"id":1,"result":{"fact"'          || fail "memory/remember 没写进去"
@@ -54,14 +54,14 @@ echo "$OUTPUT" | grep -q '缺 API key'                        || fail "PROVIDER_
 echo "$OUTPUT" | grep -q '"id":6,"error":{"code":-32601'     || fail "未知方法应当报 METHOD_NOT_FOUND"
 echo "$OUTPUT" | grep -q '"code":-32700'                     || fail "坏 JSON 应当报 PARSE_ERROR"
 
-# 记忆得真的是一个能打开的文件 —— 这是「local-first」的全部意义。
+# Memory must really be an openable file — that's the whole point of "local-first".
 [[ -f "$WORK/.joy/state.db" ]] || fail "state.db 没建在 .joy/ 下"
 sqlite3 "$WORK/.joy/state.db" '.tables' >/dev/null 2>&1 \
   && echo "  ✓ state.db 能被 sqlite3 直接打开" \
   || echo "  ⚠ 没装 sqlite3，跳过直接打开检查"
 
-# 起一个假 SSE 端点，把端口打出来。下面两段各要一个新端口（它回完一次
-# 流式应答就自己退场了）。
+# Start a fake SSE endpoint and print its port. The two sections below each need a fresh port
+# (it exits after serving one streaming reply).
 start_fake() {
   local port_file="$1"
   python3 "$REPO/scripts/fake_sse_server.py" >"$port_file" &
@@ -73,13 +73,13 @@ start_fake() {
   head -n1 "$port_file" 2>/dev/null || true
 }
 
-# ---- 流式：接到本地假 SSE 端点，验证 SSE → textDelta → 完整应答这条链 -------
-# 不用真 key：model/save 配一套指到假端点（keyEnv 指针），provider 照常打请求，对端是假的。
+# ---- Streaming: connect to the local fake SSE endpoint, verify SSE → textDelta → reply ----
+# No real key: model/save points a profile at the fake endpoint (keyEnv pointer); requests go out.
 PORT="$(start_fake "$WORK/fake_port")"
 [[ -n "$PORT" ]] || fail "假 SSE 端点没起来"
 
-# 配模型走协议本身（model/save）：key 用 --env 指针 + 测试环境变量 ——
-# 不碰真钥匙串、不落明文文件；base_url 指到假端点。顺带把这条新路径端到端跑了一遍。
+# Configure the model via the protocol itself (model/save): --env pointer key + test env var —
+# no real keychain, no plaintext file; base_url points at the fake endpoint. Also runs that path.
 STREAM_OUT=$(printf '%s\n' \
   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/save\",\"params\":{\"id\":\"fake\",\"provider\":\"anthropic\",\"apiKey\":null,\"keyEnv\":\"JOY_FAKE_KEY\",\"baseUrl\":\"http://127.0.0.1:$PORT\"}}" \
   '{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"message":"你好"}}' \
@@ -94,10 +94,10 @@ echo "$STREAM_OUT" | grep -q '"reply":"你好，世界"'         || fail "最终
 echo "$STREAM_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "turn/start 没有正常应答"
 echo "  ✓ 流式：SSE → textDelta → 完整应答"
 
-# ---- 图的前门：开着的时候，分类器挂了也必须照常答上来 -----------------------
-# 同一份假端点：非流式请求一律 500 —— 分类器和检索门于是都「失败开放」，
-# 这一轮落到 full_agent，答案跟不带图时一模一样。
-# 这就是那条规矩的端到端版本：图坏了，代价只能是延迟，不能是能力。
+# ---- Graph front door: when enabled, the classifier must fail open and still answer --------
+# Same fake endpoint: non-streaming requests always 500 — so the classifier and retrieval gate
+# both "fail open", the turn falls to full_agent, and the answer matches the no-graph case.
+# That's the e2e version of the rule: a broken graph may cost latency, never capability.
 PORT2="$(start_fake "$WORK/fake_port2")"
 [[ -n "$PORT2" ]] || fail "假 SSE 端点没起来（图那次）"
 
@@ -116,9 +116,9 @@ echo "$GRAPH_OUT" | grep -q '"reply":"你好，世界"'         || fail "图开�
 echo "$GRAPH_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "图开着时 turn/start 也得正常应答"
 echo "  ✓ 图：分类器失败开放 → full_agent → 同样的答复"
 
-# ---- hub：多用户单机的端到端 ---------------------------------------------
-# adduser → 起 hub → 无 token 401 / 错 token 401 / 对 token 200，
-# 且该用户的 home 是 hub 建的（隔离的物理证据）。
+# ---- hub: multi-user single-machine end to end ---------------------------------------------
+# adduser → start hub → no token 401 / wrong token 401 / right token 200,
+# and that user's home is created by the hub (physical evidence of isolation).
 HUB="$WORK/hub"
 HUB_OUT=$("$BIN" hub adduser alice --root "$HUB")
 HUB_TOKEN=$(printf '%s\n' "$HUB_OUT" | grep -E '^[0-9a-f]{64}$' | head -1)

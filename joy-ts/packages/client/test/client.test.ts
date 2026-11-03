@@ -7,10 +7,10 @@ import type { ServerNotification } from "../src/protocol.ts";
 import type { Transport } from "../src/transport.ts";
 
 /**
- * 站在服务端那一侧的假传输。
+ * A fake transport standing on the server's side.
  *
- * 这里测的全是客户端自己的逻辑（id 配对、通知分发、断线收敛），没有一行
- * 需要真的起进程。真起进程的活留给冒烟测试 —— 那才是它该管的事。
+ * Everything tested here is the client's own logic (id pairing, dispatch, shutdown settling) —
+ * not one line needs a real process; that belongs to the smoke tests, where it belongs.
  */
 class FakeTransport implements Transport {
   readonly written: string[] = [];
@@ -40,7 +40,7 @@ class FakeTransport implements Transport {
     this.closeCalled = true;
   }
 
-  /** 最近一条请求，已解析。 */
+  /** The latest request, parsed. */
   get lastRequest(): { id: number; method: string; params: unknown } {
     const line = this.written.at(-1);
     assert.ok(line !== undefined, "还没有写出任何请求");
@@ -80,7 +80,7 @@ class FakeTransport implements Transport {
   }
 }
 
-/** 建一个客户端，日志收进数组里好断言。 */
+/** Build a client, collecting logs into an array for assertions. */
 function setup(): { client: JoyClient; transport: FakeTransport; logs: string[] } {
   const transport = new FakeTransport();
   const logs: string[] = [];
@@ -101,7 +101,7 @@ test("请求带上递增的 id，应答还给对应的那个 await", async () =>
   const [id1, id2] = transport.written.map((line) => JSON.parse(line).id);
   assert.notEqual(id1, id2, "两个请求不能撞 id");
 
-  // 故意乱序回来：配 id 的意义就在这里。
+  // Deliberately out of order: pairing by id is the whole point.
   transport.respond(id2, { data: [], nextCursor: null });
   transport.respond(id1, { turnId: "t-1" });
 
@@ -196,7 +196,7 @@ test("连接断了：挂着的请求全被拒，且说得出在等什么", async
 
   await assert.rejects(waiting, /memory\/search 没等到应答，连接断了/);
 
-  // 断了之后新请求立刻被拒 —— 不能挂在那儿等一个不会来的应答。
+  // After the drop, new requests are rejected at once — they must not hang waiting for a reply that will never come.
   await assert.rejects(
     client.request(METHODS.SESSION_NEW, {}),
     /连接已经没了/,
@@ -214,8 +214,8 @@ test("主动关闭：文明收尾，并收敛挂着的请求", async () => {
 });
 
 test("方法名来自生成物，跟 Rust 侧一字不差", () => {
-  // 这几条断言的作用是「把生成物钉在地上」：哪天 Rust 那边改了方法名，
-  // 生成物跟着变，这里就会红，而不是等到运行时收到 method not found。
+  // These assertions "pin the artifacts to the ground": the day Rust renames a method, the
+  // artifacts change and this goes red — instead of a runtime "method not found" much later.
   assert.equal(METHODS.TURN_START, "turn/start");
   assert.equal(METHODS.SESSION_NEW, "session/new");
   assert.equal(METHODS.MEMORY_REMEMBER, "memory/remember");

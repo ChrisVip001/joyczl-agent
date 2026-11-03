@@ -1,13 +1,13 @@
-//! 本地日历：Joy 自己创建的事件。
+//! The local calendar: events Joy created itself.
 //!
-//! 语义：
-//!   * state.db 永远是权威落点（确定性评测断言的就是这里）；
-//!   * `calendar.ics` 是可导入的文件副本；
-//!   * **幂等**：同标题 + 同开始时间的事件只存一次 —— 模型犯糊涂或用户
-//!     不耐烦，都不能造成三重预定。
+//! Semantics:
+//!   * state.db is always the authoritative landing spot (deterministic evaluation asserts here);
+//!   * `calendar.ics` is an importable file copy;
+//!   * **Idempotent**: an event with the same title + same start time is stored once — a
+//!     confused model or an impatient user must not cause triple booking.
 //!
-//! Apple / Google 日历的同步是工具层（joyczl-tools）的事：state 只管
-//! 本地的这张表，联网同步失败也不能影响本地写入。
+//! Apple / Google calendar sync belongs to the tool layer (joyczl-tools): state only
+//! manages this local table, and a failed online sync must not affect local writes.
 
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
@@ -16,9 +16,9 @@ use sqlx::sqlite::SqlitePool;
 pub struct CalendarRow {
     pub id: i64,
     pub title: String,
-    /// ISO 8601，分钟精度。
+    /// ISO 8601, minute precision.
     pub start: String,
-    /// SQL 里是保留字 `"end"`；SELECT 出来的列名就是 `end`，字段名照它起。
+    /// Reserved word `"end"` in SQL; the SELECT column name is `end`, so is the field.
     pub end: String,
     pub attendees: String,
     pub notes: String,
@@ -35,8 +35,8 @@ impl Calendar {
         Self { pool }
     }
 
-    /// 写一条事件。同 (title, start) 已存在时不重复写，返回 `Ok(None)` ——
-    /// 调用方据此告诉模型「事件已经在了」，而不是假装又建了一遍。
+    /// Write one event. If the same (title, start) exists, no duplicate write; returns `Ok(None)` —
+    /// the caller then tells the model "the event is already there" instead of faking a new one.
     pub async fn add(
         &self,
         title: &str,
@@ -60,8 +60,8 @@ impl Calendar {
         Ok(row)
     }
 
-    /// 按开始日期的区间检索（两端都含当日；`start`/`end` 是 ISO 日期）。
-    /// 都不给就是全部，按开始时间升序。
+    /// Search by a start-date range (both ends inclusive; `start`/`end` are ISO dates).
+    /// Both absent = everything, ordered by start time ascending.
     pub async fn list(
         &self,
         start: Option<&str>,
@@ -74,8 +74,8 @@ impl Calendar {
         );
         let mut has_where = false;
         if let Some(start) = start {
-            // 只比日期部分（前 10 个字符）：ISO 格式下前缀相等即同一天，
-            // 「7 月 14 日的安排」不会漏掉 09:00 那条，也不会吞进 15 日的。
+            // Compare only the date part (first 10 chars): with ISO, equal prefixes mean the
+            // same day — "July 14 plans" won't miss the 09:00 entry nor swallow the 15th's.
             builder
                 .push(" WHERE substr(start, 1, 10) >= ")
                 .push_bind(start.to_string());

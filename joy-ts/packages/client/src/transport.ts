@@ -5,32 +5,32 @@ import { fileURLToPath } from "node:url";
 import readline from "node:readline";
 
 /**
- * 一帧的边界。
+ * Frame boundaries.
  *
- * app-server 的 stdout 上只有「一行一条 JSON」，stderr 上是人话（MCP 连不上、
- * 图搭不起来……）。传输层的活因此只有三件：写一行、拆一行、把另外两路原样
- * 交出去。
+ * app-server's stdout carries "one JSON per line"; stderr carries human words (MCP unreachable,
+ * graph unbuildable…). The transport's job is only three things: write a line, split a line,
+ * pass the other stream through untouched.
  *
- * 抽成接口是为了测试能塞一个假的进去 —— 帧的组装/对应关系（id 配对、通知
- * 分发、退出时收敛挂着的请求）是客户端自己的逻辑，不该为了测它去起进程。
+ * The interface exists so tests can slot in a fake — frame assembly/correlation (id pairing,
+ * dispatch, settling pending requests on exit) is the client's logic, not something to spawn for.
  */
 export interface Transport {
   write(line: string): void;
-  /** 收到一行（不含换行符）。 */
+  /** One line received (newline excluded). */
   onLine(handler: (line: string) => void): void;
-  /** stderr 上的一行，原样转出，不解析。 */
+  /** A line from stderr, passed through as-is, unparsed. */
   onLog(handler: (text: string) => void): void;
-  /** 进程退出 / 起不来 / 连接断开。 */
+  /** Process exited / failed to start / connection dropped. */
   onClose(handler: (reason: string) => void): void;
-  /** 文明关闭：关掉 stdin，让服务端把排着的帧写完再退。 */
+  /** Civilized close: close stdin, let the server finish writing queued frames, then exit. */
   close(): void;
 }
 
-/** app-server 就在 `joy` 的这个子命令下。 */
+/** app-server lives under this subcommand of `joy`. */
 export const APP_SERVER_COMMAND = "app-server";
 
 export interface StdioTransportOptions {
-  /** 二进制路径。不给就按 `$JOY_BIN` → 仓库的 target → PATH 找。 */
+  /** Binary path. If absent, search `$JOY_BIN` → repo target → PATH. */
   command?: string;
   args?: string[];
   cwd?: string;
@@ -38,10 +38,10 @@ export interface StdioTransportOptions {
 }
 
 /**
- * 起一个真的 `joy app-server`，用它的 stdin/stdout 说话。
+ * Start a real `joy app-server` and speak over its stdin/stdout.
  *
- * 这是所有客户端的入口形状：一个孩子的两根管子，没有网络、没有端口、
- * 没有要清理的临时目录。服务端死了管子就断，客户端跟着知道。
+ * This is the entry shape for all clients: one child, two pipes, no network, no port, no temp
+ * directory to clean up. When the server dies the pipes break, and the client knows with it.
  */
 export class StdioTransport implements Transport {
   readonly #child: ChildProcessWithoutNullStreams;
@@ -57,8 +57,8 @@ export class StdioTransport implements Transport {
       env: options.env ?? process.env,
     });
 
-    // 两边都用 readline 拆行：它认得 \n 与 \r\n，也管住「半行」——
-    // 手写缓冲拼字符串最后一定会漏掉跨 chunk 的那一刀。
+    // Both sides split lines with readline: it knows \n and \r\n and handles "half lines" —
+    // a hand-rolled buffer will eventually miss the cut across chunks.
     const stdout = readline.createInterface({ input: this.#child.stdout });
     stdout.on("line", (line) => {
       if (line.trim() === "") return;
@@ -98,8 +98,8 @@ export class StdioTransport implements Transport {
 
   close(): void {
     if (this.#closed) return;
-    // 只关 stdin，不 kill：服务端看到 stdin 到头就会把通道里剩的帧写完再退
-    // （见 stdio.rs 末尾）。这时候补一刀会把最后那几帧吃掉。
+    // Close stdin only, no kill: seeing EOF on stdin, the server finishes writing remaining
+    // frames and exits (see the end of stdio.rs). Killing now would swallow the last few frames.
     this.#child.stdin.end();
   }
 
@@ -118,13 +118,13 @@ export class StdioTransport implements Transport {
 }
 
 /**
- * 找 `joy` 二进制。
+ * Find the `joy` binary.
  *
- * 顺序：`$JOY_BIN` → 从本文件往上找到仓库根的 `joy-rs/target/{debug,release}`
- * → 交给 PATH。
+ * Order: `$JOY_BIN` → walk up from this file to the repo root's `joy-rs/target/{debug,release}`
+ * → hand over to PATH.
  *
- * 往上走而不是写死「上四级目录」：源码在包里的位置是会动的，而写成固定层数
- * 之后，挪一次目录就会把「找不到二进制」变成一个莫名其妙的 ENOENT。
+ * Walk up instead of hardcoding "four levels up": the source's location inside the package moves,
+ * and a fixed depth turns every move into a baffling ENOENT — "binary not found" with no hint.
  */
 export function findJoyBinary(): string {
   const override = process.env["JOY_BIN"];

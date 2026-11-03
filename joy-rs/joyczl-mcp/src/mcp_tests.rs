@@ -1,13 +1,13 @@
-//! MCP 客户端的测试。
+//! Tests for the MCP client.
 //!
-//! 三层：
-//!   1. 配置的判定与改名 —— 纯函数，不碰进程也不碰网。
-//!   2. 线上的两种帧 —— 内存里的管子（stdio）与本地假 HTTP 服务器。
-//!   3. 一条真的子进程服务器（`python3` 写的假 MCP，没有 SDK），
-//!      端到端跑到注册进 ToolRegistry 并调用成功。
+//! Three layers:
+//!   1. Config decisions and renaming — pure functions, no process, no network.
+//!   2. The two wire framings — in-memory pipes (stdio) and a local fake HTTP server.
+//!   3. A real subprocess server (a fake MCP written in `python3`, no SDK),
+//!      end-to-end up to registering into ToolRegistry and calling successfully.
 //!
-//! 第 3 层要 python3；机器上没有就跳过（不假装通过），`scripts/smoke.sh`
-//! 那边还有一条同样味道的端到端。
+//! Layer 3 needs python3; skip if the machine lacks it (never fake a pass); `scripts/smoke.sh`
+//! also carries an end-to-end of the same flavor.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,7 +26,7 @@ fn no_env(_key: &str) -> Option<String> {
     None
 }
 
-// ---- 1. 配置 ---------------------------------------------------------------
+// ---- 1. Config -------------------------------------------------------------
 
 #[test]
 fn model_safe_name_keeps_what_the_provider_accepts() {
@@ -34,7 +34,7 @@ fn model_safe_name_keeps_what_the_provider_accepts() {
         config::model_safe_name("notes", "remember"),
         "notes_remember"
     );
-    // 点号是 MCP 里常见的写法，但会被厂商的 `^[a-zA-Z0-9_-]{1,64}$` 拒掉。
+    // Dots are common in MCP, but vendors' `^[a-zA-Z0-9_-]{1,64}$` rejects them.
     assert_eq!(
         config::model_safe_name("team-memory", "memory.remember"),
         "team-memory_memory_remember"
@@ -76,9 +76,9 @@ fn config_refuses_two_transports_and_two_credentials() {
 
 #[test]
 fn oauth_resolves_to_anonymous_http_the_token_layer_sits_above() {
-    // `oauth: true` 在 resolve 这一层长成「匿名 Http」：真正的 bearer 由
-    // lib.rs 从 mcp-auth 的 token 库取（见 oauth.rs），没登录过就报
-    // 「去跑 joy mcp login」。
+    // `oauth: true` becomes "anonymous Http" at the resolve layer: the real bearer is
+    // fetched by lib.rs from mcp-auth's token store (see oauth.rs); if never signed in,
+    // it reports "go run joy mcp login".
     let spec = ServerSpec {
         name: "x".to_string(),
         url: Some("https://h/mcp".to_string()),
@@ -93,7 +93,7 @@ fn oauth_resolves_to_anonymous_http_the_token_layer_sits_above() {
 
 #[test]
 fn a_named_but_unset_variable_is_refused_before_connecting() {
-    // 匿名连上去只会得到 401 和「工具不见了」，读起来像服务器挂了。
+    // Connecting anonymously would only yield a 401 and "tools vanished", reading like a dead server.
     let spec = ServerSpec {
         name: "x".to_string(),
         url: Some("https://h/mcp".to_string()),
@@ -157,7 +157,7 @@ fn the_auth_hint_names_what_the_caller_can_check() {
     let hint = config::auth_hint(&anonymous).expect("该给提示");
     assert!(hint.contains("https://h/mcp"));
     assert!(hint.contains("auth_env"));
-    // 本地子进程没有鉴权这回事。
+    // A local subprocess has no such thing as auth.
     let stdio = TransportSpec::Stdio {
         command: "npx".to_string(),
         args: vec![],
@@ -198,9 +198,9 @@ async fn a_broken_config_file_says_so() {
     assert!(client.warnings()[0].contains("mcp.json"));
 }
 
-// ---- 2. 线上的帧 -----------------------------------------------------------
+// ---- 2. Wire framings ------------------------------------------------------
 
-/// 一个只会按脚本回话的 stdio 对端，跑在内存管子里。
+/// A stdio peer that only answers per script, running on in-memory pipes.
 #[tokio::test]
 async fn stdio_session_frames_json_lines_and_skips_foreign_messages() {
     let (client_side, server_side) = tokio::io::duplex(8192);
@@ -211,12 +211,12 @@ async fn stdio_session_frames_json_lines_and_skips_foreign_messages() {
             let message: serde_json::Value = serde_json::from_str(&line).expect("JSON");
             let method = message["method"].as_str().unwrap_or("").to_string();
             let Some(id) = message.get("id").cloned() else {
-                continue; // 通知，不回话
+                continue; // notification, no reply
             };
             let result = match method.as_str() {
                 "initialize" => json!({"protocolVersion": "2025-06-18"}),
                 "tools/list" => {
-                    // 我们的应答之前先塞一条通知：客户端必须跳过它。
+                    // Slip one notification in before our answer: the client must skip it.
                     server_write
                         .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n")
                         .await
@@ -239,7 +239,7 @@ async fn stdio_session_frames_json_lines_and_skips_foreign_messages() {
     let tools = session.list_tools().await.expect("列工具");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "reverse");
-    // 服务器没给 schema：退化成「没有参数的对象」。
+    // No schema from the server: degrade to "an object with no parameters".
     assert_eq!(
         tools[0].schema(),
         json!({"type": "object", "properties": {}})
@@ -247,10 +247,10 @@ async fn stdio_session_frames_json_lines_and_skips_foreign_messages() {
     server.abort();
 }
 
-/// 服务器没了要**说出来**，不能干等。两种死法：
+/// A server going away must be **said out loud**, not waited on forever. Two death modes:
 #[tokio::test]
 async fn stdio_session_reports_a_server_that_goes_away() {
-    // 一：还没开口它就走了 —— 写的时候就知道。
+    // One: it left before we spoke — the write itself finds out.
     let (client_side, server_side) = tokio::io::duplex(1024);
     drop(server_side);
     let (client_read, client_write) = tokio::io::split(client_side);
@@ -258,14 +258,14 @@ async fn stdio_session_reports_a_server_that_goes_away() {
     let error = session.initialize().await.unwrap_err();
     assert!(error.contains("写不出去"), "{error}");
 
-    // 二：收下了请求才走 —— 读的时候才发现，读回 0 就是 EOF。
+    // Two: it left after taking the request — discovered at read time; a 0 read is EOF.
     let (client_side, server_side) = tokio::io::duplex(1024);
     let (mut server_read, server_write) = tokio::io::split(server_side);
-    drop(server_write); // 它从不回话
+    drop(server_write); // it never replies
     let drain = tokio::spawn(async move {
         let mut line = String::new();
         let _ = BufReader::new(&mut server_read).read_line(&mut line).await;
-        // 这里读完就撒手：读端一关，客户端那边就该看见 EOF。
+        // Let go right after reading: once the read end closes, the client should see EOF.
     });
     let (client_read, client_write) = tokio::io::split(client_side);
     let mut session = StdioSession::new(client_read, client_write);
@@ -274,7 +274,7 @@ async fn stdio_session_reports_a_server_that_goes_away() {
     drain.await.expect("读完那一行");
 }
 
-/// 一个按脚本回话的本地 HTTP 服务器：记录它收到的每一个请求。
+/// A scripted local HTTP server: records every request it receives.
 struct FakeHttp {
     url: String,
     seen: Arc<Mutex<Vec<(String, String)>>>,
@@ -303,8 +303,8 @@ async fn fake_http(script: Vec<Reply>) -> FakeHttp {
                     sink.lock().await.push((headers, body.clone()));
                     let at = index.fetch_add(1, Ordering::SeqCst);
                     let reply = &script[at.min(script.len() - 1)];
-                    // 应答里的 `@id` 换成这次请求的 id —— 客户端自己数 id，
-                    // 脚本不该假装知道它数到几了。
+                    // The `@id` in the reply becomes this request's id — the client counts ids
+                    // itself; the script must not pretend to know where the count is.
                     let id = serde_json::from_str::<Value>(&body)
                         .ok()
                         .and_then(|message| message.get("id").cloned())
@@ -394,10 +394,10 @@ async fn http_session_handshakes_sends_the_token_and_reads_sse() {
 
     let seen = fake.seen.lock().await;
     assert!(seen[0].0.contains("Bearer s3cret"), "{}", seen[0].0);
-    // initialize 的应答给了一个会话 id，之后每个请求都要带回去。
+    // The initialize answer gave a session id; every later request must carry it back.
     assert!(seen[1].0.contains("mcp-session-id: abc"), "{}", seen[1].0);
     assert!(seen[2].0.contains("mcp-session-id: abc"), "{}", seen[2].0);
-    // 通知的应答是 202：不是错误，也不能当成 result。
+    // A notification's answer is 202: not an error, and not a result either.
     assert!(
         seen[1].1.contains("notifications/initialized"),
         "{}",
@@ -417,13 +417,13 @@ async fn http_failure_reports_the_status_code() {
     let mut session = HttpSession::new(&fake.url, None);
     let error = session.initialize().await.unwrap_err();
     assert!(error.contains("401"), "{error}");
-    // 一整页 HTML 不该灌进日志。
+    // A whole page of HTML must not be dumped into the log.
     assert!(error.len() < 200, "{error}");
 }
 
-// ---- 3. 一条真的子进程服务器 -----------------------------------------------
+// ---- 3. A real subprocess server -------------------------------------------
 
-/// 假 MCP 服务器：手写 JSON-RPC，没有 SDK。故意发一个带点号的工具名。
+/// Fake MCP server: hand-written JSON-RPC, no SDK. Deliberately sends a dotted tool name.
 const FAKE_SERVER: &str = r#"
 import json, sys
 
@@ -481,7 +481,7 @@ async fn tool_ctx() -> joyczl_tools::ToolCtx {
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
-    let _ = dir.keep(); // sqlite 还要写 -wal/-shm：目录不能在这里被删掉
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     joyczl_tools::ToolCtx {
         cwd: None,
         approval: None,
@@ -530,13 +530,13 @@ async fn a_real_subprocess_server_registers_working_tools() {
     let reverse = registry.get("demo_reverse").expect("有 reverse");
     assert_eq!(reverse.description, "[MCP:demo] 把文本反过来");
     assert_eq!(reverse.input_schema["required"], json!(["text"]));
-    // 服务器没给 schema 的那个：退化成空对象，而不是缺字段。
+    // The one without a server schema: degrade to an empty object, not a missing field.
     assert_eq!(
         registry.get("demo_dotted_name").expect("有").input_schema,
         json!({"type": "object", "properties": {}})
     );
 
-    // 端到端：模型读到的名字是改过的，回给服务器的必须是原名。
+    // End-to-end: the name the model reads is renamed; the name sent back must be the original.
     let ctx = tool_ctx().await;
     assert_eq!(
         registry
@@ -550,7 +550,7 @@ async fn a_real_subprocess_server_registers_working_tools() {
             .await,
         "ok"
     );
-    // 调用失败也是**文本**：模型读得到，循环不会因此崩。
+    // A failed call is also **text**: the model can read it; the loop does not crash.
     let failed = registry.execute(ctx, "demo_boom", json!({})).await;
     assert!(failed.contains("MCP 调用 demo_boom 失败"), "{failed}");
     assert!(failed.contains("炸了"), "{failed}");
@@ -568,7 +568,7 @@ async fn a_server_that_cannot_start_is_skipped_with_a_warning() {
     .expect("写配置");
 
     let client = McpClient::connect(&config).await;
-    // 一个服务器起不来，不影响别的，也不影响 Joy 启动。
+    // One server failing to start affects neither the others nor Joy's startup.
     assert!(client.servers().is_empty());
     assert_eq!(client.warnings().len(), 1, "{:?}", client.warnings());
     assert!(
@@ -582,29 +582,29 @@ async fn a_server_that_cannot_start_is_skipped_with_a_warning() {
     );
 }
 
-// ---- 熔断与命名去重（第三批）----------------------------------------------
+// ---- Breaker and name dedup (third batch) ----------------------------------
 
-/// 一台连续失败的服务器会被熔断：熔断期间**不再敲门**，冷到点后放一次探针。
+/// A repeatedly failing server gets circuit-broken: **no knocking** while open; one probe after cooldown.
 #[tokio::test]
 async fn a_failing_server_gets_circuit_broken() {
     use crate::{BreakerPolicy, Connection, Transport};
     use std::time::Duration;
 
     let fake = fake_http(vec![
-        // 握手（成功的）
+        // Handshake (the successful one)
         Reply {
             status: 200,
             content_type: "application/json",
             body: r#"{"jsonrpc":"2.0","id":@id,"result":{"protocolVersion":"2025-06-18"}}"#
                 .to_string(),
         },
-        // 握手的第二条：`notifications/initialized` 的 202
+        // Handshake's second leg: the 202 of `notifications/initialized`
         Reply {
             status: 202,
             content_type: "application/json",
             body: String::new(),
         },
-        // 之后每次都 500（脚本的最后一条会被反复用）
+        // Then 500 every time (the script's last entry gets reused)
         Reply {
             status: 500,
             content_type: "application/json",
@@ -616,7 +616,7 @@ async fn a_failing_server_gets_circuit_broken() {
     let mut session = HttpSession::new(&fake.url, None);
     session.initialize().await.expect("握手");
 
-    // 阈值 2 次、冷却 150 毫秒：测试不为了一根断路器等 60 秒。
+    // Threshold 2, cooldown 150ms: tests don't wait 60 seconds for a breaker.
     let connection = Connection::with_policy(
         "flaky",
         Transport::Http(session),
@@ -631,7 +631,7 @@ async fn a_failing_server_gets_circuit_broken() {
     assert!(first.contains("失败"), "{first}");
     assert!(second.contains("失败"), "{second}");
 
-    // 第三次：断路器开着 —— 不该再去打扰它。
+    // Third call: breaker open — it must not be disturbed again.
     let before = fake.seen.lock().await.len();
     let skipped = connection.call("do", json!({})).await;
     assert!(skipped.contains("断路器"), "{skipped}");
@@ -642,7 +642,7 @@ async fn a_failing_server_gets_circuit_broken() {
         "熔断期间一次都不该发出去"
     );
 
-    // 冷到点：放一次探针（半开）。
+    // Cooled down: let one probe through (half-open).
     tokio::time::sleep(Duration::from_millis(220)).await;
     let probe = connection.call("do", json!({})).await;
     assert!(
@@ -652,13 +652,13 @@ async fn a_failing_server_gets_circuit_broken() {
     assert!(probe.contains("失败"), "探针也是真的去敲了门：{probe}");
 }
 
-/// 两台服务器各报一个会塌成同名的工具：谁都不覆盖谁。
+/// Two servers each reporting a name-colliding tool: nobody overwrites anybody.
 #[test]
 fn two_servers_that_collide_get_distinct_names() {
     use std::collections::HashSet;
 
     let mut taken: HashSet<String> = HashSet::new();
-    // `a` + `b_c` 与 `a_b` + `c` 都会变成 `a_b_c`。
+    // Both `a` + `b_c` and `a_b` + `c` become `a_b_c`.
     let (first, renamed) = config::model_safe_name_unique("a", "b_c", &mut taken);
     assert_eq!(first, "a_b_c");
     assert!(!renamed);
@@ -670,7 +670,7 @@ fn two_servers_that_collide_get_distinct_names() {
     assert!(second.len() <= 64, "仍然要满足 64 字符上限：{second}");
 }
 
-/// 长名字加序号之后也不能越过 64 字符。
+/// Even with a suffix, a long name must stay within 64 chars.
 #[test]
 fn a_renamed_long_tool_name_still_fits() {
     use std::collections::HashSet;
