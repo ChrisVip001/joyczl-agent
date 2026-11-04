@@ -172,7 +172,7 @@ vector: run `joy memory reindex` to backfill.
 
 ## Lifecycle hooks (`JOY_HOOKS`)
 
-With `JOY_HOOKS=1`, Joy reads `<home>/hooks.json` and runs **your shell commands** on
+With `JOY_HOOKS=1`, Joy reads `<home>/hooks.json` and runs **your handlers** on
 twelve events — the place to add behaviour without editing the loop: auditing, policy
 gates, formatting, feeding tool calls to something else.
 
@@ -182,15 +182,20 @@ gates, formatting, feeding tool calls to something else.
     "PreToolUse": [
       { "matcher": "run_command", "timeout": 30, "command": "path/to/hook.sh", "args": [] }
     ],
-    "PostToolUse": [ { "matcher": "*", "command": "audit.sh" } ] } }
+    "PostToolUse": [ { "matcher": "*", "command": "audit.sh" } ],
+    "Stop": [ { "url": "http://127.0.0.1:9000/joy-policy" } ] } }
 ```
+
+Each entry names **exactly one handler**: `command` (shell) or `url` (HTTP) —
+both, or neither, is a config error and the entry is skipped with a stderr line.
 
 **Events** (named as commonly used in the ecosystem): `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `PermissionRequest`, `SessionStart`, `SessionEnd`, `Stop`,
 `StopFailure`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`.
 
-**What the command gets**: a JSON payload on stdin (`hook_event_name`, `session_id`,
-`cwd`, `tool_name`, `tool_input`, `tool_output`, `matcher`, …).
+**What the handler gets**: a JSON payload (`hook_event_name`, `session_id`,
+`cwd`, `tool_name`, `tool_input`, `tool_output`, `matcher`, …) — on stdin for a
+shell command, as the POST body for a URL.
 
 **How it answers**:
 
@@ -199,6 +204,8 @@ gates, formatting, feeding tool calls to something else.
 | `exit 0` | allow; a JSON stdout is parsed as below |
 | `exit 2` | **block** (the only exit code that blocks), reason from `reason` or stderr |
 | any other code | a non-blocking error: one stderr line, the action proceeds — a broken hook must not disable every tool |
+| HTTP `200` | allow; a JSON response body is parsed as below |
+| HTTP anything else / connection refused | "could not answer", not "no": one stderr line, the action proceeds (timeouts keep the policy/observation split below) |
 | `{"decision":"block","reason":"…"}` | same, via JSON |
 | `{"updatedInput":{…}}` | rewrite tool input (re-validated afterwards; a bad rewrite says the hook did it) |
 | `{"updatedOutput":"…"}` | rewrite the tool result |

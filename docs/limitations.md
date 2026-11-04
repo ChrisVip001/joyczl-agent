@@ -198,10 +198,12 @@ extraction use `run_command` + curl or an MCP fetching service.
   per provider family.
   → `joy-rs/joyczl-state/src/chat.rs` (`context_factor`)
 
-* **Deliberate** — Hooks are **shell handlers only** (not Claude Code's http /
-  mcp_tool / prompt / agent variants): each of those needs its own contract, and a
-  shell already expresses them (`curl`, `joy mcp`, a model CLI). Want HTTP? `curl`.
-  Want an LLM to judge? Call one.
+* **Deliberate** — Hooks have **two handler kinds**: shell (`command`) and HTTP
+  (`url` — same payload POSTed, same decision JSON back, reqwest already in the
+  tree). The verb is fixed at POST: the payload *is* the message; a `method`
+  field nobody sets would be invention. Still not done: Claude Code's
+  mcp_tool / prompt / agent variants — each needs its own contract, and shell
+  already expresses them (`joy mcp`, a model CLI). Want an LLM to judge? Call one.
 * **Deliberate** — Hooks are **Unix-first**: commands run through `sh`, so Windows
   needs a real executable. The CI Windows job skips these tests rather than pretending
   they pass. Making Windows first-class means adding a `cmd /C` branch and hook tests

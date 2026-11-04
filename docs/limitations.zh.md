@@ -157,9 +157,11 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   不该把预算带偏。要更准只能为每家厂商各带一份真实词表。
   → `joy-rs/joyczl-state/src/chat.rs`（`context_factor`）
 
-* **刻意** —— 钩子只有 **shell handler** 一种（不做 http /
-  mcp_tool / prompt / agent 四类）：那四类各自要一套契约，而 shell 已经能表达它们
-  （`curl`、`joy mcp`、`llm` 都是命令）。要 HTTP 就 `curl`，要 LLM 判定就自己调模型。
+* **刻意** —— 钩子有 **两种 handler**：shell（`command`）与 HTTP（`url`——同一
+  payload POST 过去、同一决策 JSON 回来，reqwest 本来就在依赖树里）。动词固定
+  POST：payload 本身就是消息；加一个没人会填的 `method` 字段是发明。仍不做：
+  Claude Code 的 mcp_tool / prompt / agent 三类——各自要一套契约，而 shell 已经
+  能表达它们（`joy mcp`、模型 CLI）。要 LLM 判定就自己调模型。
 * **刻意** —— 钩子是 **Unix 优先**的：命令用 `sh` 跑，Windows 上得自己准备可执行
   文件（CI 的 Windows job 跳过这些测试，而不是假装它们过）。真要在 Windows 上当
   一等公民，就补一条 `cmd /C` 分支（以及一套 Windows 上的钩子测试）。

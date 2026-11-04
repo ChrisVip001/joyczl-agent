@@ -259,3 +259,121 @@ async fn a_file_changed_while_running_is_not_executed() {
         "要说明为什么没执行"
     );
 }
+
+// ---- HTTP handler：同一 payload、同一决策契约、同一失败两分法 ----
+
+/// 一个只服务一次请求的最小 HTTP 端点：读到请求头 + Content-Length 的 body 后，
+/// 回 `body_json`（HTTP 200）。返回端点地址。仅用于测试（provider_tests 的 Scripted
+/// 同款思路，但这里只要一问一答）。
+fn spawn_http_once(body_json: &'static str) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑端口");
+    listener.set_nonblocking(true).expect("设非阻塞");
+    let listener = tokio::net::TcpListener::from_std(listener).expect("转 tokio 监听器");
+    let addr = listener.local_addr().expect("取地址");
+    let handle = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("接受连接");
+        let mut buf = Vec::new();
+        // 读到头部结束
+        loop {
+            let mut chunk = [0u8; 1024];
+            let n = socket.read(&mut chunk).await.expect("读请求");
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let head = String::from_utf8_lossy(&buf);
+        let len: usize = head
+            .split("\r\n")
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .and_then(|l| l.split(':').nth(1))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        let have = buf.len() - buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() - 4;
+        let mut body = buf.split_off(buf.len() - have);
+        while body.len() < len {
+            let mut chunk = [0u8; 1024];
+            let n = socket.read(&mut chunk).await.expect("读 body");
+            body.extend_from_slice(&chunk[..n]);
+        }
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body_json.len(),
+            body_json
+        );
+        socket.write_all(response.as_bytes()).await.expect("写应答");
+        socket.flush().await.expect("刷缓冲");
+    });
+    (addr, handle)
+}
+
+fn hooks_with_http(event: &str, url: &str) -> Hooks {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let body = json!({ "hooks": { event: [{ "url": url }] } }).to_string();
+    write_hooks(dir.path(), &body);
+    // 目录必须活到 fire 之后：信任哈希每次执行前都会重读文件，目录没了 = "文件变了" = 拒跑。
+    // keep() 拿走所有权（放弃自动清理），换来路径稳定。
+    let path = dir.keep();
+    Hooks::load(&path, None).expect("装载")
+}
+
+#[tokio::test]
+async fn http_handler_receives_the_payload_and_can_block() {
+    let (addr, server) = spawn_http_once(r#"{"decision":"block","reason":"策略说不行"}"#);
+    let hooks = hooks_with_http("PreToolUse", &format!("http://{addr}/hook"));
+    let outcome = hooks
+        .fire(
+            HookEvent::PreToolUse,
+            json!({ "tool_name": "run_command", "tool_input": { "command": "ls" } }),
+        )
+        .await;
+    assert_eq!(
+        outcome.blocked.as_deref(),
+        Some("策略说不行"),
+        "HTTP 应答走同一决策契约"
+    );
+    server.await.expect("服务端任务");
+}
+
+#[tokio::test]
+async fn http_handler_can_feed_additional_context() {
+    let (addr, server) = spawn_http_once(r#"{"additionalContext":"这是 hook 的话"}"#);
+    let hooks = hooks_with_http("SessionStart", &format!("http://{addr}/"));
+    let outcome = hooks
+        .fire(HookEvent::SessionStart, json!({ "session_id": "s" }))
+        .await;
+    assert_eq!(outcome.context.as_deref(), Some("这是 hook 的话"));
+    server.await.expect("服务端任务");
+}
+
+#[tokio::test]
+async fn http_connection_failure_fails_open_with_a_stderr_line() {
+    // 连一个必然没人听的端口：连接被拒。规矩与 shell 的"起不来"一致——fail-open + stderr。
+    let hooks = hooks_with_http("PostToolUse", "http://127.0.0.1:1/");
+    let outcome = hooks
+        .fire(
+            HookEvent::PostToolUse,
+            json!({ "tool_name": "run_command" }),
+        )
+        .await;
+    assert!(outcome.blocked.is_none(), "连接失败不是拒绝");
+    assert!(outcome.note.is_some(), "但要留痕");
+}
+
+#[test]
+fn an_entry_with_both_command_and_url_is_skipped_at_load() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    std::fs::write(
+        dir.path().join("hooks.json"),
+        json!({ "hooks": { "Stop": [
+            { "command": "sh", "args": ["-c", "exit 0"], "url": "http://127.0.0.1:1/" }
+        ] } })
+        .to_string(),
+    )
+    .expect("写配置");
+    assert!(
+        Hooks::load(dir.path(), None).is_none(),
+        "两条 handler 都写 = 配置错误，整条跳过后零条目 → None"
+    );
+}

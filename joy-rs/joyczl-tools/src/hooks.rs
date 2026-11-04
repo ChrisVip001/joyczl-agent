@@ -3,23 +3,30 @@
 //! This is the opening for "adding behavior without changing the loop": auditing, policy
 //! gates, formatting, feeding tool calls to external systems — hung on events, not a Joy fork.
 //!
-//! Only shell handlers (none of http / mcp_tool / prompt / agent):
-//! each of those four needs its own contract, and shell already expresses them (`curl`,
-//! `joy mcp`, `llm` are all one command). The un-done part is written into `docs/limitations.md`.
+//! Two handler kinds (mcp_tool / prompt / agent stay un-done, see `docs/limitations.md`):
+//! - **shell** (`command` + `args`): the executable, payload on stdin, decision JSON on stdout;
+//! - **HTTP** (`url`): the **same** payload POSTed as JSON, the **same** decision JSON in the
+//!   response body — one contract, two transports. Fixed verb (POST): the payload *is* the
+//!   message; a method field nobody sets would be invention.
 //!
 //! Three rules, all learned from scars:
 //!
 //! 1. **exit 2 is the only block-via-exit-code**. exit 1 is a
 //!    non-blocking error: a typo'd command must not paralyze all tools, but **must** leave a trace on stderr.
+//!    (HTTP equivalent: only 200 counts; anything else is "could not answer", not "no".)
 //! 2. **Policy events time out fail-closed, observation events fail-open**. `PreToolUse`
 //!    is a gate — if it can't answer within the deadline, it must not default to allow;
 //!    while `PostToolUse` is only a bystander; its death must not affect what already happened.
+//!    The same split governs HTTP timeouts; connection errors always fail open (like a
+//!    spawn failure), with a stderr line.
 //! 3. **If the file changed, don't run it**: record the content hash at load; if it changes
 //!    at runtime, refuse the new content and say why (trust hash checks). Swapping a live
-//!    policy hook is "quietly changing the gate" — better to stop and be seen.
+//!    policy hook is "quietly changing the gate" — better to stop and be seen. The hash
+//!    covers the whole file, so it guards both handler kinds for free.
 //!
-//! The command receives a JSON payload (`hook_event_name` / `session_id` / `cwd` / `tool_name` /
-//! `tool_input` / `tool_output`…) on stdin; to weigh in, reply with JSON on stdout:
+//! The handler receives a JSON payload (`hook_event_name` / `session_id` / `cwd` / `tool_name` /
+//! `tool_input` / `tool_output`…) — on stdin (shell) or as the request body (HTTP); to weigh
+//! in, reply with JSON on stdout / in the response body:
 //!
 //! ```json
 //! {"decision": "block", "reason": "……"}
@@ -145,7 +152,13 @@ struct Entry {
     /// `None`/`*` = match all; `a|b` = any; otherwise exact string equality (**no regex**:
     /// not pulling a dependency for one match; write complex checks into your script).
     matcher: Option<String>,
-    command: String,
+    /// Shell handler: the executable, `args` is the argument array. Exactly **one** of
+    /// `command` / `url` is set — `url` turns the entry into an HTTP handler.
+    command: Option<String>,
+    /// HTTP handler: POST the same JSON payload here (fixed verb — the payload *is* the
+    /// message; a method field nobody sets is invention), read the **same decision JSON**
+    /// back. reqwest is already in this crate's tree (search_web uses it): zero new deps.
+    url: Option<String>,
     args: Vec<String>,
     timeout: Option<Duration>,
 }
@@ -156,6 +169,14 @@ impl Entry {
             None | Some("*") => true,
             Some(list) => list.split('|').any(|one| one.trim() == subject),
         }
+    }
+
+    /// What to call this hook in messages: the command path or the URL.
+    fn label(&self) -> &str {
+        self.command
+            .as_deref()
+            .or(self.url.as_deref())
+            .unwrap_or("?")
     }
 }
 
@@ -169,6 +190,9 @@ pub struct Hooks {
     pub(crate) count: usize,
     /// Default timeout from config (`JOY_HOOKS_TIMEOUT`). An entry's own `timeout` wins.
     default_timeout: Option<Duration>,
+    /// Shared HTTP client for `url:` handlers (connection pooling for free; per-request
+    /// timeout is set per call). Built once at load.
+    http: reqwest::Client,
 }
 
 impl Hooks {
@@ -198,6 +222,7 @@ impl Hooks {
                 hash: hash_of(&text),
                 count: 0,
                 default_timeout,
+                http: reqwest::Client::new(),
             });
         }
 
@@ -214,16 +239,36 @@ impl Hooks {
                     continue;
                 };
                 for raw in list {
-                    let Some(command) = raw.get("command").and_then(Value::as_str) else {
-                        eprintln!("(joy) hooks.json 的 '{name}' 里有一条没写 command —— 跳过");
-                        continue;
+                    // Handler 二选一：`command`（shell 可执行文件）或 `url`（HTTP 端点）。
+                    // 两个都写或都没写都是配置错误——跳过并欠一行 stderr。
+                    let command = raw
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let url = raw.get("url").and_then(Value::as_str).map(str::to_string);
+                    let (command, url) = match (command, url) {
+                        (Some(command), None) => (Some(command), None),
+                        (None, Some(url)) => (None, Some(url)),
+                        (Some(_), Some(_)) => {
+                            eprintln!(
+                                "(joy) hooks.json 的 '{name}' 里有一条同时写了 command 和 url —— 跳过"
+                            );
+                            continue;
+                        }
+                        (None, None) => {
+                            eprintln!(
+                                "(joy) hooks.json 的 '{name}' 里有一条没写 command 也没写 url —— 跳过"
+                            );
+                            continue;
+                        }
                     };
                     entries.entry(event).or_default().push(Entry {
                         matcher: raw
                             .get("matcher")
                             .and_then(Value::as_str)
                             .map(str::to_string),
-                        command: command.to_string(),
+                        command,
+                        url,
                         args: raw
                             .get("args")
                             .and_then(Value::as_array)
@@ -254,6 +299,7 @@ impl Hooks {
             hash: hash_of(&text),
             count,
             default_timeout,
+            http: reqwest::Client::new(),
         })
     }
 
@@ -323,13 +369,20 @@ impl Hooks {
     }
 
     async fn run_one(&self, event: HookEvent, entry: &Entry, payload: &Value) -> HookOutcome {
+        if let Some(url) = &entry.url {
+            return self.run_http(event, entry, url, payload).await;
+        }
+        let command = entry
+            .command
+            .as_deref()
+            .expect("command/url 二选一由加载器保证");
         let mut body = payload.clone();
         if let Some(object) = body.as_object_mut() {
             object.insert("hook_event_name".to_string(), json!(event.name()));
             object.insert("matcher".to_string(), json!(entry.matcher.clone()));
         }
 
-        let mut command = tokio::process::Command::new(&entry.command);
+        let mut command = tokio::process::Command::new(command);
         command
             .args(&entry.args)
             .stdin(Stdio::piped())
@@ -341,7 +394,7 @@ impl Hooks {
             Ok(child) => child,
             Err(e) => {
                 // Spawn failures always fail-open: a wrong path must not paralyze all tools (but say it).
-                let note = format!("hook '{}' 起不来（{e}）—— 跳过", entry.command);
+                let note = format!("hook '{}' 起不来（{e}）—— 跳过", entry.label());
                 eprintln!("(joy) {note}");
                 return HookOutcome::note(note);
             }
@@ -363,14 +416,14 @@ impl Hooks {
         let output = match waited {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
-                let note = format!("hook '{}' 跑挂了（{e}）", entry.command);
+                let note = format!("hook '{}' 跑挂了（{e}）", entry.label());
                 eprintln!("(joy) {note}");
                 return HookOutcome::note(note);
             }
             Err(_) => {
                 let note = format!(
                     "hook '{}' 超过 {} 秒没结束 —— {}",
-                    entry.command,
+                    entry.label(),
                     timeout.as_secs(),
                     if event.is_policy() {
                         "策略事件，按阻断处理"
@@ -399,7 +452,7 @@ impl Hooks {
             2 => {
                 let reason = json_reason(&stdout).unwrap_or_else(|| {
                     if stderr.is_empty() {
-                        format!("hook '{}' 拒绝了这次动作", entry.command)
+                        format!("hook '{}' 拒绝了这次动作", entry.label())
                     } else {
                         stderr.clone()
                     }
@@ -414,7 +467,7 @@ impl Hooks {
             other => {
                 let note = format!(
                     "hook '{}' 以退出码 {other} 结束（只有 2 才是阻断）：{}",
-                    entry.command,
+                    entry.label(),
                     if stderr.is_empty() {
                         "没有输出"
                     } else {
@@ -425,6 +478,77 @@ impl Hooks {
                 HookOutcome::note(note)
             }
         }
+    }
+
+    /// HTTP handler: POST the payload (same JSON, same `hook_event_name`/`matcher`
+    /// injection), read the **same decision JSON** back from the response body. The
+    /// failure rules mirror the shell contract exactly:
+    /// - 200 → `parse_decision` on the body (exit-0 path);
+    /// - non-200 / connection error → fail-open with a stderr line (like a non-2 exit code
+    ///   or a spawn failure — the hook could not answer, not "the answer is no");
+    /// - timeout → the two-way split: policy events fail **closed**, observation events
+    ///   fail open.
+    async fn run_http(
+        &self,
+        event: HookEvent,
+        entry: &Entry,
+        url: &str,
+        payload: &Value,
+    ) -> HookOutcome {
+        let mut body = payload.clone();
+        if let Some(object) = body.as_object_mut() {
+            object.insert("hook_event_name".to_string(), json!(event.name()));
+            object.insert("matcher".to_string(), json!(entry.matcher.clone()));
+        }
+        let timeout = entry
+            .timeout
+            .or(self.default_timeout)
+            .unwrap_or_else(|| event.default_timeout());
+
+        let response = self
+            .http
+            .post(url)
+            .json(&body)
+            .timeout(timeout)
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(e) if e.is_timeout() => {
+                let note = format!(
+                    "hook <{url}> 超过 {} 秒没应答 —— {}",
+                    timeout.as_secs(),
+                    if event.is_policy() {
+                        "策略事件，按阻断处理"
+                    } else {
+                        "观察事件，放行"
+                    }
+                );
+                eprintln!("(joy) {note}");
+                if event.is_policy() {
+                    return HookOutcome {
+                        blocked: Some(note.clone()),
+                        note: Some(note),
+                        ..HookOutcome::default()
+                    };
+                }
+                return HookOutcome::note(note);
+            }
+            Err(e) => {
+                let note = format!("hook <{url}> 连不上（{e}）—— 跳过");
+                eprintln!("(joy) {note}");
+                return HookOutcome::note(note);
+            }
+        };
+
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            let note = format!("hook <{url}> 返回 HTTP {status}：这次应答不算数 —— 跳过");
+            eprintln!("(joy) {note}");
+            return HookOutcome::note(note);
+        }
+        parse_decision(&text, "", entry, event)
     }
 }
 
@@ -444,7 +568,7 @@ fn parse_decision(stdout: &str, stderr: &str, entry: &Entry, event: HookEvent) -
             },
             note: Some(format!(
                 "hook '{}'：{}",
-                entry.command,
+                entry.label(),
                 if stderr.is_empty() { stdout } else { stderr }
             )),
             ..HookOutcome::default()
@@ -494,7 +618,7 @@ fn parse_decision(stdout: &str, stderr: &str, entry: &Entry, event: HookEvent) -
         });
     }
     if !stderr.is_empty() {
-        eprintln!("(joy) hook '{}'：{stderr}", entry.command);
+        eprintln!("(joy) hook '{}'：{stderr}", entry.label());
     }
     outcome
 }

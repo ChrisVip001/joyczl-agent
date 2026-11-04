@@ -126,9 +126,9 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 
 ## 生命周期钩子（`JOY_HOOKS`）
 
-`JOY_HOOKS=1` 之后，Joy 会读 `<home>/hooks.json`，在 12 个事件上跑**你自己的 shell
-命令**。这是「不改循环就能加行为」的口子：审计、策略门禁、格式化、把工具调用喂给
-外部系统。
+`JOY_HOOKS=1` 之后，Joy 会读 `<home>/hooks.json`，在 12 个事件上跑**你自己的
+handler**。这是「不改循环就能加行为」的口子：审计、策略门禁、格式化、把工具调用
+喂给外部系统。
 
 ```json
 { "disableAllHooks": false,
@@ -136,16 +136,21 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
     "PreToolUse": [
       { "matcher": "run_command", "timeout": 30, "command": "path/to/hook.sh", "args": [] }
     ],
-    "PostToolUse": [ { "matcher": "*", "command": "audit.sh" } ] } }
+    "PostToolUse": [ { "matcher": "*", "command": "audit.sh" } ],
+    "Stop": [ { "url": "http://127.0.0.1:9000/joy-policy" } ] } }
 ```
+
+每条 handler **二选一**：`command`（shell）或 `url`（HTTP）——两个都写或都没写
+都是配置错误，该条被跳过并欠一行 stderr。
 
 **事件**（名字采用生态里通行的叫法，搬配置不必学第二套）：`PreToolUse` /
 `PostToolUse` / `PostToolUseFailure` / `PermissionRequest` / `SessionStart` /
 `SessionEnd` / `Stop` / `StopFailure` / `SubagentStart` / `SubagentStop` /
 `PreCompact` / `PostCompact`。
 
-**命令收到什么**：一段 JSON 在 stdin 上（`hook_event_name`、`session_id`、`cwd`、
-`tool_name`、`tool_input`、`tool_output`、`matcher`…）。
+**handler 收到什么**：一段 JSON（`hook_event_name`、`session_id`、`cwd`、
+`tool_name`、`tool_input`、`tool_output`、`matcher`…）——shell 命令在 stdin 上，
+HTTP 端点是 POST body。
 
 **怎么表态**：
 
@@ -154,6 +159,8 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 | `exit 0` | 放行；stdout 若是 JSON 就按下面的字段处理 |
 | `exit 2` | **阻断**（唯一靠退出码阻断的方式），理由取 stdout 的 `reason` 或 stderr |
 | 其它退出码 | **非阻塞错误**：记一行 stderr，动作照常 —— 钩子写坏了不该让所有工具瘫痪 |
+| HTTP `200` | 放行；响应体若是 JSON 就按下面的字段处理 |
+| HTTP 其它状态 / 连不上 | 「没能表态」而不是「说不」：记一行 stderr，动作照常（超时仍按下方的两分法） |
 | `{"decision":"block","reason":"…"}` | 同上，走 JSON |
 | `{"updatedInput":{…}}` | 改写工具入参（改写后会**重新校验 schema**，写坏了会明说是钩子改坏的） |
 | `{"updatedOutput":"…"}` | 改写工具结果 |
