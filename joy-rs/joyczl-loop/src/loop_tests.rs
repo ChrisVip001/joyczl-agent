@@ -42,6 +42,7 @@ async fn turn<'a>(
     observer: Option<crate::Observer>,
 ) -> crate::LoopResult {
     run(Turn {
+        user_images: Vec::new(),
         client,
         model: "test-model",
         system: "你是 Joy".to_string(),
@@ -165,6 +166,7 @@ async fn iteration_limit_stops_the_loop() {
     let ctx = ctx().await;
 
     let result = run(Turn {
+        user_images: Vec::new(),
         client: &mock,
         model: "test-model",
         system: "你是 Joy".to_string(),
@@ -261,6 +263,7 @@ async fn streaming_emits_text_deltas_in_order() {
 
     let ctx = ctx().await;
     let result = run(Turn {
+        user_images: Vec::new(),
         client: &mock,
         model: "test-model",
         system: "你是 Joy".to_string(),
@@ -321,6 +324,7 @@ async fn streaming_works_across_tool_rounds() {
 
     let ctx = ctx().await;
     let result = run(Turn {
+        user_images: Vec::new(),
         client: &mock,
         model: "test-model",
         system: "你是 Joy".to_string(),
@@ -358,6 +362,7 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
     interrupt.cancel();
 
     let result = run(Turn {
+        user_images: Vec::new(),
         client: &mock,
         model: "test-model",
         system: "你是 Joy".to_string(),
@@ -409,6 +414,7 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
     });
 
     let result = run(Turn {
+        user_images: Vec::new(),
         client: &mock,
         model: "test-model",
         system: "你是 Joy".to_string(),
@@ -520,6 +526,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
     ]);
 
     let result = run(Turn {
+        user_images: Vec::new(),
         client: &mock,
         model: "test-model",
         system: "你是 Joy".to_string(),

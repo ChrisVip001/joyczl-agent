@@ -154,6 +154,10 @@ pub struct Turn<'a> {
     /// History from previous turns (sliding-window trimmed). The new message is appended at the end.
     pub history: Vec<Message>,
     pub user_message: String,
+    /// Image blocks riding on this turn's user message (attachments, already read and
+    /// base64'd by app-server). Empty = plain text turn, zero overhead. They ride only
+    /// on the **first** user message — later rounds of the same turn carry tool results.
+    pub user_images: Vec<ContentBlock>,
     pub tools: &'a ToolRegistry,
     pub ctx: ToolCtx,
     pub max_iterations: i32,
@@ -173,7 +177,14 @@ pub struct Turn<'a> {
 pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
     let notify: Option<Observer> = turn.observer.clone();
     let mut messages = turn.history.clone();
-    messages.push(Message::user_text(&turn.user_message));
+    let mut user_content = vec![ContentBlock::Text {
+        text: turn.user_message.clone(),
+    }];
+    user_content.extend(turn.user_images.iter().cloned());
+    messages.push(Message {
+        role: Role::User,
+        content: user_content,
+    });
 
     let mut tool_calls: Vec<ToolOutcome> = Vec::new();
     let mut usage = Usage::default();

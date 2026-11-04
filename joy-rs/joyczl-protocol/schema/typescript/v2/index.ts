@@ -24,6 +24,7 @@ export type * from "./ModelInfo";
 export type * from "./SettingsView";
 export type * from "./SettingsPatch";
 export type * from "./TurnStartParams";
+export type * from "./TurnAttachment";
 export type * from "./TurnStartResponse";
 export type * from "./TurnInterruptParams";
 export type * from "./TurnInterruptResponse";

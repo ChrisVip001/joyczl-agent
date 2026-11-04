@@ -468,6 +468,21 @@ impl SettingsPatch {
 // Requests / responses
 // ===========================================================================
 
+/// One image attached to a turn. `path` is **home-relative** (uploads land in
+/// `<home>/uploads/...`); the server reads the bytes and embeds them — the model never
+/// sees a path, it sees pixels. Only image files are accepted; other files keep the
+/// "path mentioned in text" route.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnAttachment {
+    pub path: String,
+    /// Client-provided media type hint; the server trusts the file extension over this.
+    #[ts(optional = nullable)]
+    pub media_type: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -484,6 +499,10 @@ pub struct TurnStartParams {
     /// and relative read_file/list_dir paths resolve against it. Default = process cwd (old behavior).
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
+    /// Images attached to this message, embedded as image content blocks. Requires a
+    /// vision-capable provider; a missing or unreadable file fails the turn up front.
+    #[ts(optional = nullable)]
+    pub attachments: Option<Vec<TurnAttachment>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]

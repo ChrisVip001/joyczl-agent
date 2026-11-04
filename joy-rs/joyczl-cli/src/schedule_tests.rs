@@ -95,6 +95,7 @@ async fn firing_runs_a_turn_and_writes_the_reply_to_the_outbox() {
     };
     let server = joyczl_app_server::open(&settings).await.expect("装配");
     server.install_provider(Resolved {
+        vision: false,
         provider_id: "mock".to_string(),
         client: Arc::new(Mock::new(vec![
             // The retrieval gate, then the loop's reply.
@@ -103,6 +104,7 @@ async fn firing_runs_a_turn_and_writes_the_reply_to_the_outbox() {
         ])),
         model: "test".to_string(),
         small_model: "test-small".to_string(),
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
     });
 
     let job = job("tick", "* * * * *");

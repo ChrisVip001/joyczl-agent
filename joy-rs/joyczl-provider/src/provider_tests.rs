@@ -601,3 +601,95 @@ fn resolve_with_an_unknown_provider_lists_catalog_ids() {
     assert!(error.contains("可选"), "{error}");
     assert!(error.contains("deepseek"), "{error}");
 }
+
+// ---- 多模态：Image 块在两条 wire 上的形状 ----
+
+#[test]
+fn openai_wire_sends_images_as_data_uris_in_array_content() {
+    let request = CreateRequest {
+        model: "gpt-5.5".to_string(),
+        system: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "这张图里是什么？".to_string(),
+                },
+                ContentBlock::Image {
+                    media_type: "image/png".to_string(),
+                    data: "aGVsbG8=".to_string(),
+                },
+            ],
+        }],
+        tools: Vec::new(),
+        max_tokens: 100,
+    };
+    let body = crate::openai::to_openai(&request);
+    let content = body["messages"][0]["content"].clone();
+    assert!(content.is_array(), "带图消息必须是数组 content：{content}");
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image_url");
+    assert_eq!(
+        content[1]["image_url"]["url"],
+        "data:image/png;base64,aGVsbG8="
+    );
+
+    // 无图消息保持纯字符串 content（对既有客户端/测试零扰动）。
+    let plain = CreateRequest {
+        model: "gpt-5.5".to_string(),
+        system: None,
+        messages: vec![Message::user_text("纯文本")],
+        tools: Vec::new(),
+        max_tokens: 100,
+    };
+    let body = crate::openai::to_openai(&plain);
+    assert_eq!(body["messages"][0]["content"], "纯文本");
+}
+
+#[test]
+fn anthropic_wire_wraps_images_in_a_source_object() {
+    let messages = vec![Message {
+        role: Role::User,
+        content: vec![
+            ContentBlock::Text {
+                text: "看这张图".to_string(),
+            },
+            ContentBlock::Image {
+                media_type: "image/jpeg".to_string(),
+                data: "aGVsbG8=".to_string(),
+            },
+        ],
+    }];
+    let wire = crate::anthropic::anthropic_messages(&messages);
+    let image = &wire[0]["content"][1];
+    assert_eq!(image["type"], "image");
+    assert_eq!(image["source"]["type"], "base64");
+    assert_eq!(image["source"]["media_type"], "image/jpeg");
+    assert_eq!(image["source"]["data"], "aGVsbG8=");
+    // 文本块保持 serde 直通的形状。
+    assert_eq!(wire[0]["content"][0]["type"], "text");
+}
+
+#[test]
+fn image_token_estimate_is_byte_based_and_clamped() {
+    use crate::tokens::estimate_messages;
+    let tiny = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Image {
+            media_type: "image/png".to_string(),
+            data: "aGk=".to_string(), // 2 字节原始数据
+        }],
+    }];
+    // 小图不约成零：clamp 下限 200。
+    assert_eq!(estimate_messages(&tiny), 200 + 4);
+
+    let big = vec![Message {
+        role: Role::User,
+        content: vec![ContentBlock::Image {
+            media_type: "image/png".to_string(),
+            data: "A".repeat(8_000_000), // ~6MB 原始数据
+        }],
+    }];
+    // 超大图不失控：clamp 上限 8000。
+    assert_eq!(estimate_messages(&big), 8_000 + 4);
+}

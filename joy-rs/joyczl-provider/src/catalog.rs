@@ -33,6 +33,10 @@ pub struct CatalogEntry {
     #[serde(default)]
     pub small_model: Option<String>,
     pub context_window: u32,
+    /// Whether the provider's models accept image input (see `ProviderInfo::vision`).
+    /// Absent in the file = `false` — be conservative, override explicitly.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 impl CatalogEntry {
@@ -52,6 +56,7 @@ impl From<&'static ProviderInfo> for CatalogEntry {
             model: info.model.to_string(),
             small_model: Some(info.small_model.to_string()),
             context_window: info.context_window,
+            vision: info.vision,
         }
     }
 }
@@ -72,6 +77,7 @@ struct CatalogPatch {
     #[serde(default)]
     small_model: Option<String>,
     context_window: Option<u32>,
+    vision: Option<bool>,
 }
 
 impl CatalogPatch {
@@ -96,6 +102,9 @@ impl CatalogPatch {
         if let Some(context_window) = self.context_window {
             entry.context_window = context_window;
         }
+        if let Some(vision) = self.vision {
+            entry.vision = vision;
+        }
     }
 
     /// Turn a patch for an **unknown** id into a full row — a new provider needs enough
@@ -119,6 +128,7 @@ impl CatalogPatch {
             model,
             small_model: Some(small_model),
             context_window: self.context_window.unwrap_or(32_768),
+            vision: self.vision.unwrap_or(false),
         })
     }
 }

@@ -5,7 +5,7 @@
 // viewed" and "whether a turn is streaming"; a refresh returns to defaults. In other words, if the
 // browser crashes or the tab closes, nothing is lost — that's the most valuable part of this layering.
 
-import type { TurnCompletedNotification } from "./protocol";
+import type { TurnAttachment, TurnCompletedNotification } from "./protocol";
 import {
   fetchApprovals,
   fetchDashboard,
@@ -574,33 +574,46 @@ async function submit(): Promise<void> {
   const text = dom.input.value.trim();
   if ((text === "" && staged.length === 0) || busy) return;
 
-  // Upload attachments first (in order, so message paths map one-to-one to files);
-  // absolute paths are injected — the turn may carry its own cwd, relative paths would mispoint.
+  // Upload attachments first. Images ride as real attachments (the turn embeds the bytes —
+  // the model sees pixels); other files keep the "path in text" route (the model opens them
+  // with read_file). Upload order is preserved, so message text maps one-to-one to files.
   let full = text;
+  let attachments: TurnAttachment[] | null = null;
   if (staged.length > 0) {
     const home = dom.home.textContent ?? "";
     const lines: string[] = [];
     try {
       for (const file of staged) {
         const path = await uploadFile(file);
-        lines.push(`（附件：${home}/${path}）`);
+        if (file.type.startsWith("image/")) {
+          if (file.size > 20 * 1024 * 1024) {
+            dom.staged.replaceChildren(failureOf(new Error(`${file.name} 超过 20MB 单图上限`)));
+            return;
+          }
+          attachments ??= [];
+          attachments.push({ path, mediaType: file.type });
+        } else {
+          lines.push(`（附件：${home}/${path}）`);
+        }
       }
     } catch (error: unknown) {
       // An upload failure is not the end of the world: staging stays, so one can retry or drop.
       dom.staged.replaceChildren(failureOf(error));
       return;
     }
-    full = `${lines.join("\n")}${text === "" ? "" : `\n${text}`}`;
+    if (lines.length > 0) {
+      full = `${lines.join("\n")}${text === "" ? "" : `\n${text}`}`;
+    }
   }
 
   dom.input.value = "";
   staged.length = 0;
   renderStaged();
-  await send(full);
+  await send(full, attachments);
 }
 
 /** Say one thing, painting the course of this turn. */
-async function send(text: string): Promise<void> {
+async function send(text: string, attachments: TurnAttachment[] | null = null): Promise<void> {
   setBusy(true);
 
   dom.messages.append(el("div", { class: "msg me" }, el("div", { class: "bubble", text })));
@@ -628,6 +641,7 @@ async function send(text: string): Promise<void> {
       message: text,
       stream: true,
       cwd: turnCwd === "" ? null : turnCwd,
+      attachments,
     })) {
       switch (notification.type) {
         case "turnStarted":

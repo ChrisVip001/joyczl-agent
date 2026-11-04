@@ -64,6 +64,7 @@ macro_rules! protocol_types {
             SettingsPatch,
             // ---- Requests / responses
             TurnStartParams,
+            TurnAttachment,
             TurnStartResponse,
             TurnInterruptParams,
             TurnInterruptResponse,

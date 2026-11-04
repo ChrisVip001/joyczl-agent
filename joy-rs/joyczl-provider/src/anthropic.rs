@@ -12,7 +12,7 @@ use reqwest::Client as HttpClient;
 use serde_json::{json, Value};
 
 use crate::{
-    sse, ContentBlock, CreateRequest, CreateResponse, Provider, ProviderError, StopReason,
+    sse, ContentBlock, CreateRequest, CreateResponse, Message, Provider, ProviderError, StopReason,
     TextSink, Usage,
 };
 
@@ -88,12 +88,43 @@ impl Provider for Client {
     }
 }
 
+/// Anthropic wants images wrapped in a `source` object:
+/// `{"type":"image","source":{"type":"base64","media_type":…,"data":…}}`. Every other block
+/// is already wire-shaped (that is the serde-tag trick this wire leans on), so only Image
+/// pays a conversion; the rest pass through `serde_json::to_value` byte-identically.
+pub(crate) fn anthropic_messages(messages: &[Message]) -> Vec<Value> {
+    messages
+        .iter()
+        .map(|m| {
+            json!({
+                "role": m.role,
+                "content": m
+                    .content
+                    .iter()
+                    .map(|block| match block {
+                        ContentBlock::Image { media_type, data } => json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data,
+                            },
+                        }),
+                        other => serde_json::to_value(other)
+                            .expect("ContentBlock 永远可序列化"),
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
 impl Client {
     async fn create_inner(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
         let mut body = json!({
             "model": request.model,
             "max_tokens": request.max_tokens,
-            "messages": request.messages,
+            "messages": anthropic_messages(&request.messages),
         });
         if let Some(system) = &request.system {
             body["system"] = json!(system);
@@ -120,7 +151,7 @@ impl Client {
         let mut body = json!({
             "model": request.model,
             "max_tokens": request.max_tokens,
-            "messages": request.messages,
+            "messages": anthropic_messages(&request.messages),
             "stream": true,
         });
         if let Some(system) = &request.system {

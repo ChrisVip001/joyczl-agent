@@ -63,6 +63,104 @@ pub(crate) fn load_soul(home: &std::path::Path) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|_| DEFAULT_SOUL.to_string())
 }
 
+/// Media types we accept for attachments, by file extension — the extension wins over the
+/// client's hint (a renamed file is the user's problem; a wrong content-type is worse).
+/// Only images ride as content blocks: other files keep the "path mentioned in text" route,
+/// where the model can open them with read_file.
+fn media_type_for_extension(ext: &str) -> Option<&'static str> {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// The hard cap per image (raw bytes). Mirrors the upload endpoint's 20 MiB; base64
+/// inflates by 4/3, so this is also the honest ceiling for what one request can carry.
+const IMAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
+
+/// Turn staged uploads into image content blocks. Everything is checked up front —
+/// containment, existence, media type, size — and any refusal fails the turn before it
+/// starts, with `Error:`-quality guidance (the same honesty rules as the tools).
+fn resolve_attachments(
+    server: &Server,
+    params: &TurnStartParams,
+    provider_id: &str,
+    vision: bool,
+) -> Result<Vec<joyczl_provider::ContentBlock>, ErrorObject> {
+    let Some(attachments) = &params.attachments else {
+        return Ok(Vec::new());
+    };
+    if attachments.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bad = |message: String| ErrorObject {
+        code: codes::INVALID_PARAMS,
+        message,
+        data: None,
+    };
+    if !vision {
+        return Err(bad(format!(
+            "当前厂商 {provider_id} 的默认模型不支持图片输入。换支持视觉的厂商 \
+             （anthropic / openai / gemini / xai），或在 <home>/models-catalog.json 给 \
+             对应行加 \"vision\": true 后重启。"
+        )));
+    }
+    let home = server.settings().home;
+    let home_real = home
+        .canonicalize()
+        .map_err(|e| bad(format!("home 目录不可用：{e}")))?;
+    let mut images = Vec::new();
+    for attachment in attachments {
+        let raw = home.join(&attachment.path);
+        // Symlinks resolve first: the real path must stay inside home, no exceptions.
+        let path = raw
+            .canonicalize()
+            .map_err(|_| bad(format!("附件不存在或不可读：{}", attachment.path)))?;
+        if !path.starts_with(&home_real) {
+            return Err(bad(format!(
+                "附件 {} 在 home 之外 —— 附件只能引用上传目录（<home>/uploads/…）里的文件。",
+                attachment.path
+            )));
+        }
+        let media_type = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .and_then(media_type_for_extension)
+            .map(str::to_string)
+            .or_else(|| {
+                attachment
+                    .media_type
+                    .as_deref()
+                    .filter(|m| m.starts_with("image/"))
+                    .map(str::to_string)
+            })
+            .ok_or_else(|| {
+                bad(format!(
+                    "附件 {} 不是可识别的图片类型（支持 png / jpg / jpeg / gif / webp）；\
+                     其它文件请直接在正文里写路径，模型会用 read_file 打开。",
+                    attachment.path
+                ))
+            })?;
+        let bytes = std::fs::read(&path).map_err(|e| bad(format!("读附件失败：{e}")))?;
+        if bytes.len() > IMAGE_MAX_BYTES {
+            return Err(bad(format!(
+                "附件 {} 有 {} 字节，超过单张图片上限 {IMAGE_MAX_BYTES}。",
+                attachment.path,
+                bytes.len()
+            )));
+        }
+        use base64::Engine as _;
+        images.push(joyczl_provider::ContentBlock::Image {
+            media_type: media_type.to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        });
+    }
+    Ok(images)
+}
+
 pub async fn run_turn(
     server: &Server,
     params: TurnStartParams,
@@ -85,6 +183,11 @@ pub async fn run_turn(
     // Auto-select a model by task tier (route.rs). In fixed mode, or when the selected model is
     // already active, return as-is with zero overhead; the fallback and selection reasons go into route_reason, unhidden.
     let (resolved, turn_route) = server.resolved_for_turn(resolved, &params.message).await;
+
+    // ---- Attachments: staged images, read + base64'd here. Gates on the provider's vision
+    // capability and the file's existence **before any side effect** — a bad attachment must
+    // not leave a half-turn behind.
+    let user_images = resolve_attachments(server, &params, &resolved.provider_id, resolved.vision)?;
 
     let session_id = params
         .session_id
@@ -205,6 +308,7 @@ pub async fn run_turn(
                         server,
                         &resolved,
                         &message,
+                        user_images.clone(),
                         TurnFrame {
                             session_id: &session_id,
                             turn_id: &turn_id,
@@ -269,6 +373,7 @@ pub async fn run_turn(
             server,
             &resolved,
             &reason,
+            Vec::new(),
             TurnFrame {
                 session_id: &session_id,
                 turn_id: &turn_id,
@@ -377,6 +482,7 @@ pub async fn run_turn(
                 server,
                 &resolved,
                 &judgement.reason,
+                Vec::new(),
                 TurnFrame {
                     session_id: &session_id,
                     turn_id: &turn_id,
@@ -699,6 +805,7 @@ async fn full_turn(
     server: &Server,
     resolved: &Resolved,
     message: &str,
+    user_images: Vec<joyczl_provider::ContentBlock>,
     frame: TurnFrame<'_>,
     inner: Option<joyczl_loop::Observer>,
 ) -> Result<FullTurn, ErrorObject> {
@@ -871,6 +978,7 @@ async fn full_turn(
             system: system.clone(),
             history: history.clone(),
             user_message: prompt_message.clone(),
+            user_images: user_images.clone(),
             tools: &server.tools,
             ctx: ctx.clone(),
             max_iterations: settings.max_iterations,
@@ -1018,6 +1126,9 @@ async fn graph_route(
                     &server,
                     &resolved,
                     &message,
+                    // Graph-routed turns (triage / gather) are engine-driven continuations:
+                    // images already rode on the initial user message.
+                    Vec::new(),
                     TurnFrame {
                         session_id: &session_id,
                         turn_id: &turn_id,

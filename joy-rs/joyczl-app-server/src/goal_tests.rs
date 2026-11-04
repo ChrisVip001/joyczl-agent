@@ -14,6 +14,8 @@ use crate::{EventSink, Server};
 
 fn resolved_with(mock: Arc<Mock>) -> Resolved {
     Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision: false,
         provider_id: "mock".to_string(),
         client: mock,
         model: "test-model".to_string(),
@@ -109,6 +111,7 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
     crate::turn::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("goal-session".to_string()),
             message: "开始吧".to_string(),
             stream: Some(true),
@@ -180,6 +183,7 @@ async fn running_out_of_rounds_is_reported_honestly() {
     crate::turn::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("goal-session".to_string()),
             message: "开始".to_string(),
             stream: Some(true),

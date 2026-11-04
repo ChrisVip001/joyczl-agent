@@ -58,6 +58,8 @@ async fn server(mock: Arc<Mock>, graph_workflows: bool) -> Server {
     // The real provider wants a key; swap in the scripted fake here: another implementation of the same
     // trait — exactly the test capability gained for free by collapsing "model calls" into one trait.
     server.set_resolved(Some(Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision: false,
         provider_id: "mock".to_string(),
         client: mock,
         model: "test-model".to_string(),
@@ -97,6 +99,7 @@ async fn run(mock: Mock, message: &str, graph_workflows: bool) -> Ran {
     let outcome = crate::turn::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: message.to_string(),
             stream: Some(true),
@@ -624,6 +627,7 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
     crate::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: "2+2 等于几？".to_string(),
             stream: Some(true),
@@ -694,6 +698,7 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
     crate::turn::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: "2+2 等于几？".to_string(),
             stream: Some(true),
@@ -743,6 +748,7 @@ async fn a_plain_provider_error_is_not_retried() {
     let error = crate::turn::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: "你好".to_string(),
             stream: Some(true),
@@ -891,6 +897,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
     crate::turn::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: "2+2 等于几？".to_string(),
             stream: Some(true),
@@ -944,4 +951,173 @@ fn turn_cwd_validation_is_fail_closed() {
     // A nonexistent absolute path: rejected.
     let err = resolve_turn_cwd(&Some("/不存在/的/目录/joy".into())).unwrap_err();
     assert!(err.message.contains("不存在"), "{}", err.message);
+}
+
+// ---- 附件（多模态）：图片在进 provider 前被读成块、被 vision 闸门拦下 ----
+
+/// 与 `run` 相同的流程，但带 vision 开关、附件列表和一个「启动前装置」回调（往 home 里写上传文件）。
+async fn run_with_attachments(
+    mock: Mock,
+    vision: bool,
+    message: &str,
+    attachments: Option<Vec<joyczl_protocol::TurnAttachment>>,
+    prepare: impl FnOnce(&std::path::Path),
+) -> Ran {
+    let mock = Arc::new(mock);
+    let dir = tempfile::tempdir().expect("临时目录");
+    prepare(dir.path());
+    let pool = joyczl_state::open(&dir.path().join("state.db"))
+        .await
+        .expect("打开库");
+    let settings = Settings {
+        home: dir.path().to_path_buf(),
+        ..Settings::default()
+    };
+    let _ = dir.keep();
+    let server = Server::boot(pool, settings).await;
+    server.set_resolved(Some(Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision,
+        provider_id: "mock".to_string(),
+        client: mock.clone(),
+        model: "test-model".to_string(),
+        small_model: "test-small".to_string(),
+    }));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sink = EventSink::new(tx);
+    let outcome = crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            attachments,
+            session_id: Some("test".to_string()),
+            message: message.to_string(),
+            stream: Some(true),
+            cwd: None,
+        },
+        RequestId::Number(1),
+        &sink,
+    )
+    .await;
+    let mut notifications = Vec::new();
+    let mut meta = None;
+    let mut reply = String::new();
+    while let Ok(frame) = rx.try_recv() {
+        match frame {
+            Frame::Response(_) => {}
+            Frame::Notification(ServerNotification::TurnCompleted(done)) => {
+                reply = done.reply.clone();
+                meta = Some(done.meta.clone());
+            }
+            Frame::Notification(notification) => notifications.push(notification),
+        }
+    }
+    let requests = mock.received.lock().expect("锁").clone();
+    Ran {
+        notifications,
+        meta,
+        reply,
+        requests,
+        error: outcome.err(),
+    }
+}
+
+fn png_attachment(path: &str) -> Option<Vec<joyczl_protocol::TurnAttachment>> {
+    Some(vec![joyczl_protocol::TurnAttachment {
+        path: path.to_string(),
+        media_type: None,
+    }])
+}
+
+#[tokio::test]
+async fn an_attachment_reaches_the_provider_as_an_image_block() {
+    let png = [0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4];
+    let ran = run_with_attachments(
+        Mock::new(vec![
+            // 检索门控先烧一条（small model）。
+            Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
+            Mock::text("图里是一个色块。"),
+        ]),
+        true,
+        "这张图是什么？",
+        png_attachment("uploads/px.png"),
+        |home| {
+            let dir = home.join("uploads");
+            std::fs::create_dir_all(&dir).expect("建上传目录");
+            std::fs::write(dir.join("px.png"), png).expect("装置图片");
+        },
+    )
+    .await;
+    assert!(ran.error.is_none(), "{:?}", ran.error);
+    // 检索门控的调用在前，主调用在后：扫全部请求找携带图片的那条用户消息。
+    let image = ran
+        .requests
+        .iter()
+        .flat_map(|r| r.messages.iter())
+        .filter(|m| matches!(m.role, joyczl_provider::Role::User))
+        .flat_map(|m| m.content.iter())
+        .find_map(|b| match b {
+            joyczl_provider::ContentBlock::Image { media_type, data } => {
+                Some((media_type.as_str(), data.as_str()))
+            }
+            _ => None,
+        })
+        .expect("用户消息携带 Image 块");
+    assert_eq!(image.0, "image/png", "类型来自扩展名嗅探");
+    use base64::Engine as _;
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(image.1)
+            .expect("合法 base64"),
+        png,
+        "字节原样进 provider"
+    );
+    // 正文文本仍在（chat 历史 / 模型都能看到用户说了什么）。
+    let with_text = ran
+        .requests
+        .iter()
+        .flat_map(|r| r.messages.iter())
+        .filter(|m| matches!(m.role, joyczl_provider::Role::User))
+        .any(|m| m.text().contains("这张图是什么？"));
+    assert!(with_text, "用户正文文本随图片一起进请求");
+}
+
+#[tokio::test]
+async fn attachments_fail_up_front_on_a_non_vision_provider() {
+    let ran = run_with_attachments(
+        Mock::new(vec![]),
+        false,
+        "看看这张图",
+        png_attachment("uploads/px.png"),
+        |_| {},
+    )
+    .await;
+    let error = ran.error.as_ref().expect("vision 关着必须在门口拦下");
+    assert!(
+        error.message.contains("不支持图片输入"),
+        "{}",
+        error.message
+    );
+    assert!(ran.requests.is_empty(), "失败不该烧掉任何模型调用");
+}
+
+#[tokio::test]
+async fn an_attachment_outside_home_is_refused_before_the_turn() {
+    // 真实逃逸向量：uploads 里放一个指向 home 之外的符号链接，路径本身"存在"。
+    let ran = run_with_attachments(
+        Mock::new(vec![]),
+        true,
+        "看看这张图",
+        png_attachment("uploads/escape.png"),
+        |home| {
+            let dir = home.join("uploads");
+            std::fs::create_dir_all(&dir).expect("建上传目录");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink("/etc/hosts", dir.join("escape.png"))
+                .expect("建逃逸符号链接");
+        },
+    )
+    .await;
+    let error = ran.error.as_ref().expect("越界路径必须被拒");
+    assert!(error.message.contains("home 之外"), "{}", error.message);
+    assert!(ran.requests.is_empty());
 }

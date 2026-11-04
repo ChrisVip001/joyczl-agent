@@ -14,6 +14,7 @@ doctest = false
 tempfile = { workspace = true }
 
 [dependencies]
+base64 = "0.22"
 anyhow = { workspace = true }
 chrono = { workspace = true }
 joyczl-config = { workspace = true }

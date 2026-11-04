@@ -155,6 +155,9 @@ fn render(request: &CreateRequest) -> String {
                 joyczl_provider::ContentBlock::ToolResult { content, .. } => {
                     text.push_str(&format!("[tool_result {content}]"));
                 }
+                joyczl_provider::ContentBlock::Image { media_type, data } => {
+                    text.push_str(&format!("[image {media_type} {}b]", data.len()));
+                }
             }
         }
     }
@@ -235,6 +238,8 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         model: "eval-model".to_string(),
         small_model: "eval-small".to_string(),
         context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        // Mock has no pixels; vision on keeps the attachment path testable in principle.
+        vision: false,
     });
 
     let mut output = TurnOutput::default();
@@ -248,6 +253,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
             message,
             stream: Some(true),
             cwd: None,
+            attachments: None,
         };
         let task_server = server.clone();
         let task = tokio::spawn(async move {
@@ -314,6 +320,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                 model: "eval-model".to_string(),
                 small_model: "eval-small".to_string(),
                 context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+                vision: false,
             });
         }
     }
@@ -453,6 +460,7 @@ async fn collect_turn(server: &Server, message: &str) -> Result<TurnOutput> {
         message: message.to_string(),
         stream: Some(true),
         cwd: None,
+        attachments: None,
     };
     let task_server = server.clone();
     let task =

@@ -65,6 +65,14 @@ pub enum ContentBlock {
         tool_use_id: String,
         content: String,
     },
+    /// An image handed to the model: raw bytes, base64, no path — the model sees pixels,
+    /// not a filename. `media_type` is an IANA image type ("image/png", "image/jpeg", …).
+    /// The Anthropic wire wraps this in a `source` object (see anthropic.rs); the OpenAI
+    /// wire becomes a data URI in array content (see openai.rs).
+    Image {
+        media_type: String,
+        data: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -221,6 +229,11 @@ pub struct ProviderInfo {
     /// so values are always conservative. The real cap is what the provider reports as an
     /// error: those are recognized (`ProviderError::ContextOverflow`) and retried after compaction.
     pub context_window: u32,
+    /// Whether the provider's **default models** accept image input. Only gates the friendly
+    /// refusal: a text-only provider that receives an image would get an API 400 (which still
+    /// becomes `Error:` text), so this flag turns a cryptic remote error into a clear local one.
+    /// Wrongly `false` costs a capability; wrongly `true` costs a round trip — be conservative.
+    pub vision: bool,
 }
 
 impl ProviderInfo {
@@ -242,6 +255,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "claude-sonnet-5",
         small_model: "claude-haiku-4-5-20251001",
         context_window: 200_000,
+        vision: true,
     },
     ProviderInfo {
         id: "openai",
@@ -251,6 +265,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "gpt-5.5",
         small_model: "gpt-4.1-mini",
         context_window: 200_000,
+        vision: true,
     },
     ProviderInfo {
         id: "openrouter",
@@ -260,6 +275,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "nvidia/nemotron-3-super-120b-a12b:free",
         small_model: "google/gemma-4-26b-a4b-it:free",
         context_window: 128_000,
+        vision: false,
     },
     ProviderInfo {
         id: "gemini",
@@ -269,6 +285,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "gemini-3.5-flash",
         small_model: "gemini-3.1-flash-lite",
         context_window: 1_000_000,
+        vision: true,
     },
     ProviderInfo {
         id: "deepseek",
@@ -278,6 +295,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "deepseek-v4-pro",
         small_model: "deepseek-v4-pro",
         context_window: 128_000,
+        vision: false,
     },
     ProviderInfo {
         id: "minimax",
@@ -287,6 +305,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "MiniMax-M3",
         small_model: "MiniMax-M2",
         context_window: 200_000,
+        vision: false,
     },
     ProviderInfo {
         id: "kimi",
@@ -296,6 +315,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "kimi-k3",
         small_model: "kimi-k2.6",
         context_window: 200_000,
+        vision: false,
     },
     ProviderInfo {
         id: "glm",
@@ -305,6 +325,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "glm-5.2",
         small_model: "glm-5-turbo",
         context_window: 200_000,
+        vision: false,
     },
     ProviderInfo {
         id: "xai",
@@ -314,6 +335,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "grok-4",
         small_model: "grok-4-fast",
         context_window: 256_000,
+        vision: true,
     },
     ProviderInfo {
         id: "opencode_zen",
@@ -323,6 +345,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "deepseek-v4-flash-free",
         small_model: "deepseek-v4-flash-free",
         context_window: 128_000,
+        vision: false,
     },
     ProviderInfo {
         id: "opencode_go",
@@ -332,6 +355,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "deepseek-v4-flash",
         small_model: "deepseek-v4-flash",
         context_window: 128_000,
+        vision: false,
     },
     ProviderInfo {
         // Local inference: no key, no network needed. An empty `key_env` declares exactly that.
@@ -346,6 +370,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         model: "qwen3:8b",
         small_model: "qwen3:4b",
         context_window: 32_768,
+        vision: false,
     },
 ];
 
@@ -392,6 +417,8 @@ pub struct Resolved {
     pub client: Arc<dyn Provider>,
     pub model: String,
     pub small_model: String,
+    /// Whether this provider's models accept image input (from the catalog row).
+    pub vision: bool,
     /// The approximate context window, taken from the catalog row this turn resolved
     /// from. Stored now (it used to live in the static table) because catalog rows are
     /// runtime data — the row may not exist in any 'static table.
@@ -488,6 +515,7 @@ pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<R
                 .unwrap_or_else(|| info.model.clone())
         }),
         context_window: info.context_window,
+        vision: info.vision,
     })
 }
 

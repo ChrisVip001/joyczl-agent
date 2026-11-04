@@ -985,6 +985,7 @@ name = "joyczl-app-server"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "joyczl-config",
  "joyczl-graph",

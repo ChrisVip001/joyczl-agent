@@ -426,6 +426,7 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         stream: Some(true),
         // No working directory for scheduled jobs: home semantics is safest (scripts use absolute paths).
         cwd: None,
+        attachments: None,
     };
     let server_for_turn = server.clone();
     let task = tokio::spawn(async move {

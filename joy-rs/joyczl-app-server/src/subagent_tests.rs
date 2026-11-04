@@ -26,6 +26,8 @@ async fn server_with(
     };
     let server = crate::open(&settings).await.expect("装配");
     server.install_provider(Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision: false,
         provider_id: "mock".to_string(),
         client: Arc::new(Mock::new(responses)),
         model: "test-model".to_string(),
@@ -40,6 +42,7 @@ async fn collect(server: &crate::Server, message: &str) -> (String, String) {
     run_turn(
         server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: message.to_string(),
             stream: Some(true),

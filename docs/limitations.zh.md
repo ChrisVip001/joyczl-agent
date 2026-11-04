@@ -212,10 +212,10 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 ## 模型路由
 
 只有三个档位（`fast`/`chat`/`reasoning`）—— profile 上没有成本/速度标签
-（用量台账本来就按模型记账）、没有 vision 档（provider 层还没有 image
-content block）、没有同级降级链：被路由到的 profile 解析失败时直接回落
-active profile，不试同族其它档。L1 分类器只看消息文本（前 4k 字符）——
-不看工具、不看历史。
+（用量台账本来就按模型记账）、没有 vision 档路由（图片跟着回合所在档走，按
+厂商的 `vision` 标志闸门把关——见「文件与上传」）、没有同级降级链：被路由到
+的 profile 解析失败时直接回落 active profile，不试同族其它档。L1 分类器只看
+消息文本（前 4k 字符）——不看工具、不看历史、不看图片。
 
 * **刻意** —— 模型目录（`<home>/models-catalog.json`，见 configuration）
   **只在启动时读一次**：切换模型是重新 resolve provider，不是重读目录；新加
@@ -228,10 +228,22 @@ active profile，不试同族其它档。L1 分类器只看消息文本（前 4k
 
 ## 文件与上传
 
-驾驶舱的上传是**引用，不是内容**：文件落在 `<home>/uploads/<日期>/` 下，名字
-完全由服务端生成（用户输入只取扩展名、过白名单），消息里注入的是绝对路径 ——
-模型想读就用 `read_file`。图片**不会**内嵌进消息（provider 层还没有 image
-content block）；传一张「图」，模型能读到的只是那串字节。
+驾驶舱的上传走**两条路**：非图片文件是引用——文件落在 `<home>/uploads/<日期>/`
+下，名字完全由服务端生成（用户输入只取扩展名、过白名单），消息里注入的是绝对
+路径，模型想读就用 `read_file`。**图片是例外**：它作为真正的
+`ContentBlock::Image` 块进消息——服务端读字节、base64 编码，并在回合开始前按
+厂商的 `vision` 能力闸门把关（各厂商开关见 configuration）。附件的一切检查都
+在回合开始前完成：`<home>` 包含性、存在性、按扩展名嗅探的媒体类型、单图
+20 MiB 上限。
+
+* **未做** —— 附件**不随会话恢复重放**：`chat_log` 存的是消息文本（里面提到
+  上传路径），历史重建走文本——恢复后的会话是「描述」那张图，而不是重新
+  展示它。要补就得持久化字节（或恢复时做一次引用解析）。
+  → `joy-rs/joyczl-app-server/src/turn.rs`（`resolve_attachments`、`load_history`）
+* **刻意** —— `vision` 标志描述的是厂商的**默认模型**，且宁可写 `false`：错标
+  `false` 只少一个能力；错标 `true` 要多跑一趟远端、换一个看不懂的 400。可在
+  `models-catalog.json` 里按厂商覆盖。
+  → `joy-rs/joyczl-provider/src/lib.rs`（`ProviderInfo::vision`）
 
 ## 记忆
 

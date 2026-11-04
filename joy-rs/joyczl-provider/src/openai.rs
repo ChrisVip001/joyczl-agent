@@ -313,7 +313,33 @@ pub fn to_openai(request: &CreateRequest) -> Value {
                     }
                 } else {
                     let text = message.text();
-                    if !text.is_empty() {
+                    let images: Vec<&ContentBlock> = message
+                        .content
+                        .iter()
+                        .filter(|b| matches!(b, ContentBlock::Image { .. }))
+                        .collect();
+                    if !images.is_empty() {
+                        // With images, OpenAI wants **array content**: text parts plus
+                        // data-URI image parts. (A message carrying tool results keeps its
+                        // per-result tool messages; images only ride on plain user messages,
+                        // which is where the loop puts them.)
+                        let mut parts: Vec<Value> = Vec::new();
+                        if !text.is_empty() {
+                            parts.push(json!({ "type": "text", "text": text }));
+                        }
+                        for image in images {
+                            let ContentBlock::Image { media_type, data } = image else {
+                                continue;
+                            };
+                            parts.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{media_type};base64,{data}"),
+                                },
+                            }));
+                        }
+                        messages.push(json!({ "role": "user", "content": parts }));
+                    } else if !text.is_empty() {
                         messages.push(json!({ "role": "user", "content": text }));
                     }
                 }

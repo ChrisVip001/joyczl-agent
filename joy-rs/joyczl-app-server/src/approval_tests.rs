@@ -46,6 +46,8 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
     };
     let server = crate::open(&settings).await.expect("装配");
     server.install_provider(Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision: false,
         provider_id: "mock".to_string(),
         client: Arc::new(Mock::new(vec![
             Mock::text(r#"{"retrieve": false, "query": "", "reason": "tool"}"#),
@@ -91,6 +93,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
     run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: "跑一下 echo".to_string(),
             stream: Some(true),
@@ -135,6 +138,8 @@ async fn without_on_request_the_command_is_simply_refused() {
     };
     let server: Server = crate::open(&settings).await.expect("装配");
     server.install_provider(Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision: false,
         provider_id: "mock".to_string(),
         client: Arc::new(Mock::new(vec![
             Mock::text(r#"{"retrieve": false, "query": "", "reason": "tool"}"#),
@@ -168,6 +173,7 @@ async fn without_on_request_the_command_is_simply_refused() {
     run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("test".to_string()),
             message: "跑一下".to_string(),
             stream: Some(true),

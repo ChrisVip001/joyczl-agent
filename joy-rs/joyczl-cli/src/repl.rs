@@ -395,6 +395,7 @@ async fn chat_turn(
         message: message.to_string(),
         stream: Some(true),
         cwd: cwd.map(|p| p.display().to_string()),
+        attachments: None,
     };
     let task_server = server.clone();
     let task =

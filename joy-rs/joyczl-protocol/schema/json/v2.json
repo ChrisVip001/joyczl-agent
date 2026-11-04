@@ -2231,6 +2231,25 @@
       "title": "ToolStatus",
       "type": "string"
     },
+    "TurnAttachment": {
+      "description": "One image attached to a turn. `path` is **home-relative** (uploads land in `<home>/uploads/...`); the server reads the bytes and embeds them — the model never sees a path, it sees pixels. Only image files are accepted; other files keep the \"path mentioned in text\" route.",
+      "properties": {
+        "mediaType": {
+          "description": "Client-provided media type hint; the server trusts the file extension over this.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "TurnCompletedNotification": {
       "properties": {
         "iterations": {
@@ -2408,6 +2427,16 @@
     },
     "TurnStartParams": {
       "properties": {
+        "attachments": {
+          "description": "Images attached to this message, embedded as image content blocks. Requires a vision-capable provider; a missing or unreadable file fails the turn up front.",
+          "items": {
+            "$ref": "#/definitions/TurnAttachment"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "cwd": {
           "description": "Working directory for this turn (per-turn override semantics): must be an existing absolute path (fail-closed admission); relative exec commands and relative read_file/list_dir paths resolve against it. Default = process cwd (old behavior).",
           "type": [

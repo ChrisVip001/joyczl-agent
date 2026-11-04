@@ -45,6 +45,8 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
     )
     .await;
     server.set_resolved(Some(Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision: false,
         provider_id: "mock".to_string(),
         client: mock.clone(),
         model: "test-model".to_string(),
@@ -59,6 +61,7 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
         crate::turn::run_turn(
             &server,
             TurnStartParams {
+                attachments: None,
                 session_id: Some("todo-session".to_string()),
                 message: message.to_string(),
                 stream: Some(true),
@@ -132,6 +135,8 @@ async fn a_session_without_a_list_gets_no_section() {
     )
     .await;
     server.set_resolved(Some(Resolved {
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+        vision: false,
         provider_id: "mock".to_string(),
         client: mock.clone(),
         model: "test-model".to_string(),
@@ -142,6 +147,7 @@ async fn a_session_without_a_list_gets_no_section() {
     crate::turn::run_turn(
         &server,
         TurnStartParams {
+            attachments: None,
             session_id: Some("clean".to_string()),
             message: "随便说点什么".to_string(),
             stream: Some(true),

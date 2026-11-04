@@ -272,11 +272,12 @@ extraction use `run_command` + curl or an MCP fetching service.
 ## Model routing
 
 Three tiers only (`fast`/`chat`/`reasoning`) — no cost or speed labels on
-profiles (the usage ledger already bills per model), no vision tier (the
-provider layer has no image content block yet), no sibling-tier failover
-chain: if a routed profile fails to resolve, the turn falls back to the
-active profile rather than trying a sibling tier. The L1 classifier sees
-only the message text (first 4k chars) — not tools, not history.
+profiles (the usage ledger already bills per model), no vision tier routing
+(images ride on the turn's tier, gated by the provider's `vision` flag — see
+"Files & uploads"), no sibling-tier failover chain: if a routed profile fails
+to resolve, the turn falls back to the active profile rather than trying a
+sibling tier. The L1 classifier sees only the message text (first 4k chars) —
+not tools, not history, not images.
 
 * **Deliberate** — The model catalog (`<home>/models-catalog.json`, see
   configuration.md) is read **once at boot**: switching models re-resolves the
@@ -292,12 +293,27 @@ only the message text (first 4k chars) — not tools, not history.
 
 ## Files & uploads
 
-Dashboard uploads are **references, not content**: a file lands in
-`<home>/uploads/<date>/` under a server-generated name (only the extension is
-taken from the user, whitelist-checked), and its absolute path is injected into
-the message — the model reads it with `read_file` if it decides to. Images are
-NOT embedded into messages (the provider layer has no image content block yet);
-a "picture" upload is just a file the model can read as bytes.
+Dashboard uploads are **two routes**: non-image files are references — a file
+lands in `<home>/uploads/<date>/` under a server-generated name (only the
+extension is taken from the user, whitelist-checked), and its absolute path is
+injected into the message; the model reads it with `read_file` if it decides to.
+**Images are the exception**: they ride as real `ContentBlock::Image` blocks —
+the server reads the bytes, base64s them, and gates on the provider's `vision`
+capability up front (see configuration.md for the per-provider flag). Everything
+about the attachment is checked before the turn starts: containment inside
+`<home>`, existence, media type by extension, 20 MiB per image.
+
+* **Gap** — Attachments are **not replayed on session restore**: `chat_log`
+  stores the message text (which mentions the upload path), and history
+  rebuilds as text — a restored session describes the image instead of
+  re-showing it. Persisting the bytes (or a reference resolution pass on
+  restore) would close this.
+  → `joy-rs/joyczl-app-server/src/turn.rs` (`resolve_attachments`, `load_history`)
+* **Deliberate** — The `vision` flag describes the provider's **default
+  models** and errs toward `false`: a wrong `false` costs one capability; a
+  wrong `true` costs a round trip and a cryptic remote 400. Overridable per
+  provider in `models-catalog.json`.
+  → `joy-rs/joyczl-provider/src/lib.rs` (`ProviderInfo::vision`)
 
 ## Memory
 

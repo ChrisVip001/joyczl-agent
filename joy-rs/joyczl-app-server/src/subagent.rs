@@ -72,6 +72,7 @@ async fn run_child(
         system: prompt.system,
         history: prompt.history,
         user_message: prompt.user_message,
+        user_images: Vec::new(),
         tools,
         ctx,
         max_iterations,

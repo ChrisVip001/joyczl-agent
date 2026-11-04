@@ -712,6 +712,16 @@ class ToolStatus(str, Enum):
     error = 'error'
 
 
+class TurnAttachment(BaseModel):
+    mediaType: Annotated[
+        str | None,
+        Field(
+            description='Client-provided media type hint; the server trusts the file extension over this.'
+        ),
+    ] = None
+    path: str
+
+
 class TurnInterruptParams(BaseModel):
     turnId: str
 
@@ -726,6 +736,12 @@ class TurnInterruptResponse(BaseModel):
 
 
 class TurnStartParams(BaseModel):
+    attachments: Annotated[
+        list[TurnAttachment] | None,
+        Field(
+            description='Images attached to this message, embedded as image content blocks. Requires a vision-capable provider; a missing or unreadable file fails the turn up front.'
+        ),
+    ] = None
     cwd: Annotated[
         str | None,
         Field(
