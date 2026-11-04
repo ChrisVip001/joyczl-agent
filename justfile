@@ -131,6 +131,11 @@ build-python-bin:
     cd {{ justfile_directory() }}/sdk/python-bin && uv build --wheel
     {{ python }} {{ justfile_directory() }}/scripts/check_python_bin_wheel.py {{ justfile_directory() }}/sdk/python-bin/dist
 
+# Refresh the Homebrew formula's url/sha256 for a tag (after `git tag v0.8.0 && git push --tags`).
+# Computes the checksum from the same archive URL Homebrew fetches. See packaging/RELEASING.md.
+release-hash *args:
+    {{ justfile_directory() }}/packaging/release-hash.sh {{args}}
+
 # End to end: really start app-server and have the Python SDK ask it. Unit tests swap the
 # transport, so only this proves "the subprocess starts, and the process exits when closed".
 smoke-sdk-python: build
