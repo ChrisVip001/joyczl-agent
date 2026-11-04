@@ -2,6 +2,79 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.8.0 — Write, see, declare, ship (the workspace version; `v0.5.0` is the previous tagged release)
+
+### File-writing tools: `write_file` / `edit`
+
+- **Off by default**; `JOY_WRITE=1` turns them on — the same human-switch
+  philosophy as `JOY_EXEC`. Approval semantics are the ones `run_command`
+  already has (`JOY_APPROVAL` three modes via `ApprovalBroker`).
+- `edit` demands an **exact** `old_string` match: zero or multiple hits are a
+  refusal, not a guess; the reply carries a unified diff. Binary files are
+  refused (NUL sniffing), as are paths outside the sandbox like `run_command`.
+- Rejections come back as text the model can read and act on — `execute`
+  never errors, the standing invariant holds.
+
+### Image input, end to end
+
+- `ContentBlock::Image` in the provider layer; both wires speak it (Anthropic
+  image block; OpenAI content array with a data URI).
+- Providers without a `vision` flag fail with an **explicit** error — never a
+  silently dropped attachment.
+- `turn/start` attachments and the dashboard upload embed images within a
+  size cap; token estimation counts the bytes.
+
+### Model catalog
+
+- A built-in catalog (12 providers, context windows and metadata) is compiled
+  into the binary; `<home>/models-catalog.json` overrides/merges by id. No
+  network, no new dependency, merged once at boot.
+- `model/list` and the dashboard model panel read the merged catalog.
+
+### Declarative workflows
+
+- triage / gather topology moved to **JSON DAGs**
+  (`joy-rs/joyczl-graph/src/workflows/definitions/`), validated at load:
+  static edges must be acyclic, routers must be **registered built-ins**
+  (`key_router` / `needs_action` — the whitelist is closed), and every node
+  must have a bound implementation. Control flow can no longer reach the
+  model even by editing the JSON. Workflows are compiled in
+  (`include_str!`) — they are behaviour, not runtime config.
+
+### hooks: HTTP handlers
+
+- A hook entry now takes `command` (shell) **or** `url` (HTTP POST carrying
+  the event payload). The decision contract is identical to shell exit codes:
+  HTTP 200 + decision JSON blocks/allows exactly like exit 0/2. Existing
+  `command`-only configs are unchanged.
+
+### Per-session write-section lock
+
+- One tokio Mutex per session serialises **only the write sections** of a
+  turn (history append, consolidation, compaction); model calls never hold
+  it, so a slow turn cannot stall the session and `turn/interrupt` still
+  gets in. The three SQLite-level guards stay — they stop double-write
+  corruption; the lock stops read/write interleaving.
+
+### Platform boundary: Windows
+
+- The CLI and the server **refuse to start** on Windows with an explicit
+  reason (no sandbox, no execution, no pretending). Support matrix in
+  `docs/operations.md`; CI keeps a Windows build+test job.
+
+### Distribution materials
+
+- npm shim package (`joyczl-agent`: downloads the platform binary from
+  GitHub Releases), Homebrew formula hash automation (`just release-hash`),
+  a tag-triggered release workflow (four binaries + per-platform wheels),
+  and a RELEASING manual (EN/zh). **Publishing is a human step** — tokens
+  do not live in CI.
+
+### Docs
+
+- Fixed the broken README tool table, the empty limitations sections and a
+  stale memory-de-dup entry (all EN/zh pairs).
+
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
 ### Web search: provider chain, per-turn cap, untrusted wrapping

@@ -2,6 +2,68 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 0.8.0 — 能写、能看、能声明、能分发（工作区版本；`v0.5.0` 是上一个已打 tag 的发布）
+
+### 文件写入工具：`write_file` / `edit`
+
+- **默认关闭**；`JOY_WRITE=1` 开启——与 `JOY_EXEC` 同一个「能力由人类开关」
+  的哲学。审批语义与 `run_command` 完全一致（`JOY_APPROVAL` 三态，走
+  `ApprovalBroker`）。
+- `edit` 要求 `old_string` **精确**匹配：命中 0 次或多次都是拒绝而非猜测；
+  返回统一 diff。二进制文件拒绝（NUL 探测），越界路径与 `run_command` 同规。
+- 拒绝以文本返回、模型可读可行动——「execute 永不 Err」的既有不变量不动。
+
+### 图片输入，端到端
+
+- provider 层新增 `ContentBlock::Image`；两种 wire 都会说（Anthropic image
+  block；OpenAI content 数组 + data URI）。
+- 无 `vision` 标志的厂商**明确报错**——绝不静默丢附件。
+- `turn/start` 附件与驾驶舱上传按大小上限内嵌图片；token 估算按字节计。
+
+### 模型目录
+
+- 内置目录（12 家、上下文窗口等元数据）编译进二进制；
+  `<home>/models-catalog.json` 按 id 覆盖合并。零网络、零新依赖，启动合并一次。
+- `model/list` 与驾驶舱模型面板读合并后的目录。
+
+### 声明式工作流
+
+- triage / gather 的拓扑改为 **JSON DAG**
+  （`joy-rs/joyczl-graph/src/workflows/definitions/`），装载期校验：静态边
+  必须无环、路由必须是**注册的内置函数**（`key_router` / `needs_action`——
+  白名单是封闭的）、每个节点必须有绑定的实现。改 JSON 也无法把控制流交给
+  模型。JSON 由 `include_str!` 编译内嵌——工作流是行为，不是运行时配置。
+
+### hooks：HTTP handler
+
+- hook 条目现在接受 `command`（shell）**或** `url`（HTTP POST 携带事件
+  载荷）。决策契约与 shell 退出码完全一致：HTTP 200 + 决策 JSON 的
+  阻断/放行，等价于 exit 0/2。既有纯 `command` 配置不变。
+
+### per-session 写段锁
+
+- 每会话一把 tokio Mutex，只串行化 turn 的**写入段**（对话日志 append、
+  提炼、压缩）；模型调用段不持锁——慢 turn 卡不住会话，`turn/interrupt`
+  也进得来。SQLite 层的三守卫保留：它们防双写损坏，锁防读写交错，互补。
+
+### 平台边界：Windows
+
+- CLI 与 server 在 Windows 上**拒绝启动**并说明原因（无沙箱、无执行、
+  绝不假装能跑）。支持矩阵见 `docs/operations.md`；CI 保留 Windows
+  build+test 作业。
+
+### 分发物料
+
+- npm shim 包（`joyczl-agent`：从 GitHub Releases 下载平台二进制）、
+  Homebrew formula 哈希自动化（`just release-hash`）、tag 触发的 release
+  workflow（四个平台二进制 + 分平台 wheel）、RELEASING 发布手册（中英）。
+  **发布本身由人执行**——token 不进 CI。
+
+### 文档
+
+- 修复 README 工具表断裂、limitations 空章节与一条过时的记忆去重条目
+  （中英成对）。
+
 ## 0.7.0 — 向当前最优实现对齐（工作区版本；`v0.5.0` 是上一个已打 tag 的发布）
 
 ### web 搜索：降级链、每轮上限、不可信包装
