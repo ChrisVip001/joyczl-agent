@@ -72,6 +72,7 @@ persisted with the conversation.
 | `job_output` / `job_list` / `job_kill` | read, list and stop background jobs (started with `run_command`'s `background=true`) |
 | `todo_write` | keep a per-session todo list, re-injected every turn (whole-table replace; one `in_progress` at a time) |
 | `current_time` | local time with weekday and timezone |
+| `write_file` / `edit` | write a text file / one exact-match replacement with a change hunk — off unless `JOY_WRITE=1`; writable boundary = workdir + home + `JOY_EXEC_WRITABLE_ROOTS` |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
 | `delegate_task` | hand one self-contained job to a subagent — off unless `JOY_DELEGATE=1`, cannot delegate again; pass `result_schema` for a structured answer (retried once, then prose) |
 

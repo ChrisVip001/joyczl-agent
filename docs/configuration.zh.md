@@ -202,6 +202,7 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 | `JOY_HOOKS` | `0` | 读 `<home>/hooks.json` 并在 12 个生命周期事件上跑你的 shell 命令（见下） |
 | `JOY_HOOKS_TIMEOUT` | `30` | 钩子的默认超时（秒）；条目里的 `timeout` 优先 |
 | `JOY_EXEC` | `0` | 开启 `run_command` 工具（关着 = 模型看不见它） |
+| `JOY_WRITE` | `0` | 开启 `write_file` / `edit` 工具（关着 = 模型看不见它们）。可写范围：工作目录、Joy 的 home、`JOY_EXEC_WRITABLE_ROOTS`；`JOY_APPROVAL=on-request` 时每次写入都会问一次 |
 | `JOY_DELEGATE` | `0` | 开启 `delegate_task` 工具（子代理有自己的上下文，且不能再派生） |
 | `JOY_EXEC_ALLOW` | — | 放行表，逗号分隔，支持末尾 `*` 通配（`cargo test,git status,ls *`）。空 = 全部拒绝 |
 | `JOY_EXEC_TIMEOUT` | `30` | 单条命令的超时（秒） |
@@ -225,6 +226,18 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 
 `remember: true`（终端里的 `a`，或驾驶舱的「允许并记住」）会把**被批准的那条
 命令本身**（不加通配）追加进 `settings.json` 的放行表，**下次启动**生效。
+
+## 写文件（`JOY_WRITE`）
+
+`JOY_WRITE=1` 会注册两个工具：`write_file`（整文件写入，覆盖原内容）和 `edit`
+（一次精确匹配替换 —— `old_string` 必须在文件里恰好出现一次，0 次或多次都会被
+拒绝，返回里带变更 hunk）。默认关；关着时模型连名字都看不见。
+
+可写范围是**工作目录、Joy 的 home、`JOY_EXEC_WRITABLE_ROOTS`** —— 与执行沙箱
+的根一致，一个变量一个含义。范围外的写入在审批之前就被硬拒。内容必须是 UTF-8
+文本（不含 NUL 字节）且不超过 1 MiB。`JOY_APPROVAL=on-request` 时**每次**写入
+都会问一次 —— 写入少见而后果实在，也没有放行表可匹配，所以 on-request 就是
+「每次都问」。
 
 ## 把活交给子代理
 

@@ -67,7 +67,7 @@ just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # 端到端冒烟
 - **扩展一律注入**：工具层只认 trait（`SubagentRunner` / `ApprovalBroker` /
   `HookRunner` / `JobRegistry`），实现全在 app-server，`ToolCtx` 只加字段。
   工具层不认识 app-server —— 依赖方向反过来就会成环。
-- **能力要人亲手开**：`JOY_EXEC` / `JOY_DELEGATE` / `JOY_HOOKS` 默认关；
+- **能力要人亲手开**：`JOY_EXEC` / `JOY_DELEGATE` / `JOY_WRITE` / `JOY_HOOKS` 默认关；
   批准、目标、记忆写入这些「只有人能发起」的路径**不暴露给模型**（连工具都
   没有），所以「模型给自己派活」不是被禁止，而是不存在。
 - **不静默**：重试、熔断、跳过重复写入、目标续轮、后台作业结束、钩子被信任哈希

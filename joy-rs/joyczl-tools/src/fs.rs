@@ -44,7 +44,7 @@ pub const LIST_MAX_ENTRIES: usize = 500;
 /// Only `HOME` / `USERPROFILE` are honored; no dependencies.
 /// The base for resolving relative paths (session-level working-directory semantics):
 /// this turn's working directory first; if unset, keep the status quo (process cwd). Absolute paths pass through.
-fn resolve_against_cwd(ctx: &crate::ToolCtx, path: PathBuf) -> PathBuf {
+pub(crate) fn resolve_against_cwd(ctx: &crate::ToolCtx, path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         return path;
     }

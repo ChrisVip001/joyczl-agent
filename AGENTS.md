@@ -77,7 +77,7 @@ just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # end-to-end smokes
   app-server and `ToolCtx` only gains fields. The dependency points one way — the
   other way is a cycle.
 - **Capabilities are switched on by humans**: `JOY_EXEC` / `JOY_DELEGATE` /
-  `JOY_HOOKS` are off by default, and the paths only a human may start (approval,
+  `JOY_WRITE` / `JOY_HOOKS` are off by default, and the paths only a human may start (approval,
   goals, memory writes) are not exposed to the model at all — no tool, no route.
   "The model assigning itself work" is not forbidden here, it is impossible.
 - **Never silent**: retries, circuit breaking, skipped duplicate writes, goal

@@ -84,6 +84,9 @@ pub struct SettingsOverrides {
     /// Exec tool toggle and allow rules (see joyczl-tools' exec.rs).
     #[serde(default)]
     pub exec_enabled: Option<bool>,
+    /// File-write tools (`JOY_WRITE`).
+    #[serde(default)]
+    pub write_enabled: Option<bool>,
     /// Subagents (`JOY_DELEGATE`).
     #[serde(default)]
     pub delegate_enabled: Option<bool>,

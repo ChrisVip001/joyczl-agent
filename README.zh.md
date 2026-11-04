@@ -66,6 +66,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `job_output` / `job_list` / `job_kill` | 读写后台作业（`run_command` 的 `background=true` 起的那些） |
 | `todo_write` | 维护一张每轮重新注入的待办清单（整表替换；同时只能一项 `in_progress`） |
 | `current_time` | 本地时间（含星期与时区） |
+| `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——默认关（`JOY_WRITE=1` 才开）；可写范围 = 工作目录 + Joy home + `JOY_EXEC_WRITABLE_ROOTS` |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)）；`background=true` 丢到后台跑 |
 | `delegate_task` | 把一件自成一体的活交给子代理——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生；可给 `result_schema` 要结构化结论（不合规重试一次后回落散文） |
 

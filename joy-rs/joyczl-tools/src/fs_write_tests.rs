@@ -1,0 +1,351 @@
+//! Write-tool tests: gate semantics (roots, content checks, approval), edit matching,
+//! and the change-hunk rendering contract. No network, real temp dirs.
+
+use std::sync::{Arc, Mutex};
+
+use serde_json::json;
+
+use super::approval::{ApprovalBroker, ApprovalFut, ApprovalRequest};
+use super::fs_write::{edit, render_change, write_file, WritePolicy};
+use crate::{ToolCtx, ToolRegistry};
+
+async fn test_ctx(approval: Option<Arc<dyn ApprovalBroker>>) -> ToolCtx {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let home = dir.path().to_path_buf();
+    let pool = joyczl_state::open(&home.join("state.db"))
+        .await
+        .expect("打开库");
+    let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
+    ToolCtx {
+        cwd: None,
+        approval,
+        jobs: None,
+        hooks: None,
+        turn_limits: std::sync::Arc::new(crate::web::TurnLimits::default()),
+        session_id: "test".to_string(),
+        facts: joyczl_state::Facts::new(pool.clone()),
+        episodes: joyczl_state::Episodes::new(pool.clone()),
+        chat: joyczl_state::Chat::new(pool.clone()),
+        calendar: joyczl_state::Calendar::new(pool),
+        home,
+    }
+}
+
+fn registry() -> ToolRegistry {
+    let mut reg = ToolRegistry::new();
+    let policy = WritePolicy::default();
+    reg.register(write_file(policy.clone()));
+    reg.register(edit(policy));
+    reg
+}
+
+/// A broker that records questions and answers by script (same shape as approval_tests).
+struct Fake {
+    answer: bool,
+    seen: Mutex<Vec<ApprovalRequest>>,
+}
+
+impl Fake {
+    fn answering(answer: bool) -> Arc<Self> {
+        Arc::new(Self {
+            answer,
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl ApprovalBroker for Fake {
+    fn request(&self, request: ApprovalRequest) -> ApprovalFut {
+        self.seen.lock().expect("锁").push(request);
+        let answer = self.answer;
+        Box::pin(async move { answer })
+    }
+}
+
+#[tokio::test]
+async fn write_file_creates_a_file_and_reports_it() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("notes/created.md");
+    let out = reg
+        .execute(
+            ctx.clone(),
+            "write_file",
+            json!({"path": path.display().to_string(), "content": "第一行\n第二行\n"}),
+        )
+        .await;
+    assert!(out.starts_with("已写入"), "{out}");
+    assert!(out.contains("（新建，2 行）"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("文件应存在"),
+        "第一行\n第二行\n"
+    );
+}
+
+#[tokio::test]
+async fn writing_identical_content_skips_the_disk() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("same.md");
+    let args = |content: &str| json!({"path": path.display().to_string(), "content": content});
+    let first = reg
+        .execute(ctx.clone(), "write_file", args("同一段内容\n"))
+        .await;
+    assert!(first.starts_with("已写入"), "{first}");
+    let again = reg
+        .execute(ctx.clone(), "write_file", args("同一段内容\n"))
+        .await;
+    assert!(again.contains("内容未变，没有写盘"), "{again}");
+}
+
+#[tokio::test]
+async fn a_write_outside_the_roots_is_refused_without_asking() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let out = reg
+        .execute(
+            ctx,
+            "write_file",
+            json!({"path": "/etc/joy-fs-write-test-denied.txt", "content": "hi\n"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("可写范围之外"), "{out}");
+    assert!(!std::path::Path::new("/etc/joy-fs-write-test-denied.txt").exists());
+}
+
+#[tokio::test]
+async fn binary_content_is_refused() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("bin.md");
+    let out = reg
+        .execute(
+            ctx,
+            "write_file",
+            json!({"path": path.display().to_string(), "content": "a\0b"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("NUL"), "{out}");
+}
+
+#[tokio::test]
+async fn oversized_content_is_refused() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let big = "x".repeat(super::fs_write::MAX_WRITE_BYTES + 1);
+    let path = ctx.home.join("big.txt");
+    let out = reg
+        .execute(
+            ctx,
+            "write_file",
+            json!({"path": path.display().to_string(), "content": big}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("上限"), "{out}");
+}
+
+#[tokio::test]
+async fn edit_replaces_the_single_match_and_shows_the_hunk() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("article.md");
+    std::fs::write(&path, "alpha beta gamma\nsecond line\n").expect("装置文件");
+    let out = reg
+        .execute(
+            ctx,
+            "edit",
+            json!({
+                "path": path.display().to_string(),
+                "old_string": "beta",
+                "new_string": "delta"
+            }),
+        )
+        .await;
+    assert!(out.starts_with("已编辑"), "{out}");
+    assert!(out.contains("- alpha beta gamma"), "{out}");
+    assert!(out.contains("+ alpha delta gamma"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("应已改写"),
+        "alpha delta gamma\nsecond line\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_refuses_zero_matches_with_a_hint() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("article.md");
+    std::fs::write(&path, "alpha beta gamma\n").expect("装置文件");
+    let out = reg
+        .execute(
+            ctx,
+            "edit",
+            json!({"path": path.display().to_string(), "old_string": "zeta", "new_string": "x"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("没有找到"), "{out}");
+    assert!(out.contains("read_file"), "{out}");
+}
+
+#[tokio::test]
+async fn edit_refuses_ambiguous_matches() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("article.md");
+    std::fs::write(&path, "beta here\nbeta there\n").expect("装置文件");
+    let out = reg
+        .execute(
+            ctx,
+            "edit",
+            json!({"path": path.display().to_string(), "old_string": "beta", "new_string": "x"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("2 次"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("被拒绝时文件不能动"),
+        "beta here\nbeta there\n"
+    );
+}
+
+#[tokio::test]
+async fn edit_refuses_a_no_op_and_a_missing_file() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("article.md");
+    std::fs::write(&path, "alpha beta\n").expect("装置文件");
+    let same = reg
+        .execute(
+            ctx.clone(),
+            "edit",
+            json!({"path": path.display().to_string(), "old_string": "beta", "new_string": "beta"}),
+        )
+        .await;
+    assert!(same.starts_with("Error:"), "{same}");
+    assert!(same.contains("相同"), "{same}");
+
+    let missing_path = ctx.home.join("nope.md");
+    let missing = reg
+        .execute(
+            ctx,
+            "edit",
+            json!({"path": missing_path.display().to_string(), "old_string": "a", "new_string": "b"}),
+        )
+        .await;
+    assert!(missing.starts_with("Error:"), "{missing}");
+    assert!(missing.contains("找不到文件"), "{missing}");
+}
+
+#[tokio::test]
+async fn edit_refuses_a_binary_file() {
+    let ctx = test_ctx(None).await;
+    let reg = registry();
+    let path = ctx.home.join("blob.bin");
+    std::fs::write(&path, [0xff, 0xfe, 0x00]).expect("装置文件");
+    let out = reg
+        .execute(
+            ctx,
+            "edit",
+            json!({"path": path.display().to_string(), "old_string": "a", "new_string": "b"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("UTF-8"), "{out}");
+}
+
+#[tokio::test]
+async fn on_request_mode_asks_once_per_write() {
+    let yes = Fake::answering(true);
+    let ctx = test_ctx(Some(yes.clone())).await;
+    let mut reg = ToolRegistry::new();
+    let policy = WritePolicy {
+        approval: true,
+        approval_timeout_secs: 5,
+        extra_roots: Vec::new(),
+    };
+    reg.register(write_file(policy.clone()));
+    reg.register(edit(policy));
+
+    let path = ctx.home.join("approved.md");
+    let out = reg
+        .execute(
+            ctx.clone(),
+            "write_file",
+            json!({"path": path.display().to_string(), "content": "hi\n"}),
+        )
+        .await;
+    assert!(out.starts_with("已写入"), "{out}");
+    {
+        let seen = yes.seen.lock().expect("锁");
+        assert_eq!(seen.len(), 1, "问一次，不是零次也不是多次");
+        assert_eq!(seen[0].tool, "write_file");
+    } // guard dropped here — it must not live across the awaits below
+
+    // A denial (or silence) skips the write — and the file must not appear.
+    let no = Fake::answering(false);
+    let ctx2 = test_ctx(Some(no)).await;
+    let denied_path = ctx2.home.join("denied.md");
+    let out = reg
+        .execute(
+            ctx2.clone(),
+            "write_file",
+            json!({"path": denied_path.display().to_string(), "content": "hi\n"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("没有被批准"), "{out}");
+    assert!(!denied_path.exists());
+}
+
+#[tokio::test]
+async fn on_request_mode_without_a_broker_refuses() {
+    let ctx = test_ctx(None).await; // approval mode on, nobody home to answer
+    let mut reg = ToolRegistry::new();
+    reg.register(write_file(WritePolicy {
+        approval: true,
+        approval_timeout_secs: 5,
+        extra_roots: Vec::new(),
+    }));
+    let path = ctx.home.join("x.md");
+    let out = reg
+        .execute(
+            ctx,
+            "write_file",
+            json!({"path": path.display().to_string(), "content": "hi\n"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("没人能回答"), "{out}");
+}
+
+#[test]
+fn render_change_pins_the_hunk_format() {
+    // New file.
+    assert_eq!(render_change(None, "a\nb\n"), "（新建，2 行）");
+
+    // In-place edit keeps shared head/tail and marks the middle.
+    let hunk = render_change(
+        Some("one\ntwo\nthree\nfour\nfive\n"),
+        "one\ntwo\nTWO\nfour\nfive\n",
+    );
+    assert!(hunk.starts_with("@@"), "{hunk}");
+    assert!(hunk.contains("- three"), "{hunk}");
+    assert!(hunk.contains("+ TWO"), "{hunk}");
+    assert!(hunk.contains("  one"), "{hunk}");
+
+    // Identical content says so.
+    assert_eq!(render_change(Some("same\n"), "same\n"), "（内容未变）");
+}
+
+#[test]
+fn render_change_truncates_honestly() {
+    let old = "x\n".repeat(100);
+    let new = "y\n".repeat(100);
+    let hunk = render_change(Some(&old), &new);
+    assert!(hunk.contains("diff 截断"), "{hunk}");
+    assert!(hunk.contains("read_file"), "{hunk}");
+}

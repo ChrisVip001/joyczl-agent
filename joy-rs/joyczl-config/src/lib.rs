@@ -275,6 +275,10 @@ pub struct Settings {
     /// `JOY_EXEC`: only when enabled is run_command registered in the tool table. Off
     /// by default — an assistant that can execute commands must be switched on by hand.
     pub exec_enabled: bool,
+    /// `JOY_WRITE`: only when enabled are write_file / edit registered in the tool table.
+    /// Off by default — an assistant that can change files must be switched on by hand;
+    /// the writable boundary (workdir + home + JOY_EXEC_WRITABLE_ROOTS) is fixed at startup.
+    pub write_enabled: bool,
     /// `JOY_EXEC_ALLOW`: allow rules (comma-separated; trailing `*` wildcard supported).
     /// **Empty list = nothing is allowed**: deny by default, not allow by default.
     pub exec_allow: Vec<String>,
@@ -336,6 +340,7 @@ impl Default for Settings {
             hub_idle_secs: 900,
             hooks_timeout_secs: 30,
             exec_enabled: false,
+            write_enabled: false,
             exec_allow: Vec::new(),
             exec_timeout_secs: 30,
             approval: "never".to_string(),
@@ -397,6 +402,7 @@ impl Settings {
             hub_idle_secs: env_int("JOY_HUB_IDLE_SECS", d.hub_idle_secs as i32) as i64,
             hooks_timeout_secs: env_int("JOY_HOOKS_TIMEOUT", d.hooks_timeout_secs as i32) as i64,
             exec_enabled: env_bool("JOY_EXEC"),
+            write_enabled: env_bool("JOY_WRITE"),
             exec_allow: env("JOY_EXEC_ALLOW")
                 .map(|raw| {
                     raw.split(',')

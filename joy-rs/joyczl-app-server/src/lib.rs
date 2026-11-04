@@ -680,6 +680,23 @@ async fn builtin_tools(
             "(joy) 后台作业可用：run_command 的 background=true，配 job_output / job_list / job_kill"
         );
     }
+    // File-write tools: **off by default**, registered only when JOY_WRITE=1 — same discipline
+    // as run_command: the switch must be pressed by the user's own hand. Writable boundary is
+    // the sandbox's roots (workdir + home + JOY_EXEC_WRITABLE_ROOTS); approval in on-request
+    // mode asks once per write.
+    if settings.write_enabled {
+        let policy = joyczl_tools::fs_write::WritePolicy {
+            approval: settings.approval == "on-request",
+            approval_timeout_secs: settings.approval_timeout_secs,
+            extra_roots: settings.exec_writable_roots.clone(),
+        };
+        tools.register(joyczl_tools::fs_write::write_file(policy.clone()));
+        tools.register(joyczl_tools::fs_write::edit(policy));
+        eprintln!(
+            "(joy) 文件写入工具已启用：write_file / edit（可写范围 = 工作目录 + Joy home + \
+             额外可写根；JOY_APPROVAL=on-request 时每次写入都会问）"
+        );
+    }
     // Sweep spill/ while at it at startup: keep only the last 7 days (see the "no quota rotation" item
     // in docs/limitations.md). Unrelated to the exec switch — if the files are there, they get swept.
     joyczl_tools::exec::prune_spill(&settings.home, 7);

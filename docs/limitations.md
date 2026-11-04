@@ -81,6 +81,14 @@ extraction use `run_command` + curl or an MCP fetching service.
   `JOY_EXEC_WRITABLE_ROOTS`. Commands that need to download something need
   both switches.
   → `joy-rs/joyczl-tools/src/exec.rs` (`sandbox_argv`)
+* **Deliberate** — The write tools (`write_file` / `edit`, `JOY_WRITE=1`) have
+  **no process sandbox**: the write happens in-process, so the hard gate is the
+  writable roots (workdir + home + `JOY_EXEC_WRITABLE_ROOTS`, resolved through
+  symlinks). Outside them is refused before approval is consulted — approval
+  only unlocks writes already inside the boundary. `require_str` trims, so the
+  write tools take content via a no-trim reader: a trailing newline is data,
+  not noise.
+  → `joy-rs/joyczl-tools/src/fs_write.rs` (`contained`, `raw_str`)
 * **Deliberate** — Spilled command output is cleaned by **age only**
   (`spill/` keeps 7 days, pruned at startup), not by a size quota. A quota that
   guesses wrong either fills the disk or deletes something you wanted; a
@@ -110,8 +118,8 @@ extraction use `run_command` + curl or an MCP fetching service.
   24.04 restricts unprivileged user namespaces, so availability is probed by
   actually running `bwrap` once per process.
   → `joy-rs/joyczl-tools/src/exec.rs` (`sandbox_backend`, `bubblewrap_runs`)
-* **Gap** — Policy (`JOY_EXEC`, `JOY_EXEC_ALLOW`) is read once at startup;
-  `config/write` does not rebuild the tool registry. Restart the process.
+* **Gap** — Policy (`JOY_EXEC`, `JOY_EXEC_ALLOW`, `JOY_WRITE`) is read once at
+  startup; `config/write` does not rebuild the tool registry. Restart the process.
   → `joy-rs/joyczl-app-server/src/lib.rs` (`builtin_tools`)
 * **Gap** — The hard-deny list is substring matching with a hand-written
   pipe-into-shell check. Clever obfuscation (`bash -c "$(printf …)"`) will not

@@ -21,6 +21,7 @@ pub mod approval;
 pub mod calendar;
 pub mod exec;
 pub mod fs;
+pub mod fs_write;
 pub mod handlers;
 pub mod hooks;
 pub mod jobs;
@@ -72,6 +73,10 @@ mod todo_tests;
 #[cfg(test)]
 #[path = "fs_tests.rs"]
 mod fs_tests;
+
+#[cfg(test)]
+#[path = "fs_write_tests.rs"]
+mod fs_write_tests;
 
 #[cfg(test)]
 #[path = "web_tests.rs"]

@@ -246,6 +246,7 @@ and the context keeps the head and tail — **complete lines only** — plus
 | `JOY_HOOKS` | `0` | read `<home>/hooks.json` and run your shell commands on twelve lifecycle events (below) |
 | `JOY_HOOKS_TIMEOUT` | `30` | default hook timeout in seconds; a per-entry `timeout` wins |
 | `JOY_EXEC` | `0` | enable the `run_command` tool (off = the model never sees it) |
+| `JOY_WRITE` | `0` | enable the `write_file` / `edit` tools (off = the model never sees them). Writable boundary: the working directory, the Joy home, and `JOY_EXEC_WRITABLE_ROOTS`; with `JOY_APPROVAL=on-request` every write asks once |
 | `JOY_DELEGATE` | `0` | enable the `delegate_task` tool (a subagent gets its own context; it cannot delegate again) |
 | `JOY_EXEC_ALLOW` | — | allowlist, comma separated, trailing `*` wildcards (`cargo test,git status,ls *`). Empty = deny everything |
 | `JOY_EXEC_TIMEOUT` | `30` | per-command timeout in seconds |
@@ -273,6 +274,21 @@ missing UI all end the same way.
 `remember: true` (the `a` answer, or "允许并记住") appends the command — exactly
 as approved, no wildcard — to the exec allowlist in `settings.json`, which takes
 effect on the next start.
+
+## Writing files (`JOY_WRITE`)
+
+`JOY_WRITE=1` registers two tools: `write_file` (whole-file write, overwrites)
+and `edit` (one exact-match replacement — `old_string` must appear exactly
+once, 0 or several matches are refused, and the reply carries a change hunk).
+Off by default; off, the model cannot even see the names.
+
+The writable boundary is the **working directory, the Joy home, and
+`JOY_EXEC_WRITABLE_ROOTS`** — the same roots the exec sandbox may write, one
+variable, one meaning. Outside them the write is refused before approval is
+ever consulted. Content must be UTF-8 text (no NUL bytes) and at most 1 MiB.
+With `JOY_APPROVAL=on-request` **every** write asks once — writes are rare and
+consequential, and there is no allow table to match, so on-request means "ask
+each time".
 
 ## Delegating work to a subagent
 

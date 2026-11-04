@@ -64,6 +64,12 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   限制在工作目录、Joy 的 home 与临时目录，外加 `JOY_EXEC_WRITABLE_ROOTS` 里
   列出的目录。要下载东西的命令得同时打开这两个开关。
   → `joy-rs/joyczl-tools/src/exec.rs`（`sandbox_argv`）
+* **刻意** —— 写入工具（`write_file` / `edit`，`JOY_WRITE=1`）**没有进程沙箱**：
+  写发生在进程内，所以硬闸是可写范围（工作目录 + home + `JOY_EXEC_WRITABLE_ROOTS`，
+  逐跳解析符号链接）。范围外在审批之前就被拒绝——审批只可能放行一条本来就
+  在范围内的写入。`require_str` 会 trim，所以写入工具的正文走不 trim 的取值
+  ——尾部换行是数据，不是噪音。
+  → `joy-rs/joyczl-tools/src/fs_write.rs`（`contained`、`raw_str`）
 * **刻意** —— 落盘的命令输出只按**时间**清（`spill/` 保留 7 天，启动时打扫），
   不做容量配额。配额猜错了要么撑满磁盘、要么删掉你还想要的东西；按时间扫一遍
   是可预期的。`JOY_HOME` 里没有别的东西会轮转。
@@ -88,7 +94,7 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   也要真的能建命名空间：Ubuntu 24.04 限制了非特权用户命名空间，所以可用性
   是**每个进程探测一次**（真跑一次 `bwrap`），不是查文件在不在。
   → `joy-rs/joyczl-tools/src/exec.rs`（`sandbox_backend`、`bubblewrap_runs`）
-* **未做** —— `JOY_EXEC` / `JOY_EXEC_ALLOW` 只在启动时读一次，`config/write`
+* **未做** —— `JOY_EXEC` / `JOY_EXEC_ALLOW` / `JOY_WRITE` 只在启动时读一次，`config/write`
   不会重建工具表。改了要重启进程。
   → `joy-rs/joyczl-app-server/src/lib.rs`（`builtin_tools`）
 * **未做** —— 硬拒名单是子串匹配加一个手写的「管道进 shell」识别。花哨的绕法
