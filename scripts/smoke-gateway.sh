@@ -40,6 +40,15 @@ done
 PORT="$(head -n1 "$WORK/port" 2>/dev/null || true)"
 [[ -n "$PORT" ]] || fail "假 SSE 端点没起来"
 
+# Models and keys no longer travel via env vars (see 0.7.0): seed a models.json whose
+# key_source reads JOY_API_KEY from the environment and whose base_url is the fake SSE
+# endpoint. JOY_PROVIDER/JOY_API_KEY below stay — provider is still the fallback vendor,
+# and the key is read from the env by the profile above.
+mkdir -p "$WORK/.joy"
+cat > "$WORK/.joy/models.json" <<EOF
+{"active":"smoke","profiles":[{"id":"smoke","provider":"anthropic","base_url":"http://127.0.0.1:$PORT","key_source":"env:JOY_API_KEY"}]}
+EOF
+
 # The gateway finds the binary itself; point it here so it doesn't dig up an old version.
 OUT="$WORK/out.json"
 JOY_BIN="$BIN" \

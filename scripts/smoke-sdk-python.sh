@@ -77,7 +77,9 @@ export SMOKE_WORK="$WORK"
 """拿真的 app-server 走一遍，逐条断言。"""
 
 import asyncio
+import json
 import os
+import pathlib
 import sys
 
 from joyczl_agent import (
@@ -172,9 +174,29 @@ async def without_a_key() -> None:
 
 async def streaming() -> None:
     """模型流 → textDelta → 完整应答。对端是假的，所以不要真 key。"""
+    home = pathlib.Path(WORK) / "stream"
+    # Models and keys no longer travel via env vars (see 0.7.0): seed a models.json whose
+    # key_source reads JOY_API_KEY from the environment and whose base_url is the fake
+    # SSE endpoint. JOY_API_KEY below stays — it is what the env: source reads.
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "models.json").write_text(
+        json.dumps(
+            {
+                "active": "smoke",
+                "profiles": [
+                    {
+                        "id": "smoke",
+                        "provider": "anthropic",
+                        "base_url": f"http://127.0.0.1:{SSE_PORT}",
+                        "key_source": "env:JOY_API_KEY",
+                    }
+                ],
+            }
+        )
+    )
     env = {
         **BASE_ENV,
-        "JOY_HOME": f"{WORK}/stream",
+        "JOY_HOME": str(home),
         "JOY_PROVIDER": "anthropic",
         "JOY_API_KEY": "test",
         "JOY_BASE_URL": f"http://127.0.0.1:{SSE_PORT}",

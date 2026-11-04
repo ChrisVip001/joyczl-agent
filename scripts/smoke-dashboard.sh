@@ -45,6 +45,14 @@ MODEL_PORT="$(head -n1 "$WORK/fake_port" 2>/dev/null || true)"
 # so read where it actually landed straight from the startup line.
 PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 
+# Models and keys no longer travel via env vars (see 0.7.0): seed a models.json whose
+# key_source reads JOY_API_KEY from the environment and whose base_url is the fake SSE
+# endpoint. JOY_PROVIDER/JOY_API_KEY below stay — provider is still the fallback vendor.
+mkdir -p "$WORK/.joy"
+cat > "$WORK/.joy/models.json" <<EOF
+{"active":"smoke","profiles":[{"id":"smoke","provider":"anthropic","base_url":"http://127.0.0.1:$MODEL_PORT","key_source":"env:JOY_API_KEY"}]}
+EOF
+
 JOY_PORT="$PORT" \
 JOY_HOME="$WORK/.joy" \
 JOY_PROVIDER=anthropic JOY_API_KEY=test JOY_BASE_URL="http://127.0.0.1:$MODEL_PORT" \
@@ -53,7 +61,8 @@ DASH_PID=$!
 
 BASE=""
 for _ in $(seq 1 100); do
-  BASE="$(sed -n 's|.*http://\(localhost:[0-9]*\).*|\1|p' "$WORK/dash.log" | head -n1)"
+  # The startup line prints the URL it actually landed on (localhost or 127.0.0.1).
+  BASE="$(grep -oE '(localhost|127\.0\.0\.1):[0-9]+' "$WORK/dash.log" | head -n1 || true)"
   [[ -n "$BASE" ]] && break
   kill -0 "$DASH_PID" 2>/dev/null || { cat "$WORK/dash.log"; fail "驾驶舱没起来就退了"; }
   sleep 0.1
