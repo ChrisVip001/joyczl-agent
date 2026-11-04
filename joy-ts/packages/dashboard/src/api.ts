@@ -21,6 +21,8 @@ import type {
   ServerNotification,
   UsageSummaryResponse,
   SessionMessagesResponse,
+  TurnInterruptParams,
+  TurnInterruptResponse,
   TurnStartParams,
 } from "./protocol";
 
@@ -246,6 +248,20 @@ export async function removeModel(params: ModelRemoveParams): Promise<ModelRemov
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as ModelRemoveResponse;
+}
+
+/**
+ * Stop a running turn. `interrupted: false` = arrived too late (it had already finished) —
+ * the UI says so instead of pretending something was stopped.
+ */
+export async function interruptTurn(params: TurnInterruptParams): Promise<TurnInterruptResponse> {
+  const response = await apiFetch("/api/interrupt", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as TurnInterruptResponse;
 }
 
 /** Usage ledger (migration 0010): per-model aggregation + totals. Bookkeeping only. */

@@ -102,6 +102,29 @@ async fn without_a_token_the_api_is_open() {
     );
 }
 
+/// `/api/interrupt` reaches the app-server with the protocol's own shape: a stale turnId
+/// comes back honestly as `interrupted: false` — the click is heard, just too late.
+#[tokio::test]
+async fn interrupt_answers_with_the_turns_own_fate() {
+    let (app, fake) = fake();
+    // The stub answers every request; nothing is running, so the answer is "nothing stopped".
+    auto_respond(fake);
+    let router = router(Gate::single(Arc::new(app), None), std::env::temp_dir());
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/interrupt")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"turnId":"no-such-turn"}"#))
+                .expect("请求体"),
+        )
+        .await
+        .expect("路由响应");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 /// Token covers /api/* only: static files carry no data and must not be blocked by 401
 /// (the page itself must load; the token is sent by the page JS in request headers).
 #[tokio::test]

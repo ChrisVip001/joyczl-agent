@@ -837,6 +837,17 @@ textarea::placeholder {
   font-variant-numeric: tabular-nums;
 }
 
+.statusline .status-stop {
+  margin-left: auto;
+  color: var(--text-2);
+}
+
+.statusline .status-stop:hover {
+  color: var(--bad);
+  border-color: var(--bad);
+  background: var(--surface);
+}
+
 .statusline.thinking .status-label::before,
 .statusline.working .status-label::before {
   content: "";

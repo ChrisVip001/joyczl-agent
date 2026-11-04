@@ -190,6 +190,7 @@ export function turnFooter(turn: TurnCompletedNotification): string {
   ];
   if (turn.usage !== null && turn.usage !== undefined) parts.push(formatUsage(turn.usage));
   if (turn.meta.tools.length > 0) parts.push(`${turn.meta.tools.length} 次工具`);
+  if (turn.meta.interrupted === true) parts.push("已被你停止");
   // Route reason only speaks when a choice/fallback actually happened (empty in fixed/active).
   if (turn.meta.routeReason) parts.push(`路由 ${turn.meta.routeReason}`);
   return parts.join(" · ");

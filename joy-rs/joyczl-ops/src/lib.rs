@@ -268,6 +268,7 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/session", get(api::session))
         .route("/api/turn", post(api::turn))
         .route("/api/approval", post(api::approval))
+        .route("/api/interrupt", post(api::interrupt))
         .route("/api/goal", post(api::goal))
         .route("/api/usage", get(api::usage))
         .route("/api/approvals", get(api::approvals))

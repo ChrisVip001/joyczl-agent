@@ -20,7 +20,8 @@ use joyczl_protocol::{
     MemoryListEpisodesResponse, MemoryListResponse, ModelProfilesResponse, ModelRemoveParams,
     ModelRemoveResponse, ModelSaveParams, ModelSaveResponse, ScheduleListResponse,
     ServerNotification, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
-    TurnStartParams, TurnStartResponse, UsageSummaryResponse,
+    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
+    UsageSummaryResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -480,6 +481,25 @@ pub async fn approval(
     // Same path as turn: the app-server is a subprocess, answering is one of its methods.
     match app
         .request::<ApprovalRespondResponse>(methods::APPROVAL_RESPOND, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `POST /api/interrupt` — 停一个在跑的 turn。
+///
+/// 载荷就是协议的 `TurnInterruptParams`（**没有第二种形状**）；turnId 由前端从
+/// `turnStarted` 事件里拿到——它是这一轮的唯一句柄。太晚（turn 已结束）→
+/// `interrupted: false`，前端如实显示，不假装停掉了什么。
+pub async fn interrupt(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<TurnInterruptParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("TurnInterruptParams 一定能序列化");
+    match app
+        .request::<TurnInterruptResponse>(methods::TURN_INTERRUPT, payload)
         .await
     {
         Ok(response) => Json(response).into_response(),

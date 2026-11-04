@@ -14,6 +14,7 @@ import {
   fetchModelProfiles,
   fetchSchedules,
   fetchUsage,
+  interruptTurn,
   removeModel,
   respondApproval,
   saveModel,
@@ -227,6 +228,8 @@ async function refreshPanels(): Promise<void> {
 
 let statusTimer: number | null = null;
 let statusStart = 0;
+/** The running turn's handle (from `turnStarted`) — what the stop button points at. */
+let activeTurnId: string | null = null;
 
 function showStatus(kind: "thinking" | "working", label: string): void {
   dom.status.hidden = false;
@@ -255,10 +258,30 @@ function showStatus(kind: "thinking" | "working", label: string): void {
 function hideStatus(): void {
   dom.status.hidden = true;
   dom.status.replaceChildren();
+  activeTurnId = null;
   if (statusTimer !== null) {
     window.clearInterval(statusTimer);
     statusTimer = null;
   }
+}
+
+/** The stop button rides the status line while a turn runs — one click, honest answer. */
+function addStopButton(): void {
+  if (dom.status.querySelector(".status-stop") !== null) return;
+  const stop = el("button", { class: "ghost status-stop", text: "停止", type: "button" });
+  stop.addEventListener("click", () => {
+    if (activeTurnId === null) return;
+    stop.disabled = true;
+    void interruptTurn({ turnId: activeTurnId })
+      .then((result) => {
+        if (!result.interrupted) {
+          const label = dom.status.querySelector(".status-label");
+          if (label !== null) label.textContent = "（那一轮已经结束了）";
+        }
+      })
+      .catch(() => undefined);
+  });
+  dom.status.append(stop);
 }
 
 /**
@@ -729,6 +752,9 @@ async function send(
     })) {
       switch (notification.type) {
         case "turnStarted":
+          // The turn's handle arrives first — from here on, stopping is possible.
+          activeTurnId = notification.turnId;
+          addStopButton();
           break;
 
         case "textDelta":
