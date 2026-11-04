@@ -1143,7 +1143,34 @@ async fn attachments_fail_up_front_on_a_non_vision_provider() {
 
 #[tokio::test]
 async fn an_attachment_outside_home_is_refused_before_the_turn() {
-    // 真实逃逸向量：uploads 里放一个指向 home 之外的符号链接，路径本身"存在"。
+    // 平台无关的逃逸向量：`..` 走出 home。文件必须真实存在 —— canonicalize 才分得清
+    // 「不存在」与「越界」，断言才能钉住越界那一条错误。
+    let ran = run_with_attachments(
+        Mock::new(vec![]),
+        true,
+        "看看这张图",
+        png_attachment("../escape.png"),
+        |home| {
+            std::fs::write(
+                home.parent()
+                    .expect("tempdir 必有父目录")
+                    .join("escape.png"),
+                [0u8; 8],
+            )
+            .expect("放逃逸文件");
+        },
+    )
+    .await;
+    let error = ran.error.as_ref().expect("越界路径必须被拒");
+    assert!(error.message.contains("home 之外"), "{}", error.message);
+    assert!(ran.requests.is_empty());
+}
+
+/// Unix 专属逃逸向量：符号链接指向 home 之外、路径本身「存在」。
+/// Windows 上符号链接需要特权语义，同一个闸门由上面的 `../` 用例覆盖。
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_attachment_outside_home_is_refused() {
     let ran = run_with_attachments(
         Mock::new(vec![]),
         true,
@@ -1152,7 +1179,6 @@ async fn an_attachment_outside_home_is_refused_before_the_turn() {
         |home| {
             let dir = home.join("uploads");
             std::fs::create_dir_all(&dir).expect("建上传目录");
-            #[cfg(unix)]
             std::os::unix::fs::symlink("/etc/hosts", dir.join("escape.png"))
                 .expect("建逃逸符号链接");
         },
