@@ -160,13 +160,22 @@ export function chip(text: string, kind: "gate" | "tool" | "graph" | "note" = "n
   return el("span", { class: `chip ${kind}`, text });
 }
 
-/** Error: the red line. Protocol codes are kept too — useful when checking logs. */
+/**
+ * Error: a quiet red card, not an alarm. The protocol code stays as a tag —
+ * useful when checking logs, meaningless to a person.
+ */
 export function failure(error: { code: number; message: string }): HTMLElement {
   return el(
     "div",
     { class: "failure" },
-    el("span", { class: "code", text: String(error.code) }),
-    el("span", { text: error.message }),
+    el(
+      "div",
+      { class: "failure-head" },
+      el("span", { class: "failure-dot", "aria-hidden": "true" }),
+      el("span", { class: "failure-title", text: "出错了" }),
+      el("span", { class: "code", text: String(error.code) }),
+    ),
+    el("div", { class: "failure-body", text: error.message }),
   );
 }
 

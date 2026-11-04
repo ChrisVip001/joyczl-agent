@@ -829,23 +829,78 @@ textarea::placeholder {
   color: var(--text);
 }
 
-/* 错误行 */
+/* ---- 错误卡：安静的红色，不是警报 ---------------------------------------------- */
 
 .failure {
   display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent);
-  border-radius: var(--radius);
-  color: var(--bad);
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--bad) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent);
+  border-radius: var(--radius-card);
   font-size: 13px;
+}
+
+.failure-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.failure-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bad);
+  flex: none;
+}
+
+.failure-title {
+  color: var(--bad);
+  font-weight: 500;
 }
 
 .failure .code {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-3);
+  margin-left: auto;
+}
+
+.failure-body {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ---- 图片大图（点击缩略图） ------------------------------------------------------ */
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.78);
+  display: grid;
+  place-items: center;
+  z-index: 60;
+  cursor: zoom-out;
+  animation: fade 160ms ease-out;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.lightbox img {
+  max-width: 92vw;
+  max-height: 88vh;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
 }
 
 /* 运行状态行：三种 */

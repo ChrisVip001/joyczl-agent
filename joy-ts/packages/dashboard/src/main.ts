@@ -265,6 +265,21 @@ function hideStatus(): void {
   }
 }
 
+/** Full view for an image: click anywhere or Esc to leave — no chrome, just the picture. */
+function openLightbox(src: string, alt: string): void {
+  const overlay = el("div", { class: "lightbox", role: "dialog", "aria-label": alt });
+  overlay.append(el("img", { src, alt }));
+  overlay.addEventListener("click", () => overlay.remove());
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Escape") overlay.remove();
+    },
+    { once: true },
+  );
+  document.body.append(overlay);
+}
+
 /** The stop button rides the status line while a turn runs — one click, honest answer. */
 function addStopButton(): void {
   if (dom.status.querySelector(".status-stop") !== null) return;
@@ -390,6 +405,15 @@ async function boot(): Promise<void> {
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
   dom.drawerClose.addEventListener("click", closeDrawer);
+
+  // Click a thumbnail anywhere in the flow (or the staging strip) → full view.
+  // Delegated once: history, staged, and future messages all get it for free.
+  for (const area of [dom.messages, dom.staged]) {
+    area.addEventListener("click", (event) => {
+      const thumb = event.target instanceof Element ? event.target.closest(".attach-thumb") : null;
+      if (thumb instanceof HTMLImageElement) openLightbox(thumb.src, thumb.alt);
+    });
+  }
 
   // Right-side tabs: data as navigation — each button carries one tab name; behavior in switchTab.
   for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
