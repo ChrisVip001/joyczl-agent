@@ -399,6 +399,94 @@ textarea::placeholder {
   color: var(--text-3);
 }
 
+/* 空会话的欢迎屏：安静的居中主视觉，第一句话就把它替换掉。 */
+
+.welcome {
+  margin: auto;
+  padding: 48px 16px;
+  text-align: center;
+  animation: rise 240ms ease-out;
+}
+
+.welcome-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.welcome-sub {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 13px;
+  max-width: 420px;
+}
+
+/* 消息下的附件条：图片缩略图，其余是名字 chip。 */
+
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.msg.joy .attach-strip {
+  justify-content: flex-start;
+}
+
+.attach-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-soft);
+  display: block;
+}
+
+.msg.me .attach-thumb {
+  width: 96px;
+  height: 96px;
+}
+
+.folded-note {
+  text-align: center;
+  margin: 0;
+  padding: 8px 0;
+}
+
+/* staged 区的缩略图（待发送）：小图 + 角上的移除钮。 */
+
+.thumb {
+  position: relative;
+  display: inline-block;
+}
+
+.thumb .attach-thumb {
+  width: 56px;
+  height: 56px;
+}
+
+.thumb-drop {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
+
+.thumb-drop:hover {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
 /* 活动痕迹（时间线雏形，组件化在下一步） */
 
 .trace {

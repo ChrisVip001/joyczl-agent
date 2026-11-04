@@ -25,6 +25,7 @@ import {
   uploadFile,
 } from "./api";
 import {
+  attachmentStrip,
   chip,
   el,
   elapsedSince,
@@ -42,6 +43,7 @@ import {
   sessionList,
   toolCard,
   turnFooter,
+  welcome,
 } from "./render";
 
 /**
@@ -105,9 +107,49 @@ let busy = false;
  */
 const staged: File[] = [];
 
+/** Object URLs for staged image previews; revoked the moment they leave the stage. */
+const stagedUrls = new Map<File, string>();
+
+function previewUrl(file: File): string | undefined {
+  if (!file.type.startsWith("image/")) return undefined;
+  let url = stagedUrls.get(file);
+  if (url === undefined) {
+    url = URL.createObjectURL(file);
+    stagedUrls.set(file, url);
+  }
+  return url;
+}
+
+function releaseStaged(files: File[]): void {
+  for (const file of files) {
+    const url = stagedUrls.get(file);
+    if (url !== undefined) {
+      URL.revokeObjectURL(url);
+      stagedUrls.delete(file);
+    }
+  }
+}
+
 function renderStaged(): void {
   dom.staged.hidden = staged.length === 0;
   const nodes = staged.map((file, index) => {
+    const url = previewUrl(file);
+    if (url !== undefined) {
+      const img = el("img", { class: "attach-thumb", src: url, alt: file.name, title: file.name });
+      img.onerror = () => img.remove();
+      const drop = el("button", {
+        class: "thumb-drop",
+        text: "×",
+        title: "拿掉这个文件",
+        type: "button",
+      });
+      drop.addEventListener("click", () => {
+        releaseStaged([file]);
+        staged.splice(index, 1);
+        renderStaged();
+      });
+      return el("span", { class: "thumb" }, img, drop);
+    }
     const item = el("span", { class: "chip", text: file.name });
     const drop = el("button", {
       class: "ghost",
@@ -115,6 +157,7 @@ function renderStaged(): void {
       title: "拿掉这个文件",
     });
     drop.addEventListener("click", () => {
+      releaseStaged([file]);
       staged.splice(index, 1);
       renderStaged();
     });
@@ -342,6 +385,12 @@ async function boot(): Promise<void> {
       event.preventDefault();
       void submit();
     }
+  });
+
+  // Auto-grow: the box follows the draft up to the cap, back to one line when emptied.
+  dom.input.addEventListener("input", () => {
+    dom.input.style.height = "auto";
+    dom.input.style.height = `${Math.min(dom.input.scrollHeight, 180)}px`;
   });
 
   setInterval(() => {
@@ -622,23 +671,37 @@ async function submit(): Promise<void> {
     }
   }
 
+  // Snapshot the staged files for the message's attachment strip BEFORE clearing the stage —
+  // the object URLs stay alive so the thumbnails in the flow keep resolving.
+  const snapshot = staged.slice();
   dom.input.value = "";
+  dom.input.style.height = "auto";
   staged.length = 0;
   renderStaged();
-  await send(full, attachments);
+  await send(full, attachments, snapshot);
 }
 
 /** Say one thing, painting the course of this turn. */
-async function send(text: string, attachments: TurnAttachment[] | null = null): Promise<void> {
+async function send(
+  text: string,
+  attachments: TurnAttachment[] | null = null,
+  previewFiles: File[] = [],
+): Promise<void> {
   setBusy(true);
 
-  dom.messages.append(el("div", { class: "msg me" }, el("div", { class: "bubble", text })));
+  const mine = el("div", { class: "msg me" }, el("div", { class: "bubble", text }));
+  if (previewFiles.length > 0) {
+    mine.append(
+      attachmentStrip(previewFiles.map((file) => ({ name: file.name, url: previewUrl(file) }))),
+    );
+  }
+  dom.messages.append(mine);
 
   const trace = el("div", { class: "trace" });
   const bubble = el("div", { class: "bubble streaming" });
   const foot = el("div", { class: "foot" });
   dom.messages.append(el("div", { class: "msg joy" }, trace, bubble, foot));
-  scrollToEnd();
+  scrollToEnd(true);
 
   let streamed = "";
   let completed: TurnCompletedNotification | null = null;
@@ -669,8 +732,10 @@ async function send(text: string, attachments: TurnAttachment[] | null = null): 
             showStatus("thinking", "回复中");
           }
           streamed += notification.delta;
-          bubble.textContent = streamed;
-          scrollToEnd();
+          // Incremental insert: appending one text node per delta, never repainting the
+          // whole bubble — a several-thousand-token reply must not reflow on every chunk.
+          bubble.append(document.createTextNode(notification.delta));
+          scrollToEnd(true);
           break;
 
         case "gateDecided":
@@ -767,7 +832,7 @@ async function send(text: string, attachments: TurnAttachment[] | null = null): 
           }, 500);
           currentCard = card;
           trace.append(card);
-          scrollToEnd();
+          scrollToEnd(true);
           break;
         }
 
@@ -791,7 +856,7 @@ async function send(text: string, attachments: TurnAttachment[] | null = null): 
             done.title = notification.output;
           }
           trace.append(done);
-          scrollToEnd();
+          scrollToEnd(true);
           break;
         }
 
@@ -849,10 +914,11 @@ async function send(text: string, attachments: TurnAttachment[] | null = null): 
       bubble.textContent = "（这一轮没有回复）";
     }
 
-    scrollToEnd();
+    scrollToEnd(true);
     setBusy(false);
     // This turn changed the session's message count and last-active time; refresh the panels.
     void refresh();
+    trimMessages();
     dom.input.focus();
   }
 }
@@ -891,8 +957,9 @@ async function loadHistory(sessionId: string, cursor: string | null): Promise<vo
 
   if (cursor === null) {
     dom.messages.replaceChildren(
-      ...(nodes.length === 0 ? [muted("这个会话还没说过话。说第一句就有了。")] : nodes),
+      ...(nodes.length === 0 ? [welcome()] : nodes),
     );
+    trimMessages();
   } else {
     // Prepend at the top and **keep the original scroll position** — otherwise paging flings it.
     const fromBottom = dom.messages.scrollHeight - dom.messages.scrollTop;
@@ -925,8 +992,39 @@ function setBusy(value: boolean): void {
   dom.composer.classList.toggle("busy", value);
 }
 
-function scrollToEnd(): void {
-  dom.messages.scrollTop = dom.messages.scrollHeight;
+/**
+ * Scrolling policy: follow the stream **only while the reader is at the bottom** — someone
+ * paging back through history must not be yanked down by every delta. `interactive` marks
+ * a moment that always scrolls (the user just sent something).
+ */
+function nearBottom(): boolean {
+  return dom.messages.scrollHeight - dom.messages.scrollTop - dom.messages.clientHeight < 120;
+}
+
+function scrollToEnd(interactive = false): void {
+  if (interactive || nearBottom()) {
+    dom.messages.scrollTop = dom.messages.scrollHeight;
+  }
+}
+
+/**
+ * Cap the live DOM: the store keeps everything, the page keeps a window. Beyond
+ * MAX_MESSAGES children the oldest nodes are dropped — paging back is exactly what
+ * the「更早的」button is for, so nothing is lost, just not painted.
+ */
+const MAX_MESSAGES = 300;
+
+function trimMessages(): void {
+  const overflow = dom.messages.children.length - MAX_MESSAGES;
+  if (overflow <= 0) return;
+  for (let i = 0; i < overflow; i++) {
+    dom.messages.firstElementChild?.remove();
+  }
+  if (dom.messages.querySelector(".folded-note") === null) {
+    dom.messages.prepend(
+      el("p", { class: "hint folded-note", text: "更早的消息已折叠 —— 用上面的「更早的」翻看" }),
+    );
+  }
 }
 
 function must<T extends HTMLElement = HTMLElement>(id: string): T {

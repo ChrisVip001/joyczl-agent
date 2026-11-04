@@ -196,6 +196,48 @@ export function turnFooter(turn: TurnCompletedNotification): string {
 }
 
 /**
+ * The empty-session welcome: a quiet hero instead of an orphan sentence.
+ * Rendered only when a session has no history; the first message replaces it.
+ */
+export function welcome(): HTMLElement {
+  return el(
+    "div",
+    { class: "welcome" },
+    el("p", { class: "welcome-title", text: "你好，我是 Joy" }),
+    el("p", {
+      class: "welcome-sub",
+      text: "把要做的事说清楚就行 —— 长任务会一步步来，需要你拍板时会停下来问。",
+    }),
+  );
+}
+
+/**
+ * The attachment strip under a sent message: thumbnails for images, name chips for the rest.
+ * `url` is an object URL minted by main (it owns the lifecycle); without one, name only.
+ */
+export function attachmentStrip(files: { name: string; url?: string }[]): HTMLElement {
+  const strip = el("div", { class: "attach-strip" });
+  for (const file of files) {
+    if (file.url !== undefined) {
+      const img = el("img", {
+        class: "attach-thumb",
+        src: file.url,
+        alt: file.name,
+        title: file.name,
+      });
+      // A failed object URL must not leave a broken-image glyph behind.
+      img.onerror = () => {
+        img.replaceWith(el("span", { class: "tag", text: file.name }));
+      };
+      strip.append(img);
+    } else {
+      strip.append(el("span", { class: "tag", text: file.name, title: file.name }));
+    }
+  }
+  return strip;
+}
+
+/**
  * One message from history.
  *
  * Deliberately painted identical to the **live stream** (same classes, same layout): after a
