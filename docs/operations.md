@@ -5,6 +5,20 @@ English | [简体中文](operations.zh.md)
 Every way to run Joy day to day, the recommended environment, and
 troubleshooting.
 
+## Supported platforms
+
+| Platform | Status | Why |
+|---|---|---|
+| macOS (Apple Silicon / Intel) | ✅ first-class | seatbelt sandbox, Keychain, `sh` hooks |
+| Linux | ✅ first-class | bubblewrap sandbox, secret-service, `sh` hooks |
+| Windows (native) | ❌ refuses to boot (exit 2) | no sandbox backend — per the "no sandbox, no execution" rule `run_command` could never run; hooks need `sh`; the credential store cannot read secrets back, so keys would sit in plaintext `secrets.json` |
+| Windows + WSL2 | ✅ use the Linux build | everything above is a real Linux user space |
+
+The refusal happens in the `joy` binary at startup (`cfg!(windows)`) with the
+reasons printed — a half-working assistant that looks healthy is worse than a
+clear no. CI keeps a Windows job for build + unit tests only (no sandbox, no
+hooks tests); libraries compile everywhere, the binary simply will not boot.
+
 ## Terminal conversation
 
 ```bash

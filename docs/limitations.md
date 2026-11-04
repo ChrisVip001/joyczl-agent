@@ -162,11 +162,14 @@ extraction use `run_command` + curl or an MCP fetching service.
   → `joy-rs/joyczl-state/src/facts.rs` (`KINDS`)
 
 * **Deliberate** — The sandbox is Unix-only (macOS `sandbox-exec`, Linux
-  `bubblewrap`). On Windows there is no backend, so `run_command` refuses to
-  run anything — which is the intended reading of "no sandbox, no execution",
-  not a bug. CI has a Windows job that runs everything *except* the sandbox
-  tests, named so the boundary is visible.
-  → `.github/workflows/ci.yml`, `joy-rs/joyczl-tools/src/exec.rs`
+  `bubblewrap`), and the boundary is enforced up front: on native Windows the
+  `joy` binary **refuses to boot** (exit 2) with the reasons printed — a
+  half-working assistant that looks healthy is worse than a clear no. WSL2 is
+  the supported way to run Joy on Windows (see the matrix in
+  docs/operations.md). CI keeps a Windows job for build + unit tests only,
+  named so the boundary is visible.
+  → `.github/workflows/ci.yml`, `joy-rs/joyczl-cli/src/main.rs` (`windows_blocker`),
+  `joy-rs/joyczl-tools/src/exec.rs`
 * **Deliberate** — Context compaction does not preserve file-operation state
   (which files were read or written earlier in the session, the way pi's
   harness does). What survives eviction is the rolling summary plus the

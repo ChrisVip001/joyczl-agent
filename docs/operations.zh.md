@@ -4,6 +4,20 @@
 
 日常运行的每一种形态、推荐的环境变量与常见故障。
 
+## 支持的平台
+
+| 平台 | 状态 | 原因 |
+|---|---|---|
+| macOS（Apple Silicon / Intel） | ✅ 一等公民 | seatbelt 沙箱、钥匙串、`sh` hooks |
+| Linux | ✅ 一等公民 | bubblewrap 沙箱、secret-service、`sh` hooks |
+| Windows（原生） | ❌ 拒绝启动（exit 2） | 没有沙箱后端——按「无沙箱不执行」铁律 `run_command` 永远跑不了；hooks 要 `sh`；凭据库读不回密钥，只能落明文 `secrets.json` |
+| Windows + WSL2 | ✅ 用 Linux 版即可 | 上面的一切都是真的 Linux 用户态 |
+
+拒绝发生在 `joy` 二进制启动时（`cfg!(windows)`），原因直接打印——
+「看起来健康但处处受限的半成品」不如一声清楚的不。CI 保留 Windows job
+但只做 build + 单测（沙箱与 hooks 测试照旧跳过）；库在哪儿都能编译，
+二进制只是不启动。
+
 ## 终端对话
 
 ```bash

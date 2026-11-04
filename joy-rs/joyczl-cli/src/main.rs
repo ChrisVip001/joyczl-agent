@@ -54,8 +54,32 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".joy"))
 }
 
+/// Why Windows cannot boot Joy, if it is Windows. The sandbox has no Windows backend
+/// (and per the standing rule, **no sandbox, no execution**), hooks run through `sh`,
+/// and Windows has no credential store that reads secrets back — booting would produce
+/// a half-working assistant while looking perfectly healthy. Say no instead.
+/// Unix-only is a stated boundary (docs/operations.md), not a silent limitation.
+fn windows_blocker() -> Option<&'static str> {
+    if cfg!(windows) {
+        Some(
+            "Joy 暂不支持在 Windows 原生运行：\n  \
+             · 执行沙箱只有 macOS seatbelt / Linux bubblewrap 两个后端，按「无沙箱不执行」的铁律，\
+             run_command 在 Windows 上永远拒绝执行；\n  \
+             · hooks 通过 sh 执行；\n  \
+             · Windows 凭据库读不回密钥，只能落明文 secrets.json。\n\
+             请在 macOS 或 Linux 上运行（WSL2 即可）。支持矩阵见 docs/operations.md。",
+        )
+    } else {
+        None
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(why) = windows_blocker() {
+        eprintln!("(joy) {why}");
+        std::process::exit(2);
+    }
     let command = std::env::args().nth(1);
     match command.as_deref() {
         Some("mcp") => {
@@ -209,4 +233,14 @@ fn hub_adduser(args: &[String]) -> anyhow::Result<()> {
     println!("{token}");
     println!("驾驶舱首次访问时把它填进弹框即可。换一枚：删掉 users.json 里那行再 adduser。");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn non_windows_boots_freely() {
+        // On every platform CI actually builds on, the blocker must stay silent.
+        // (A Windows runner would fail this assert — that is the point.)
+        assert!(super::windows_blocker().is_none());
+    }
 }

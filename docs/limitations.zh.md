@@ -129,11 +129,13 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   返回，但还没被用来筛。
   → `joy-rs/joyczl-state/src/facts.rs`（`KINDS`）
 
-* **刻意** —— 沙箱是 Unix-only（macOS `sandbox-exec`、Linux `bubblewrap`）。
-  Windows 上没有后端，于是 `run_command` 什么都拒绝执行 —— 这是「没有沙箱就不
-  执行」的本意，不是故障。CI 有一个 Windows job 跑除沙箱测试之外的全部，名字里
-  就写着这条边界。
-  → `.github/workflows/ci.yml`、`joy-rs/joyczl-tools/src/exec.rs`
+* **刻意** —— 沙箱是 Unix-only（macOS `sandbox-exec`、Linux `bubblewrap`），
+  而且这条边界在门口就执行：Windows 原生环境下 `joy` 二进制**拒绝启动**（exit 2）
+  并打印原因——「看起来健康但处处受限的半成品」不如一声清楚的不。Windows 上
+  跑 Joy 请用 WSL2（矩阵见 docs/operations.zh.md）。CI 有一个 Windows job 跑除
+  沙箱测试之外的全部，名字里就写着这条边界。
+  → `.github/workflows/ci.yml`、`joy-rs/joyczl-cli/src/main.rs`（`windows_blocker`）、
+  `joy-rs/joyczl-tools/src/exec.rs`
 * **刻意** —— 上下文压缩**不保留文件操作状态**（这个会话里读过/写过哪些文件，
   pi 的 harness 就是那么做的）。被挤出窗口之后留下的是滚动摘要与
   `[tools used: …]` 的折叠；模型要精确的早先改动，就自己把文件再读一遍。
