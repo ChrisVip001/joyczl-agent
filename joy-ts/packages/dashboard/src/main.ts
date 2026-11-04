@@ -6,6 +6,7 @@
 // browser crashes or the tab closes, nothing is lost — that's the most valuable part of this layering.
 
 import type { TurnAttachment, TurnCompletedNotification } from "./protocol";
+import { createTimeline } from "./timeline";
 import {
   fetchApprovals,
   fetchDashboard,
@@ -41,7 +42,7 @@ import {
   renderSchedules,
   renderUsage,
   sessionList,
-  toolCard,
+  toolSummary,
   turnFooter,
   welcome,
 } from "./render";
@@ -689,6 +690,9 @@ async function send(
 ): Promise<void> {
   setBusy(true);
 
+  // The welcome hero only lives until the first sentence arrives.
+  dom.messages.querySelector(".welcome")?.remove();
+
   const mine = el("div", { class: "msg me" }, el("div", { class: "bubble", text }));
   if (previewFiles.length > 0) {
     mine.append(
@@ -697,19 +701,20 @@ async function send(
   }
   dom.messages.append(mine);
 
+  // The turn's course lives on a timeline (collapsed to its latest step); the trace
+  // row keeps only what needs interaction: approval cards and hard failures.
+  const timeline = createTimeline();
   const trace = el("div", { class: "trace" });
   const bubble = el("div", { class: "bubble streaming" });
   const foot = el("div", { class: "foot" });
-  dom.messages.append(el("div", { class: "msg joy" }, trace, bubble, foot));
+  dom.messages.append(
+    el("div", { class: "msg joy" }, timeline.root, trace, bubble, foot),
+  );
   scrollToEnd(true);
 
   let streamed = "";
   let completed: TurnCompletedNotification | null = null;
   let firstDelta = true;
-  // The tool card currently running (at most one in the serial loop) and its stopwatch.
-  let currentCard: HTMLElement | null = null;
-  let cardTimer: number | null = null;
-  let cardStart = 0;
   showStatus("thinking", "思考中");
 
   try {
@@ -739,14 +744,11 @@ async function send(
           break;
 
         case "gateDecided":
-          // The gate decides whether to consult memory. This line shows "why it remembered / not".
-          trace.append(
-            chip(
-              notification.decision.decision === "retrieve"
-                ? `检索「${notification.decision.query ?? ""}」`
-                : `跳过记忆（${notification.decision.reason}）`,
-              "gate",
-            ),
+          // The gate decides whether to consult memory. The line shows "why it remembered / not".
+          timeline.gate(
+            notification.decision.decision === "retrieve"
+              ? `检索「${notification.decision.query ?? ""}」`
+              : `跳过记忆（${notification.decision.reason}）`,
           );
           break;
 
@@ -799,90 +801,62 @@ async function send(
         case "goalRound":
           // The goal loop ran another round: say "why it hasn't ended yet", otherwise the UI
           // moved a round on its own and nobody knows why.
-          trace.append(
-            chip(
-              `目标 · 第 ${notification.round}/${notification.maxRounds} 轮 · ${notification.status} — ${notification.reason}`,
-              "gate",
-            ),
+          timeline.goal(
+            `目标 · 第 ${notification.round}/${notification.maxRounds} 轮 · ${notification.status} — ${notification.reason}`,
           );
           dom.goalState.textContent = `${notification.status}（第 ${notification.round}/${notification.maxRounds} 轮）`;
           break;
 
         case "retry":
           // Retries are never silent: this line shows "those seconds weren't a hang".
-          trace.append(
-            chip(
-              `重试第 ${notification.attempt} 次（${notification.reason}，${formatMs(
-                notification.delayMs,
-              )} 后）`,
-              "gate",
-            ),
+          timeline.retry(
+            `重试第 ${notification.attempt} 次（${notification.reason}，${formatMs(
+              notification.delayMs,
+            )} 后）`,
           );
           break;
 
         case "toolStarted": {
-          // Tool card: a plain-language summary + a live stopwatch,
-          // without spitting out the args JSON as-is.
+          // Plain-language summary on the thread; the JSON args stay one hover away.
           showStatus("working", notification.tool);
-          const card = toolCard(notification);
-          const timeNode = card.querySelector(".toolcard-time");
-          cardStart = Date.now();
-          cardTimer = window.setInterval(() => {
-            if (timeNode !== null) timeNode.textContent = elapsedSince(cardStart);
-          }, 500);
-          currentCard = card;
-          trace.append(card);
+          timeline.toolStart(notification.tool, toolSummary(notification));
           scrollToEnd(true);
           break;
         }
 
         case "toolCompleted": {
-          if (cardTimer !== null) {
-            window.clearInterval(cardTimer);
-            cardTimer = null;
-          }
-          currentCard = null;
-          // The end is the card's period: status coloring + frozen duration.
-          const done = chip(
-            `${notification.tool} ${notification.status === "ok" ? "好了" : "出错"}${
-              notification.durationMs === null ? "" : ` · ${formatMs(notification.durationMs)}`
-            }`,
-            "tool",
+          // The end freezes the entry: status coloring + duration.
+          timeline.toolEnd(
+            notification.tool,
+            notification.status === "ok",
+            notification.durationMs,
+            notification.output,
           );
-          done.classList.add(notification.status === "ok" ? "done-ok" : "done-bad");
-          // On error, lift one sentence of output — a tool-level failure doesn't abort the turn,
-          // but the failure reason should be visible now, not in the final Error.
-          if (notification.status !== "ok" && notification.output !== "") {
-            done.title = notification.output;
-          }
-          trace.append(done);
           scrollToEnd(true);
           break;
         }
 
         case "consolidationCompleted":
           if (notification.newFacts > 0) {
-            trace.append(chip(`记住了 ${notification.newFacts} 条新事实`, "note"));
+            timeline.note(`记住了 ${notification.newFacts} 条新事实`);
             void refresh(); // The memory panel catches up now, no need to wait for the next poll
           }
           break;
 
         case "graphStarted":
-          trace.append(chip(`工作流 ${notification.workflow}`, "graph"));
+          timeline.graph(`工作流 ${notification.workflow}`);
           break;
 
         case "graphNodeStarted":
-          trace.append(chip(`${notification.node} #${notification.visit}`, "graph"));
+          timeline.graph(`${notification.node} #${notification.visit}`);
           break;
 
         case "graphNodeEnded":
-          trace.append(chip(`${notification.node} ${formatMs(notification.ms)}`, "graph"));
+          timeline.graph(`${notification.node} · ${formatMs(notification.ms)}`);
           break;
 
         case "graphEnded":
-          trace.append(
-            chip(`工作流 ${notification.workflow} · ${notification.path.length} 步`, "graph"),
-          );
+          timeline.graph(`工作流 ${notification.workflow} · ${notification.path.length} 步`);
           break;
 
         case "turnCompleted":
@@ -901,7 +875,7 @@ async function send(
     // otherwise the blinking cursor would stay on the bubble forever.
     bubble.classList.remove("streaming");
     hideStatus();
-    if (cardTimer !== null) window.clearInterval(cardTimer);
+    timeline.settle(); // fold back: after the turn the thread collapses to one line — the reply gets the attention
 
     if (completed !== null) {
       // Overwrite the streamed accumulation with `reply`: deltas may be missing (backpressure,

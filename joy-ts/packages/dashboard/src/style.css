@@ -585,6 +585,137 @@ textarea::placeholder {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- 活动时间线：agent 正在做什么，一条安静的细线轴 ---------------------------- */
+
+.timeline {
+  margin-bottom: 4px;
+}
+
+.tl-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 2px 0;
+  transition: color var(--speed) ease;
+}
+
+.tl-head::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: breath 1.6s ease-in-out infinite;
+}
+
+.tl-head::after {
+  content: "›";
+  font-size: 13px;
+  transition: transform var(--speed) ease;
+}
+
+.timeline.open .tl-head::after {
+  transform: rotate(90deg);
+}
+
+.tl-head:hover {
+  color: var(--text-2);
+}
+
+.tl-body {
+  margin: 6px 0 10px 3px;
+  padding-left: 14px;
+  border-left: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* display:flex beats the UA's [hidden] rule — say it explicitly or "collapse" never collapses. */
+.tl-body[hidden],
+.staged[hidden] {
+  display: none;
+}
+
+/* After the turn the head dot stops breathing: the thread is history now. */
+.timeline.ended .tl-head::before {
+  background: var(--text-3);
+  animation: none;
+}
+
+.tl-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+  animation: rise 160ms ease-out;
+}
+
+.tl-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex: none;
+  position: relative;
+  left: -18px;
+  margin-right: -8px;
+  top: 0;
+}
+
+.tl-row .tl-dot {
+  transform: translateX(0);
+}
+
+.tl-gate .tl-dot {
+  background: var(--accent);
+}
+
+.tl-graph .tl-dot {
+  background: var(--text-2);
+}
+
+.tl-note .tl-dot {
+  background: var(--ok);
+}
+
+.tl-label {
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.tl-detail {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.tl-row.running .tl-dot {
+  background: var(--accent);
+  animation: breath 1.2s ease-in-out infinite;
+}
+
+.tl-row.running .tl-label {
+  color: var(--text);
+}
+
+.tl-row.done-ok .tl-dot {
+  background: var(--ok);
+}
+
+.tl-row.done-bad .tl-dot {
+  background: var(--bad);
+}
+
+.tl-row.done-bad .tl-label {
+  color: var(--bad);
+}
+
 /* 授权行（升级为授权卡在下一步；这里先保持语义与可用） */
 
 .approval {

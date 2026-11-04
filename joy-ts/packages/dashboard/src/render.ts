@@ -599,22 +599,14 @@ const TOOL_SUMMARY: Record<string, (args: ToolArgs) => string> = {
   },
 };
 
-/** Paint a card when a tool starts: icon-semantic label + summary + live stopwatch (main moves it). */
-export function toolCard(notification: ToolStartedNotification): HTMLElement {
+/** A one-line plain-language summary of "what this step is doing" (empty = show name only). */
+export function toolSummary(notification: ToolStartedNotification): string {
   const args =
     typeof notification.args === "object" && notification.args !== null
       ? (notification.args as ToolArgs)
       : {};
   const summarize = TOOL_SUMMARY[notification.tool];
-  const detail = summarize ? summarize(args) : "";
-  const children: (HTMLElement | string)[] = [
-    el("span", { class: "toolcard-name", text: notification.tool }),
-  ];
-  if (detail !== "") {
-    children.push(el("span", { class: "toolcard-detail", text: detail, title: detail }));
-  }
-  children.push(el("span", { class: "toolcard-time", text: "0s" }));
-  return el("div", { class: "toolcard" }, ...children);
+  return summarize ? summarize(args) : "";
 }
 
 /** The stopwatch text in a card. `start` is the moment this card was created. */
