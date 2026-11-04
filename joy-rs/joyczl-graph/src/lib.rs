@@ -747,8 +747,13 @@ fn elapsed_ms(since: Instant) -> i64 {
 }
 
 pub mod nodes;
+pub mod workflow_def;
 pub mod workflows;
 
 #[cfg(test)]
 #[path = "graph_tests.rs"]
 mod graph_tests;
+
+#[cfg(test)]
+#[path = "workflow_def_tests.rs"]
+mod workflow_def_tests;

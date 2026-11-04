@@ -28,12 +28,18 @@
 //!    worst failure mode, so every scan returns **honest text**
 //!    ("unavailable (…)") instead of an error. See each node's safe wrapper below.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use joyczl_provider::{CreateRequest, Message};
 use serde_json::json;
 
-use crate::{writes, Boxed, Graph, GraphError, Node, NodeCtx, NodeWrites, State, Topology, END};
+use crate::workflow_def::{builtin_routes, WorkflowDef};
+use crate::{writes, Boxed, Graph, NodeCtx, NodeFn, NodeWrites, State, Topology};
+
+/// 拓扑的唯一定义，编译期内嵌（`definitions/gather.json`）。工作流是代码的一部分，
+/// 随二进制发布——改动走 review，不走运行时加载。
+const GATHER_DEF: &str = include_str!("definitions/gather.json");
 
 /// Each scan only writes keys carrying its own prefix. Parallel nodes writing the same
 /// key trips GraphStateCollision — the backstop; the reviewer-checkable convention is the defense.
@@ -75,21 +81,9 @@ pub type MemoryScanFn = Arc<dyn Fn() -> Boxed<String> + Send + Sync>;
 pub type SynthFn = Arc<dyn Fn(State) -> Boxed<String> + Send + Sync>;
 pub type DraftFn = Arc<dyn Fn(State) -> Boxed<String> + Send + Sync>;
 
-/// The router: decides on the **counts** scans write back — never on digest prose.
-///
-/// The engine's rule is "the router is code, not a model". Routing on the model's
-/// wording hands control flow to the model, and every branch then needs a scripted
-/// reply to be testable. Counts are exact, cheap, and directly drivable in tests.
-pub fn needs_action(state: &State) -> String {
-    let pending = state.i64("gh_open_prs").unwrap_or(0) > 0
-        || state.i64("gh_open_issues").unwrap_or(0) > 0
-        || state.i64("cal_event_count").unwrap_or(0) > 0;
-    if pending {
-        "propose".to_string()
-    } else {
-        "quiet".to_string()
-    }
-}
+/// The router lives in `nodes.rs` (so the declarative route whitelist can reference
+/// it); re-exported here because gather is its only user today.
+pub use crate::nodes::needs_action;
 
 /// The honest copy when a scan fails — "unavailable" is itself information, better than silence.
 fn unavailable(why: &str) -> String {
@@ -135,12 +129,13 @@ pub fn build_gather_graph(
     memory_fn: MemoryScanFn,
     synth_fn: SynthFn,
     draft_fn: DraftFn,
-) -> Result<Graph, GraphError> {
-    let mut g = Graph::new("gather");
+) -> Result<Graph, String> {
+    // 拓扑在 definitions/gather.json 里（编译期内嵌，启动即校验）；这里只按节点名
+    // 注入行为 —— JSON 声明形状，代码提供动作。
+    let mut bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
 
-    g.add_node(Node::new(
-        "scan_github",
-        "tool",
+    bindings.insert(
+        "scan_github".to_string(),
         scan_fn(
             github_fn,
             |(text, prs, issues)| {
@@ -158,17 +153,12 @@ pub fn build_gather_graph(
                 ])
             },
         ),
-    ))?;
+    );
 
-    g.add_node(Node::new(
-        "scan_web",
-        "tool",
-        text_scan_fn("web_text", web_fn),
-    ))?;
+    bindings.insert("scan_web".to_string(), text_scan_fn("web_text", web_fn));
 
-    g.add_node(Node::new(
-        "scan_calendar",
-        "tool",
+    bindings.insert(
+        "scan_calendar".to_string(),
         scan_fn(
             calendar_fn,
             |(text, count)| writes([("cal_text", json!(text)), ("cal_event_count", json!(count))]),
@@ -179,56 +169,40 @@ pub fn build_gather_graph(
                 ])
             },
         ),
-    ))?;
+    );
 
-    g.add_node(Node::new(
-        "scan_memory",
-        "tool",
+    bindings.insert(
+        "scan_memory".to_string(),
         text_scan_fn("mem_text", memory_fn),
-    ))?;
+    );
 
     // The only model call, **no tools**. See iron rule 1 in the module comment.
-    let synth = synth_fn.clone();
-    g.add_node(Node::new("synthesize", "llm", {
+    bindings.insert(
+        "synthesize".to_string(),
         Arc::new(move |ctx: NodeCtx| {
-            let synth = synth.clone();
+            let synth = synth_fn.clone();
             let state = ctx.state;
             Box::pin(async move {
                 let digest = synth(state).await?;
                 Ok(writes([("digest", json!(digest))]))
             })
-        })
-    }))?;
+        }),
+    );
 
     // The graph's only write, and it's a file opened by a human.
-    let draft = draft_fn.clone();
-    g.add_node(Node::new("draft_digest", "tool", {
+    bindings.insert(
+        "draft_digest".to_string(),
         Arc::new(move |ctx: NodeCtx| {
-            let draft = draft.clone();
+            let draft = draft_fn.clone();
             let state = ctx.state;
             Box::pin(async move {
                 let path = draft(state).await?;
                 Ok(writes([("draft_path", json!(path))]))
             })
-        })
-    }))?;
+        }),
+    );
 
-    // The four scans are mutually independent → one parallel wave; synthesize waits for all four.
-    for scan in ["scan_github", "scan_web", "scan_calendar", "scan_memory"] {
-        g.entry(&[scan])?;
-        g.add_edge(scan, "synthesize")?;
-    }
-
-    // The router hangs on synthesize: it is the meeting wall; triage's separate
-    // gather node would be dead weight here.
-    g.add_router(
-        "synthesize",
-        Arc::new(needs_action),
-        &[("propose", "draft_digest"), ("quiet", END)],
-    )?;
-    g.add_edge("draft_digest", END)?;
-
-    Ok(g)
+    WorkflowDef::parse(GATHER_DEF)?.build(&bindings, &builtin_routes())
 }
 
 /// Topology as data, for the dashboard — builds the graph with stubs, never runs it.

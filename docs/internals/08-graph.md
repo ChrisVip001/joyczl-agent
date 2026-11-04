@@ -4,7 +4,8 @@
 一堆 if。** 它很像 LangGraph，但整个引擎加拓扑描述不到 800 行，且节点是 Rust 闭包而不是任意 Python。
 
 目录：`joy-rs/joyczl-graph/src/`
-（`lib.rs`（引擎）、`nodes.rs`（常用节点形状）、`workflows/`（triage、gather））。
+（`lib.rs`（引擎）、`nodes.rs`（常用节点形状）、`workflow_def.rs`（声明式定义装载）、
+`workflows/`（triage、gather，拓扑在 `workflows/definitions/*.json`））。
 
 ## 8.1 概念与类型
 
@@ -233,3 +234,37 @@ fn needs_action(state) -> String {
 
 写 `<home>/outbox/gather-{日期}.md`，返回路径。这是全图唯一的副作用。
 `gather_topology()` 同样用桩建图、从不运行。
+
+## 8.7 `workflow_def.rs`：声明式定义
+
+triage 与 gather 的**拓扑**不再是手写的一串 `add_node/add_edge/add_router`，而是
+JSON DAG（`workflows/definitions/triage.json`、`gather.json`），由 `workflow_def.rs`
+装载校验后建图。分工是刻意的：
+
+- **JSON 声明形状**：节点名与 kind、静态边、入口、路由器（挂在哪个节点、
+  用哪个路由函数、targets 表）、有意的循环用 `max_visits` 声明。
+- **代码提供动作**：节点行为是按**节点名**注入的 `BTreeMap<String, NodeFn>`
+  （`build_triage_graph`/`build_gather_graph` 只剩这件事）；gather 空节点绑一个
+  noop。
+- **路由是白名单**：路由函数必须在 `builtin_routes()` 注册表里
+  （`key_router`——参数 `key`/`default`；`needs_action`——无参）。注册表是**封闭的**：
+  JSON 里写了未注册的路由名，装载直接拒绝——「控制流绝不交给模型」从评审
+  约定升级成了装载期约束。
+
+装载期校验（全部在建图时完成，错误即拒绝建图）：
+
+| 校验 | 结果 |
+|---|---|
+| JSON 解析失败 | `Err`，带 serde 错误 |
+| 静态边有环（拓扑排序检查） | `Err` —— 并行波无法定序；有意循环请用路由 + `max_visits` |
+| 路由名未注册 | `Err`，附可用白名单 |
+| 路由参数缺失（如 `key_router` 少 `params.key`） | `Err` |
+| 节点名没有绑定实现 | `Err` —— 不是静默 noop |
+| 未知节点/边端点/路由目标 | 引擎既有 `GraphError` |
+
+环检查**只走静态边**，路由跳转刻意豁免（路由是条件跳转，有意的循环本来就该
+用 `max_visits` 表达）。测试在 `workflow_def_tests.rs`：两条拒装路径、triage.json
+用桩绑定端到端真跑（quick/full 两条分支的 path 都钉死）。
+
+JSON 是 `include_str!` **编译期内嵌**的：工作流是代码的一部分，随二进制发布，
+改动走 review——没有 `<home>/` 运行时覆盖目录（见 limitations「图工作流」）。

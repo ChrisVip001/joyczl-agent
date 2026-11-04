@@ -271,6 +271,18 @@ extraction use `run_command` + curl or an MCP fetching service.
 * **Not done** — `prune_spill` at startup has a theoretical race with another
   process writing (it only deletes files older than seven days).
 
+## Graph workflows
+
+* **Deliberate** — Workflow topology is a **JSON DAG**
+  (`joy-rs/joyczl-graph/src/workflows/definitions/*.json`), but it is **compiled
+  in** via `include_str!`: there is no `<home>/workflows/` runtime load or
+  override. Reason: a workflow *is* behaviour (the route whitelist and
+  `max_visits` guards are its safety properties); loading behaviour from disk
+  means changing control flow without review. To change the topology, edit the
+  JSON and recompile. Load-time validation (acyclic static edges, routers must
+  be registered built-ins, every node must have a binding) lives in
+  `workflow_def.rs`.
+
 ## Model routing
 
 Three tiers only (`fast`/`chat`/`reasoning`) — no cost or speed labels on

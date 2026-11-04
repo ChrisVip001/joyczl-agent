@@ -17,6 +17,7 @@
 //! engine broken, any situation → answered by the plain loop, exactly as when
 //! the flag is off.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,8 +25,13 @@ use chrono::Local;
 use joyczl_provider::{CreateRequest, Message, Provider};
 use serde_json::json;
 
-use crate::nodes::{fn_node, key_router};
-use crate::{writes, Boxed, Graph, GraphError, Node, NodeCtx, NodeWrites, State, Topology, END};
+use crate::nodes::fn_node;
+use crate::workflow_def::{builtin_routes, WorkflowDef};
+use crate::{writes, Boxed, Graph, NodeCtx, NodeFn, NodeWrites, State, Topology};
+
+/// 拓扑的唯一定义，编译期内嵌（`definitions/triage.json`）。工作流是代码的一部分，
+/// 随二进制发布——改动走 review，不走运行时加载。
+const TRIAGE_DEF: &str = include_str!("definitions/triage.json");
 
 pub const TRIAGE_PROMPT: &str = r#"You are a triage gate for a personal assistant. Given the user's message,
 decide which brain should answer it.
@@ -143,13 +149,14 @@ pub fn build_triage_graph(
     calendar_fn: CalendarFn,
     quick_fn: QuickFn,
     full_fn: FullFn,
-) -> Result<Graph, GraphError> {
-    let mut g = Graph::new("triage");
+) -> Result<Graph, String> {
+    // 拓扑在 definitions/triage.json 里（编译期内嵌，启动即校验）；这里只按节点名
+    // 注入行为 —— 与引擎的约定一致：JSON 声明形状，代码提供动作。
+    let mut bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
 
     let classify = classify_fn.clone();
-    g.add_node(Node::new(
-        "classify",
-        "llm",
+    bindings.insert(
+        "classify".to_string(),
         Arc::new(move |ctx: NodeCtx| {
             let classify = classify.clone();
             let message = ctx.state.str("message").unwrap_or_default().to_string();
@@ -161,52 +168,35 @@ pub fn build_triage_graph(
                 ]))
             })
         }),
-    ))?;
+    );
 
-    let calendar = calendar_fn.clone();
-    g.add_node(Node::new(
-        "check_calendar",
-        "tool",
-        fn_node(move |_| writes([("calendar", json!(calendar()))])),
-    ))?;
+    bindings.insert(
+        "check_calendar".to_string(),
+        fn_node(move |_| writes([("calendar", json!(calendar_fn()))])),
+    );
 
-    let quick = quick_fn.clone();
-    g.add_node(Node::new(
-        "quick_reply",
-        "llm",
+    bindings.insert(
+        "quick_reply".to_string(),
         Arc::new(move |ctx: NodeCtx| {
-            let quick = quick.clone();
+            let quick = quick_fn.clone();
             let state = ctx.state;
             Box::pin(async move {
                 let reply = quick(state).await?;
                 Ok(writes([("reply", json!(reply))]))
             })
         }),
-    ))?;
+    );
 
     // This node is "an entire loop". It calls the same full_turn as without a graph.
-    let full = full_fn.clone();
-    g.add_node(Node::new(
-        "full_agent",
-        "agent",
-        Arc::new(move |ctx: NodeCtx| full(ctx)),
-    ))?;
-
-    g.entry(&["classify", "check_calendar"])?;
+    bindings.insert(
+        "full_agent".to_string(),
+        Arc::new(move |ctx: NodeCtx| full_fn(ctx)),
+    );
 
     // Does nothing but wait for **both** parallel branches to arrive — then the router decides.
-    g.add_node(Node::new("gather", "fn", fn_node(|_| NodeWrites::new())))?;
-    g.add_edge("classify", "gather")?;
-    g.add_edge("check_calendar", "gather")?;
-    g.add_router(
-        "gather",
-        key_router("route", "full"),
-        &[("quick", "quick_reply"), ("full", "full_agent")],
-    )?;
-    g.add_edge("quick_reply", END)?;
-    g.add_edge("full_agent", END)?;
+    bindings.insert("gather".to_string(), fn_node(|_| NodeWrites::new()));
 
-    Ok(g)
+    WorkflowDef::parse(TRIAGE_DEF)?.build(&bindings, &builtin_routes())
 }
 
 /// Topology as data, for the dashboard — builds the graph with stubs, never runs it.

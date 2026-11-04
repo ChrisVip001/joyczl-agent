@@ -1,0 +1,26 @@
+{
+  "name": "gather",
+  "nodes": [
+    { "name": "scan_github", "kind": "tool" },
+    { "name": "scan_web", "kind": "tool" },
+    { "name": "scan_calendar", "kind": "tool" },
+    { "name": "scan_memory", "kind": "tool" },
+    { "name": "synthesize", "kind": "llm" },
+    { "name": "draft_digest", "kind": "tool" }
+  ],
+  "entry": ["scan_github", "scan_web", "scan_calendar", "scan_memory"],
+  "edges": [
+    ["scan_github", "synthesize"],
+    ["scan_web", "synthesize"],
+    ["scan_calendar", "synthesize"],
+    ["scan_memory", "synthesize"],
+    ["draft_digest", "END"]
+  ],
+  "routers": [
+    {
+      "src": "synthesize",
+      "router": "needs_action",
+      "targets": { "propose": "draft_digest", "quiet": "END" }
+    }
+  ]
+}

@@ -18,12 +18,30 @@ use std::sync::Arc;
 use crate::{NodeCtx, NodeFn, NodeWrites, RouteFn, State};
 
 /// First-party router: reads a state key and returns it as the route label (missing
-/// or empty → `default`). The model writes the key; this code reads it.
-pub fn key_router(key: &'static str, default: &'static str) -> RouteFn {
-    Arc::new(move |state: &State| match state.str(key) {
+/// or empty → `default`). The model writes the key; this code reads it. Lives here
+/// (not in a workflow file) so the declarative route whitelist can reference it.
+pub fn key_router(key: impl Into<String>, default: impl Into<String>) -> RouteFn {
+    let (key, default) = (key.into(), default.into());
+    Arc::new(move |state: &State| match state.str(&key) {
         Some(value) if !value.is_empty() => value.to_string(),
-        _ => default.to_string(),
+        _ => default.clone(),
     })
+}
+
+/// gather's route: decide on the **counts** scans write back — never on digest prose.
+///
+/// The engine's rule is "the router is code, not a model". Routing on the model's
+/// wording hands control flow to the model, and every branch then needs a scripted
+/// reply to be testable. Counts are exact, cheap, and directly drivable in tests.
+pub fn needs_action(state: &State) -> String {
+    let pending = state.i64("gh_open_prs").unwrap_or(0) > 0
+        || state.i64("gh_open_issues").unwrap_or(0) > 0
+        || state.i64("cal_event_count").unwrap_or(0) > 0;
+    if pending {
+        "propose".to_string()
+    } else {
+        "quiet".to_string()
+    }
 }
 
 /// The escape hatch: any **pure** `state in → keys out` function can be a node

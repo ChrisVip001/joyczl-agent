@@ -211,6 +211,15 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **未做** —— `prune_spill` 的启动清理与另一进程的写入有理论竞争（只删 7 天前
   的文件，实际概率极低）。
 
+## 图工作流
+
+* **刻意** —— 工作流拓扑是 **JSON DAG**（`joy-rs/joyczl-graph/src/workflows/
+  definitions/*.json`），但它是 `include_str!` **编译期内嵌**的：没有
+  `<home>/workflows/` 运行时加载或覆盖。理由：工作流是行为（路由白名单、
+  max_visits 护栏都是它的安全属性），从磁盘加载行为意味着绕过 review 改变
+  控制流。要改拓扑，改 JSON 并重新编译。装载期校验（无环、路由须为注册
+  白名单内置、节点必须有绑定）见 `workflow_def.rs`。
+
 ## 模型路由
 
 只有三个档位（`fast`/`chat`/`reasoning`）—— profile 上没有成本/速度标签

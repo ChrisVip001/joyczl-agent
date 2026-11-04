@@ -1,0 +1,25 @@
+{
+  "name": "triage",
+  "nodes": [
+    { "name": "classify", "kind": "llm" },
+    { "name": "check_calendar", "kind": "tool" },
+    { "name": "gather", "kind": "fn" },
+    { "name": "quick_reply", "kind": "llm" },
+    { "name": "full_agent", "kind": "agent" }
+  ],
+  "entry": ["classify", "check_calendar"],
+  "edges": [
+    ["classify", "gather"],
+    ["check_calendar", "gather"],
+    ["quick_reply", "END"],
+    ["full_agent", "END"]
+  ],
+  "routers": [
+    {
+      "src": "gather",
+      "router": "key_router",
+      "params": { "key": "route", "default": "full" },
+      "targets": { "quick": "quick_reply", "full": "full_agent" }
+    }
+  ]
+}
