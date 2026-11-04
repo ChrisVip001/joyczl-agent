@@ -3,12 +3,10 @@
 //! Cases needing real subprocesses are marked `#[cfg(unix)]`: hooks run shell commands, which
 //! on Windows are a different beast (see `docs/limitations.md`); don't pretend platforms are alike.
 
-use super::hooks::Hooks;
-// The subprocess-needing cases are unix-only (see the module comment above); only they use these two.
-#[cfg(unix)]
-use super::hooks::HookEvent;
-#[cfg(unix)]
+use super::hooks::{HookEvent, Hooks};
 use serde_json::json;
+// The shell-subprocess cases are unix-only (see the module comment above); the HTTP-handler
+// cases are not — a TcpListener is a TcpListener on every platform CI builds on.
 
 fn write_hooks(dir: &std::path::Path, body: &str) {
     std::fs::write(dir.join("hooks.json"), body).expect("写 hooks.json");
@@ -260,11 +258,11 @@ async fn a_file_changed_while_running_is_not_executed() {
     );
 }
 
-// ---- HTTP handler：同一 payload、同一决策契约、同一失败两分法 ----
+// ---- HTTP handler: same payload, same decision contract, same failure dichotomy ----
 
-/// 一个只服务一次请求的最小 HTTP 端点：读到请求头 + Content-Length 的 body 后，
-/// 回 `body_json`（HTTP 200）。返回端点地址。仅用于测试（provider_tests 的 Scripted
-/// 同款思路，但这里只要一问一答）。
+/// A minimal HTTP endpoint that serves exactly one request: reads the request head plus the
+/// Content-Length body, replies `body_json` (HTTP 200). Returns the endpoint address and the
+/// server task. Test-only — the same idea as provider_tests' Scripted, but one round trip.
 fn spawn_http_once(body_json: &'static str) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑端口");
@@ -274,7 +272,7 @@ fn spawn_http_once(body_json: &'static str) -> (std::net::SocketAddr, tokio::tas
     let handle = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("接受连接");
         let mut buf = Vec::new();
-        // 读到头部结束
+        // Read until the head terminator (\r\n\r\n).
         loop {
             let mut chunk = [0u8; 1024];
             let n = socket.read(&mut chunk).await.expect("读请求");
@@ -312,8 +310,9 @@ fn hooks_with_http(event: &str, url: &str) -> Hooks {
     let dir = tempfile::tempdir().expect("临时目录");
     let body = json!({ "hooks": { event: [{ "url": url }] } }).to_string();
     write_hooks(dir.path(), &body);
-    // 目录必须活到 fire 之后：信任哈希每次执行前都会重读文件，目录没了 = "文件变了" = 拒跑。
-    // keep() 拿走所有权（放弃自动清理），换来路径稳定。
+    // The directory must outlive the fire(): the trust hash re-reads the file before every run —
+    // a missing file reads as "changed" and refuses to run. keep() takes ownership (giving up
+    // auto-cleanup) in exchange for a stable path.
     let path = dir.keep();
     Hooks::load(&path, None).expect("装载")
 }
@@ -349,7 +348,8 @@ async fn http_handler_can_feed_additional_context() {
 
 #[tokio::test]
 async fn http_connection_failure_fails_open_with_a_stderr_line() {
-    // 连一个必然没人听的端口：连接被拒。规矩与 shell 的"起不来"一致——fail-open + stderr。
+    // Bind a port nobody listens on: the connection is refused. Same rule as the shell's
+    // "won't start" — fail-open plus a stderr line.
     let hooks = hooks_with_http("PostToolUse", "http://127.0.0.1:1/");
     let outcome = hooks
         .fire(
