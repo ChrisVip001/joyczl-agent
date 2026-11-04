@@ -234,6 +234,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         client: recording.clone(),
         model: "eval-model".to_string(),
         small_model: "eval-small".to_string(),
+        context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
     });
 
     let mut output = TurnOutput::default();
@@ -312,6 +313,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                 client: recording.clone(),
                 model: "eval-model".to_string(),
                 small_model: "eval-small".to_string(),
+                context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
             });
         }
     }

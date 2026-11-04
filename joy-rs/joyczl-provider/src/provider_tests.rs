@@ -501,3 +501,103 @@ fn only_transient_failures_are_retryable() {
     }
     .retryable());
 }
+
+// ---- catalog：内置表 + <home>/models-catalog.json 合并（见 catalog.rs）----
+
+#[test]
+fn built_in_catalog_matches_the_static_table() {
+    let catalog = crate::catalog::Catalog::built_in();
+    assert_eq!(catalog.entries().len(), crate::PROVIDERS.len());
+    assert!(catalog.lookup("deepseek").is_some());
+    assert!(catalog.lookup("ollama").is_some());
+}
+
+#[test]
+fn load_without_an_override_file_is_built_in() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let catalog = crate::catalog::Catalog::load(dir.path());
+    assert_eq!(catalog.entries().len(), crate::PROVIDERS.len());
+}
+
+#[test]
+fn load_patches_an_existing_provider_without_adding_a_row() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    std::fs::write(
+        dir.path().join("models-catalog.json"),
+        r#"[{"id":"deepseek","context_window":999999}]"#,
+    )
+    .expect("写目录文件");
+    let catalog = crate::catalog::Catalog::load(dir.path());
+    let deepseek = catalog.lookup("deepseek").expect("还在");
+    assert_eq!(deepseek.context_window, 999_999);
+    // 未提字段保留内置值：补丁是补丁，不是重写。
+    let built_in = crate::lookup("deepseek").expect("内置表里有 deepseek");
+    assert_eq!(deepseek.model, built_in.model);
+    assert_eq!(deepseek.wire, built_in.wire);
+    assert_eq!(catalog.entries().len(), crate::PROVIDERS.len());
+}
+
+#[test]
+fn load_appends_a_keyless_custom_provider_and_resolves_it() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    std::fs::write(
+        dir.path().join("models-catalog.json"),
+        r#"[{"id":"mybox","wire":"openai","model":"qwen3:8b","base_url":"http://127.0.0.1:9/v1"}]"#,
+    )
+    .expect("写目录文件");
+    let catalog = crate::catalog::Catalog::load(dir.path());
+    let entry = catalog.lookup("mybox").expect("自定义 provider 已加入");
+    assert!(!entry.needs_key(), "未给 key_env = 本地免 key");
+    assert_eq!(
+        entry.small_model.as_deref(),
+        Some("qwen3:8b"),
+        "small_model 缺省回落主模型"
+    );
+    let settings = joyczl_config::Settings {
+        provider: "mybox".to_string(),
+        ..Default::default()
+    };
+    let resolved = crate::resolve_with(&settings, &catalog).expect("可解析");
+    assert_eq!(resolved.context_window, crate::DEFAULT_CONTEXT_WINDOW);
+    assert_eq!(resolved.model, "qwen3:8b");
+}
+
+#[test]
+fn load_skips_broken_rows_and_survives_broken_json() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    std::fs::write(
+        dir.path().join("models-catalog.json"),
+        r#"[{"id":"half","wire":"openai"},{"id":"deepseek","context_window":1}]"#,
+    )
+    .expect("写目录文件");
+    let catalog = crate::catalog::Catalog::load(dir.path());
+    assert!(catalog.lookup("half").is_none(), "缺 model 的新行被跳过");
+    assert_eq!(
+        catalog
+            .lookup("deepseek")
+            .expect("合法行照常生效")
+            .context_window,
+        1
+    );
+
+    let dir2 = tempfile::tempdir().expect("临时目录");
+    std::fs::write(dir2.path().join("models-catalog.json"), "{not json").expect("写坏文件");
+    let catalog2 = crate::catalog::Catalog::load(dir2.path());
+    assert_eq!(
+        catalog2.entries().len(),
+        crate::PROVIDERS.len(),
+        "坏文件退回内置表，不炸启动"
+    );
+}
+
+#[test]
+fn resolve_with_an_unknown_provider_lists_catalog_ids() {
+    let catalog = crate::catalog::Catalog::built_in();
+    let settings = joyczl_config::Settings {
+        provider: "不存在".to_string(),
+        ..Default::default()
+    };
+    let error = crate::resolve_with(&settings, &catalog).expect_err("应当报错");
+    assert!(error.contains("可选"), "{error}");
+    assert!(error.contains("deepseek"), "{error}");
+}

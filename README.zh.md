@@ -72,7 +72,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 
 ### 模型与密钥
 
-**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切：`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。驾驶舱的「模型」面板是同一处实现。密钥优先进系统钥匙串；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。
+**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切——而且不改代码也能扩：`<home>/models-catalog.json` 可以补丁内置默认值或新增一家（见 [docs/configuration.zh.md](docs/configuration.zh.md)）。`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。驾驶舱的「模型」面板是同一处实现。密钥优先进系统钥匙串；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。
 
 工具失败以文本回给模型——loop 绝不因一次工具失败而崩。
 

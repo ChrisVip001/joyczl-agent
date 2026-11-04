@@ -239,6 +239,27 @@ embedding 服务不可用会降级成纯关键词并警告，绝不会变成「�
 都会问一次 —— 写入少见而后果实在，也没有放行表可匹配，所以 on-request 就是
 「每次都问」。
 
+## 模型目录（`models-catalog.json`）
+
+二进制里预置了 12 家厂商（`joyczl-provider`）。要加一家、或调整内置厂商的默认
+值而不改代码，写 `<home>/models-catalog.json`：一个 JSON 数组，每行要么**按 id
+补丁一个已有厂商**（字段任意子集），要么**新增一家**（`wire`、`model` 必填；
+`key_env` 留空或不填 = 本地免 key；`context_window` 缺省 32768）。例子：
+
+```json
+[
+  { "id": "deepseek", "context_window": 999999 },
+  { "id": "mybox", "wire": "openai", "model": "qwen3:8b",
+    "base_url": "http://127.0.0.1:11434/v1" }
+]
+```
+
+文件**只在启动时读一次**并合并进目录；`/model`、驾驶舱「模型」面板与
+`model/list` 看到的都是合并后的结果，`model/save` 也按它校验。未知字段会被
+拒绝（悄悄无效的错字比报错更糟）；坏文件或坏行只欠一行 stderr 并退回内置表
+——绝不拦启动。改完要重启进程。注意 embedding 端点（混合检索）目前仍只从
+内置表里选。
+
 ## 把活交给子代理
 
 `JOY_DELEGATE=1` 会多出 `delegate_task`：把一件自成一体的活交给子代理，只把结论

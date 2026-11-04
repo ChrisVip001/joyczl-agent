@@ -78,20 +78,24 @@ fn pick(incoming: Option<String>, existing: Option<String>) -> Option<String> {
     }
 }
 
-/// The provider must be one of `joyczl-provider`'s table: the table itself is the list of
-/// "pre-adapted mainstream vendors"; an id outside the table cannot produce a request (unless base_url is given).
-fn validate_provider(provider: &str, base_url: Option<&str>) -> Result<(), String> {
-    if joyczl_provider::PROVIDERS.iter().any(|p| p.id == provider) {
+/// The provider must exist in the **merged catalog**: the catalog is the list of "pre-adapted
+/// mainstream vendors" plus whatever the user added via `<home>/models-catalog.json`; an id
+/// outside it cannot produce a request (unless base_url is given).
+fn validate_provider(
+    catalog: &joyczl_provider::catalog::Catalog,
+    provider: &str,
+    base_url: Option<&str>,
+) -> Result<(), String> {
+    if catalog.lookup(provider).is_some() {
         return Ok(());
     }
     if base_url.is_some() {
         // Self-hosted / proxy endpoint: the provider is only "which wire format to use".
         return Ok(());
     }
-    let known: Vec<&str> = joyczl_provider::PROVIDERS.iter().map(|p| p.id).collect();
     Err(format!(
         "不认识的 provider '{provider}'。可用的：{}；走自建端点就同时给 base_url。",
-        known.join("、")
+        catalog.ids().join("、")
     ))
 }
 
@@ -211,7 +215,7 @@ impl Server {
                 ))
             }
         };
-        validate_provider(&provider, p.base_url.as_deref())?;
+        validate_provider(&self.catalog, &provider, p.base_url.as_deref())?;
 
         // Credentials: if given, store them (keychain first); if absent, keep the old pointer.
         let home = self.settings().home.clone();
@@ -308,7 +312,7 @@ impl Server {
             let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
             cfg::apply_active(file, &home, &mut store, &mut settings);
         }
-        let resolved = match joyczl_provider::resolve(&settings) {
+        let resolved = match joyczl_provider::resolve_with(&settings, &self.catalog) {
             Ok(resolved) => Some(resolved),
             Err(reason) => {
                 eprintln!("(joy) 切换模型后还没配好，turn/* 暂不可用 —— {reason}");

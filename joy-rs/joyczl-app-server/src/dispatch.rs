@@ -290,17 +290,20 @@ async fn dispatch(
 
         methods::MODEL_LIST => {
             let p: ModelListParams = parse(params, method)?;
-            // The catalog is just the PROVIDERS table: the main model is the id, and flagship / fast are
-            // its two display slots. No cursor — the catalog is 11 rows; pagination would be invention.
-            let data = joyczl_provider::PROVIDERS
+            // The catalog is the merged provider table (built-in + the user's override
+            // file): the main model is the id, and flagship / fast are its two display
+            // slots. No cursor — the catalog is a dozen rows; pagination would be invention.
+            let data = server
+                .catalog
+                .entries()
                 .iter()
                 .filter(|info| p.provider.as_deref().is_none_or(|want| info.id == want))
                 .map(|info| ModelInfo {
-                    id: info.model.to_string(),
-                    provider: info.id.to_string(),
+                    id: info.model.clone(),
+                    provider: info.id.clone(),
                     label: None,
-                    flagship: Some(info.model.to_string()),
-                    fast: Some(info.small_model.to_string()),
+                    flagship: Some(info.model.clone()),
+                    fast: info.small_model.clone(),
                 })
                 .collect();
             respond(ModelListResponse {

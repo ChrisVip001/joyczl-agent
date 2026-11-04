@@ -159,6 +159,9 @@ pub struct Server {
     /// Models resolved per tier (route.rs): each profile is resolved once — the provider
     /// client holds the connection pool. When a profile is edited/deleted, `reapply` invalidates the whole table.
     pub(crate) route_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, Resolved>>>,
+    /// The merged model catalog (built-in table + `<home>/models-catalog.json`), loaded
+    /// once at boot. `model/save` validates against it; `model/list` shows it.
+    pub(crate) catalog: joyczl_provider::catalog::Catalog,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -207,7 +210,10 @@ impl Server {
         // The read lock is taken only inside an expression: **never held across an await** (clippy would
         // stop it, and rightly so — a read lock stuck on an await would clog the whole server).
         let snapshot = settings.read().expect("settings 锁不该中毒").clone();
-        let resolved = match joyczl_provider::resolve(&snapshot) {
+        // The merged model catalog: built-in table + the user's override file. Loaded once —
+        // switching models re-resolves, it does not re-read the catalog.
+        let catalog = joyczl_provider::catalog::Catalog::load(&snapshot.home);
+        let resolved = match joyczl_provider::resolve_with(&snapshot, &catalog) {
             Ok(resolved) => Some(resolved),
             Err(reason) => {
                 // Log to stderr: stdout is the protocol channel and must not mix in logs.
@@ -312,6 +318,7 @@ impl Server {
             goals: goal::store(),
             models,
             route_cache,
+            catalog,
             secrets,
             pool,
         }

@@ -172,7 +172,7 @@ impl Server {
             let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
             joyczl_config::models::apply_profile(&profile, &home, &mut store, &mut settings);
         }
-        let resolved = joyczl_provider::resolve(&settings)
+        let resolved = joyczl_provider::resolve_with(&settings, &self.catalog)
             .map_err(|why| format!("'{profile_id}' 解析失败：{why}"))?;
         self.route_cache
             .lock()

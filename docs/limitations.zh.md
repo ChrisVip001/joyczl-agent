@@ -217,6 +217,15 @@ content block）、没有同级降级链：被路由到的 profile 解析失败�
 active profile，不试同族其它档。L1 分类器只看消息文本（前 4k 字符）——
 不看工具、不看历史。
 
+* **刻意** —— 模型目录（`<home>/models-catalog.json`，见 configuration）
+  **只在启动时读一次**：切换模型是重新 resolve provider，不是重读目录；新加
+  条目要重启。坏行各欠一行 stderr 并被跳过；坏文件退回内置表——绝不拦启动。
+  → `joy-rs/joyczl-provider/src/catalog.rs`（`load`）
+* **刻意** —— embedding 端点（混合检索）目前仍只从**内置**厂商表里选：只存在
+  于目录里的自定义厂商没有 embeddings，混合检索退化到纯关键词（它本来就有
+  的关闭/降级形态）。
+  → `joy-rs/joyczl-provider/src/embed.rs`（`lookup`）
+
 ## 文件与上传
 
 驾驶舱的上传是**引用，不是内容**：文件落在 `<home>/uploads/<日期>/` 下，名字

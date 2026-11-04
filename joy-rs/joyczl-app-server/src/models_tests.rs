@@ -38,18 +38,29 @@ fn views_carry_the_key_pointer_but_never_the_secret() {
     assert!(!serialized.contains("sk-"), "视图不该带密钥：{serialized}");
 }
 
-/// Provider validation: in-table ids pass; out-of-table ones need a base_url, otherwise the error lists what is available.
+/// Provider validation: in-catalog ids pass; out-of-catalog ones need a base_url, otherwise the error lists what is available.
 #[test]
 fn provider_validation_accepts_known_ids_and_self_hosted_endpoints() {
-    let known = joyczl_provider::PROVIDERS.first().expect("表里至少一家").id;
-    assert!(validate_provider(known, None).is_ok());
+    let catalog = joyczl_provider::catalog::Catalog::built_in();
+    let known = catalog.ids().first().copied().expect("目录里至少一家");
+    assert!(validate_provider(&catalog, known, None).is_ok());
 
-    let err = validate_provider("不存在的厂", None).unwrap_err();
+    let err = validate_provider(&catalog, "不存在的厂", None).unwrap_err();
     assert!(err.contains("不认识的 provider"), "{err}");
     assert!(err.contains(known), "报错该列出可用的：{err}");
 
     // Self-hosted endpoint: the provider only decides which wire format is used.
-    assert!(validate_provider("不存在的厂", Some("http://localhost:8000/v1")).is_ok());
+    assert!(validate_provider(&catalog, "不存在的厂", Some("http://localhost:8000/v1")).is_ok());
+
+    // A catalog the user extended with a custom provider accepts that id too.
+    let dir = tempfile::tempdir().expect("临时目录");
+    std::fs::write(
+        dir.path().join("models-catalog.json"),
+        r#"[{"id":"mybox","wire":"openai","model":"qwen3:8b","base_url":"http://127.0.0.1:9/v1"}]"#,
+    )
+    .expect("写目录文件");
+    let extended = joyczl_provider::catalog::Catalog::load(dir.path());
+    assert!(validate_provider(&extended, "mybox", None).is_ok());
 }
 
 /// The "which model is current" one-liner: with a model it names both, without it only the vendor.

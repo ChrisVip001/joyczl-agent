@@ -290,6 +290,31 @@ With `JOY_APPROVAL=on-request` **every** write asks once — writes are rare and
 consequential, and there is no allow table to match, so on-request means "ask
 each time".
 
+## The model catalog (`models-catalog.json`)
+
+Twelve providers ship in the binary (`joyczl-provider`). To add one — or to
+retune a built-in's defaults — without touching code, write
+`<home>/models-catalog.json`: a JSON array, each row either **patches an
+existing id** (any subset of fields) or **adds a new provider** (`wire`,
+`model` required; `key_env` empty or absent = keyless local endpoint;
+`context_window` defaults to 32768). Example:
+
+```json
+[
+  { "id": "deepseek", "context_window": 999999 },
+  { "id": "mybox", "wire": "openai", "model": "qwen3:8b",
+    "base_url": "http://127.0.0.1:11434/v1" }
+]
+```
+
+The file is read **once at boot** and merged into the catalog; `/model`, the
+dashboard's Model panel and `model/list` all see the merged result, and
+`model/save` validates against it. Unknown fields are rejected (a typo that
+silently does nothing is worse than an error); a broken file or row costs one
+stderr line and keeps the built-in table — it never blocks boot. Restart the
+process after editing. Note the embedding endpoint (hybrid retrieval) still
+selects from the built-in table only.
+
 ## Delegating work to a subagent
 
 `JOY_DELEGATE=1` adds `delegate_task`, which hands one self-contained job to a

@@ -278,6 +278,18 @@ chain: if a routed profile fails to resolve, the turn falls back to the
 active profile rather than trying a sibling tier. The L1 classifier sees
 only the message text (first 4k chars) — not tools, not history.
 
+* **Deliberate** — The model catalog (`<home>/models-catalog.json`, see
+  configuration.md) is read **once at boot**: switching models re-resolves the
+  provider, it does not re-read the catalog; a new entry needs a restart.
+  Broken rows cost one stderr line each and are skipped; a broken file falls
+  back to the built-in table — never a failed boot.
+  → `joy-rs/joyczl-provider/src/catalog.rs` (`load`)
+* **Deliberate** — The embedding endpoint (hybrid retrieval) still selects
+  from the **built-in** provider table only: a catalog-only provider gets no
+  embeddings, and hybrid retrieval degrades to keyword-only (its normal
+  off/degraded mode).
+  → `joy-rs/joyczl-provider/src/embed.rs` (`lookup`)
+
 ## Files & uploads
 
 Dashboard uploads are **references, not content**: a file lands in

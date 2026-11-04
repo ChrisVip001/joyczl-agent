@@ -78,7 +78,7 @@ persisted with the conversation.
 
 ### Providers and keys
 
-**Twelve LLM providers are pre-adapted in code** (`joyczl-provider`), switchable at will: `/model` lists configured profiles, `/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` adds one, `/model use ds` switches — no need to retype the key, effective immediately, no restart. The dashboard's "Model" panel is the same implementation. Keys go to the OS keychain first, falling back to `<home>/secrets.json` (0600, plaintext) when there is none — the save response says which one it was, honestly. **The old `JOY_API_KEY` / `JOY_BASE_URL` env vars are no longer read** — configuration has exactly one path: `models.json`.
+**Twelve LLM providers are pre-adapted in code** (`joyczl-provider`), switchable at will — and extendable without code: `<home>/models-catalog.json` patches built-in defaults or adds a provider (see [docs/configuration.md](docs/configuration.md)). `/model` lists configured profiles, `/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` adds one, `/model use ds` switches — no need to retype the key, effective immediately, no restart. The dashboard's "Model" panel is the same implementation. Keys go to the OS keychain first, falling back to `<home>/secrets.json` (0600, plaintext) when there is none — the save response says which one it was, honestly. **The old `JOY_API_KEY` / `JOY_BASE_URL` env vars are no longer read** — configuration has exactly one path: `models.json`.
 
 Tool failures return to the model as text — the loop never crashes on one.
 

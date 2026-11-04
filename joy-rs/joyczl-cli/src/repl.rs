@@ -191,7 +191,8 @@ fn models(server: &Server, input: &str) {
             if response.profiles.is_empty() {
                 println!(
                     "还没配任何模型。用 /model add <名字> <厂商> [模型] [--env 变量名] 加一套；\
-                     /model ls 之后再 /model use <名字> 切换。model/list 能看到 12 家厂商的 id。"
+                     /model ls 之后再 /model use <名字> 切换。model/list 能看到全部厂商 id（含 \
+                     <home>/models-catalog.json 里自加的）。"
                 );
                 return;
             }

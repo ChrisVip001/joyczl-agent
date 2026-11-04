@@ -193,7 +193,9 @@ pub trait Provider: Send + Sync {
 // ---- provider catalog -------------------------------------------------------
 
 /// The two wire formats. Choosing one decides which HTTP client is used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Lowercase in JSON — the catalog file uses the same words as `JOY_PROVIDER`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Wire {
     Anthropic,
     OpenAi,
@@ -368,6 +370,8 @@ pub fn lookup(id: &str) -> Option<&'static ProviderInfo> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
+pub mod catalog;
+
 #[cfg(test)]
 #[path = "provider_tests.rs"]
 mod provider_tests;
@@ -388,6 +392,10 @@ pub struct Resolved {
     pub client: Arc<dyn Provider>,
     pub model: String,
     pub small_model: String,
+    /// The approximate context window, taken from the catalog row this turn resolved
+    /// from. Stored now (it used to live in the static table) because catalog rows are
+    /// runtime data — the row may not exist in any 'static table.
+    pub context_window: u32,
 }
 
 /// Context window for providers not in the table (mocks, evals, self-built gateways).
@@ -395,14 +403,9 @@ pub struct Resolved {
 pub const DEFAULT_CONTEXT_WINDOW: u32 = 32_768;
 
 impl Resolved {
-    /// The approximate context window for this turn. Looks up `PROVIDERS`, else the default.
-    ///
-    /// Not stored in `Resolved`: it lives in the table, and one more copy is one more place
-    /// to drift (plus every new provider would need syncing in two places).
+    /// The approximate context window for this turn.
     pub fn context_window(&self) -> u32 {
-        lookup(&self.provider_id)
-            .map(|info| info.context_window)
-            .unwrap_or(DEFAULT_CONTEXT_WINDOW)
+        self.context_window
     }
 }
 
@@ -420,12 +423,21 @@ impl std::fmt::Debug for Resolved {
 
 /// Resolve a usable client from Settings. On a missing key, give **actionable** guidance:
 /// where to get a key, which line to add to which file, and which providers exist.
+/// Resolve against the built-in table only. Kept for tests and callers that have no
+/// home directory (embeddings); app-server resolves against the loaded catalog.
 pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
-    let info = lookup(&settings.provider).ok_or_else(|| {
+    resolve_with(settings, &catalog::Catalog::built_in())
+}
+
+/// Resolve a usable client from Settings and the **merged** catalog. On a missing key,
+/// give **actionable** guidance: where to get a key, which line to add to which file,
+/// and which providers exist.
+pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<Resolved, String> {
+    let info = catalog.lookup(&settings.provider).ok_or_else(|| {
         format!(
             "未知的 JOY_PROVIDER '{}'。可选：{}",
             settings.provider,
-            ids()
+            catalog.ids().join(", ")
         )
     })?;
 
@@ -445,12 +457,9 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .or_else(|| (!info.needs_key()).then(String::new))
-        .ok_or_else(|| no_key_message(info))?;
+        .ok_or_else(|| no_key_message(&info.id, &info.key_env, &catalog.ids().join(", ")))?;
 
-    let base_url = settings
-        .base_url
-        .clone()
-        .or_else(|| info.base_url.map(str::to_string));
+    let base_url = settings.base_url.clone().or_else(|| info.base_url.clone());
     let timeout = Duration::from_secs(settings.llm_timeout_secs.max(1) as u64);
 
     let max_retries = settings.llm_retries.max(0) as u32;
@@ -470,44 +479,35 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
     };
 
     Ok(Resolved {
-        provider_id: info.id.to_string(),
+        provider_id: info.id.clone(),
         client,
-        model: settings
-            .model
-            .clone()
-            .unwrap_or_else(|| info.model.to_string()),
-        small_model: settings
-            .small_model
-            .clone()
-            .unwrap_or_else(|| info.small_model.to_string()),
+        model: settings.model.clone().unwrap_or_else(|| info.model.clone()),
+        small_model: settings.small_model.clone().unwrap_or_else(|| {
+            info.small_model
+                .clone()
+                .unwrap_or_else(|| info.model.clone())
+        }),
+        context_window: info.context_window,
     })
 }
 
-fn ids() -> String {
-    PROVIDERS
-        .iter()
-        .map(|p| p.id)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn no_key_message(info: &ProviderInfo) -> String {
-    let mut msg = format!("provider '{}' 没有 API key。\n", info.id);
-    if let Some(url) = key_url(info.id) {
+fn no_key_message(id: &str, key_env: &str, known: &str) -> String {
+    let mut msg = format!("provider '{id}' 没有 API key。\n");
+    if let Some(url) = key_url(id) {
         msg.push_str(&format!("  1. 去领一个 key：{url}\n"));
     }
     msg.push_str(&format!(
         "  2. 配进 Joy（`--env {var}` 只读环境变量、不落盘；key 优先交给系统钥匙串）：\
          \n       /model add <名字> {id} --env {var}\n",
-        var = info.key_env,
-        id = info.id
+        var = key_env,
+        id = id,
     ));
     msg.push_str(&format!(
         "  3. 或直接给 key（钥匙串不可用时会退回明文文件，界面会如实说是哪一种）：\
          \n       /model add <名字> {id} --key 你的-key\n",
-        id = info.id
+        id = id,
     ));
-    msg.push_str(&format!("其他 provider：{}", ids()));
+    msg.push_str(&format!("其他 provider：{known}"));
     msg.push_str("\n切到另一套：/model use <名字>（驾驶舱的「模型」面板是同一处实现）。");
     msg
 }
