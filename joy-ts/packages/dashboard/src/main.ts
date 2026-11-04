@@ -779,14 +779,22 @@ async function send(
           break;
 
         case "approvalRequested": {
-          // Asking for execution permission: buttons given, nothing moves until clicked — deny by default.
-          const row = el("div", { class: "approval" });
-          row.append(
-            chip(`需要批准 · ${notification.tool}`, "gate"),
-            el("code", { class: "cmd", text: notification.argsPreview }),
+          // An authorization card inline in the flow: nothing moves until clicked — deny by default.
+          const card = el("div", { class: "approval-card" });
+          card.append(
+            el(
+              "div",
+              { class: "ac-head" },
+              el("span", { class: "ac-dot", "aria-hidden": "true" }),
+              el("span", { class: "ac-title", text: "需要你授权" }),
+              el("span", { class: "tag", text: notification.tool }),
+            ),
+            el("code", { class: "ac-cmd", text: notification.argsPreview }),
           );
+          const foot = el("div", { class: "ac-foot" });
+          card.append(foot);
           const settle = (approved: boolean, remember: boolean) => {
-            row.querySelectorAll("button").forEach((button) => {
+            card.querySelectorAll("button").forEach((button) => {
               (button as HTMLButtonElement).disabled = true;
             });
             void respondApproval({
@@ -796,7 +804,8 @@ async function send(
               remember,
             })
               .then((response) => {
-                row.append(
+                // The verdict replaces the buttons — the card becomes its own receipt.
+                foot.replaceChildren(
                   chip(
                     response.accepted
                       ? approved
@@ -810,7 +819,7 @@ async function send(
                 );
               })
               .catch((error: unknown) => {
-                row.append(chip(`回答没送出去：${String(error)}`, "note"));
+                foot.replaceChildren(chip(`回答没送出去：${String(error)}`, "note"));
               });
           };
           const allow = el("button", { class: "approve", text: "允许" });
@@ -819,8 +828,8 @@ async function send(
           allow.addEventListener("click", () => settle(true, false));
           always.addEventListener("click", () => settle(true, true));
           deny.addEventListener("click", () => settle(false, false));
-          row.append(allow, always, deny);
-          trace.append(row);
+          foot.append(allow, always, deny);
+          trace.append(card);
           break;
         }
 

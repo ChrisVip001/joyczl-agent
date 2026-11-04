@@ -716,29 +716,59 @@ textarea::placeholder {
   color: var(--bad);
 }
 
-/* 授权行（升级为授权卡在下一步；这里先保持语义与可用） */
+/* ---- 授权卡：消息流里的「需要你拍板」 ------------------------------------------ */
 
-.approval {
+.approval-card {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
   border-left: 2px solid var(--warn);
   border-radius: var(--radius-card);
+  animation: rise 200ms ease-out;
 }
 
-.approval .cmd {
-  flex-basis: 100%;
+.ac-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ac-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  animation: breath 1.4s ease-in-out infinite;
+  flex: none;
+}
+
+.ac-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.ac-cmd {
   font-family: var(--mono);
   font-size: 12px;
+  line-height: 1.6;
   color: var(--text-2);
-  background: none;
-  border: none;
-  padding: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.ac-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .approve,
