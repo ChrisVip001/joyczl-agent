@@ -487,6 +487,7 @@ async fn tool_ctx() -> joyczl_tools::ToolCtx {
         approval: None,
         jobs: None,
         hooks: None,
+        turn_limits: std::sync::Arc::new(joyczl_tools::web::TurnLimits::default()),
         session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),

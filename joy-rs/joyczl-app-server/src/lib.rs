@@ -602,6 +602,13 @@ async fn builtin_tools(
     Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
 ) {
     let mut tools = joyczl_tools::handlers::build_default();
+    if !joyczl_tools::web::search_ready() {
+        // Not silent: the model's tool table lost an entry — the human should know why.
+        eprintln!(
+            "(joy) 搜索未就绪：没有配置搜索 key 且 DDG 已关（JOY_SEARCH_DDG=0），\
+             search_web 未注册"
+        );
+    }
     let mut jobs_handle: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>> = None;
     // Exec tool: **off by default**, registered only when enabled — when off, the model cannot even
     // see its name. The highest-privilege thing there is; the switch must be pressed by the user's own hand.
@@ -741,6 +748,7 @@ pub(crate) fn tool_ctx(
         cwd: injected.cwd,
         approval: injected.approval,
         hooks: injected.hooks,
+        turn_limits: std::sync::Arc::new(joyczl_tools::web::TurnLimits::from_env()),
         jobs: injected.jobs,
     }
 }

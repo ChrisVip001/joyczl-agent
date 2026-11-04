@@ -336,8 +336,17 @@ which variable to set.
 | Variable | Purpose |
 |---|---|
 | `TAVILY_API_KEY` / `JOY_SEARCH_API_KEY` | upgrade `search_web` to Tavily (default: DuckDuckGo HTML) |
+| `BRAVE_API_KEY` | second keyed backend in the chain (tried after Tavily) |
+| `JOY_SEARCH_MAX_PER_TURN` | per-turn `search_web` cap (default 20, range 1–200) |
+| `JOY_SEARCH_DDG` | `0` disables the keyless DuckDuckGo backend (default on) |
 | `JOY_JUDGE_MODEL` | judge referee override |
 | `JOY_GH_REPO` | gather's GitHub scan target |
+
+Search backends form an ordered chain: Tavily, then Brave, with DuckDuckGo entering
+the plan **only when no key is configured** (after a keyed backend fails, the free
+endpoint stays out of the plan — one gamble per turn, not two). When no backend is
+usable, `search_web` is not registered at all and startup says so; search results
+are wrapped as untrusted external data, same as a fetched page body.
 
 ## Dashboard and binaries
 

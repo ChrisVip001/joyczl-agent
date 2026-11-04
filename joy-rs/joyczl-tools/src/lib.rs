@@ -104,6 +104,10 @@ pub struct ToolCtx {
     /// copy of the hooks (it is the single choke point); a copy is carried here so handlers
     /// can fire events too — currently only `run_command`'s approval path (`PermissionRequest`).
     pub hooks: Option<Arc<crate::hooks::Hooks>>,
+    /// This turn's web-search budget (`web.rs::TurnLimits`). Created once per turn
+    /// and shared by every clone of the ctx, so the counter survives across the
+    /// turn's tool calls; a fresh turn gets a fresh budget.
+    pub turn_limits: Arc<crate::web::TurnLimits>,
 }
 
 pub type BoxFut = Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;

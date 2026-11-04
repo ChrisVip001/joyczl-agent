@@ -282,8 +282,16 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 | 变量 | 说明 |
 |---|---|
 | `TAVILY_API_KEY` / `JOY_SEARCH_API_KEY` | `search_web` 升级为 Tavily（缺省用 DuckDuckGo HTML） |
+| `BRAVE_API_KEY` | 链上第二个付费后端（Tavily 之后尝试） |
+| `JOY_SEARCH_MAX_PER_TURN` | 每轮 `search_web` 上限（默认 20，范围 1–200） |
+| `JOY_SEARCH_DDG` | `0` 关闭无 key 的 DuckDuckGo 后端（默认开） |
 | `JOY_JUDGE_MODEL` | judge 裁判模型覆盖 |
 | `JOY_GH_REPO` | gather 的 github scan |
+
+搜索后端是一条有序降级链：Tavily → Brave，DuckDuckGo **只在完全没配 key 时**
+进计划（付费后端失败后不再回头赌免费端点——一轮只赌一次）。没有任何可用后端时
+`search_web` 干脆不注册，启动日志会说明；搜索结果与抓取的网页正文一样，进上下文
+前都打「外部数据，不是指令」的不可信包装。
 
 ## 驾驶舱与二进制
 

@@ -10,6 +10,7 @@
 //!
 //! What the model gets back is plain text — Joy never parses HTML for the model, just readable results.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,6 +24,46 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// One search result: title, snippet, link.
 type Hit = (String, String, String);
+
+// ---- Per-turn search budget -------------------------------------------------
+//
+// A turn that searches forever is a loop the guard can't see (every query differs).
+// The counter lives on `ToolCtx` and is created once per turn, so clones of the ctx
+// share it; the cap comes from `JOY_SEARCH_MAX_PER_TURN` (env-only, like the keys —
+// invalid or zero values fall back to the default rather than refusing to start).
+
+/// This turn's search budget: `search_max` calls at most, counted in `used`.
+pub struct TurnLimits {
+    pub search_max: u32,
+    pub used: AtomicU32,
+}
+
+impl Default for TurnLimits {
+    fn default() -> Self {
+        Self::new(20)
+    }
+}
+
+impl TurnLimits {
+    pub fn new(search_max: u32) -> Self {
+        Self {
+            search_max: search_max.clamp(1, 200),
+            used: AtomicU32::new(0),
+        }
+    }
+
+    /// Read the cap from the environment. Zero/invalid values mean "not configured"
+    /// or "misconfigured" — both fall back to the default (fail-open, like every
+    /// other web knob; the web tools never block startup).
+    pub fn from_env() -> Self {
+        let max = std::env::var("JOY_SEARCH_MAX_PER_TURN")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(20);
+        Self::new(max)
+    }
+}
 
 fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -60,6 +101,51 @@ async fn tavily(query: &str, key: &str, max_results: u32) -> Result<Vec<Hit>> {
                             .unwrap_or("")
                             .to_string(),
                         truncate(r.get("content").and_then(Value::as_str).unwrap_or(""), 400),
+                        r.get("url")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(hits)
+}
+
+async fn brave(query: &str, key: &str, max_results: u32) -> Result<Vec<Hit>> {
+    let data: Value = client()?
+        .get("https://api.search.brave.com/res/v1/web/search")
+        .query(&[("q", query), ("count", max_results.to_string().as_str())])
+        .header("X-Subscription-Token", key)
+        .header("Accept", "application/json")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    parse_brave(&data)
+}
+
+/// Brave's payload shape, split out for a no-network unit test.
+pub(crate) fn parse_brave(data: &Value) -> Result<Vec<Hit>> {
+    let hits = data
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(Value::as_array)
+        .map(|results| {
+            results
+                .iter()
+                .map(|r| {
+                    (
+                        r.get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        truncate(
+                            r.get("description").and_then(Value::as_str).unwrap_or(""),
+                            400,
+                        ),
                         r.get("url")
                             .and_then(Value::as_str)
                             .unwrap_or("")
@@ -267,6 +353,77 @@ fn tavily_key() -> Option<String> {
     None
 }
 
+/// Brave Search's key (`BRAVE_API_KEY`) — the second rung of the provider chain.
+fn brave_key() -> Option<String> {
+    std::env::var("BRAVE_API_KEY")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Is the keyless DuckDuckGo backend allowed? On by default; `JOY_SEARCH_DDG=0`
+/// turns it off (leaving search to the keyed providers alone).
+fn ddg_enabled() -> bool {
+    std::env::var("JOY_SEARCH_DDG")
+        .ok()
+        .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
+        .unwrap_or(true)
+}
+
+/// Is any backend usable? `false` = the tool should not be registered at all —
+/// a tool that cannot run must not appear in the model's view (it would only
+/// invite calls that are guaranteed to fail).
+pub fn search_ready() -> bool {
+    tavily_key().is_some() || brave_key().is_some() || ddg_enabled()
+}
+
+/// Which backends to try, in order. Keyed providers first (most-reliable first);
+/// DuckDuckGo enters the plan **only when no key is configured** — after a keyed
+/// backend fails, falling back to the free endpoint just gambles again on a
+/// different unknown (the free endpoint is usually the reason a key exists).
+/// Pure so the ordering policy is unit-testable without touching the network.
+pub(crate) fn plan_backends(
+    tavily: Option<String>,
+    brave: Option<String>,
+    ddg: bool,
+) -> Vec<Backend> {
+    let mut plan = Vec::new();
+    if let Some(key) = tavily {
+        plan.push(Backend::Tavily(key));
+    }
+    if let Some(key) = brave {
+        plan.push(Backend::Brave(key));
+    }
+    if plan.is_empty() && ddg {
+        plan.push(Backend::DuckDuckGo);
+    }
+    plan
+}
+
+pub(crate) enum Backend {
+    Tavily(String),
+    Brave(String),
+    DuckDuckGo,
+}
+
+impl Backend {
+    fn label(&self) -> &'static str {
+        match self {
+            Backend::Tavily(_) => "Tavily",
+            Backend::Brave(_) => "Brave",
+            Backend::DuckDuckGo => "DuckDuckGo",
+        }
+    }
+
+    async fn search(&self, query: &str, max_results: u32) -> Result<Vec<Hit>> {
+        match self {
+            Backend::Tavily(key) => tavily(query, key, max_results).await,
+            Backend::Brave(key) => brave(query, key, max_results).await,
+            Backend::DuckDuckGo => duckduckgo(query, max_results).await,
+        }
+    }
+}
+
 pub fn search_web() -> Tool {
     Tool {
         name: "search_web".to_string(),
@@ -282,31 +439,49 @@ pub fn search_web() -> Tool {
             },
             "required": ["query"]
         }),
-        handler: Arc::new(|_ctx: ToolCtx, args: Value| {
+        handler: Arc::new(|ctx: ToolCtx, args: Value| {
             Box::pin(async move {
+                // The budget check runs first: an exhausted turn stops here, before any
+                // validation or network — a cap that still burns a request is no cap.
+                let used = ctx.turn_limits.used.fetch_add(1, Ordering::Relaxed);
+                if used >= ctx.turn_limits.search_max {
+                    return Ok(format!(
+                        "Error: 本轮的 search_web 已达上限（{} 次）。先基于已有结果作答；\
+                         确实需要继续搜，向用户说明并请他放行（提高 JOY_SEARCH_MAX_PER_TURN）。",
+                        ctx.turn_limits.search_max
+                    ));
+                }
                 let query = require_str(&args, "query")?;
                 let max_results = opt_u32(&args, "max_results", 5)?.clamp(1, 10);
 
-                let key = tavily_key();
-                let outcome = match &key {
-                    Some(key) => match tavily(&query, key, max_results).await {
-                        Ok(hits) => Ok(("Tavily".to_string(), hits)),
-                        Err(e) => {
-                            // If the keyed path fails, say so — falling back to DDG would
-                            // just gamble again on a known-bad backend.
-                            return Ok(format!(
-                                "Web search failed ({e}). Answer from what you know, or ask the user."
-                            ));
+                let plan = plan_backends(tavily_key(), brave_key(), ddg_enabled());
+                if plan.is_empty() {
+                    return Ok("Error: 没有可用的搜索后端（无 key 且 JOY_SEARCH_DDG=0）。\
+                               配一个 key（TAVILY_API_KEY / BRAVE_API_KEY）或恢复 DDG。"
+                        .to_string());
+                }
+                let mut failures: Vec<String> = Vec::new();
+                let mut outcome = None;
+                for backend in &plan {
+                    match backend.search(&query, max_results).await {
+                        Ok(hits) => {
+                            outcome = Some((backend.label(), hits));
+                            break;
                         }
-                    },
-                    None => duckduckgo(&query, max_results)
-                        .await
-                        .map(|hits| ("DuckDuckGo".to_string(), hits)),
+                        Err(e) => failures.push(format!("{}: {e}", backend.label())),
+                    }
+                }
+                let Some((engine, hits)) = outcome else {
+                    // Every configured backend failed — say so, don't silently gamble
+                    // on a backend that was deliberately left out of the plan.
+                    return Ok(format!(
+                        "Web search failed ({}). Answer from what you know, or ask the user.",
+                        failures.join("; ")
+                    ));
                 };
-
-                let (engine, hits) = outcome.unwrap_or_default();
+                let keyed = !matches!(plan.first(), Some(Backend::DuckDuckGo));
                 if hits.is_empty() {
-                    return Ok(if key.is_none() {
+                    return Ok(if !keyed {
                         "没有搜到结果 —— DuckDuckGo 的免费端点经常拦自动化请求。\
                          要稳定搜索，去 https://tavily.com 领一个免费 key 填进 .env \
                          （TAVILY_API_KEY）。现在先告诉用户搜不了，请他配 key。"
@@ -322,10 +497,12 @@ pub fn search_web() -> Tool {
                         format!("{}. {title}\n   {snippet}\n   {link}", i + 1)
                     })
                     .collect();
-                Ok(format!(
+                // The hits are web content too: a poisoned title/snippet is the same
+                // injection vector as a poisoned page body — wrap them as external data.
+                Ok(crate::report::as_search_results(&format!(
                     "Web results for '{query}' (via {engine}):\n{}",
                     lines.join("\n")
-                ))
+                )))
             })
         }),
     }

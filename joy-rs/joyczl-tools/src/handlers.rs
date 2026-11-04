@@ -171,7 +171,12 @@ pub fn build_default() -> crate::ToolRegistry {
     registry.register(crate::calendar::create_event());
     registry.register(crate::calendar::list_events());
     registry.register(crate::messages::send_message());
-    registry.register(crate::web::search_web());
+    // search_web only when a backend is usable (a key configured, or DDG allowed):
+    // a tool that cannot run must not appear in the model's view — it would only
+    // invite calls that are guaranteed to fail. fetch_url is keyless, always on.
+    if crate::web::search_ready() {
+        registry.register(crate::web::search_web());
+    }
     registry.register(crate::web::fetch_url());
     // Read-only file tools: no side effects, present by default (reads skip the execution gate — see fs.rs docs).
     registry.register(crate::fs::read_file());

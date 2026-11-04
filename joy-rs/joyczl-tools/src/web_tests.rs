@@ -18,6 +18,7 @@ async fn ctx() -> ToolCtx {
         approval: None,
         jobs: None,
         hooks: None,
+        turn_limits: std::sync::Arc::new(crate::web::TurnLimits::default()),
         session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
@@ -231,4 +232,74 @@ async fn the_tool_refuses_loopback_without_the_test_knob() {
         .await;
     assert!(out.starts_with("Error:"), "{out}");
     assert!(out.contains("内网/保留地址"), "{out}");
+}
+
+// ---- Search: provider plan, per-turn budget, untrusted wrapping --------------
+
+use super::web::{plan_backends, search_web, Backend, TurnLimits};
+use std::sync::atomic::Ordering;
+
+/// Ordering policy: keyed providers first (in order), DDG only when no key exists —
+/// after a keyed backend fails, gambling on the free endpoint stays out of the plan.
+#[test]
+fn backend_plan_prefers_keyed_and_only_falls_back_to_ddg_without_keys() {
+    let plan = plan_backends(Some("t".into()), None, true);
+    assert_eq!(plan.len(), 1, "有 key 时 DDG 不进计划");
+    assert!(matches!(plan[0], Backend::Tavily(_)));
+
+    let plan = plan_backends(None, Some("b".into()), true);
+    assert!(matches!(plan[0], Backend::Brave(_)));
+
+    let plan = plan_backends(None, None, true);
+    assert!(matches!(plan[0], Backend::DuckDuckGo), "无 key 时 DDG 兜底");
+
+    assert!(
+        plan_backends(None, None, false).is_empty(),
+        "全关就是没有后端 —— search_ready 必须已经把它挡在注册之外"
+    );
+}
+
+/// Brave's payload shape (web.results[].title/description/url) parses into hits.
+#[test]
+fn brave_results_parse_into_hits() {
+    let data = json!({"web": {"results": [
+        {"title": "T", "description": "D", "url": "https://example.com/x"}
+    ]}});
+    let hits = super::web::parse_brave(&data).unwrap();
+    assert_eq!(
+        hits,
+        vec![(
+            "T".to_string(),
+            "D".to_string(),
+            "https://example.com/x".to_string()
+        )]
+    );
+    assert!(super::web::parse_brave(&json!({})).unwrap().is_empty());
+}
+
+/// The budget short-circuits **before** validation and network: an exhausted turn
+/// gets a readable stop, not a tool timeout and not a silent extra request.
+#[tokio::test]
+async fn search_cap_stops_the_turn_before_any_network() {
+    let mut registry = ToolRegistry::new();
+    registry.register(search_web());
+    let c = ctx().await;
+    c.turn_limits
+        .used
+        .store(c.turn_limits.search_max, Ordering::Relaxed);
+    let out = registry
+        .execute(c, "search_web", json!({"query": "anything"}))
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("上限"), "{out}");
+}
+
+/// Fresh budget: a new TurnLimits starts at zero used.
+#[test]
+fn turn_limits_start_empty() {
+    let limits = TurnLimits::default();
+    assert_eq!(limits.used.load(Ordering::Relaxed), 0);
+    assert_eq!(limits.search_max, 20);
+    assert_eq!(TurnLimits::new(0).search_max, 1, "0 钳到下界，永不为负预算");
+    assert_eq!(TurnLimits::new(99_999).search_max, 200, "上界钳制");
 }

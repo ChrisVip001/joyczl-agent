@@ -4,6 +4,21 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## 0.7.0 — Aligning with the state of the art (the workspace version; `v0.5.0` is the previous tagged release)
 
+### Web search: provider chain, per-turn cap, untrusted wrapping
+
+- **Ordered provider chain**: Tavily -> Brave (`BRAVE_API_KEY`, new) -> DuckDuckGo;
+  DuckDuckGo enters the plan only when no key is configured — after a keyed
+  backend fails, the free endpoint stays out of the plan.
+- **No backend, no tool**: with no key and `JOY_SEARCH_DDG=0`, `search_web` is
+  not registered at all (a promise that cannot run only invites guaranteed
+  failures); startup says so explicitly.
+- **Per-turn cap**: `JOY_SEARCH_MAX_PER_TURN` (default 20); the budget check
+  short-circuits before any network — a loop that varies its query each time is
+  invisible to the loop guard, but not to the budget.
+- **Search results wrapped as untrusted**: a poisoned title/snippet is the same
+  injection threat as a poisoned page, just one tool call earlier; hits go
+  through the same "data, not instructions" paraphrase pipeline as fetched bodies.
+
 ### A stale dashboard frontend now refuses to start
 
 The dist is a build artifact and gitignored — nothing ever forced a rebuild,
