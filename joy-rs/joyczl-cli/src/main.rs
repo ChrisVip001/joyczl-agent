@@ -238,9 +238,10 @@ fn hub_adduser(args: &[String]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn non_windows_boots_freely() {
-        // On every platform CI actually builds on, the blocker must stay silent.
-        // (A Windows runner would fail this assert — that is the point.)
-        assert!(super::windows_blocker().is_none());
+    fn the_blocker_matches_the_platform() {
+        // The blocker must agree with the platform it runs on: silent on Unix,
+        // refusing on Windows. The previous version asserted "never fires" and
+        // failed the Windows CI job by its own admission.
+        assert_eq!(super::windows_blocker().is_none(), !cfg!(windows));
     }
 }
