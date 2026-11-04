@@ -39,6 +39,7 @@ import {
   renderOverview,
   renderSchedules,
   renderUsage,
+  sessionList,
   toolCard,
   turnFooter,
 } from "./render";
@@ -91,6 +92,9 @@ const dom = {
   home: must("home"),
   session: must("session"),
   stamp: must("stamp"),
+  sessions: must("sessions"),
+  drawer: must("drawer"),
+  drawerClose: must<HTMLButtonElement>("drawer-close"),
 };
 
 let busy = false;
@@ -136,7 +140,17 @@ function switchTab(tab: TabId): void {
   for (const section of document.querySelectorAll<HTMLElement>(".panels .panel")) {
     section.hidden = section.id !== `panel-${tab}`;
   }
+  openDrawer();
   void refreshPanels();
+}
+
+/** The panel drawer slides in from the right; the chat column never squeezes. */
+function openDrawer(): void {
+  dom.drawer.hidden = false;
+}
+
+function closeDrawer(): void {
+  dom.drawer.hidden = true;
 }
 
 /** On-demand panels: only fire a request when the current tab is one of the three new panels. */
@@ -308,6 +322,7 @@ async function applyModel(): Promise<void> {
 async function boot(): Promise<void> {
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
+  dom.drawerClose.addEventListener("click", closeDrawer);
 
   // Right-side tabs: data as navigation — each button carries one tab name; behavior in switchTab.
   for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
@@ -416,6 +431,7 @@ async function refresh(): Promise<void> {
     const data = await fetchDashboard();
     dom.overview.replaceChildren(renderOverview(data, current, (id) => void open(id)));
     dom.memory.replaceChildren(renderMemory(data));
+    dom.sessions.replaceChildren(sessionList(data, current, (id) => void open(id)));
     dom.home.textContent = data.config.home;
     dom.home.title = data.config.home;
     dom.stamp.textContent = formatStamp(data.generatedAt);

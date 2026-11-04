@@ -109,6 +109,27 @@ export function renderOverview(
   return fragment;
 }
 
+/**
+ * The sidebar's session list — same rows as the overview's, one source of truth
+ * (`sessionRow`), two surfaces. The sidebar is where switching actually happens;
+ * the overview keeps the fuller picture.
+ */
+export function sessionList(
+  data: DashboardData,
+  current: string,
+  onPick: (id: string) => void,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  if (data.sessions.length === 0) {
+    fragment.append(muted("还没有会话"));
+    return fragment;
+  }
+  fragment.append(
+    el("ul", { class: "list" }, ...data.sessions.map((item) => sessionRow(item, current, onPick))),
+  );
+  return fragment;
+}
+
 /** Memory panel: what it remembers. */
 export function renderMemory(data: DashboardData): DocumentFragment {
   const fragment = document.createDocumentFragment();

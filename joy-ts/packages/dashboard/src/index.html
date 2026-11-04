@@ -3,26 +3,45 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
-    <title>Joy 驾驶舱</title>
+    <meta name="color-scheme" content="dark light" />
+    <title>Joy</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <header>
-      <div class="brand">
-        <span class="dot" aria-hidden="true"></span>
-        <h1>Joy</h1>
-        <select class="pill" id="model" aria-label="切换模型"></select>
-      </div>
-      <div class="right">
-        <span class="path" id="home"></span>
-        <span class="stamp" id="stamp"></span>
-        <button class="ghost" id="refresh" type="button">刷新</button>
-      </div>
-    </header>
+    <div class="app">
+      <!-- 侧栏：品牌 / 会话列表 / 面板入口。数据在 Rust 侧，这里只是导航。 -->
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <span class="dot" aria-hidden="true"></span>
+          <h1>Joy</h1>
+        </div>
 
-    <main>
-      <section class="chat">
+        <nav class="tabs rail" aria-label="面板">
+          <button class="tab" data-tab="overview" type="button">概览</button>
+          <button class="tab" data-tab="memory" type="button">记忆</button>
+          <button class="tab" data-tab="usage" type="button">用量</button>
+          <button class="tab" data-tab="approvals" type="button">审批</button>
+          <button class="tab" data-tab="schedules" type="button">定时</button>
+          <button class="tab" data-tab="model" type="button">模型</button>
+        </nav>
+
+        <div class="rail-block">
+          <p class="rail-label">会话</p>
+          <ul class="session-list" id="sessions"></ul>
+        </div>
+
+        <div class="sidebar-foot">
+          <select class="pill" id="model" aria-label="切换模型"></select>
+          <span class="path" id="home"></span>
+          <div class="foot-row">
+            <span class="stamp" id="stamp"></span>
+            <button class="ghost" id="refresh" type="button">刷新</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 主对话区：单列居中，agent 的活动内嵌在消息流里。 -->
+      <main class="chat">
         <div class="bar">
           <p class="hint">
             会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
@@ -71,20 +90,14 @@
           ></textarea>
           <button id="send" type="submit">发送</button>
         </form>
-      </section>
+      </main>
 
-      <aside class="panels">
-        <!-- Data as navigation: the tabs are this array,
-             adding a panel = one more section in HTML + one more NAV row in main.ts. -->
-        <nav class="tabs" aria-label="面板">
-          <button class="tab active" data-tab="overview" type="button">概览</button>
-          <button class="tab" data-tab="memory" type="button">记忆</button>
-          <button class="tab" data-tab="usage" type="button">用量</button>
-          <button class="tab" data-tab="approvals" type="button">审批</button>
-          <button class="tab" data-tab="schedules" type="button">定时</button>
-          <button class="tab" data-tab="model" type="button">模型</button>
-        </nav>
-
+      <!-- 面板抽屉：从右滑入，不挤压聊天列。tabs 在侧栏，这里只有内容。 -->
+      <aside class="panels" id="drawer" hidden>
+        <div class="drawer-head">
+          <p class="hint">面板</p>
+          <button class="ghost" id="drawer-close" type="button" aria-label="收起面板">×</button>
+        </div>
         <section class="panel active" id="panel-overview">
           <div class="body" id="overview"></div>
         </section>
@@ -140,7 +153,7 @@
           </div>
         </section>
       </aside>
-    </main>
+    </div>
 
     <script type="module" src="./main.js"></script>
   </body>
