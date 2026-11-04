@@ -26,8 +26,6 @@
   写在 `<home>/models.json`，下次启动仍然是你上次选的那套。
 - **模型不能自己换模型**：`model/*` 只给人用，模型没有对应工具，也拿不到密钥。
 
-## 常驻与守护
-
 ## 通知与审计
 
 - **通知是尽力而为**：发不出（网络断、端点 5xx）只往 stderr 说一声，**没有
@@ -40,6 +38,8 @@
   管理员跑 `joy hub adduser`，token 只打印一次。配对码流程（用户
   自助申请 + 主人批准 + 限速锁定）需要一个未鉴权的申请端点，等真有第二个
   用户时再做。per-user 配额同样记账未设限（usage 数据在攒，强制留给计费）
+
+## 常驻与守护
 
 - **app-server 有守护锁**：同一个 `<home>` 同时只能跑一个 app-server
   （`<home>/app-server.lock`，含 PID；进程死了锁由下一次启动自动收掉）。
@@ -218,10 +218,11 @@ content block）；传一张「图」，模型能读到的只是那串字节。
 
 ## 记忆
 
-* **未做** —— 写入时没有去重/合并。`facts` 没有唯一约束、`add` 总是插入，
-  所以重复调用 `save_note` 或反复提炼会攒下近似重复的事实。要补的话是一个
-  合并遍历（或 subject+content 上的唯一规则）。
-  → `joy-rs/joyczl-state/src/facts.rs`、`joy-rs/joyczl-state/migrations/`
+* **刻意** —— 完全重复进不了库：迁移 0008 在 `(subject, lower(trim(content)))`
+  上建了唯一索引，`add` 命中冲突时返回已有行并标记非新——提炼重跑或模型重复
+  `save_note` 是噪音，不是错误。**没做**的是近似重复的合并：同一件事换个说法
+  会落成第二行。补法是按相似度做一次合并遍历。
+  → `joy-rs/joyczl-state/src/facts.rs`（`add`）、`joy-rs/joyczl-state/migrations/0008_memory_dedup.sql`
 * **未做** —— `MEMORY.md` 是**生成的视图**，每轮之后从 `facts` + `episodes`
   重写。编辑它没有用，state.db 才是事实来源。要让它可编辑，需要一条写回路径
   与冲突规则。

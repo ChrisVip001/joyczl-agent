@@ -33,8 +33,6 @@ means "we would like this, nobody has built it".
 - **The model cannot switch models**: `model/*` is human-only — the model has no
   such tool and never sees a key.
 
-## Long-running and the daemon lock
-
 ## Notifications and audit
 
 - **Notifications are best-effort**: a failed send (network down, endpoint 5xx)
@@ -50,6 +48,8 @@ means "we would like this, nobody has built it".
   rate limits/lockout) needs an unauthenticated request endpoint; it waits
   until there is a real second user. Per-user quotas likewise record but do
   not enforce (usage data is accumulating; enforcement waits for billing)
+
+## Long-running and the daemon lock
 
 - **The app-server takes a daemon lock**: only one app-server per `<home>` at a
   time (`<home>/app-server.lock`, holding the PID; a lock left by a dead process is
@@ -278,11 +278,13 @@ a "picture" upload is just a file the model can read as bytes.
 
 ## Memory
 
-* **Gap** — No dedup or merge on write. `facts` has no unique constraint and
-  `add` always inserts, so repeated `save_note` calls or re-distilled
-  consolidation can accumulate near-duplicates. A merge pass (or a uniqueness
-  rule on subject+content) would go here.
-  → `joy-rs/joyczl-state/src/facts.rs`, `joy-rs/joyczl-state/migrations/`
+* **Deliberate** — Exact duplicates never enter the table: migration 0008 puts a
+  unique index on `(subject, lower(trim(content)))` and `add` resolves the conflict
+  by returning the existing row with `is_new = false` — a rerun of consolidation or
+  a repeated `save_note` is noise, not an error. **Not done** is merging
+  near-duplicates: the same fact reworded lands as a second row. A
+  similarity-based merge pass would go here.
+  → `joy-rs/joyczl-state/src/facts.rs` (`add`), `joy-rs/joyczl-state/migrations/0008_memory_dedup.sql`
 * **Gap** — `MEMORY.md` is a *generated view*, rewritten after every turn from
   `facts` + `episodes`. Editing it does nothing; state.db is the source.
   Making it editable would need a write-back path and conflict rules.
