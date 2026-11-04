@@ -418,6 +418,47 @@ async fn tool_started_goes_out_before_tool_completed() {
     );
 }
 
+/// The per-session write-section lock is **lazy but stable**: the same session always gets the
+/// same lock (two concurrent turns must not end up holding two different ones), and different
+/// sessions never share one — that would serialise the whole server for no reason.
+#[tokio::test]
+async fn the_write_lock_is_lazy_but_stable_per_session() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+
+    let first = server.session_write_lock("s1");
+    let again = server.session_write_lock("s1");
+    let other = server.session_write_lock("s2");
+
+    assert!(Arc::ptr_eq(&first, &again), "同一会话同一把锁");
+    assert!(!Arc::ptr_eq(&first, &other), "不同会话各一把");
+}
+
+/// The lock run_turn takes is a real mutex: while one task holds it, another's acquire
+/// does not go through — that is the whole guarantee the write sections (append /
+/// consolidate / compact) rely on to stop interleaving.
+#[tokio::test]
+async fn a_held_write_lock_blocks_another_acquirer() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+    let lock = server.session_write_lock("s");
+
+    let guard = lock.lock().await;
+    let attempt = lock.clone();
+    let blocked = tokio::time::timeout(std::time::Duration::from_millis(50), async move {
+        let _ = attempt.lock().await;
+    })
+    .await;
+    assert!(blocked.is_err(), "写段被持有时，另一个获取者必须等");
+
+    drop(guard);
+    let relock = lock.clone();
+    let acquired = tokio::time::timeout(std::time::Duration::from_millis(50), async move {
+        let guard = relock.lock().await;
+        drop(guard);
+    })
+    .await;
+    assert!(acquired.is_ok(), "释放后另一个获取者立刻进来");
+}
+
 /// turn/interrupt: a running turn's token can be flipped; a non-running turn cannot be interrupted —
 /// but it must say false honestly, instead of pretending something was interrupted.
 #[tokio::test]

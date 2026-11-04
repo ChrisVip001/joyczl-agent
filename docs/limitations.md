@@ -263,11 +263,16 @@ extraction use `run_command` + curl or an MCP fetching service.
   if 10s is not enough the answer is fewer concurrent writers, not a longer
   timeout.
   → `joy-rs/joyczl-state/src/db.rs`
-* **Not done** — No per-session lock. Adding one means holding it during the
-  turn's *write* section (append / consolidate / compact) but not during model
-  calls; the gain is strict per-session ordering, the cost is a visibly slower
-  second turn. Not needed today: the three guards above already make the
-  concurrency consequences acceptable.
+* **Deliberate** — There **is** a per-session *write-section* lock, held only
+  during a turn's write sections: compaction (`refresh` inside `load_history`)
+  and the tail section (history append / context calibration / consolidation /
+  MEMORY.md mirror). **Model-call sections never hold it** — that would stall
+  the session and keep interrupt out; `turn/interrupt` writes no session state,
+  so it is orthogonal to the lock. Locks are created lazily per session and
+  **never removed** (removal would let two concurrent turns hold two different
+  locks). The three SQLite-level guards stay: they prevent *double-write
+  corruption*; the lock prevents *read/write interleaving* — complementary.
+  → `joyczl-app-server/src/lib.rs` (`session_write_lock`), `turn.rs` (two locked sections)
 * **Not done** — `prune_spill` at startup has a theoretical race with another
   process writing (it only deletes files older than seven days).
 

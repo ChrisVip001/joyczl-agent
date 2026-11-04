@@ -606,6 +606,12 @@ pub async fn run_turn(
         eprintln!("(joy) 用量没记进台账：{e}");
     }
 
+    // ---- 写段：per-session 串行。从写对话日志到 MEMORY.md 镜像，本会话的写入不得与
+    // 另一个并发 turn 的写段交错——这正是 per-session 锁的增量价值：SQLite 层的三守卫
+    // 防的是双写损坏，这里防的是读写交错导致的乱序。模型调用不持此锁。
+    let session_write_lock = server.session_write_lock(&session_id);
+    let write_guard = session_write_lock.lock().await;
+
     server
         .chat
         .append_exchange(
@@ -663,6 +669,8 @@ pub async fn run_turn(
     {
         eprintln!("(joy) MEMORY.md 镜像失败（记忆本身不受影响）：{e}");
     }
+    // 写段到此结束：通知与应答不是写操作，别让锁的影子多留一步。
+    drop(write_guard);
 
     sink.notification(ServerNotification::TurnCompleted(Box::new(
         TurnCompletedNotification {
@@ -904,16 +912,23 @@ async fn full_turn(
     let factor = server.chat.context_factor(session_id).await.unwrap_or(None);
     let history_budget = budget_tokens(resolved, &settings, factor).saturating_sub(reserve);
 
-    let (mut history, mut summary) = load_history(
-        &server.chat,
-        resolved,
-        session_id,
-        settings.history_turns,
-        history_budget,
-        None,
-        &server.hooks,
-    )
-    .await;
+    // ---- 压缩可能在这里发生（compaction::refresh 在 load_history 内），它属于本会话的
+    // 写段：与另一个并发 turn 的写段串行。锁只在拿历史/压缩期间持有——THE LOOP 与
+    // interrupt 永不等这把锁。
+    let session_write_lock = server.session_write_lock(session_id);
+    let (mut history, mut summary) = {
+        let _compact_guard = session_write_lock.lock().await;
+        load_history(
+            &server.chat,
+            resolved,
+            session_id,
+            settings.history_turns,
+            history_budget,
+            None,
+            &server.hooks,
+        )
+        .await
+    };
     let mut system = build_system(
         &soul,
         &resolved.model,
@@ -995,16 +1010,19 @@ async fn full_turn(
             Err(e) if !retried && is_context_overflow(&e) => {
                 eprintln!("(joy) 上下文超了，压缩后重试一次");
                 retried = true;
-                let (forced_history, forced_summary) = load_history(
-                    &server.chat,
-                    resolved,
-                    session_id,
-                    settings.history_turns,
-                    0,
-                    Some(FORCED_RETRY_TURNS),
-                    &server.hooks,
-                )
-                .await;
+                let (forced_history, forced_summary) = {
+                    let _compact_guard = session_write_lock.lock().await;
+                    load_history(
+                        &server.chat,
+                        resolved,
+                        session_id,
+                        settings.history_turns,
+                        0,
+                        Some(FORCED_RETRY_TURNS),
+                        &server.hooks,
+                    )
+                    .await
+                };
                 history = forced_history;
                 summary = forced_summary;
                 system = build_system(

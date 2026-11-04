@@ -205,9 +205,13 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   多进程同时写（REPL、dashboard、`joy mcp serve`、`joy schedule`）时排队而非
   直接失败；10 秒还不够就只能减小并发面，而不是把超时调得更长。
   → `joy-rs/joyczl-state/src/db.rs`
-* **未做** —— 没有 per-session 锁。要加的话是在 turn 的**写入段**（append /
-  提炼 / 压缩）持锁、模型调用段不持；收益是「同会话严格有序」，代价是第二个
-  turn 会明显变慢。当前不需要：上面几条已经把并发后果降到可接受。
+* **刻意** —— 有 per-session **写段锁**，但只在 turn 的写入段持有：compaction
+  （`load_history` 内的 `refresh`）与尾部写段（对话日志 append / 校准 / 提炼 /
+  MEMORY.md 镜像）。**模型调用段不持锁**——那会把会话卡死，interrupt 也进不来；
+  `turn/interrupt` 本身不写会话状态，与这把锁正交。锁按会话惰性创建、常驻不删
+  （删了会让两个并发 turn 拿到两把不同的锁）。SQLite 层的三守卫仍保留：它们防
+  「双写损坏」，锁防的是「读写交错导致的乱序」，两者互补。
+  → `joyczl-app-server/src/lib.rs`（`session_write_lock`）、`turn.rs`（两处加锁段）
 * **未做** —— `prune_spill` 的启动清理与另一进程的写入有理论竞争（只删 7 天前
   的文件，实际概率极低）。
 

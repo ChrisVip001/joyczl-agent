@@ -68,6 +68,7 @@ use joyczl_tools::ToolCtx;
 use joyczl_tools::ToolRegistry;
 use sqlx::sqlite::SqlitePool;
 use tokio::sync::mpsc;
+use tokio::sync::Mutex as AsyncMutex;
 
 pub use dispatch::handle;
 pub use stdio::run_stdio;
@@ -162,6 +163,12 @@ pub struct Server {
     /// The merged model catalog (built-in table + `<home>/models-catalog.json`), loaded
     /// once at boot. `model/save` validates against it; `model/list` shows it.
     pub(crate) catalog: joyczl_provider::catalog::Catalog,
+    /// One **write-section lock** per session: the serialisation point for a turn's
+    /// write sections (history append / consolidation / compaction). Model-call
+    /// sections never hold it — that would stall the session and keep interrupt out.
+    /// Lazily created and **never removed**: removal would race two concurrent turns
+    /// into holding two different locks.
+    pub(crate) session_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
     #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
@@ -319,9 +326,20 @@ impl Server {
             models,
             route_cache,
             catalog,
+            session_locks: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             pool,
         }
+    }
+
+    /// The session's write-section lock — created on first use, held forever.
+    /// Two hash lookups are nothing next to what the lock actually protects.
+    pub(crate) fn session_write_lock(&self, session_id: &str) -> Arc<AsyncMutex<()>> {
+        let mut locks = self.session_locks.lock().expect("session_locks 中毒");
+        locks
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
     }
 
     /// The environment handed to handlers when executing tools. **Constructed in exactly one place**
