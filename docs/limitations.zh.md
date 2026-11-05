@@ -351,6 +351,22 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   会自动续跑并把它翻回 `running`——**崩溃恢复是自动的，人类按的暂停不是**：暂停的
   checkpoint 标 `suspended`，只有 `task/resume` 会让它动。两者的区别只在状态字上。
   → `joy-rs/joyczl-app-server/src/resume.rs`、`joy-rs/joyczl-app-server/src/turn.rs`
+## 连接器
+
+* **边界** —— 连接器没有「重试 / 退避 / 限流」：一次发送失败就是把失败原样交回模型，
+  由它决定下一步（改天再发、换人问、如实说没发成）。批量的第三方调用不在这个方案里。
+  → `joy-rs/joyczl-connector/src/smtp.rs`、`joy-rs/joyczl-connector/src/feishu.rs`
+* **边界** —— 飞书以**应用身份**（tenant_access_token）发送；以**具体某个人**的身份
+  行事需要 OAuth 授权码 + 控制台登记回调地址，在没有可验证的自建应用之前不写这条
+  不可验证的路。微信同理：个人号没有可编程出站接口，首发不含微信（见配置文档的
+  Chat gateways：入站是另一套东西，不是连接器）。
+  → `joy-rs/joyczl-connector/src/feishu.rs`
+* **刻意** —— 白名单是**精确匹配**（邮件另支持 `@域名`）：没有通配、没有正则、没有
+  「先问一次以后都放」。名单只有人能改；改完下一回合才生效（工具注册发生在启动时）。
+  → `joy-rs/joyczl-connector/src/config.rs`
+* **边界** —— 凭证明文回退是既有 `SecretStore` 的语义（钥匙串不可用时写 0600 文件并
+  如实报告），连接器不另造加密格式；`live` 开关与白名单仍只在文件里，UI 只读。
+  → `joy-rs/joyczl-config/src/models.rs`（`SecretStore`）
 
 ## 网关
 

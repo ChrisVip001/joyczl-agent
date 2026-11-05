@@ -443,6 +443,27 @@ about the attachment is checked before the turn starts: containment inside
   automatic, a human's pause is not**: a paused checkpoint says `suspended`, and only
   `task/resume` moves it. The difference between the two lives in that status word.
   → `joy-rs/joyczl-app-server/src/resume.rs`, `joy-rs/joyczl-app-server/src/turn.rs`
+## Connectors
+
+* **Boundary** — Connectors have no retry / backoff / rate limiting: a failed send hands
+  the failure back to the model as-is, and *it* decides the next step (try later, ask a
+  human, say plainly that nothing was sent). Bulk third-party calls are out of scope.
+  → `joy-rs/joyczl-connector/src/smtp.rs`, `joy-rs/joyczl-connector/src/feishu.rs`
+* **Boundary** — Feishu sends as the **app** (`tenant_access_token`); acting as a
+  specific person needs the OAuth code flow with a console-registered redirect URI,
+  which won't be written before there is a real app to verify it against. Same story
+  for WeChat: personal accounts have no programmable outbound API, so the first release
+  has no WeChat (inbound gateways are a different thing — see Chat gateways).
+  → `joy-rs/joyczl-connector/src/feishu.rs`
+* **Deliberate** — The allowlist is an **exact match** (plus `@domain` for email): no
+  wildcards, no regex, no "ask once, allow forever". Only the human edits it, and a
+  change takes effect on the next start (tools are registered at boot).
+  → `joy-rs/joyczl-connector/src/config.rs`
+* **Boundary** — Plaintext secret fallback is the existing `SecretStore` semantics
+  (keychain unavailable → 0600 file, reported honestly); connectors invent no new
+  encrypted format. The `live` switch and the allowlist stay in the file; the UI is
+  read-only.
+  → `joy-rs/joyczl-config/src/models.rs` (`SecretStore`)
 
 ## Gateways
 

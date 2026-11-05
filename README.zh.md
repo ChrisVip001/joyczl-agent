@@ -112,6 +112,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P11 ✅ | 账号与多端：hub 注册登录（PBKDF2、每设备 token、座位上限）、dashboard 远程模式与登录卡、跨端事件同步、CORS、PWA 骨架、Tauri 桌面壳 |
 | P12 ✅ | 长任务引擎（回合级 checkpoint）：工具边界落盘工作记忆、kill -9 后启动对账自动续跑（已完成的工具不重跑）、`task_*` 事件 ping、dashboard 续跑提示 |
 | P13 ✅ | 长任务实体（`agent_tasks`）：任务 → 目标循环执行器、一会话一活跃、创建/暂停/继续/取消、暂停保留断点（继续即续跑）、重启对账标挂起、dashboard 任务卡开关 |
+| P14 ✅ | 连接器（M4）：email（SMTP）与飞书（应用身份）——白名单硬边界、默认草稿、每次实发一问；`joy connector` 人类入口；驾驶舱只读面板 |
 
 ## 命名
 

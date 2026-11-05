@@ -2,6 +2,25 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 0.12.0 — 伸出去的那只手（工作区版本）
+
+### 连接器：草稿之外的唯一例外
+
+- 新增 `joyczl-connector` crate：email（SMTP，465 隐式 TLS / 587 STARTTLS）与
+  飞书（应用身份 tenant_access_token，进程内缓存两小时）。不引 SMTP 全家桶、
+  不引 native-tls —— 只写需要的那些行。
+- **三道栅栏，缺一不可**：没有 `connectors.json` 就连工具名都不注册；配好也默认
+  `live: false` 只写 outbox；每次实际发送弹一次审批卡（收件人 + 正文摘要）。
+  白名单留空 = 谁都不许，失败关闭。
+- 凭据走既有 `SecretStore`（钥匙串优先、0600 明文回退并如实报告）；
+  `connectors.json` 只放意图。拼错的字段名直接启动失败，不静默变成「谁都不许」。
+- `joy connector list / email / feishu`：人的直接路径，与模型共用同一条白名单与
+  同一段发送代码（终端发送不弹卡 —— 敲命令的人就是批准人）。
+- 驾驶舱新增「连接器」面板：哪个连接器、能不能真发、白名单多宽；开关仍在文件里，
+  UI 只读。顺手修掉空任务时面板崩溃（`task: null` 当对象用）的 bug。
+- 新冒烟 `smoke-connector.sh`：真二进制 + 假 SMTP + 假飞书端点，覆盖
+  无配置 / 白名单外 / 草稿 / 真发（RFC 2047 主题、base64 正文、receive_id 形状）。
+
 ## 0.11.0 — 任务是有身份的（工作区版本）
 
 ### 长任务实体：目标循环降为执行器

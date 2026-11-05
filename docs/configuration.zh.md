@@ -379,6 +379,57 @@ JOY_HUB_ROOT=~/joy-hub joy hub           # 起多用户驾驶舱，默认仍绑 
   结束」「有授权待批」。细节由客户端拉 `/api/data`；提示不带载荷。`/api/*`
   的 CORS 是放行的，因为客户端（Tauri 壳、PWA）用请求头鉴权，从不带 Cookie。
 
+## 连接器（`<home>/connectors.json`）
+
+「草稿，永不发送」是默认；连接器是唯一的例外，并且被三道栅栏围住：
+
+1. **不开就没有。** 没有 `connectors.json` → 没有任何连接器工具，模型连名字都看不见。
+2. **默认还是草稿。** 配好连接器但 `"live": false`（默认）时，消息只写进
+   `<home>/outbox/`，不出机器。
+3. **每次实际发送问一次。** 审批卡写清收件人与正文摘要；拒绝/超时 = 不发。
+   白名单是硬边界，**留空 = 谁都不许**。
+
+```json
+{
+  "email": {
+    "smtp_host": "smtp.example.com",
+    "smtp_port": 465,
+    "from": "joy@example.com",
+    "username": "joy@example.com",
+    "secret": "keychain:connector:email",
+    "allow_recipients": ["@example.com", "alice@other.org"],
+    "live": false
+  },
+  "feishu": {
+    "app_id": "cli_a1b2c3",
+    "app_secret": "env:FEISHU_APP_SECRET",
+    "receive_id_type": "open_id",
+    "allow_recipients": ["ou_xxx", "oc_yyy"],
+    "live": false
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `smtp_port` | 465 = 隐式 TLS，587 = STARTTLS，其它 = 明文（只给本地中转/测试） |
+| `secret` / `app_secret` | `env:VAR` 或 `SecretStore` 条目名（钥匙串优先，回退 0600 明文并如实报告） |
+| `allow_recipients` | 邮件：完整地址或 `@域名`；飞书：`open_id` / `chat_id` 精确匹配 |
+| `live` | 只有 `true` 才会真的发送；从 `false` 改成 `true` 是人的动作 |
+| `receive_id_type` | `open_id`（成员）或 `chat_id`（群） |
+| `base_url` | 飞书自建/私有部署时改这里，默认 `https://open.feishu.cn` |
+
+人的两个命令（终端直接发不弹审批卡 —— 敲命令的人就是批准人）：
+
+```bash
+joy connector list
+joy connector email --to alice@corp.com --subject 周报 --body 正文 [--dry-run]
+joy connector feishu --to ou_xxx --text 正文 [--dry-run]
+```
+
+模型侧工具是 `email_send` / `feishu_send`，只在连接器启用且白名单非空时注册。
+驾驶舱「连接器」面板只读展示：哪个连接器、能不能真发、白名单多宽。
+
 ## Chat gateways (joy-ts)
 
 | 平台 | 变量 |

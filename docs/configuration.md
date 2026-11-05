@@ -448,6 +448,61 @@ JOY_HUB_ROOT=~/joy-hub joy hub           # multi-user dashboard, still binds 127
   `/api/*` because clients (Tauri shell, PWA) authenticate by header, never
   cookies.
 
+## Connectors (`<home>/connectors.json`)
+
+"Draft, never send" is the default; a connector is the one exception, fenced three ways:
+
+1. **Off until configured.** No `connectors.json` → no connector tools exist; the model
+   cannot even see their names.
+2. **Dry run by default.** A configured connector with `"live": false` (the default)
+   only writes drafts to `<home>/outbox/`; nothing leaves the machine.
+3. **Every live send asks once.** The approval card names the recipients and previews
+   the body; refusal/timeout = no send. The allowlist is a hard boundary, and
+   **empty means nobody**.
+
+```json
+{
+  "email": {
+    "smtp_host": "smtp.example.com",
+    "smtp_port": 465,
+    "from": "joy@example.com",
+    "username": "joy@example.com",
+    "secret": "keychain:connector:email",
+    "allow_recipients": ["@example.com", "alice@other.org"],
+    "live": false
+  },
+  "feishu": {
+    "app_id": "cli_a1b2c3",
+    "app_secret": "env:FEISHU_APP_SECRET",
+    "receive_id_type": "open_id",
+    "allow_recipients": ["ou_xxx", "oc_yyy"],
+    "live": false
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `smtp_port` | 465 = implicit TLS, 587 = STARTTLS, anything else = plaintext (local relay/tests only) |
+| `secret` / `app_secret` | `env:VAR` or a `SecretStore` account (keychain first, 0600 plaintext fallback — reported honestly) |
+| `allow_recipients` | email: exact address or `@domain`; feishu: exact `open_id` / `chat_id` |
+| `live` | only `true` actually sends; flipping it is a human act |
+| `receive_id_type` | `open_id` (a person) or `chat_id` (a group) |
+| `base_url` | for self-hosted Lark; defaults to `https://open.feishu.cn` |
+
+The human's own commands (the terminal sends without an approval card — the person
+typing is the approval):
+
+```bash
+joy connector list
+joy connector email --to alice@corp.com --subject Weekly --body text [--dry-run]
+joy connector feishu --to ou_xxx --text text [--dry-run]
+```
+
+Model-side tools are `email_send` / `feishu_send`, registered only when the connector is
+configured and its allowlist is non-empty. The dashboard's connector panel is read-only:
+which connector, whether it can really send, how wide the allowlist is.
+
 ## Chat gateways (joy-ts)
 
 | Platform | Variables |

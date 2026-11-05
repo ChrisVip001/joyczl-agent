@@ -2,6 +2,30 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.12.0 — The hand that reaches out (the workspace version)
+
+### Connectors: the one exception to "draft, never send"
+
+- New `joyczl-connector` crate: email (SMTP, 465 implicit TLS / 587 STARTTLS) and
+  Feishu (app identity, `tenant_access_token`, cached in memory for two hours). No SMTP
+  client suite, no native-tls — only the lines this feature needs.
+- **Three fences, all required**: no `connectors.json` → not even the tool names are
+  registered; configured still means `live: false` drafts to `outbox/`; every live send
+  raises one approval card (recipients + body preview). Empty allowlist = nobody,
+  failing closed.
+- Credentials go through the existing `SecretStore` (keychain first, 0600 plaintext
+  fallback, reported honestly); `connectors.json` holds intent only. A typo'd key fails
+  at startup rather than silently meaning "nobody".
+- `joy connector list / email / feishu`: the human's direct path, sharing the same
+  allowlist and the same send code as the model (terminal sends skip the card — the
+  person typing *is* the approval).
+- The dashboard grows a read-only connector panel: which connector, whether it can
+  really send, how wide the allowlist is; the switches stay in the file. Also fixes a
+  crash when there is no task (`task: null` treated as an object).
+- New `smoke-connector.sh`: the shipped binary against a fake SMTP server and a fake
+  Feishu endpoint — no config / outside allowlist / draft / real send (RFC 2047
+  subject, base64 body, receive_id shape).
+
 ## 0.11.0 — A task has an identity (the workspace version)
 
 ### Long tasks as entities: the goal loop becomes their engine
