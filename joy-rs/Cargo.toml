@@ -6,6 +6,7 @@ members = [
     "joyczl-config",
     "joyczl-provider",
     "joyczl-tools",
+    "joyczl-connector",
     "joyczl-loop",
     "joyczl-graph",
     "joyczl-mcp",
@@ -61,6 +62,7 @@ joyczl-state = { path = "joyczl-state" }
 joyczl-config = { path = "joyczl-config" }
 joyczl-provider = { path = "joyczl-provider" }
 joyczl-tools = { path = "joyczl-tools" }
+joyczl-connector = { path = "joyczl-connector" }
 joyczl-loop = { path = "joyczl-loop" }
 joyczl-graph = { path = "joyczl-graph" }
 joyczl-mcp = { path = "joyczl-mcp" }
