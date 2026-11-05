@@ -117,6 +117,7 @@ Tool failures return to the model as text — the loop never crashes on one.
 | P10 ✅ | file-writing tools (`write_file`/`edit`), image input, model catalog, HTTP hooks, declarative workflows, per-session write lock, Windows boundary (Unix-only), distribution materials (npm shim / brew / PyPI / release workflow) |
 | P11 ✅ | accounts & multi-device: register/login hub (PBKDF2, per-device tokens, seat cap), dashboard remote mode + login card, cross-device event sync, CORS, PWA skeleton, Tauri desktop shell |
 | P12 ✅ | long-task engine (turn-level checkpoints): working memory persisted at tool boundaries, kill -9 → startup reconcile auto-resumes (finished tools never re-run), `task_*` event pings, dashboard resume notice |
+| P13 ✅ | long tasks as entities (`agent_tasks`): the goal loop becomes their engine, one active task per session, create/pause/resume/cancel, a pause keeps the checkpoint (resume continues it), boot reconcile marks suspended, dashboard task-card switches |
 
 ## Naming
 

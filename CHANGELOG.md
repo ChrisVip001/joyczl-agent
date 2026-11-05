@@ -2,6 +2,34 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.11.0 — A task has an identity (the workspace version)
+
+### Long tasks as entities: the goal loop becomes their engine
+
+- A goal used to be a string in process memory: gone on restart, and "pause" was
+  meaningless. It is now a row in `agent_tasks` (migration 0014): id, name, status,
+  round account. `goal/set` becomes the compatibility layer — setting a goal creates
+  the task, clearing it downgrades the task to single-turn; `/goal` and the task card
+  point at one table from now on.
+- **One active task per session**: a partial unique index as the backstop; a second
+  `task/create` is refused with the existing one named — the human should see what
+  they already started, not a stack of ghosts.
+- State machine: pending / running / suspended / done / failed / cancelled. The judge
+  says satisfied → done; impossible / round-limit → failed (honestly recorded as not
+  done, never faked); judge broke down → suspended (stopped in place, the human decides).
+- **A pause is not a stop**: `task/suspend` interrupts the turn but marks its
+  checkpoint `suspended` instead of `abandoned`; `task/resume` continues from that
+  boundary, finished tools never re-run. `task/cancel` is the stop — checkpoint
+  `abandoned`, never auto-resumed.
+- Boot reconcile: a `running` task is marked `suspended` (with the reason), and an
+  `open` checkpoint resumes and flips it back to running. **A human's pause is never
+  undone automatically.**
+- The event bus grows a `task` ping (distilled from `TaskUpdated`); the dashboard's
+  task card shows status, rounds and the suspend reason, with pause / continue /
+  cancel switches — the only place those exist.
+- Smoke extended: create → visible on the first screen → second refused → pause →
+  resume → cancel, the whole chain over real HTTP.
+
 ## 0.10.0 — Crashed? Continue. (the workspace version)
 
 ### Turn-level checkpoints: the long-task engine's foundation

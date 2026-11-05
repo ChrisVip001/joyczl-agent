@@ -426,6 +426,23 @@ about the attachment is checked before the turn starts: containment inside
   inside its process mark the checkpoint `abandoned`, **not** auto-resumed; after
   a process ends, `open` can only mean a crash.
   → `joy-rs/joyczl-app-server/src/turn.rs` (`finalize_turn`)
+* **Boundary** — A task **never speaks its own first line**: `task/create` makes a goal
+  and a ledger row; progress still comes from the human's next message (or an existing
+  turn). Self-starting tasks would mean the model assigning itself work — out of scope.
+  → `joy-rs/joyczl-app-server/src/task.rs` (`create`)
+* **Deliberate** — One active task per session. A second `task/create` is refused with
+  the existing one named; there is no task queue and no parallel scheduler — turns in
+  one session are serial by nature.
+  → `joy-rs/joyczl-state/migrations/0014_agent_tasks.sql` (partial unique index)
+* **Boundary** — Background jobs are **not** attached to the task ledger: a job is a
+  fact at the tool layer, a task is intent; a task's turn may start jobs, but neither
+  keeps books on the other. A "jobs of this task" list would have to invent that link.
+  → `joy-rs/joyczl-state/src/jobs.rs`, `joy-rs/joyczl-app-server/src/task.rs`
+* **Boundary** — On restart a `running` task is marked `suspended` first; a turn with an
+  `open` checkpoint then resumes and flips it back to `running` — **crash recovery is
+  automatic, a human's pause is not**: a paused checkpoint says `suspended`, and only
+  `task/resume` moves it. The difference between the two lives in that status word.
+  → `joy-rs/joyczl-app-server/src/resume.rs`, `joy-rs/joyczl-app-server/src/turn.rs`
 
 ## Gateways
 

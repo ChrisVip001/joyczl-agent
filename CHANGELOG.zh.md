@@ -2,6 +2,28 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 0.11.0 — 任务是有身份的（工作区版本）
+
+### 长任务实体：目标循环降为执行器
+
+- 目标此前只是进程内存里的一个字符串：重启即丢，也就无从谈起「暂停」。现在它是
+  `agent_tasks` 表里的一行（migration 0014）：有 id、有名字、有状态、有轮次账。
+  `goal/set` 成为兼容层——设目标即建任务，清目标即把任务降级为单回合；`/goal`
+  和任务卡从此指向同一张表。
+- **一会话一活跃任务**：部分唯一索引兜底，第二个 `task/create` 被拒并点名已有的
+  那个——让人看见自己已经开始了什么，而不是堆一排幽灵。
+- 状态机：pending / running / suspended / done / failed / cancelled。judge 判定
+  达成 → done；做不到 / 轮次上限 → failed（诚实记为没做成，不伪造完成）；
+  判断器故障 → suspended（停在原地，由人决定）。
+- **暂停不是停止**：`task/suspend` 中断回合，但 checkpoint 标 `suspended` 而不是
+  `abandoned`；`task/resume` 从断点续跑，已完成的工具绝不重跑。`task/cancel`
+  才是停止——checkpoint 标 abandoned，永不自动续跑。
+- 重启对账：`running` 的任务标 `suspended`（理由写明），回合若有 `open`
+  checkpoint 则续跑并把它翻回 running。**人类按的暂停不会被自动恢复**。
+- 事件总线多一类 `task` ping（`TaskUpdated` 通知蒸馏）；dashboard 任务卡显示
+  状态、轮次、挂起理由，并带暂停 / 继续 / 取消三个开关——这是它们唯一存在的地方。
+- 冒烟扩展：建任务 → 首屏可见 → 拒第二个 → 暂停 → 继续 → 取消，全链路真 HTTP。
+
 ## 0.10.0 — 崩了，接着来（工作区版本）
 
 ### 回合级 checkpoint：长任务引擎的地基

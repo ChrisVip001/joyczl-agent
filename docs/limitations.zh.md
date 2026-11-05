@@ -337,6 +337,20 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **边界** —— 用户打断（`turn/interrupt`）与回合内报错把 checkpoint 标
   `abandoned`，**不**自动续跑；`open` 在进程结束之后只可能意味着崩溃。
   → `joy-rs/joyczl-app-server/src/turn.rs`（`finalize_turn`）
+* **边界** —— 任务**不会自己说第一句话**：`task/create` 建的是目标 + 台账，推进仍由
+  人的下一句话（或已有的回合）驱动。让任务自启动等于让模型给自己派活，不在这个
+  方案里。
+  → `joy-rs/joyczl-app-server/src/task.rs`（`create`）
+* **刻意** —— 一会话一活跃任务。第二个 `task/create` 被拒并点名已有的那个；没有
+  任务队列、没有并行调度器——同一会话的回合本来就串行。
+  → `joy-rs/joyczl-state/migrations/0014_agent_tasks.sql`（部分唯一索引）
+* **边界** —— 后台作业（jobs）**不**挂任务台账：作业是工具层的事实，任务是意图；
+  任务的一轮里可以起作业，但两者不互相记账。要"任务的作业清单"得先发明这层关系。
+  → `joy-rs/joyczl-state/src/jobs.rs`、`joy-rs/joyczl-app-server/src/task.rs`
+* **边界** —— 重启时 `running` 的任务先标 `suspended`，回合若有 `open` checkpoint
+  会自动续跑并把它翻回 `running`——**崩溃恢复是自动的，人类按的暂停不是**：暂停的
+  checkpoint 标 `suspended`，只有 `task/resume` 会让它动。两者的区别只在状态字上。
+  → `joy-rs/joyczl-app-server/src/resume.rs`、`joy-rs/joyczl-app-server/src/turn.rs`
 
 ## 网关
 
