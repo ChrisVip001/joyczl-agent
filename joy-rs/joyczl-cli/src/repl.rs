@@ -519,11 +519,25 @@ async fn chat_turn(
                 }
                 break;
             }
+            // Resumed / suspended are rare and meaningful — one honest line each. A boundary
+            // checkpoint (every tool round) is too chatty for the terminal; the trace has it.
+            ServerNotification::TurnResumed(resumed) => {
+                end_streamed_line(&mut streamed);
+                println!(
+                    "…从上次中断处继续（已完成 {} 轮，不重跑已完成的工具）",
+                    resumed.from_iterations
+                );
+            }
+            ServerNotification::TurnSuspended(suspended) => {
+                end_streamed_line(&mut streamed);
+                println!("…这个回合已暂停（{}），不会自动续跑", suspended.reason);
+            }
             // Graph node events are too chatty for the terminal; with triage on, meta shows the route.
             ServerNotification::GraphStarted(_)
             | ServerNotification::GraphNodeStarted(_)
             | ServerNotification::GraphNodeEnded(_)
             | ServerNotification::GraphEnded(_)
+            | ServerNotification::TurnCheckpointed(_)
             | ServerNotification::Error(_) => {}
         }
     }

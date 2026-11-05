@@ -47,6 +47,15 @@ pub async fn run_stdio(server: Server) -> Result<()> {
         }
     });
 
+    // Startup reconciliation: open checkpoints (a crashed process's mid-turn leftovers) resume
+    // as their own tasks, notifications flowing out the same stdout — whoever connects (hub,
+    // dashboard) sees "resumed" like any other turn event.
+    {
+        let server = server.clone();
+        let sink = EventSink::new(tx.clone());
+        tokio::spawn(async move { crate::resume::reconcile(&server, &sink).await });
+    }
+
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();

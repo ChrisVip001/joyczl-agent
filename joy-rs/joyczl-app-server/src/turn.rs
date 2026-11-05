@@ -31,8 +31,9 @@ use joyczl_protocol::{
     GraphNodeEndedNotification, GraphNodeStartedNotification, GraphRouteKind,
     GraphStartedNotification, JsonRpcMessage, JsonRpcResponse, RequestId, RetryNotification,
     ServerNotification, TextDeltaNotification, TokenUsage, ToolCallRecord,
-    ToolCompletedNotification, ToolStartedNotification, ToolStatus, TurnCompletedNotification,
-    TurnMeta, TurnStartParams, TurnStartResponse, TurnStartedNotification, JSONRPC_VERSION,
+    ToolCompletedNotification, ToolStartedNotification, ToolStatus, TurnCheckpointedNotification,
+    TurnCompletedNotification, TurnMeta, TurnStartParams, TurnStartResponse,
+    TurnStartedNotification, TurnSuspendedNotification, JSONRPC_VERSION,
 };
 use joyczl_provider::{ContentBlock, CreateRequest, Message, Resolved, Role, TextSink, Usage};
 
@@ -168,7 +169,6 @@ pub async fn run_turn(
     sink: &EventSink,
 ) -> Result<(), ErrorObject> {
     let started = std::time::Instant::now();
-    let settings = server.settings();
 
     // Model not configured: spell out "what to do" instead of just dropping a "no key".
     let resolved: Resolved = server.resolved().ok_or_else(|| ErrorObject {
@@ -202,6 +202,47 @@ pub async fn run_turn(
     let _guard = TurnGuard {
         server,
         turn_id: turn_id.clone(),
+    };
+
+    // ---- The checkpoint outlet: every tool-results boundary lands in state.db **before** the
+    // next model call goes out. A crash then costs at most "finish this iteration again", never
+    // the whole turn. A save failure warns and moves on — checkpointing must not stall the turn.
+    let checkpoint: joyczl_loop::CheckpointSink = {
+        let checkpoints = server.checkpoints.clone();
+        let session = session_id.clone();
+        let user_message = params.message.clone();
+        let sink = sink.clone();
+        let turn_id_cp = turn_id.clone();
+        Arc::new(move |cp: joyczl_loop::Checkpoint| {
+            let (checkpoints, session, user_message) =
+                (checkpoints.clone(), session.clone(), user_message.clone());
+            let (sink, turn_id) = (sink.clone(), turn_id_cp.clone());
+            Box::pin(async move {
+                let messages_json = serde_json::to_string(&cp.messages).unwrap_or_default();
+                let usage_json = serde_json::to_string(&cp.usage).unwrap_or_default();
+                if let Err(e) = checkpoints
+                    .save(
+                        &turn_id,
+                        &session,
+                        &user_message,
+                        &messages_json,
+                        cp.iterations,
+                        &usage_json,
+                    )
+                    .await
+                {
+                    eprintln!("(joy) checkpoint 没写进去（照常跑，崩了得整轮重来）：{e}");
+                    return;
+                }
+                sink.notification(ServerNotification::TurnCheckpointed(
+                    TurnCheckpointedNotification {
+                        turn_id,
+                        session_id: session,
+                        iterations: cp.iterations,
+                    },
+                ));
+            })
+        })
     };
 
     // Working directory for this turn: validate when provided (fail-closed). Reject before the
@@ -297,6 +338,8 @@ pub async fn run_turn(
                     interrupt: Some(interrupt.clone()),
                     turn_cwd: turn_cwd.clone(),
                     route_reason: turn_route.clone(),
+                    resume: None,
+                    checkpoint: Some(checkpoint.clone()),
                 },
             )
             .await?
@@ -316,6 +359,8 @@ pub async fn run_turn(
                             interrupt: Some(interrupt.clone()),
                             turn_cwd: turn_cwd.clone(),
                             route_reason: turn_route.clone(),
+                            resume: None,
+                            checkpoint: Some(checkpoint.clone()),
                         },
                         None,
                     )
@@ -381,6 +426,8 @@ pub async fn run_turn(
                 interrupt: Some(interrupt.clone()),
                 turn_cwd: turn_cwd.clone(),
                 route_reason: turn_route.clone(),
+                resume: None,
+                checkpoint: Some(checkpoint.clone()),
             },
             None,
         )
@@ -490,6 +537,8 @@ pub async fn run_turn(
                     interrupt: Some(interrupt.clone()),
                     turn_cwd: turn_cwd.clone(),
                     route_reason: turn_route.clone(),
+                    resume: None,
+                    checkpoint: Some(checkpoint.clone()),
                 },
                 None,
             )
@@ -498,6 +547,98 @@ pub async fn run_turn(
     }
 
     let FullTurn { result, gate } = full;
+
+    finalize_turn(
+        server,
+        sink,
+        FinishedTurn {
+            session_id,
+            turn_id: turn_id.clone(),
+            user_message: &params.message,
+            resolved: &resolved,
+            graph,
+            gate,
+            result,
+            route_reason: turn_route.clone(),
+            retries: retries.load(Ordering::Relaxed),
+            goal_status,
+            goal_rounds,
+            started,
+        },
+    )
+    .await?;
+
+    // Only after every notification is out does the response get its turn.
+    sink.response(JsonRpcMessage::Response(JsonRpcResponse {
+        jsonrpc: JSONRPC_VERSION.to_string(),
+        id,
+        result: serde_json::to_value(TurnStartResponse { turn_id }).expect("序列化"),
+    }));
+    Ok(())
+}
+
+/// Everything one finished turn leaves behind — shared by the fresh path and the resumed one,
+/// so "a resumed turn gets exactly the same accounting" holds by construction, not by copy-paste.
+pub(crate) struct FinishedTurn<'a> {
+    pub(crate) session_id: String,
+    pub(crate) turn_id: String,
+    pub(crate) user_message: &'a str,
+    pub(crate) resolved: &'a Resolved,
+    pub(crate) graph: Option<GraphInfo>,
+    pub(crate) gate: Option<GateDecision>,
+    pub(crate) result: LoopResult,
+    pub(crate) route_reason: Option<String>,
+    pub(crate) retries: i32,
+    pub(crate) goal_status: Option<String>,
+    pub(crate) goal_rounds: i32,
+    pub(crate) started: std::time::Instant,
+}
+
+/// The shared tail of every turn: notifications, the checkpoint ledger's closing entry, the
+/// trace, the usage ledger, the write section (history append → consolidation → MEMORY.md) and
+/// the `TurnCompleted` announcement. The reply goes to the response by `run_turn` itself — only
+/// it knows the order, and a resumed turn has no response to send at all.
+pub(crate) async fn finalize_turn(
+    server: &Server,
+    sink: &EventSink,
+    t: FinishedTurn<'_>,
+) -> Result<(), ErrorObject> {
+    let FinishedTurn {
+        session_id,
+        turn_id,
+        user_message,
+        resolved,
+        graph,
+        gate,
+        result,
+        route_reason,
+        retries,
+        goal_status,
+        goal_rounds,
+        started,
+    } = t;
+    let settings = server.settings();
+
+    // ---- Checkpoint bookkeeping: the turn reached an end **in this process**. From here on,
+    // `open` can only mean "the process died mid-turn" — the invariant the startup reconcile
+    // relies on. An interrupted turn is the human's explicit stop: abandoned, never auto-resumed.
+    let (final_status, suspended_reason) = if result.interrupted {
+        ("abandoned", Some("interrupted by user"))
+    } else {
+        ("done", None)
+    };
+    if let Err(e) = server.checkpoints.finish(&turn_id, final_status).await {
+        eprintln!("(joy) checkpoint 收尾状态没记上（不影响回合本身）：{e}");
+    }
+    if let Some(reason) = suspended_reason {
+        sink.notification(ServerNotification::TurnSuspended(
+            TurnSuspendedNotification {
+                turn_id: turn_id.clone(),
+                session_id: session_id.clone(),
+                reason: reason.to_string(),
+            },
+        ));
+    }
 
     for call in &result.tool_calls {
         sink.notification(ServerNotification::ToolCompleted(
@@ -554,10 +695,10 @@ pub async fn run_turn(
         interrupted: result.interrupted,
         guard_hits: result.guard.hits,
         guard_note: result.guard.note.clone(),
-        retries: retries.load(Ordering::Relaxed),
+        retries,
         goal_status: goal_status.clone(),
         goal_rounds,
-        route_reason: turn_route.clone(),
+        route_reason: route_reason.clone(),
     };
 
     let meta_json = serde_json::to_string(&meta).ok();
@@ -570,7 +711,7 @@ pub async fn run_turn(
             "ts": Local::now().to_rfc3339(),
             "turnId": turn_id,
             "sessionId": session_id,
-            "userMessage": params.message,
+            "userMessage": user_message,
             "reply": reply,
             "meta": meta,
         }),
@@ -616,7 +757,7 @@ pub async fn run_turn(
     server
         .chat
         .append_exchange(
-            &params.message,
+            user_message,
             &reply,
             &session_id,
             "app-server",
@@ -676,7 +817,7 @@ pub async fn run_turn(
 
     sink.notification(ServerNotification::TurnCompleted(Box::new(
         TurnCompletedNotification {
-            turn_id: turn_id.clone(),
+            turn_id,
             reply: result.reply.clone(),
             iterations: result.iterations,
             usage: Some(TokenUsage {
@@ -686,13 +827,6 @@ pub async fn run_turn(
             meta,
         },
     )));
-
-    // Only after every notification is out does the response get its turn.
-    sink.response(JsonRpcMessage::Response(JsonRpcResponse {
-        jsonrpc: JSONRPC_VERSION.to_string(),
-        id,
-        result: serde_json::to_value(TurnStartResponse { turn_id }).expect("序列化"),
-    }));
     Ok(())
 }
 
@@ -700,16 +834,16 @@ pub async fn run_turn(
 ///
 /// The gate is a detail **inside the full path**: the quick-answer path does not even consult memory —
 /// that is exactly why it is cheap, and why it has no gate.
-struct FullTurn {
-    result: LoopResult,
-    gate: Option<GateDecision>,
+pub(crate) struct FullTurn {
+    pub(crate) result: LoopResult,
+    pub(crate) gate: Option<GateDecision>,
 }
 
 /// Deregistration guard for a turn: however this turn exits (success, error, interrupted),
 /// the cancellation token is removed from the table — a finished turn has nothing left to interrupt.
-struct TurnGuard<'a> {
-    server: &'a Server,
-    turn_id: String,
+pub(crate) struct TurnGuard<'a> {
+    pub(crate) server: &'a Server,
+    pub(crate) turn_id: String,
 }
 
 impl Drop for TurnGuard<'_> {
@@ -774,14 +908,18 @@ fn is_context_overflow(error: &anyhow::Error) -> bool {
 /// Positioning info for one turn: session, turn, event outlet, cancellation token, working directory.
 /// The same reason as Injections for bundling into a struct: they **always change together**,
 /// and clippy stops at the 8th parameter.
-struct TurnFrame<'a> {
-    session_id: &'a str,
-    turn_id: &'a str,
-    sink: &'a EventSink,
-    interrupt: Option<Arc<joyczl_loop::Interrupt>>,
-    turn_cwd: Option<std::path::PathBuf>,
+pub(crate) struct TurnFrame<'a> {
+    pub(crate) session_id: &'a str,
+    pub(crate) turn_id: &'a str,
+    pub(crate) sink: &'a EventSink,
+    pub(crate) interrupt: Option<Arc<joyczl_loop::Interrupt>>,
+    pub(crate) turn_cwd: Option<std::path::PathBuf>,
     /// This turn's route decision reason (route.rs); None = no selection happened.
-    route_reason: Option<String>,
+    pub(crate) route_reason: Option<String>,
+    /// Resume from a checkpoint instead of assembling history (crash recovery).
+    pub(crate) resume: Option<joyczl_loop::Resume>,
+    /// The checkpoint outlet: every tool-results boundary lands here (None = no checkpointing).
+    pub(crate) checkpoint: Option<joyczl_loop::CheckpointSink>,
 }
 
 /// Admission check for this turn's working directory (fail-closed): when given, it must be an existing
@@ -811,7 +949,7 @@ pub(crate) fn resolve_turn_cwd(
     Ok(Some(path))
 }
 
-async fn full_turn(
+pub(crate) async fn full_turn(
     server: &Server,
     resolved: &Resolved,
     message: &str,
@@ -826,59 +964,74 @@ async fn full_turn(
         interrupt,
         turn_cwd,
         // route_reason is not used here: TurnMeta is assembled by run_turn (which holds turn_route).
+        resume,
+        checkpoint,
         ..
     } = frame;
     let settings = server.settings();
 
     // ---- Retrieval gate: does this turn consult memory?
-    let decision = joyczl_memory::gate::should_retrieve(
-        resolved.client.as_ref(),
-        &resolved.small_model,
-        message,
-    )
-    .await;
-
-    let gate_decision = GateDecision {
-        decision: if decision.retrieve {
-            GateDecisionKind::Retrieve
-        } else {
-            GateDecisionKind::Skip
-        },
-        reason: decision.reason.clone(),
-        query: decision.retrieve.then(|| decision.query.clone()),
-    };
-    sink.notification(ServerNotification::GateDecided(GateDecidedNotification {
-        turn_id: turn_id.to_string(),
-        decision: gate_decision.clone(),
-    }));
-
-    // The hybrid-retrieval leg: the embedder is assembled only when the switch is on. Assembly failure
-    // (no model configured, provider lacks a default endpoint) warns once and retrieval falls back to
-    // pure keywords — one misconfigured knob must not keep the whole conversation from starting.
-    let embedder = if settings.embeddings_enabled {
-        match joyczl_provider::embed::Embedder::from_settings(&settings) {
-            Ok(embedder) => Some(embedder),
-            Err(why) => {
-                eprintln!("(joy) 向量检索没配好，这次只用关键词：{why}");
-                None
-            }
+    //
+    // A resumed turn skips the gate: the memory context that mattered is already baked into the
+    // checkpointed working memory — re-gating would spend a small-model call to re-decide a past.
+    let (gate_decision, memory_context) = match &resume {
+        Some(_) => (
+            GateDecision {
+                decision: GateDecisionKind::Skip,
+                reason: "resumed from checkpoint —— 续跑不再过门".to_string(),
+                query: None,
+            },
+            String::new(),
+        ),
+        None => {
+            let decision = joyczl_memory::gate::should_retrieve(
+                resolved.client.as_ref(),
+                &resolved.small_model,
+                message,
+            )
+            .await;
+            let gate_decision = GateDecision {
+                decision: if decision.retrieve {
+                    GateDecisionKind::Retrieve
+                } else {
+                    GateDecisionKind::Skip
+                },
+                reason: decision.reason.clone(),
+                query: decision.retrieve.then(|| decision.query.clone()),
+            };
+            sink.notification(ServerNotification::GateDecided(GateDecidedNotification {
+                turn_id: turn_id.to_string(),
+                decision: gate_decision.clone(),
+            }));
+            let memory_context = if decision.retrieve {
+                // The hybrid-retrieval leg: the embedder is assembled only when the switch is on. Assembly failure
+                // (no model configured, provider lacks a default endpoint) warns once and retrieval falls back to
+                // pure keywords — one misconfigured knob must not keep the whole conversation from starting.
+                let embedder = if settings.embeddings_enabled {
+                    match joyczl_provider::embed::Embedder::from_settings(&settings) {
+                        Ok(embedder) => Some(embedder),
+                        Err(why) => {
+                            eprintln!("(joy) 向量检索没配好，这次只用关键词：{why}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                joyczl_memory::retrieve_context(
+                    &server.facts,
+                    &server.episodes,
+                    &decision.query,
+                    settings.retrieval_top_k.max(1) as u32,
+                    embedder.as_ref(),
+                )
+                .await
+                .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            (gate_decision, memory_context)
         }
-    } else {
-        None
-    };
-
-    let memory_context = if decision.retrieve {
-        joyczl_memory::retrieve_context(
-            &server.facts,
-            &server.episodes,
-            &decision.query,
-            settings.retrieval_top_k.max(1) as u32,
-            embedder.as_ref(),
-        )
-        .await
-        .unwrap_or_default()
-    } else {
-        String::new()
     };
 
     // ---- Procedural memory: SKILL.md progressive disclosure. Frontmatter is always scanned (cheap),
@@ -919,18 +1072,25 @@ async fn full_turn(
     // section. The lock is held only while reading history/compacting — THE LOOP and interrupt
     // never wait on it.
     let session_write_lock = server.session_write_lock(session_id);
-    let (mut history, mut summary) = {
-        let _compact_guard = session_write_lock.lock().await;
-        load_history(
-            &server.chat,
-            resolved,
-            session_id,
-            settings.history_turns,
-            history_budget,
-            None,
-            &server.hooks,
-        )
-        .await
+    // A resumed turn skips history assembly: its working memory IS the checkpoint — history,
+    // user message and finished tool rounds are all already inside it. Compaction (a model
+    // call) must not run just to produce a summary that gets discarded.
+    let (mut history, mut summary) = if resume.is_some() {
+        (Vec::new(), None)
+    } else {
+        {
+            let _compact_guard = session_write_lock.lock().await;
+            load_history(
+                &server.chat,
+                resolved,
+                session_id,
+                settings.history_turns,
+                history_budget,
+                None,
+                &server.hooks,
+            )
+            .await
+        }
     };
     let mut system = build_system(
         &soul,
@@ -994,6 +1154,8 @@ async fn full_turn(
             client: resolved.client.as_ref(),
             model: &resolved.model,
             system: system.clone(),
+            // Fresh start (history + user message) or resume (the checkpointed working memory
+            // as-is, `user_message` ignored): both end up as the same `joyczl_loop::Turn`.
             history: history.clone(),
             user_message: prompt_message.clone(),
             user_images: user_images.clone(),
@@ -1005,6 +1167,8 @@ async fn full_turn(
             observer: observer.clone(),
             on_text: Some(on_text.clone()),
             interrupt: interrupt.clone(),
+            checkpoint: checkpoint.clone(),
+            resume: resume.clone(),
         })
         .await;
 
@@ -1075,6 +1239,10 @@ async fn graph_route(
         interrupt,
         turn_cwd,
         route_reason,
+        // Resumed turns bypass the graph entirely (full_turn directly), so the frame's
+        // resume slot never reaches here.
+        resume: _,
+        checkpoint,
     } = frame;
     if !server.settings().graph_workflows {
         return Ok(None);
@@ -1130,11 +1298,15 @@ async fn graph_route(
         let (turn_id, session_id) = (turn_id.to_string(), session_id.to_string());
         let turn_cwd = turn_cwd.clone();
         let route_reason = route_reason.clone();
+        // The graph's inner loop checkpoints too: its tool rounds are this turn's progress
+        // just the same (checkpoint is None only for quick answers, which run no loop).
+        let checkpoint = checkpoint.clone();
         let slot = slot.clone();
         Arc::new(move |ctx: NodeCtx| {
             // FullFn is an Fn (the engine may call it multiple times): only clone here; never move the captured values.
             let turn_cwd = turn_cwd.clone();
             let route_reason = route_reason.clone();
+            let checkpoint = checkpoint.clone();
             let (server, resolved, sink) = (server.clone(), resolved.clone(), sink.clone());
             let (turn_id, session_id, slot) = (turn_id.clone(), session_id.clone(), slot.clone());
             let interrupt = interrupt.clone();
@@ -1157,6 +1329,8 @@ async fn graph_route(
                         interrupt,
                         turn_cwd,
                         route_reason,
+                        resume: None,
+                        checkpoint,
                     },
                     inner,
                 )

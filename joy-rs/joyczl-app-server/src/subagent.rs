@@ -81,6 +81,8 @@ async fn run_child(
         observer: None,
         on_text: None,
         interrupt: None,
+        checkpoint: None,
+        resume: None,
     })
     .await
 }

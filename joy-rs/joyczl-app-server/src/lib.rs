@@ -22,6 +22,7 @@ mod jobs;
 /// Guardian lock: only one app-server per home (`joyczl_app_server::lock`).
 pub mod lock;
 pub mod models;
+mod resume;
 mod route;
 mod stdio;
 mod subagent;
@@ -30,6 +31,10 @@ mod turn;
 
 #[cfg(test)]
 mod turn_tests;
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod resume_tests;
 
 #[cfg(test)]
 #[path = "approval_tests.rs"]
@@ -132,6 +137,9 @@ pub struct Server {
     pub(crate) chat: Chat,
     /// Usage ledger (migration 0010): bookkeeping only, never enforced.
     pub(crate) usage: joyczl_state::Usage,
+    /// Turn checkpoints (migration 0013): a running turn's working memory, durable at each
+    /// tool-results boundary — the fresh process resumes instead of replaying finished tools.
+    pub(crate) checkpoints: joyczl_state::Checkpoints,
     /// Notifier (M3a): a side path; None when unconfigured.
     pub(crate) notifier: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
     /// Approval audit ledger (M3b): who asked, and how it turned out.
@@ -276,6 +284,7 @@ impl Server {
         let episodes = Episodes::new(pool.clone());
         let chat = Chat::new(pool.clone());
         let usage = joyczl_state::Usage::new(pool.clone());
+        let checkpoints = joyczl_state::Checkpoints::new(pool.clone());
         let calendar = Calendar::new(pool.clone());
 
         // Subagent: **off by default**, registered only when enabled. The runner gets "a copy of this
@@ -311,6 +320,7 @@ impl Server {
             episodes,
             chat,
             usage,
+            checkpoints,
             notifier,
             approval_log,
             calendar,
