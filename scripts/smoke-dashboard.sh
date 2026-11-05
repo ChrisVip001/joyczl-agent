@@ -143,6 +143,43 @@ grep -q '"nextCursor":null'  "$WORK/session.json" || fail "只有两条，不该
 echo "  历史：$(head -c 220 "$WORK/session.json")"
 echo "  ✓ 说过的话读得回来（最新在前 + 已经到底）"
 
+# ---- Long task: create → appears on screen → pause → resume → cancel ----------------
+# One door (`/api/task`) with an action field; the rules (one active task per session)
+# live in app-server, so the assertions check the state machine end to end.
+curl -sS -X POST "$BASE/api/task" \
+  -H 'content-type: application/json' \
+  -d '{"action":"create","sessionId":"default","title":"盯三天服务器","goalCondition":"三天都盯着"}' \
+  >"$WORK/task1.json" || fail "建任务没通"
+grep -q '"status":"pending"' "$WORK/task1.json" || fail "新任务该是 pending：$(cat "$WORK/task1.json")"
+TASK_ID="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$WORK/task1.json" | head -n1)"
+[[ -n "$TASK_ID" ]] || fail "应答里没有任务 id"
+
+curl -sS "$BASE/api/data?sessionId=default" >"$WORK/data3.json"
+grep -q '"title":"盯三天服务器"' "$WORK/data3.json" || fail "任务没进首屏数据（任务卡会空）"
+grep -q '"goalCondition":"三天都盯着"' "$WORK/data3.json" || fail "目标没进任务行"
+
+# A second active task must be refused with the first one named — not a stack of ghosts.
+curl -sS -X POST "$BASE/api/task" \
+  -H 'content-type: application/json' \
+  -d '{"action":"create","sessionId":"default","title":"另一件事"}' >"$WORK/task2.json"
+grep -q '盯三天服务器' "$WORK/task2.json" || fail "第二个任务该被拒，并说清是哪个占着"
+
+curl -sS -X POST "$BASE/api/task" -H 'content-type: application/json' \
+  -d "{\"action\":\"suspend\",\"taskId\":\"$TASK_ID\"}" >"$WORK/suspend.json"
+grep -q '"status":"suspended"' "$WORK/suspend.json" || fail "暂停没生效"
+
+curl -sS -X POST "$BASE/api/task" -H 'content-type: application/json' \
+  -d "{\"action\":\"resume\",\"taskId\":\"$TASK_ID\"}" >"$WORK/resume.json"
+grep -q '"status":"running"' "$WORK/resume.json" || fail "继续没生效"
+
+curl -sS -X POST "$BASE/api/task" -H 'content-type: application/json' \
+  -d "{\"action\":\"cancel\",\"taskId\":\"$TASK_ID\"}" >"$WORK/cancel.json"
+grep -q '"status":"cancelled"' "$WORK/cancel.json" || fail "取消失败"
+
+curl -sS "$BASE/api/tasks" >"$WORK/tasks.json"
+grep -q '"tasks":\[' "$WORK/tasks.json" || fail "任务列表没有 tasks 数组"
+echo "  ✓ 任务：建 → 首屏可见 → 拒第二个 → 暂停 → 继续 → 取消"
+
 # Sessions are hard boundaries: paging an untouched session must yield an empty page, never default's.
 curl -sS "$BASE/api/session?sessionId=nobody" | grep -q '"data":\[\]' \
   || fail "空会话不该看见别人的话"

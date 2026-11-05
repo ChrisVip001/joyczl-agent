@@ -5,7 +5,7 @@
 // viewed" and "whether a turn is streaming"; a refresh returns to defaults. In other words, if the
 // browser crashes or the tab closes, nothing is lost — that's the most valuable part of this layering.
 
-import type { TurnAttachment, TurnCompletedNotification } from "./protocol";
+import type { AgentTaskView, TurnAttachment, TurnCompletedNotification } from "./protocol";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
@@ -15,6 +15,7 @@ import {
   fetchMessages,
   fetchModelProfiles,
   fetchSchedules,
+  taskAction,
   fetchUsage,
   interruptTurn,
   removeModel,
@@ -554,10 +555,39 @@ async function boot(): Promise<void> {
 }
 
 /** Paint one screen of data. */
+/** Pause / continue / cancel the current task — human switches, they exist nowhere else. */
+async function switchTask(
+  task: AgentTaskView,
+  action: "suspend" | "resume" | "cancel",
+): Promise<void> {
+  if (
+    action === "cancel" &&
+    !window.confirm(`取消任务「${task.title}」？取消后不会自动续跑。`)
+  ) {
+    return;
+  }
+  try {
+    await taskAction({ action, taskId: task.id });
+  } catch (error) {
+    // A dead button is worse than a visible error: say what happened, right on the panel.
+    dom.overview.prepend(failureOf(error));
+    return;
+  }
+  await refresh();
+  await refreshPanels();
+}
+
 async function refresh(): Promise<void> {
   try {
     const data = await fetchDashboard(current);
-    dom.overview.replaceChildren(renderOverview(data, current, (id) => void open(id)));
+    dom.overview.replaceChildren(
+      renderOverview(
+        data,
+        current,
+        (id) => void open(id),
+        (task, action) => void switchTask(task, action),
+      ),
+    );
     dom.memory.replaceChildren(renderMemory(data));
     dom.sessions.replaceChildren(sessionList(data, current, (id) => void open(id)));
     dom.home.textContent = data.config.home;

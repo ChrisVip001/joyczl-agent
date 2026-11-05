@@ -1222,6 +1222,67 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
+/* 任务状态：只上颜色，不加装饰 —— 状态是事实，不是警报。 */
+.task-state.st-running {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.task-state.st-suspended {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.task-state.st-done {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+
+.task-state.st-failed {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 35%, transparent);
+}
+
+/* 挂起理由：安静一行次要文字，不抢任务标题的位置。 */
+.task-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 人手上的开关：安静的描边按钮，悬停才亮。 */
+.task-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.task-act {
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.task-act:hover {
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+.task-act-go:hover {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+.task-act-stop:hover {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+}
+
 .task-todos {
   margin: 0;
   padding: 0;

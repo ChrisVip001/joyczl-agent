@@ -4,6 +4,7 @@
 // not "what it looks like" — when the page gets ugly, look at this one file.
 
 import type {
+  AgentTaskView,
   ApprovalLogEntry,
   DashboardData,
   Episode,
@@ -21,7 +22,7 @@ import type {
   UsageByModel,
 } from "./protocol";
 
-type Attrs = Record<string, string | number | boolean | undefined>;
+type Attrs = Record<string, string | number | boolean | undefined | (() => void)>;
 
 /**
  * Build an element.
@@ -39,7 +40,10 @@ export function el<K extends keyof HTMLElementTagNameMap>(
     if (value === undefined || value === false) continue;
     if (key === "class") node.className = String(value);
     else if (key === "text") node.textContent = String(value);
-    else node.setAttribute(key, String(value));
+    // `on<event>` takes a function: listeners are added, not stringified into attributes.
+    else if (key.startsWith("on") && typeof value === "function") {
+      node.addEventListener(key.slice(2), value as EventListener);
+    } else node.setAttribute(key, String(value));
   }
   for (const child of children) node.append(child);
   return node;
@@ -50,18 +54,21 @@ export function renderOverview(
   data: DashboardData,
   session: string,
   onPick: (id: string) => void,
+  onTask: (task: AgentTaskView, action: "suspend" | "resume" | "cancel") => void,
 ): DocumentFragment {
   const { config } = data;
   const fragment = document.createDocumentFragment();
 
   // The task card leads the overview when there is anything on it: what the loop is
   // chasing, what the model ticked off — the two answers to "what is it doing now".
-  if (data.goal !== undefined || data.todos !== undefined) {
+  if (data.goal !== undefined || data.todos !== undefined || data.task !== undefined) {
     const emptyTodos: TodoListView = { revision: 0n, items: [] };
     fragment.append(
       renderTaskCard(
         data.goal ?? { active: false, condition: null, roundsUsed: 0, maxRounds: 0 },
         data.todos ?? emptyTodos,
+        data.task,
+        onTask,
       ),
     );
   }
@@ -128,21 +135,94 @@ export function renderOverview(
  * sees them. Both come from `DashboardData` (goal/todos, filled only when the page
  * names a session) — this is where "what is the agent actually working on" lives.
  */
-export function renderTaskCard(goal: GoalSetResponse, todos: TodoListView): DocumentFragment {
+export function renderTaskCard(
+  goal: GoalSetResponse,
+  todos: TodoListView,
+  task: AgentTaskView | undefined,
+  onTask: (task: AgentTaskView, action: "suspend" | "resume" | "cancel") => void,
+): DocumentFragment {
   const fragment = document.createDocumentFragment();
   const block = el("div", { class: "block taskcard" });
 
-  if (goal.active && goal.condition !== null) {
+  // The task leads: a goal that survives restarts is a noun with a status, not a condition.
+  // Pause/continue are **human switches** — the card is the only place they exist.
+  const statusText: Record<string, string> = {
+    pending: "等待开始",
+    running: "进行中",
+    suspended: "已暂停",
+    done: "已完成",
+    failed: "未达成",
+    cancelled: "已取消",
+  };
+  if (task !== undefined) {
+    const live = task.status === "running" || task.status === "pending";
+    block.append(
+      el("h3", { text: "任务" }),
+      el(
+        "div",
+        { class: "task-goal" },
+        el("span", { class: "task-goal-text", text: task.title }),
+        el("span", {
+          class: `tag task-state st-${task.status}`,
+          text: `${statusText[task.status] ?? task.status}${
+            task.goalCondition !== null ? ` · 第 ${task.roundsUsed}/${task.maxRounds} 轮` : ""
+          }`,
+        }),
+      ),
+      task.suspendReason !== null
+        ? el("div", { class: "task-note", text: task.suspendReason })
+        : document.createDocumentFragment(),
+      el(
+        "div",
+        { class: "task-actions" },
+        ...(live
+          ? [
+              el("button", {
+                class: "task-act",
+                type: "button",
+                text: "暂停",
+                onclick: () => onTask(task, "suspend"),
+              }),
+            ]
+          : []),
+        ...(task.status === "suspended"
+          ? [
+              el("button", {
+                class: "task-act task-act-go",
+                type: "button",
+                text: "继续",
+                onclick: () => onTask(task, "resume"),
+              }),
+            ]
+          : []),
+        ...(live || task.status === "suspended"
+          ? [
+              el("button", {
+                class: "task-act task-act-stop",
+                type: "button",
+                text: "取消",
+                onclick: () => onTask(task, "cancel"),
+              }),
+            ]
+          : []),
+      ),
+    );
+  }
+
+  // A goal set on an existing task has its own text; when it is just the title repeated,
+  // the task block above already says it.
+  const duplicated = task !== undefined && task.goalCondition === task.title;
+  if (goal.active && goal.condition !== null && !duplicated) {
     block.append(
       el("h3", { text: "目标" }),
       el(
         "div",
         { class: "task-goal" },
         el("span", { class: "task-goal-text", text: goal.condition }),
-        el(
-          "span",
-          { class: "tag", text: `第 ${goal.roundsUsed}/${goal.maxRounds} 轮` },
-        ),
+        // The task block above already carries the round account; don't say it twice.
+        task === undefined
+          ? el("span", { class: "tag", text: `第 ${goal.roundsUsed}/${goal.maxRounds} 轮` })
+          : document.createDocumentFragment(),
       ),
     );
   }

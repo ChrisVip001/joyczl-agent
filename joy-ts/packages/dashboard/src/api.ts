@@ -21,6 +21,9 @@ import type {
   ServerNotification,
   UsageSummaryResponse,
   SessionMessagesResponse,
+  TaskCreateParams,
+  TaskEnvelope,
+  TaskListResponse,
   TurnInterruptParams,
   TurnInterruptResponse,
   TurnStartParams,
@@ -249,6 +252,33 @@ export async function setGoal(params: GoalSetParams): Promise<GoalSetResponse> {
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as GoalSetResponse;
+}
+
+/**
+ * The long-task switches: create / suspend / resume / cancel.
+ *
+ * One door (`/api/task`) with an action field — the protocol keeps four methods, ops only
+ * translates. **Human-only** like the goal: the model has no task tool.
+ */
+export type TaskActionBody =
+  | ({ action: "create" } & TaskCreateParams)
+  | { action: "suspend" | "resume" | "cancel"; taskId: string; reason?: string | null };
+
+export async function taskAction(body: TaskActionBody): Promise<TaskEnvelope> {
+  const response = await apiFetch("/api/task", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as TaskEnvelope;
+}
+
+/** Every task, newest first — the panel's list (the card uses `data.task` instead). */
+export async function fetchTasks(): Promise<TaskListResponse> {
+  const response = await apiFetch("/api/tasks", { headers: { accept: "application/json" } });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as TaskListResponse;
 }
 
 /**
