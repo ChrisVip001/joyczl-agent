@@ -37,3 +37,6 @@ sdk/python-bin/src/joyczl_agent_bin/bin/*
 .commitmsg
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+
+# 浏览器验证的截图与快照（工具产物，不是源码）
+.playwright-cli/
