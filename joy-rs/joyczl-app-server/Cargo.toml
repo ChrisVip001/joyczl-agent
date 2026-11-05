@@ -26,6 +26,7 @@ joyczl-provider = { workspace = true }
 joyczl-protocol = { workspace = true }
 joyczl-state = { workspace = true }
 joyczl-tools = { workspace = true }
+joyczl-connector = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }

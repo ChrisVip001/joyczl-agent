@@ -876,6 +876,31 @@ async fn builtin_tools(
              额外可写根；JOY_APPROVAL=on-request 时每次写入都会问）"
         );
     }
+    // Connectors: `<home>/connectors.json` **is** the switch — no file, no connector tools
+    // (the model cannot even see their names). A configured-but-unusable connector is not
+    // registered either: a tool that is guaranteed to fail only invites doomed calls.
+    match joyczl_connector::config::load(&settings.home) {
+        Ok(config) => {
+            if let Some(email) = config.email {
+                if email.allow_recipients.is_empty() {
+                    eprintln!(
+                        "(joy) 连接器 email 配置了但白名单是空的（谁都不能发）—— \
+                         email_send 未注册；在 {} 里填 allow_recipients",
+                        settings.home.join("connectors.json").display()
+                    );
+                } else {
+                    let mode = if email.live {
+                        "live（每次实际发送都会问人）"
+                    } else {
+                        "草稿模式（只写 outbox，不发）"
+                    };
+                    tools.register(joyczl_connector::email_send_tool(email));
+                    eprintln!("(joy) 连接器 email 已启用：email_send —— {mode}");
+                }
+            }
+        }
+        Err(e) => eprintln!("(joy) 连接器配置有问题，未注册任何连接器：{e}"),
+    }
     // Sweep spill/ while at it at startup: keep only the last 7 days (see the "no quota rotation" item
     // in docs/limitations.md). Unrelated to the exec switch — if the files are there, they get swept.
     joyczl_tools::exec::prune_spill(&settings.home, 7);

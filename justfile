@@ -115,6 +115,10 @@ dashboard-build: ts-install
 dashboard *args:
     cd {{ rust_dir }} && cargo run --bin joy -- dashboard {{args}}
 
+# End to end: the email connector against a scripted SMTP server, through the shipped binary.
+smoke-connector: build
+    {{ justfile_directory() }}/scripts/smoke-connector.sh
+
 # End to end: start a real dashboard, use curl as a browser against both endpoints.
 smoke-dashboard: build dashboard-build
     {{ justfile_directory() }}/scripts/smoke-dashboard.sh

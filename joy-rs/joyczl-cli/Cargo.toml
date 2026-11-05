@@ -15,6 +15,7 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 joyczl-app-server = { workspace = true }
 joyczl-config = { workspace = true }
+joyczl-connector = { workspace = true }
 joyczl-eval = { workspace = true }
 joyczl-graph = { workspace = true }
 joyczl-memory = { workspace = true }

@@ -6,6 +6,7 @@
 //! starts the web cockpit, also an app-server client (it forks one to talk to),
 //! just translating the protocol into HTTP + SSE.
 
+mod connector_cmd;
 mod gather;
 mod mcp_cmd;
 mod memory_cmd;
@@ -87,6 +88,11 @@ async fn main() -> Result<()> {
             settings.home = home();
             let args: Vec<String> = std::env::args().skip(2).collect();
             mcp_cmd::run(&settings.home, &args).await
+        }
+        Some("connector") => {
+            let home = home();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            connector_cmd::run(&home, &args).await
         }
         Some("skill") => {
             let home = home();
