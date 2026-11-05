@@ -88,15 +88,19 @@ fn user_names_must_be_safe_path_segments() {
     assert!(!valid_user("a".repeat(33).as_str()));
 }
 
-/// An empty users.json at hub open is a config error, not "wait for the first user".
+/// An empty users.json now opens (web self-registration is the M2 path) — the operator
+/// gets a hint on stderr, the first user registers from loopback or via adduser.
 #[test]
-fn an_empty_hub_is_a_configuration_error() {
+fn an_empty_hub_opens_and_waits_for_its_first_user() {
     let dir = temp();
-    let error = match Hub::open(dir.path()) {
-        Err(error) => error.to_string(),
-        Ok(_) => panic!("空 hub 不该开得起来"),
-    };
-    assert!(error.contains("adduser"), "{error}");
+    let hub = Hub::open(dir.path()).expect("空 hub 也开得起来（注册登录是正门）");
+    assert_eq!(hub.user_count(), 0);
+    // 空表 + 公网绑定 → 首个注册被门控关死（serve_hub 会按 host 设置这一位）。
+    hub.permit_first_registration(false);
+    assert!(matches!(
+        hub.register("alice", "hunter2-secret", "phone"),
+        Err(crate::hub::AuthError::Closed)
+    ));
 
     std::fs::write(dir.path().join("users.json"), r#"{"alice": "t-a"}"#).expect("造表");
     let hub = Hub::open(dir.path()).expect("有一个用户就能开");

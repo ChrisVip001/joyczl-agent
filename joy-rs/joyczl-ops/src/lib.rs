@@ -15,9 +15,14 @@
 //! Everything the dashboard sees comes from the protocol, so it sees the same world.
 
 mod api;
+mod auth;
 mod client;
 mod freshness;
 pub mod hub;
+
+#[cfg(test)]
+#[path = "auth_tests.rs"]
+mod auth_tests;
 
 #[cfg(test)]
 #[path = "router_tests.rs"]
@@ -107,6 +112,9 @@ pub async fn serve(settings: Settings) -> Result<()> {
 /// Auth is the token in users.json — the same Bearer path as single-user mode.
 pub async fn serve_hub(root: &Path, host: &str, max_open: usize, idle_secs: u64) -> Result<()> {
     let hub = Arc::new(hub::Hub::open_with(root, max_open, idle_secs)?);
+    // First-user policy: a fresh hub on a public bind must not let a stranger claim it —
+    // the owner registers from loopback or via `joy hub adduser`.
+    hub.permit_first_registration(bind_addr(host).is_loopback());
     eprintln!(
         "(joy) hub：{} 个用户，根目录 {}，池上限 {} 个实例，闲置 {} 秒关",
         hub.user_count(),
@@ -169,6 +177,12 @@ impl Gate {
             hub: Some(hub),
             single: None,
         }
+    }
+
+    /// The hub, when this is hub mode. The auth endpoints live *outside* the authorize
+    /// layer, so they reach the user table through this instead of an extension.
+    pub(crate) fn hub_ref(&self) -> Option<&Arc<hub::Hub>> {
+        self.hub.as_ref()
     }
 }
 
@@ -292,6 +306,10 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
             gate.clone(),
             authorize,
         ))
+        // Account endpoints — registered *after* the authorize layer, so they are the
+        // only /api/* reachable without a token. That is the whole point of login.
+        .route("/api/auth/register", post(crate::auth::register))
+        .route("/api/auth/login", post(crate::auth::login))
         // Static file fallback. `ServeDir` instead of reading files ourselves: path traversal
         // (`/../../.env`) is the kind of thing written correctly countless times — don't rewrite
         // it. `append_index_html_on_directories` makes `/` land on index.html.

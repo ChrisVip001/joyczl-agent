@@ -139,7 +139,25 @@ code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$@"; }
 [[ "$(code -H 'Authorization: Bearer wrong' "http://127.0.0.1:$HUB_PORT/api/data")" == "401" ]] || fail "hub 错 token 该 401"
 [[ "$(code -H "Authorization: Bearer $HUB_TOKEN" "http://127.0.0.1:$HUB_PORT/api/data")" == "200" ]] || fail "hub 对 token 该 200"
 [[ -f "$HUB/alice/state.db" ]] || fail "alice 的 home 没被建出来（隔离的物理证据）"
+
+# 注册登录（M2）：免鉴权注册 → token 直访 → 同设备登录同 token → 错密码 401。
+REG=$(curl -s -m 10 -X POST "http://127.0.0.1:$HUB_PORT/api/auth/register" \
+  -H 'content-type: application/json' \
+  -d '{"username":"bob","password":"hunter2-secret","device":"phone"}')
+BOB_TOKEN=$(printf '%s' "$REG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
+[[ -n "$BOB_TOKEN" ]] || fail "注册响应里没有 token：$REG"
+[[ "$(code -H "Authorization: Bearer $BOB_TOKEN" "http://127.0.0.1:$HUB_PORT/api/data")" == "200" ]] || fail "bob 注册的 token 该 200"
+LOG=$(curl -s -m 10 -X POST "http://127.0.0.1:$HUB_PORT/api/auth/login" \
+  -H 'content-type: application/json' \
+  -d '{"username":"bob","password":"hunter2-secret","device":"phone"}')
+LOG_TOKEN=$(printf '%s' "$LOG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
+[[ "$LOG_TOKEN" == "$BOB_TOKEN" ]] || fail "同设备登录该拿同一个 token"
+[[ "$(code -X POST "http://127.0.0.1:$HUB_PORT/api/auth/login" -H 'content-type: application/json' \
+  -d '{"username":"bob","password":"wrong-password","device":"phone"}')" == "401" ]] || fail "错密码该 401"
+[[ "$(code -X POST "http://127.0.0.1:$HUB_PORT/api/auth/register" -H 'content-type: application/json' \
+  -d '{"username":"bob","password":"hunter2-secret","device":"phone"}')" == "409" ]] || fail "重名注册该 409"
+[[ -f "$HUB/bob/state.db" ]] || fail "bob 的 home 没被建出来"
 kill "$HUB_PID" 2>/dev/null
-echo "  ✓ hub：无 token 401 / 错 token 401 / 对 token 200，alice 的 home 已隔离"
+echo "  ✓ hub：无 token 401 / 对 token 200 / 注册登录换 token，alice 与 bob 的 home 已隔离"
 
 echo "✓ 冒烟测试通过"

@@ -23,6 +23,8 @@ tokio = { workspace = true }
 tower-http = { workspace = true }
 # token 生成用：已在依赖树里（sqlx/tokio 传递引入），不是新 crate。
 getrandom = "0.3"
+# 密码哈希（PBKDF2-HMAC-SHA256）：ring 已在依赖树里（reqwest → rustls），直接声明不新增编译物。
+ring = "0.17"
 
 [dev-dependencies]
 tokio = { workspace = true }

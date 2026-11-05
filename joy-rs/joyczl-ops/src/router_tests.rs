@@ -15,7 +15,7 @@ use crate::{constant_time_eq, router, validate_binding, Gate};
 
 /// Start an auto-responder: minimal valid answers per method. **Must answer** — with the
 /// fake end gone, `app.request` would wait forever (closed link is not an answer).
-fn auto_respond(fake: crate::client::client_tests::Fake) {
+pub(crate) fn auto_respond(fake: crate::client::client_tests::Fake) {
     tokio::spawn(async move {
         let mut fake = fake;
         loop {
