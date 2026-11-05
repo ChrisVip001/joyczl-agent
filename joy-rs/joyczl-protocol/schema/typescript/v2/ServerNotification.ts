@@ -9,6 +9,7 @@ import type { GraphNodeEndedNotification } from "./GraphNodeEndedNotification";
 import type { GraphNodeStartedNotification } from "./GraphNodeStartedNotification";
 import type { GraphStartedNotification } from "./GraphStartedNotification";
 import type { RetryNotification } from "./RetryNotification";
+import type { TaskUpdatedNotification } from "./TaskUpdatedNotification";
 import type { TextDeltaNotification } from "./TextDeltaNotification";
 import type { ToolCompletedNotification } from "./ToolCompletedNotification";
 import type { ToolStartedNotification } from "./ToolStartedNotification";
@@ -41,5 +42,6 @@ export type ServerNotification =
   | ({ type: "turnCheckpointed" } & TurnCheckpointedNotification)
   | ({ type: "turnResumed" } & TurnResumedNotification)
   | ({ type: "turnSuspended" } & TurnSuspendedNotification)
+  | ({ type: "taskUpdated" } & TaskUpdatedNotification)
   | ({ type: "turnCompleted" } & TurnCompletedNotification)
   | ({ type: "error" } & ErrorNotification);

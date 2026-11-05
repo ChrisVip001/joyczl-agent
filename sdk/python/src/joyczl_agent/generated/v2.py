@@ -13,6 +13,30 @@ class JoyProtocolV2(RootModel[Any]):
     root: Annotated[Any, Field(title='JoyProtocolV2')]
 
 
+class AgentTaskView(BaseModel):
+    createdAt: str
+    currentTurnId: Annotated[
+        str | None,
+        Field(
+            description='The turn currently carrying this task (a heartbeat; absent when idle).'
+        ),
+    ] = None
+    finishedAt: str | None = None
+    goalCondition: Annotated[
+        str | None,
+        Field(
+            description="The goal loop's condition. Absent = a single-turn task: done when the turn is."
+        ),
+    ] = None
+    id: str
+    maxRounds: int
+    roundsUsed: int
+    sessionId: str
+    status: str
+    suspendReason: str | None = None
+    title: str
+
+
 class ApprovalLogEntry(BaseModel):
     argsPreview: str
     decidedAt: str
@@ -630,7 +654,16 @@ class ServerNotification16(BaseModel):
     type: Literal['turnSuspended']
 
 
-class ServerNotification18(BaseModel):
+class ServerNotification17(BaseModel):
+    reason: str | None = None
+    roundsUsed: int
+    sessionId: str
+    status: str
+    taskId: str
+    type: Literal['taskUpdated']
+
+
+class ServerNotification19(BaseModel):
     code: int
     data: Any | None = None
     message: str
@@ -717,6 +750,55 @@ class SettingsView(BaseModel):
     provider: str
     retrievalTopK: int
     smallModel: str
+
+
+class TaskActionParams(BaseModel):
+    reason: str | None = None
+    taskId: str
+
+
+class TaskCreateParams(BaseModel):
+    goalCondition: Annotated[
+        str | None,
+        Field(
+            description='The goal condition that keeps the loop going. Absent = single-turn task.'
+        ),
+    ] = None
+    maxRounds: Annotated[
+        int | None,
+        Field(description='Per-task round cap; absent = `JOY_GOAL_MAX_ROUNDS`.'),
+    ] = None
+    sessionId: str
+    title: Annotated[
+        str,
+        Field(
+            description="What this task is, in the human's words — the card's first line."
+        ),
+    ]
+
+
+class TaskEnvelope(BaseModel):
+    task: AgentTaskView
+
+
+class TaskListParams(RootModel[None]):
+    root: Annotated[None, Field(title='TaskListParams')]
+
+
+class TaskListResponse(BaseModel):
+    tasks: list[AgentTaskView]
+
+
+class TaskUpdatedNotification(BaseModel):
+    reason: str | None = None
+    roundsUsed: int
+    sessionId: str
+    status: str
+    taskId: str
+
+
+class TaskViewResponse(BaseModel):
+    task: AgentTaskView | None = None
 
 
 class TextDeltaNotification(BaseModel):
@@ -901,6 +983,12 @@ class DashboardData(BaseModel):
         ),
     ] = None
     sessions: list[SessionSummary]
+    task: Annotated[
+        AgentTaskView | None,
+        Field(
+            description="The viewed session's current task (goal upgraded to a persisted entity), when asked for."
+        ),
+    ] = None
     todos: Annotated[
         TodoListView | None,
         Field(
@@ -1120,7 +1208,7 @@ class Message(BaseModel):
     role: MessageRole
 
 
-class ServerNotification17(BaseModel):
+class ServerNotification18(BaseModel):
     iterations: int
     meta: TurnMeta
     reply: str
@@ -1149,6 +1237,7 @@ class ServerNotification(
         | ServerNotification16
         | ServerNotification17
         | ServerNotification18
+        | ServerNotification19
     ]
 ):
     root: Annotated[
@@ -1169,7 +1258,8 @@ class ServerNotification(
         | ServerNotification15
         | ServerNotification16
         | ServerNotification17
-        | ServerNotification18,
+        | ServerNotification18
+        | ServerNotification19,
         Field(
             description='The full stream of events for one turn.\n\n`type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated union. **No failure here should crash the client**: this only describes "what happened".',
             title='ServerNotification',

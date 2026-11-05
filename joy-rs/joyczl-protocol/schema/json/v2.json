@@ -1,6 +1,70 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AgentTaskView": {
+      "description": "One task as the human sees it. `status` is a string on the wire (pending / running / suspended / done / failed / cancelled) — the dashboard paints it.",
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "currentTurnId": {
+          "description": "The turn currently carrying this task (a heartbeat; absent when idle).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finishedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "goalCondition": {
+          "description": "The goal loop's condition. Absent = a single-turn task: done when the turn is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "maxRounds": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "roundsUsed": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "suspendReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "createdAt",
+        "id",
+        "maxRounds",
+        "roundsUsed",
+        "sessionId",
+        "status",
+        "title"
+      ],
+      "type": "object"
+    },
     "ApprovalLogEntry": {
       "description": "One row of `approval/log`: the complete record of one \"ask before running\".",
       "properties": {
@@ -248,6 +312,18 @@
             "$ref": "#/definitions/SessionSummary"
           },
           "type": "array"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentTaskView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The viewed session's current task (goal upgraded to a persisted entity), when asked for."
         },
         "todos": {
           "anyOf": [
@@ -1866,6 +1942,44 @@
           "type": "object"
         },
         {
+          "description": "The task behind this turn changed state (created / running / suspended / done…).",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "roundsUsed": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "taskId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "taskUpdated"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "roundsUsed",
+            "sessionId",
+            "status",
+            "taskId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.",
           "properties": {
             "iterations": {
@@ -2239,6 +2353,142 @@
         "smallModel"
       ],
       "title": "SettingsView",
+      "type": "object"
+    },
+    "TaskActionParams": {
+      "description": "`task/suspend|resume|cancel`: address one task and say why (the reason is shown, not dropped).",
+      "properties": {
+        "reason": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "title": "TaskActionParams",
+      "type": "object"
+    },
+    "TaskCreateParams": {
+      "description": "`task/create`: **only a human can start a long task** — there is no tool for it.",
+      "properties": {
+        "goalCondition": {
+          "default": null,
+          "description": "The goal condition that keeps the loop going. Absent = single-turn task.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maxRounds": {
+          "default": null,
+          "description": "Per-task round cap; absent = `JOY_GOAL_MAX_ROUNDS`.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "title": {
+          "description": "What this task is, in the human's words — the card's first line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "title"
+      ],
+      "title": "TaskCreateParams",
+      "type": "object"
+    },
+    "TaskEnvelope": {
+      "properties": {
+        "task": {
+          "$ref": "#/definitions/AgentTaskView"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "title": "TaskEnvelope",
+      "type": "object"
+    },
+    "TaskListParams": {
+      "title": "TaskListParams",
+      "type": "null"
+    },
+    "TaskListResponse": {
+      "description": "Newest first; `active` is the session's one non-terminal task, when there is one.",
+      "properties": {
+        "tasks": {
+          "items": {
+            "$ref": "#/definitions/AgentTaskView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "title": "TaskListResponse",
+      "type": "object"
+    },
+    "TaskUpdatedNotification": {
+      "description": "A task changed state. The event bus folds it into a ping; the hub's `/api/tasks` shows the row.",
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roundsUsed": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "roundsUsed",
+        "sessionId",
+        "status",
+        "taskId"
+      ],
+      "title": "TaskUpdatedNotification",
+      "type": "object"
+    },
+    "TaskViewResponse": {
+      "description": "`task/view`: one session's current task (the card on screen).",
+      "properties": {
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentTaskView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "TaskViewResponse",
       "type": "object"
     },
     "TextDeltaNotification": {

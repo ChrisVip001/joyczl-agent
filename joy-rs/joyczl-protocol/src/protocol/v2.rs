@@ -30,6 +30,14 @@ pub mod methods {
     pub const GOAL_VIEW: &str = "goal/view";
     /// Read a session's todo sheet (the dashboard's task card). Read-only, human-facing.
     pub const TODO_VIEW: &str = "todo/view";
+    /// Long tasks: create / list / view / suspend / resume / cancel.
+    /// **All human-only** — the model has no path to any of them (like `goal/set`).
+    pub const TASK_CREATE: &str = "task/create";
+    pub const TASK_LIST: &str = "task/list";
+    pub const TASK_VIEW: &str = "task/view";
+    pub const TASK_SUSPEND: &str = "task/suspend";
+    pub const TASK_RESUME: &str = "task/resume";
+    pub const TASK_CANCEL: &str = "task/cancel";
     pub const SESSION_LIST: &str = "session/list";
     pub const SESSION_NEW: &str = "session/new";
     pub const SESSION_MESSAGES: &str = "session/messages";
@@ -194,6 +202,106 @@ pub struct GoalSetResponse {
     #[serde(default)]
     pub rounds_used: i32,
     pub max_rounds: i32,
+}
+
+// ===========================================================================
+// Long tasks (agent_tasks)
+// ===========================================================================
+//
+// A task is what a goal becomes once it has to survive a restart: persisted, addressable,
+// and — crucially — **suspendable**. The goal loop is its engine; the row is its memory.
+// One active task per session at a time; the model has no task/* path (human-only, like goal).
+
+/// One task as the human sees it. `status` is a string on the wire
+/// (pending / running / suspended / done / failed / cancelled) — the dashboard paints it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct AgentTaskView {
+    pub id: String,
+    pub session_id: String,
+    pub title: String,
+    /// The goal loop's condition. Absent = a single-turn task: done when the turn is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_condition: Option<String>,
+    pub status: String,
+    pub rounds_used: i32,
+    pub max_rounds: i32,
+    /// The turn currently carrying this task (a heartbeat; absent when idle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspend_reason: Option<String>,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+}
+
+/// `task/create`: **only a human can start a long task** — there is no tool for it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskCreateParams {
+    pub session_id: String,
+    /// What this task is, in the human's words — the card's first line.
+    pub title: String,
+    /// The goal condition that keeps the loop going. Absent = single-turn task.
+    #[serde(default)]
+    pub goal_condition: Option<String>,
+    /// Per-task round cap; absent = `JOY_GOAL_MAX_ROUNDS`.
+    #[serde(default)]
+    pub max_rounds: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskEnvelope {
+    pub task: AgentTaskView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export_to = "v2/")]
+pub struct TaskListParams;
+
+/// Newest first; `active` is the session's one non-terminal task, when there is one.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskListResponse {
+    pub tasks: Vec<AgentTaskView>,
+}
+
+/// `task/view`: one session's current task (the card on screen).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskViewResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<AgentTaskView>,
+}
+
+/// `task/suspend|resume|cancel`: address one task and say why (the reason is shown, not dropped).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskActionParams {
+    pub task_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// A task changed state. The event bus folds it into a ping; the hub's `/api/tasks` shows the row.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskUpdatedNotification {
+    pub task_id: String,
+    pub session_id: String,
+    pub status: String,
+    pub rounds_used: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Which session to look at — the shared params of the dashboard's per-session reads
@@ -1013,6 +1121,10 @@ pub struct DashboardData {
     #[serde(default)]
     #[ts(optional)]
     pub todos: Option<TodoListView>,
+    /// The viewed session's current task (goal upgraded to a persisted entity), when asked for.
+    #[serde(default)]
+    #[ts(optional)]
+    pub task: Option<AgentTaskView>,
 }
 
 /// One row of the todo sheet. `status` is the wire form of `TodoStatus`
@@ -1220,6 +1332,8 @@ pub enum ServerNotification {
     TurnCheckpointed(TurnCheckpointedNotification),
     TurnResumed(TurnResumedNotification),
     TurnSuspended(TurnSuspendedNotification),
+    /// The task behind this turn changed state (created / running / suspended / done…).
+    TaskUpdated(TaskUpdatedNotification),
     /// Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and
     /// notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.
     TurnCompleted(Box<TurnCompletedNotification>),
