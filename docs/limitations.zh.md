@@ -327,6 +327,16 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   `joy schedule`）—— WAL 加 `busy_timeout` 就是干这个的 —— 但没有任何东西协调
   跨进程的**轮次**。两个进程里的两轮对话会自由交错。
   → `joy-rs/joyczl-state/src/db.rs`
+* **边界** —— 回合 checkpoint（0.10.0）在**工具结果边界**落盘：崩溃后续跑绝不
+  重跑已完成的工具，但**死在工具执行半途的那一次**会在续跑时整只重跑——工具
+  应当按幂等写（`run_command` 的输出落盘与审批台账已经在帮这件事）。
+  → `joy-rs/joyczl-loop/src/lib.rs`（checkpoint 调用点）
+* **边界** —— 续跑自动发生（启动对账），但只在**有进程启动时**：hub 池闲置驱逐
+  后没人来敲门，续跑就等着下次访问——通知不补发，错过的人看对话日志。
+  → `joy-rs/joyczl-app-server/src/resume.rs`
+* **边界** —— 用户打断（`turn/interrupt`）与回合内报错把 checkpoint 标
+  `abandoned`，**不**自动续跑；`open` 在进程结束之后只可能意味着崩溃。
+  → `joy-rs/joyczl-app-server/src/turn.rs`（`finalize_turn`）
 
 ## 网关
 

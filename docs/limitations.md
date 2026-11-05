@@ -412,6 +412,20 @@ about the attachment is checked before the turn starts: containment inside
   `busy_timeout` are for — but nothing coordinates *turns* across them. Two
   turns running in different processes interleave freely.
   → `joy-rs/joyczl-state/src/db.rs`
+* **Boundary** — Turn checkpoints (0.10.0) land at **tool-results boundaries**: a
+  resumed turn never re-runs finished tools, but the one execution that was
+  *mid-flight at the crash* reruns whole — tools should be written idempotent
+  (`run_command`'s output spilling and the approval ledger already help).
+  → `joy-rs/joyczl-loop/src/lib.rs` (checkpoint call site)
+* **Boundary** — Resuming happens automatically (startup reconcile), but only
+  **when a process starts**: if the hub evicted the idle pool and nobody knocks,
+  the resume waits for the next visit — notifications are not replayed; whoever
+  missed them reads the chat log.
+  → `joy-rs/joyczl-app-server/src/resume.rs`
+* **Boundary** — A human interrupt (`turn/interrupt`) and a turn that errored
+  inside its process mark the checkpoint `abandoned`, **not** auto-resumed; after
+  a process ends, `open` can only mean a crash.
+  → `joy-rs/joyczl-app-server/src/turn.rs` (`finalize_turn`)
 
 ## Gateways
 

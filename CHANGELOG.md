@@ -2,6 +2,32 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.10.0 — Crashed? Continue. (the workspace version)
+
+### Turn-level checkpoints: the long-task engine's foundation
+
+- A turn's working memory (model thoughts, tool calls, their results) used to
+  live only in process memory — the process dies, the whole turn starts over.
+  It now lands at every **tool-results boundary** (migration 0013
+  `turn_checkpoints`); each boundary overwrites the previous one, newest wins.
+- **Startup reconcile resumes**: a fresh process finding an `open` checkpoint
+  continues the turn — the turn the human asked for — never re-running finished
+  tools; the pre-crash token account joins the resumed one. A `turnResumed`
+  notification carries the completed iteration count; nothing is silent.
+- A resumed turn shares the **same tail** as a fresh one (`finalize_turn`):
+  trace, usage ledger, chat log, consolidation — one road, no second copy to
+  forget.
+- The gates don't move: resuming re-enters checkpointed, already-approved
+  territory; new tool executions still pass the approval gate (default-deny).
+  A human interrupt and an in-process error mark `abandoned`, never auto-resumed
+  — after a process ends, `open` can only mean a crash.
+- Three new knocks on the event bus: `task_progress` / `task_resumed` /
+  `task_suspended` — still lightweight pings, still one connection, reusing
+  0.9.0's coalescing and reconnect.
+- End-to-end smoke (`scripts/smoke-resume.sh`): boot a real process, plant the
+  crash leftover, kill -9, restart — the reconcile's stdout frames and the
+  ledger closure are asserted line by line.
+
 ## 0.9.0 — Accounts and every screen (the workspace version)
 
 ### Hub: register / login
