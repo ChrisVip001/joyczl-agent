@@ -230,6 +230,8 @@ async function refreshPanels(): Promise<void> {
 
 let statusTimer: number | null = null;
 let statusStart = 0;
+/** The self-dismiss timer of the crash-recovery notice (see startSync's onActivity). */
+let resumeNotice: number | null = null;
 /** The running turn's handle (from `turnStarted`) — what the stop button points at. */
 let activeTurnId: string | null = null;
 
@@ -457,6 +459,21 @@ async function boot(): Promise<void> {
   startSync({
     onActivity: (ping) => {
       if (busy) return;
+      // Crash recovery announced itself: one quiet line, self-dismissed — the resumed
+      // turn has no live stream here (open() pulls history, it does not subscribe), so
+      // the statusline must not linger waiting for a TurnCompleted that never comes.
+      if (ping.kind === "task_resumed") {
+        dom.status.hidden = false;
+        dom.status.className = "statusline resumed";
+        dom.status.replaceChildren(
+          el("span", {
+            class: "status-label",
+            text: "上次中断的回合正在续跑（已完成的工具不重跑）",
+          }),
+        );
+        if (resumeNotice !== null) window.clearTimeout(resumeNotice);
+        resumeNotice = window.setTimeout(hideStatus, 5000);
+      }
       void refresh();
       void refreshPanels();
       if (ping.sessionId === current) void open(current);

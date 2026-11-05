@@ -12,11 +12,19 @@ export interface SyncHandlers {
   onActivity: (ping: EventPing) => void;
 }
 
+/**
+ * Pings a burst must not drown: "a crashed turn is resuming" is the whole point of the
+ * burst it rides in (resumed → progress → …). Only the last ping of a burst is delivered,
+ * so these keep their seat at the front of the queue.
+ */
+const KEEP: ReadonlySet<string> = new Set(["task_resumed"]);
+
 export function startSync(handlers: SyncHandlers): void {
   let timer: number | null = null;
   let pending: EventPing | null = null;
 
   const knock = (ping: EventPing): void => {
+    if (pending !== null && KEEP.has(pending.kind) && !KEEP.has(ping.kind)) return;
     pending = ping;
     if (timer !== null) return;
     timer = window.setTimeout(() => {

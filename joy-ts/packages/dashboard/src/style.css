@@ -903,6 +903,18 @@ textarea::placeholder {
   animation: shimmer 1.4s linear infinite;
 }
 
+/* 续跑提示：静态绿点，不闪不秒表 —— 已恢复的事不需要计时，5 秒后自行退场。 */
+.statusline.resumed .status-label::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  vertical-align: baseline;
+  background: var(--ok);
+}
+
 @keyframes shimmer {
   to {
     background-position: -200% 0;
