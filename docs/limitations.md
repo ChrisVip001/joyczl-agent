@@ -452,10 +452,13 @@ about the attachment is checked before the turn starts: containment inside
 * **Boundary** — Feishu sends as the **app** (`tenant_access_token`) by default; acting
   as a specific person needs one browser authorization (`joy connector feishu login`),
   the token in a 0600 file, refreshed before use. The flow has no PKCE, the callback is
-  fixed at `127.0.0.1:41766/callback` and must be registered in the console, and an
-  expired refresh token means logging in again (no background renewal). WeChat stays
-  out: a personal account has no programmable outbound API (inbound is a different
-  thing — see Chat gateways).
+  fixed at `127.0.0.1:41766/callback` and must be registered in the console. Renewal is
+  **rotating** (the old refresh token dies when used), so the app-server serializes it
+  through a lock file and renews ten minutes before each expiry — but only while a
+  long-lived app-server is running: one-shot `joy connector` commands take the lazy path,
+  and with every process stopped nothing renews at all (once the refresh token itself
+  expires, only a new login helps). WeChat stays out: a personal account has no
+  programmable outbound API (inbound is a different thing — see Chat gateways).
   → `joy-rs/joyczl-connector/src/feishu_oauth.rs`
 * **Boundary** — inbound mail is **polling** (30-second floor), no IDLE push: new mail
   shows up one interval late at worst. Deduping is by IMAP UID, and a rebuilt mailbox

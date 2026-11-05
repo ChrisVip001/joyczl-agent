@@ -10,6 +10,8 @@
 //!   2. a local 127.0.0.1:41766/callback catches `code` + `state`
 //!   3. POST `{base}/open-apis/authen/v2/oauth/token` → access_token + refresh_token
 //!   4. refresh before use when expired (refresh tokens last longer than access tokens)
+//!   5. **and again in the background**, ten minutes before each expiry, so the chain never
+//!      dies from neglect and a send never pays the refresh latency
 //!
 //! Redirect URI must be registered in the app console **exactly**; the message says so
 //! when Feishu rejects the exchange.
@@ -32,6 +34,19 @@ pub const CALLBACK_PATH: &str = "/callback";
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(300);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 const AUTH_DIR: &str = "connector-auth";
+/// Refresh this long before expiry. Long enough to survive a sleeping laptop, short enough
+/// that a revoked authorization shows up while the human still remembers logging in.
+pub const REFRESH_LEAD: i64 = 600;
+/// Longest the background loop sleeps between glances at the token file (so a login that
+/// happens *after* the server booted is picked up too).
+const MAX_SLEEP: Duration = Duration::from_secs(300);
+/// Shortest sleep after a refresh, so a provider answering with a tiny `expires_in` cannot
+/// turn the loop into a hot spin.
+const MIN_SLEEP: Duration = Duration::from_secs(30);
+/// How long to wait after a *transient* failure (network, 500) before trying again.
+const RETRY_BACKOFF: Duration = Duration::from_secs(300);
+/// A lock file older than this is from a process that died mid-refresh; take it over.
+const LOCK_STALE: Duration = Duration::from_secs(60);
 
 /// What the token file holds. `expires_at` is a unix timestamp in seconds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,29 +119,175 @@ pub async fn access_token(config: &FeishuConfig, home: &Path) -> Result<String> 
     if token.expires_at - 300 > now() {
         return Ok(token.access_token);
     }
-    refresh(config, home, &token.refresh_token).await
+    Ok(refresh_now(config, home).await?.access_token)
 }
 
-async fn refresh(config: &FeishuConfig, home: &Path, refresh_token: &str) -> Result<String> {
+/// Refresh the stored token, once, whoever asks — the lazy send path and the background
+/// loop share this.
+///
+/// A refresh is a **rotation**: the old refresh token dies when the new one is issued, so
+/// two refreshers at the same moment would lose the chain. Inside the process a file lock
+/// serializes them (`connector-auth/feishu.lock`, stale after a minute); after taking it the
+/// token is re-read, which is also how "another process already did it" becomes a no-op
+/// instead of a second rotation.
+pub async fn refresh_now(config: &FeishuConfig, home: &Path) -> Result<UserToken> {
+    let _lock = lock(home).await?;
+    let Some(token) = load(home) else {
+        bail!(
+            "没有飞书用户 token 文件（{} 不在）",
+            token_path(home).display()
+        );
+    };
+    if token.expires_at - REFRESH_LEAD > now() {
+        // Someone refreshed while we waited for the lock: their token is the good one.
+        return Ok(token);
+    }
     let Some(secret) = config.secret(home) else {
         bail!(
             "飞书 app_secret 找不到，续不了用户 token（{}）",
             config.app_secret
         );
     };
-    let body = exchange(
+    let refreshed = exchange(
         config,
         &json!({
             "grant_type": "refresh_token",
             "client_id": config.app_id,
             "client_secret": secret,
-            "refresh_token": refresh_token,
+            "refresh_token": token.refresh_token,
         }),
     )
     .await
     .context("续期飞书用户 token 失败；重新跑 `joy connector feishu login`")?;
-    save(home, &body)?;
-    Ok(body.access_token)
+    save(home, &refreshed)?;
+    Ok(refreshed)
+}
+
+/// How long the background loop should sleep before looking again.
+///
+/// `ZERO` means "refresh now"; `MIN_SLEEP` keeps a provider that hands out very short tokens
+/// from spinning the loop, and `MAX_SLEEP` keeps it able to notice a fresh login.
+pub fn next_check(expires_at: i64, now: i64) -> Duration {
+    let until = expires_at - REFRESH_LEAD - now;
+    if until <= 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_secs((until as u64).min(MAX_SLEEP.as_secs()))
+}
+
+/// Start the background renewer. Meant for the long-lived process (app-server); the CLI
+/// keeps its lazy refresh.
+///
+/// It keeps running while there is no token file at all: a human may run `feishu login`
+/// after the server booted, and the token should then be looked after without a restart.
+pub fn spawn_renewer(config: FeishuConfig, home: PathBuf) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move { renew_forever(config, home).await })
+}
+
+async fn renew_forever(config: FeishuConfig, home: PathBuf) {
+    loop {
+        let wait = match load(&home) {
+            None => MAX_SLEEP,
+            Some(token) => next_check(token.expires_at, now()),
+        };
+        if wait > Duration::ZERO {
+            tokio::time::sleep(wait).await;
+            continue;
+        }
+        match refresh_now(&config, &home).await {
+            Ok(token) => {
+                eprintln!(
+                    "(joy) 飞书用户 token 已在后台续期，到 {} 过期",
+                    expiry_text(token.expires_at)
+                );
+                // A successful refresh usually leaves hours on the clock; the floor only
+                // matters when the provider answered with something tiny.
+                tokio::time::sleep(MIN_SLEEP).await;
+            }
+            Err(error) if is_terminal(&error) => {
+                // The refresh token itself is dead (revoked, expired, wrong app). No amount of
+                // retrying fixes that, and silence would leave sends failing with no clue.
+                eprintln!(
+                    "(joy) 飞书用户 token 续不上了，需要人重新登录：joy connector feishu login\n      {error:#}"
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!("(joy) 飞书用户 token 这次没续上，5 分钟后再试：{error:#}");
+                tokio::time::sleep(RETRY_BACKOFF).await;
+            }
+        }
+    }
+}
+
+/// Did Feishu itself refuse the grant (as opposed to "the network was down")?
+///
+/// Only a refusal is terminal: retrying a revoked authorization every five minutes would
+/// just write the same line into a log forever.
+fn is_terminal(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<Rejected>().is_some())
+}
+
+/// Feishu answered and said no. Marked as its own type so the renewer can tell it apart
+/// from a timeout without matching on text.
+#[derive(Debug)]
+struct Rejected(String);
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Rejected {}
+
+/// An exclusive `connector-auth/feishu.lock`; removed on drop.
+///
+/// Hand-rolled instead of pulling in a lock crate: one file, one meaning. A crash leaves the
+/// file behind, so it is considered free again after `LOCK_STALE`.
+struct Lock(PathBuf);
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+async fn lock(home: &Path) -> Result<Lock> {
+    let path = home.join(AUTH_DIR).join("feishu.lock");
+    std::fs::create_dir_all(path.parent().expect("有父目录"))?;
+    for _ in 0..50 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write as _;
+                let _ = write!(file, "{} {}", std::process::id(), now());
+                return Ok(Lock(path));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let stale = std::fs::metadata(&path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|at| at.elapsed().ok())
+                    .is_some_and(|age| age > LOCK_STALE);
+                if stale {
+                    let _ = std::fs::remove_file(&path);
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    bail!(
+        "另一个进程正在续期飞书 token（{}），这次先跳过",
+        path.display()
+    )
 }
 
 /// The human's login: open the browser, catch the code, exchange it, store it.
@@ -190,14 +351,16 @@ async fn exchange(config: &FeishuConfig, payload: &Value) -> Result<UserToken> {
     // v2 answers 0 on success; some deployments answer without a code at all.
     if let Some(code) = body.get("code").and_then(Value::as_i64) {
         if code != 0 {
-            bail!(
+            // A refusal, not a hiccup: the background renewer stops on this and asks for a
+            // human instead of retrying into the void.
+            return Err(anyhow::Error::new(Rejected(format!(
                 "飞书拒绝换 token：{} {}（redirect_uri 必须在应用控制台精确登记）",
                 code,
                 body.get("error_description")
                     .or_else(|| body.get("msg"))
                     .and_then(Value::as_str)
                     .unwrap_or("")
-            );
+            ))));
         }
     }
     let access_token = body

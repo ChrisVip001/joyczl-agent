@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """假的飞书开放平台，只给 smoke-connector.sh 用。
 
-起在 127.0.0.1:0，端口打印到 stdout 一行；认得两个端点：
+起在 127.0.0.1:0，端口打印到 stdout 一行；认得三个端点：
   POST /open-apis/auth/v3/tenant_access_token/internal  → {"code":0,"tenant_access_token":"t-fake"}
+  POST /open-apis/authen/v2/oauth/token                  → {"code":0,"access_token":"u-renewed",…}
   POST /open-apis/im/v1/messages                         → {"code":0,"data":{"message_id":"om_fake"}}
 收到的每个请求（方法 + 路径 + 关键 body）写进 argv[1]，然后退出（一次只服务一个客户端）。
 
@@ -31,6 +32,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if "tenant_access_token" in self.path:
             reply = {"code": 0, "msg": "ok", "tenant_access_token": "t-fake", "expire": 7200}
+        elif "/authen/v2/oauth/token" in self.path:
+            # The refresh grant: a new access token AND a new refresh token (rotation).
+            with open(LOG, "a", encoding="utf-8") as out:
+                out.write(json.dumps({"path": self.path, "body": body}, ensure_ascii=False))
+                out.write("\n")
+            reply = {
+                "code": 0,
+                "access_token": "u-renewed",
+                "refresh_token": "r-renewed",
+                "expires_in": 7200,
+            }
         elif "/im/v1/messages" in self.path:
             with open(LOG, "a", encoding="utf-8") as out:
                 out.write(json.dumps({"path": self.path, "auth": auth, "body": body}, ensure_ascii=False))

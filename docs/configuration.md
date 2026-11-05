@@ -650,7 +650,16 @@ joy connector feishu logout    # delete the token
 
 Then set `"as": "user"` in the feishu block of `connectors.json`. The callback is fixed
 at `127.0.0.1:41766/callback` and must be registered **exactly** in the app console;
-there is no PKCE, and an expired refresh token means logging in again.
+there is no PKCE.
+
+The token is **rotating**: each refresh token dies when it is used, so renewals are
+serialized (in-process through `connector-auth/feishu.lock`). The long-lived process
+(app-server) renews it **ten minutes before each expiry** — a send never pays a network
+round trip for it, and a laptop that slept past the expiry wakes up still valid. When
+Feishu refuses the grant (authorization revoked, refresh token dead) it says so once and
+asks for a human login instead of writing the same line into the log every five minutes.
+The CLI keeps its lazy path ("expired, will refresh on the next send" in
+`joy connector feishu status`).
 
 ## Chat gateways (joy-ts)
 

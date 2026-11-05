@@ -252,4 +252,76 @@ assert invoice["fromAddr"] == "alice@corp.com", invoice
 PY
 echo "  ✓ 入站：轮询器真的连了 IMAP，主题/正文解码后进了收件箱，inbox/list 读得回来"
 
+# ---- 7. 用户 token 的后台续期：没人发消息，它自己续 --------------------------------
+# The chain this proves: connectors.json says as:user → app-server starts the renewer →
+# the renewer sees a token inside its lead window → refresh grant over real HTTP → the file
+# is rewritten with the rotated pair.
+RENEW_HOME="$WORK/renew"
+mkdir -p "$RENEW_HOME/connector-auth"
+python3 "$REPO/scripts/fake_feishu_server.py" "$WORK/renew.log" >"$WORK/renew_port" &
+RENEW_PID=$!
+for _ in $(seq 1 50); do
+  [[ -s "$WORK/renew_port" ]] && break
+  sleep 0.1
+done
+RENEW_PORT="$(head -n1 "$WORK/renew_port" 2>/dev/null || true)"
+[[ -n "$RENEW_PORT" ]] || fail "续期用的假飞书端点没起来"
+
+cat > "$RENEW_HOME/connectors.json" <<EOF_RENEW
+{"feishu": {"app_id": "cli_fake", "app_secret": "env:JOY_FEISHU_SMOKE_SECRET",
+            "as": "user", "allow_recipients": ["ou_alice"], "live": false,
+            "base_url": "http://127.0.0.1:$RENEW_PORT"}}
+EOF_RENEW
+
+# Five seconds of life left: the renewer's first glance already lands inside the lead window.
+python3 - "$RENEW_HOME/connector-auth/feishu.json" <<'PY_TOKEN'
+import json, sys, time
+json.dump({"access_token": "u-old", "refresh_token": "r-old",
+           "expires_at": int(time.time()) + 5}, open(sys.argv[1], "w"))
+PY_TOKEN
+
+# stdin stays open for a few seconds: app-server shuts down when the pipe closes, and the
+# renewer lives inside it.
+( printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{}}'; sleep 8 ) \
+  | JOY_HOME="$RENEW_HOME" JOY_PROVIDER=anthropic JOY_API_KEY=test \
+      JOY_FEISHU_SMOKE_SECRET=s3cret \
+      "$BIN" app-server >"$WORK/renew_out.log" 2>&1 &
+RENEW_SERVER=$!
+
+RENEWED=""
+for _ in $(seq 1 100); do
+  RENEWED="$(python3 - "$RENEW_HOME/connector-auth/feishu.json" <<'PY_READ'
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("access_token", ""))
+except Exception:
+    print("")
+PY_READ
+)"
+  [[ "$RENEWED" == "u-renewed" ]] && break
+  sleep 0.1
+done
+kill "$RENEW_SERVER" 2>/dev/null || true
+kill "$RENEW_PID" 2>/dev/null || true
+
+[[ "$RENEWED" == "u-renewed" ]] || { cat "$WORK/renew_out.log"; fail "后台没有把 token 续掉（拿到：$RENEWED）"; }
+grep -q "在后台续期" "$WORK/renew_out.log" || { cat "$WORK/renew_out.log"; fail "续期没在日志里说一声"; }
+
+python3 - "$WORK/renew.log" <<'PY_GRANT' || fail "续期请求形状不对"
+import json, sys
+lines = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+grant = next(item for item in lines if "oauth/token" in item["path"])
+assert grant["body"]["grant_type"] == "refresh_token", grant
+assert grant["body"]["refresh_token"] == "r-old", grant
+assert grant["body"]["client_id"] == "cli_fake", grant
+PY_GRANT
+
+python3 - "$RENEW_HOME/connector-auth/feishu.json" <<'PY_ROTATED' || fail "轮换后的 refresh token 没存下来"
+import json, sys
+token = json.load(open(sys.argv[1]))
+assert token["refresh_token"] == "r-renewed", token
+assert token["expires_at"] > 0, token
+PY_ROTATED
+echo "  ✓ 后台续期：没人发消息，refresh grant 真的走了，token 与轮换后的 refresh token 都落盘"
+
 echo "✓ 连接器冒烟测试通过"

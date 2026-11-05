@@ -559,7 +559,14 @@ joy connector feishu logout    # 删掉 token
 
 然后在 `connectors.json` 的 feishu 块里写 `"as": "user"`。回调固定
 `127.0.0.1:41766/callback`，这个地址要在飞书应用后台**一模一样**地登记；流程没有
-PKCE，refresh token 过期就得重新 login。
+PKCE。
+
+token 是**轮换**的：refresh token 用一次就换新的，所以续期只能串行（进程内走
+`connector-auth/feishu.lock`）。长住的进程（app-server）会在**过期前十分钟自动续**
+—— 发送不必为它等一次网络往返，笔记本睡过到期时间也能醒来继续用；续期被飞书拒绝
+（授权被撤销/refresh token 已死）时它只喊一次，让人重新 login，不会每五分钟刷一次
+日志。`joy connector feishu status` 里的「已过期，下次发送会尝试续期」仍然成立，那是
+CLI 自己的惰性路径。
 
 ## Chat gateways (joy-ts)
 

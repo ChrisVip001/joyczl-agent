@@ -908,6 +908,16 @@ async fn builtin_tools(
     match joyczl_connector::config::load(&settings.home) {
         Ok(config) => {
             if let Some(feishu) = config.feishu.clone() {
+                // Sending as a person uses a rotating token chain: renew it in the background
+                // (ten minutes before each expiry) so a send never pays the refresh latency,
+                // and a laptop that slept through the expiry wakes up with a valid token.
+                if feishu.identity() == Ok("user") {
+                    joyczl_connector::feishu_oauth::spawn_renewer(
+                        feishu.clone(),
+                        settings.home.clone(),
+                    );
+                    eprintln!("(joy) 飞书以用户身份发送：用户 token 在后台自动续期");
+                }
                 if feishu.allow_recipients.is_empty() {
                     eprintln!(
                         "(joy) 连接器 feishu 配置了但白名单是空的（谁都不能收）—— \

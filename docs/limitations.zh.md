@@ -358,9 +358,12 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   → `joy-rs/joyczl-connector/src/smtp.rs`、`joy-rs/joyczl-connector/src/feishu.rs`
 * **边界** —— 飞书默认以**应用身份**（tenant_access_token）发送；以**某个人**的身份
   发需要一次浏览器授权（`joy connector feishu login`），token 落 0600 文件、用前续期。
-  这条流程没有 PKCE，回调固定 `127.0.0.1:41766/callback` 且必须在控制台登记；
-  refresh token 过期就得重新 login（没有后台定时续期）。微信仍是个人号没有可编程出站
-  接口，不含在其中（入站是另一套东西，见 Chat gateways）。
+  这条流程没有 PKCE，回调固定 `127.0.0.1:41766/callback` 且必须在控制台登记。
+  续期是**轮换**的（旧 refresh token 用一次即失效），所以 app-server 用锁文件把续期
+  串行化、在过期前十分钟自动续；但续期只发生在**长住的 app-server 里**：`joy connector`
+  这类一次性命令走惰性路径，而且进程全关着的时候没人续（refresh token 自己过期了，
+  只能重新 login）。微信仍是个人号没有可编程出站接口，不含在其中（入站是另一套东西，
+  见 Chat gateways）。
   → `joy-rs/joyczl-connector/src/feishu_oauth.rs`
 * **边界** —— 入站邮件是**轮询**（最小 30 秒），没有 IDLE 推送：新信最多晚一个间隔才
   出现。去重按 IMAP UID，而 UID 在邮箱重建后会从 0 重来 —— 那时旧索引会挡住同 UID 的

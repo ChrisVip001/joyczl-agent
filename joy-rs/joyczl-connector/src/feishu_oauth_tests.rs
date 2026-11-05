@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -226,4 +226,126 @@ async fn the_token_file_is_written_0600() {
         0o600,
         "token 文件必须只有本人可读"
     );
+}
+
+/// The loop's clock: wake ten minutes before expiry, but never sleep longer than five
+/// (a login that happened after the server booted still needs to be noticed), and never
+/// "sleep zero" on a token that is already past its lead time.
+#[test]
+fn the_renewer_wakes_ten_minutes_early_and_peeks_at_least_every_five() {
+    let now = 1_000;
+    assert_eq!(
+        feishu_oauth::next_check(now + 3_600, now),
+        Duration::from_secs(300),
+        "还早的时候也要每 5 分钟看一眼（可能刚登录）"
+    );
+    assert_eq!(
+        feishu_oauth::next_check(now + feishu_oauth::REFRESH_LEAD + 60, now),
+        Duration::from_secs(60),
+        "进入提前量之后按真实剩余时间睡"
+    );
+    assert_eq!(
+        feishu_oauth::next_check(now + feishu_oauth::REFRESH_LEAD, now),
+        Duration::ZERO,
+        "正好到提前量：现在续"
+    );
+    assert_eq!(
+        feishu_oauth::next_check(now - 10, now),
+        Duration::ZERO,
+        "已经过期：立刻续，不许再睡"
+    );
+}
+
+/// The refresh token rotates: whoever uses it kills it. Two refreshes at the same moment
+/// would leave one of them holding a corpse, so only one may reach the network.
+#[tokio::test]
+async fn two_refreshers_at_once_do_not_lose_the_rotating_chain() {
+    let dir = tempdir().expect("临时目录");
+    std::env::set_var("JOY_FEISHU_OAUTH_SECRET", "s3cret");
+    write_token(
+        dir.path(),
+        &UserToken {
+            access_token: "u-old".to_string(),
+            refresh_token: "r-old".to_string(),
+            expires_at: now() - 10,
+        },
+    );
+    let (base, calls, _bodies) = fake_token_endpoint(0).await;
+    let config = config(base);
+
+    let (first, second) = tokio::join!(
+        feishu_oauth::refresh_now(&config, dir.path()),
+        feishu_oauth::refresh_now(&config, dir.path()),
+    );
+    assert_eq!(first.expect("第一次该成功").access_token, "u-new");
+    assert_eq!(
+        second.expect("第二次该拿到同一个").access_token,
+        "u-new",
+        "等锁的那一个要读到已经续好的 token，而不是再轮换一次"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "refresh_token 是轮换的，只许真续一次"
+    );
+    assert!(
+        !dir.path()
+            .join("connector-auth")
+            .join("feishu.lock")
+            .exists(),
+        "锁用完要删掉，不然下次续期得等它过期"
+    );
+}
+
+/// The point of the background renewer: no one sends anything, the token still gets renewed.
+#[tokio::test]
+async fn the_renewer_refreshes_without_anyone_sending() {
+    let dir = tempdir().expect("临时目录");
+    std::env::set_var("JOY_FEISHU_OAUTH_SECRET", "s3cret");
+    write_token(
+        dir.path(),
+        &UserToken {
+            access_token: "u-old".to_string(),
+            refresh_token: "r-old".to_string(),
+            expires_at: now() + 5,
+        },
+    );
+    let (base, calls, _bodies) = fake_token_endpoint(0).await;
+    let handle = feishu_oauth::spawn_renewer(config(base), dir.path().to_path_buf());
+
+    for _ in 0..100 {
+        if feishu_oauth::load(dir.path()).is_some_and(|token| token.access_token == "u-new") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    handle.abort();
+
+    let saved = feishu_oauth::load(dir.path()).expect("续期后该有新 token");
+    assert_eq!(saved.access_token, "u-new");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "只该续一次");
+}
+
+/// A refused grant is terminal: the refresh token is dead and only a human can fix it.
+/// Retrying would just write the same line into a log every five minutes.
+#[tokio::test]
+async fn a_refused_grant_stops_the_renewer_for_good() {
+    let dir = tempdir().expect("临时目录");
+    std::env::set_var("JOY_FEISHU_OAUTH_SECRET", "s3cret");
+    write_token(
+        dir.path(),
+        &UserToken {
+            access_token: "u-old".to_string(),
+            refresh_token: "r-old".to_string(),
+            expires_at: now() - 1,
+        },
+    );
+    let (base, calls, _bodies) = fake_token_endpoint(20005).await;
+    let handle = feishu_oauth::spawn_renewer(config(base), dir.path().to_path_buf());
+
+    tokio::time::timeout(Duration::from_secs(10), handle)
+        .await
+        .expect("被拒之后该收工，而不是每 5 分钟重试到世界末日")
+        .expect("任务不该 panic");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "拒绝只问一次");
 }
