@@ -204,46 +204,14 @@ pub async fn run_turn(
         turn_id: turn_id.clone(),
     };
 
-    // ---- The checkpoint outlet: every tool-results boundary lands in state.db **before** the
-    // next model call goes out. A crash then costs at most "finish this iteration again", never
-    // the whole turn. A save failure warns and moves on — checkpointing must not stall the turn.
-    let checkpoint: joyczl_loop::CheckpointSink = {
-        let checkpoints = server.checkpoints.clone();
-        let session = session_id.clone();
-        let user_message = params.message.clone();
-        let sink = sink.clone();
-        let turn_id_cp = turn_id.clone();
-        Arc::new(move |cp: joyczl_loop::Checkpoint| {
-            let (checkpoints, session, user_message) =
-                (checkpoints.clone(), session.clone(), user_message.clone());
-            let (sink, turn_id) = (sink.clone(), turn_id_cp.clone());
-            Box::pin(async move {
-                let messages_json = serde_json::to_string(&cp.messages).unwrap_or_default();
-                let usage_json = serde_json::to_string(&cp.usage).unwrap_or_default();
-                if let Err(e) = checkpoints
-                    .save(
-                        &turn_id,
-                        &session,
-                        &user_message,
-                        &messages_json,
-                        cp.iterations,
-                        &usage_json,
-                    )
-                    .await
-                {
-                    eprintln!("(joy) checkpoint 没写进去（照常跑，崩了得整轮重来）：{e}");
-                    return;
-                }
-                sink.notification(ServerNotification::TurnCheckpointed(
-                    TurnCheckpointedNotification {
-                        turn_id,
-                        session_id: session,
-                        iterations: cp.iterations,
-                    },
-                ));
-            })
-        })
-    };
+    // ---- The checkpoint outlet (shared with the resumed turn — see checkpoint_outlet).
+    let checkpoint = checkpoint_outlet(
+        &server.checkpoints,
+        sink,
+        &turn_id,
+        &session_id,
+        &params.message,
+    );
 
     // Working directory for this turn: validate when provided (fail-closed). Reject before the
     // turn starts, leaving no half-turn behind.
@@ -837,6 +805,55 @@ pub(crate) async fn finalize_turn(
 pub(crate) struct FullTurn {
     pub(crate) result: LoopResult,
     pub(crate) gate: Option<GateDecision>,
+}
+
+/// The checkpoint outlet, constructed once per turn (fresh or resumed): every tool-results
+/// boundary lands in state.db **before** the next model call goes out. A crash then costs
+/// at most "finish this iteration again", never the whole turn. A save failure warns and
+/// moves on — checkpointing must not stall the turn.
+pub(crate) fn checkpoint_outlet(
+    checkpoints: &joyczl_state::Checkpoints,
+    sink: &EventSink,
+    turn_id: &str,
+    session_id: &str,
+    user_message: &str,
+) -> joyczl_loop::CheckpointSink {
+    let (checkpoints, session, user_message) = (
+        checkpoints.clone(),
+        session_id.to_string(),
+        user_message.to_string(),
+    );
+    let (sink, turn_id) = (sink.clone(), turn_id.to_string());
+    Arc::new(move |cp: joyczl_loop::Checkpoint| {
+        let (checkpoints, session, user_message) =
+            (checkpoints.clone(), session.clone(), user_message.clone());
+        let (sink, turn_id) = (sink.clone(), turn_id.clone());
+        Box::pin(async move {
+            let messages_json = serde_json::to_string(&cp.messages).unwrap_or_default();
+            let usage_json = serde_json::to_string(&cp.usage).unwrap_or_default();
+            if let Err(e) = checkpoints
+                .save(
+                    &turn_id,
+                    &session,
+                    &user_message,
+                    &messages_json,
+                    cp.iterations,
+                    &usage_json,
+                )
+                .await
+            {
+                eprintln!("(joy) checkpoint 没写进去（照常跑，崩了得整轮重来）：{e}");
+                return;
+            }
+            sink.notification(ServerNotification::TurnCheckpointed(
+                TurnCheckpointedNotification {
+                    turn_id,
+                    session_id: session,
+                    iterations: cp.iterations,
+                },
+            ));
+        })
+    })
 }
 
 /// Deregistration guard for a turn: however this turn exits (success, error, interrupted),

@@ -11,12 +11,7 @@
 //! stands on. New tool executions still pass the approval gate (default-deny) — resuming
 //! re-enters approved territory, it never widens it.
 
-use std::sync::Arc;
-
-use joyczl_protocol::{
-    ServerNotification, TurnCheckpointedNotification, TurnResumedNotification,
-    TurnStartedNotification,
-};
+use joyczl_protocol::{ServerNotification, TurnResumedNotification, TurnStartedNotification};
 use joyczl_provider::{Message, Resolved, Usage};
 use joyczl_state::CheckpointRow;
 
@@ -102,44 +97,14 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
             completed_iterations: row.iterations,
             usage,
         }),
-        checkpoint: {
-            // Same outlet as a fresh turn: every further boundary is durable again.
-            let checkpoints = server.checkpoints.clone();
-            let session = session_id.clone();
-            let user_message = row.user_message.clone();
-            let sink_owned = sink.clone();
-            let turn_id_cp = turn_id.clone();
-            Some(Arc::new(move |cp: joyczl_loop::Checkpoint| {
-                let (checkpoints, session, user_message) =
-                    (checkpoints.clone(), session.clone(), user_message.clone());
-                let (sink, turn_id) = (sink_owned.clone(), turn_id_cp.clone());
-                Box::pin(async move {
-                    let messages_json = serde_json::to_string(&cp.messages).unwrap_or_default();
-                    let usage_json = serde_json::to_string(&cp.usage).unwrap_or_default();
-                    if let Err(e) = checkpoints
-                        .save(
-                            &turn_id,
-                            &session,
-                            &user_message,
-                            &messages_json,
-                            cp.iterations,
-                            &usage_json,
-                        )
-                        .await
-                    {
-                        eprintln!("(joy) checkpoint 没写进去（照常跑，崩了得整轮重来）：{e}");
-                        return;
-                    }
-                    sink.notification(ServerNotification::TurnCheckpointed(
-                        TurnCheckpointedNotification {
-                            turn_id,
-                            session_id: session,
-                            iterations: cp.iterations,
-                        },
-                    ));
-                })
-            }))
-        },
+        // Same outlet as a fresh turn: every further boundary is durable again.
+        checkpoint: Some(crate::turn::checkpoint_outlet(
+            &server.checkpoints,
+            sink,
+            &turn_id,
+            &session_id,
+            &row.user_message,
+        )),
     };
 
     match full_turn(
