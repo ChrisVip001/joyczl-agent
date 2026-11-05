@@ -14,14 +14,20 @@
 
 pub mod config;
 pub mod email;
+pub mod feishu;
 pub mod smtp;
 
-pub use config::{ConnectorConfig, EmailConfig, RecipientPolicy};
+pub use config::{ConnectorConfig, EmailConfig, FeishuConfig, RecipientPolicy};
 pub use email::email_send_tool;
+pub use feishu::feishu_send_tool;
 
 #[cfg(test)]
 #[path = "email_tests.rs"]
 mod email_tests;
+
+#[cfg(test)]
+#[path = "feishu_tests.rs"]
+mod feishu_tests;
 
 /// A message that may leave the machine. Built by the tool, sent by a transport.
 #[derive(Debug, Clone, PartialEq, Eq)]

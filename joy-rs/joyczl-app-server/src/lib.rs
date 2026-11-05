@@ -881,6 +881,23 @@ async fn builtin_tools(
     // registered either: a tool that is guaranteed to fail only invites doomed calls.
     match joyczl_connector::config::load(&settings.home) {
         Ok(config) => {
+            if let Some(feishu) = config.feishu.clone() {
+                if feishu.allow_recipients.is_empty() {
+                    eprintln!(
+                        "(joy) 连接器 feishu 配置了但白名单是空的（谁都不能收）—— \
+                         feishu_send 未注册；在 {} 里填 allow_recipients",
+                        settings.home.join("connectors.json").display()
+                    );
+                } else {
+                    let mode = if feishu.live {
+                        "live（每次实际发送都会问人）"
+                    } else {
+                        "草稿模式（只写 outbox，不发）"
+                    };
+                    tools.register(joyczl_connector::feishu_send_tool(feishu));
+                    eprintln!("(joy) 连接器 feishu 已启用：feishu_send —— {mode}");
+                }
+            }
             if let Some(email) = config.email {
                 if email.allow_recipients.is_empty() {
                     eprintln!(

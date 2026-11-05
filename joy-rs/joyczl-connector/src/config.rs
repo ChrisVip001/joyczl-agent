@@ -31,6 +31,69 @@ use serde::Deserialize;
 pub struct ConnectorConfig {
     #[serde(default)]
     pub email: Option<EmailConfig>,
+    #[serde(default)]
+    pub feishu: Option<FeishuConfig>,
+}
+
+/// 飞书（Lark）自建应用。消息以**应用身份**发出（tenant_access_token），
+/// 这也是机器人能做的事；以用户身份行事需要 OAuth 授权码 + 控制台登记回调，
+/// 见 docs/limitations：没有可验证的 app 之前不写不可验证的流程。
+///
+/// ```json
+/// {
+///   "feishu": {
+///     "app_id": "cli_a…",
+///     "app_secret": "keychain:connector:feishu",
+///     "allow_recipients": ["oc_聊天id", "ou_用户id"],
+///     "live": false
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeishuConfig {
+    pub app_id: String,
+    /// `env:VAR` or a `SecretStore` account name.
+    pub app_secret: String,
+    /// `open_id` (a person) or `chat_id` (a group) — must match the ids in the allowlist.
+    #[serde(default = "default_receive_id_type")]
+    pub receive_id_type: String,
+    /// Hard boundary, same rule as email: empty = nobody.
+    #[serde(default)]
+    pub allow_recipients: Vec<String>,
+    /// `false` (default): drafts to `<home>/outbox/`.
+    #[serde(default)]
+    pub live: bool,
+    /// Override for tests and self-hosted Lark deployments; defaults to the public cloud.
+    #[serde(default = "default_feishu_base")]
+    pub base_url: String,
+}
+
+fn default_receive_id_type() -> String {
+    "open_id".to_string()
+}
+
+fn default_feishu_base() -> String {
+    "https://open.feishu.cn".to_string()
+}
+
+impl FeishuConfig {
+    pub fn permits(&self, receive_id: &str) -> bool {
+        let target = receive_id.trim().to_ascii_lowercase();
+        !target.is_empty()
+            && self
+                .allow_recipients
+                .iter()
+                .any(|entry| entry.trim().to_ascii_lowercase() == target)
+    }
+
+    /// Resolve the app secret (keychain / env) — same rule as email's SMTP password.
+    pub fn secret(&self, home: &Path) -> Option<String> {
+        match self.app_secret.strip_prefix("env:") {
+            Some(var) => std::env::var(var).ok().filter(|v| !v.trim().is_empty()),
+            None => SecretStore::auto().get(home, &self.app_secret),
+        }
+    }
 }
 
 /// One email account. `smtp_port` decides the transport:

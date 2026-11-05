@@ -176,7 +176,7 @@ fn recipients(raw: &str) -> Vec<String> {
 
 /// One line for the approval card: subject plus as much body as a person can judge in
 /// a glance. The full body goes to the draft file when it doesn't fit.
-fn summarize(subject: &str, body: &str) -> String {
+pub(crate) fn summarize(subject: &str, body: &str) -> String {
     let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
     let preview: String = flat.chars().take(160).collect();
     if preview.len() < flat.len() {

@@ -23,6 +23,8 @@ serde_json = { workspace = true }
 joyczl-tools = { workspace = true }
 joyczl-config = { workspace = true }
 joyczl-state = { workspace = true }
+# reqwest 早就在树里（网关 / MCP），飞书两个端点是它最平常的用法。
+reqwest = { workspace = true }
 tokio = { workspace = true }
 # TLS 只用于 SMTP（465 隐式 TLS / 587 STARTTLS）。rustls 经由 reqwest 早就在树里，
 # 这里显式声明是为了「谁在用」可查 —— 不引 native-tls、不依赖系统 OpenSSL。
