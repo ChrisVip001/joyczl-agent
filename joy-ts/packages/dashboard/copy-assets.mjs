@@ -8,6 +8,6 @@ import { copyFile } from "node:fs/promises";
 
 const here = import.meta.dirname; // script sits at the package root, beside src/
 
-for (const file of ["index.html", "style.css"]) {
+for (const file of ["index.html", "style.css", "manifest.webmanifest", "sw.js", "icon.svg", "icon-maskable.svg"]) {
   await copyFile(`${here}/src/${file}`, `${here}/dist/${file}`);
 }

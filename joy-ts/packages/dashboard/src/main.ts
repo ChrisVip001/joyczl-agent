@@ -1082,6 +1082,17 @@ function must<T extends HTMLElement = HTMLElement>(id: string): T {
   return node as T;
 }
 
+// PWA：静态资源交给 service worker（缓存优先、后台更新）；/api 一帧不缓存。
+// 仅 https 或 localhost 下注册——这是浏览器自己的要求，失败不吵（安装能力是锦上添花）。
+if (
+  "serviceWorker" in navigator &&
+  (location.protocol === "https:" ||
+    location.hostname === "localhost" ||
+    location.hostname === "127.0.0.1")
+) {
+  navigator.serviceWorker.register("./sw.js").catch(() => undefined);
+}
+
 // 登录门：远程模式（配置了服务器地址）且本设备还没有 token → 先登录，再进应用。
 // 本机同源模式不设门——`joy dashboard` 打开即用，401 时才有一次性 token 询问。
 if (localStorage.getItem("joy-server") !== null && localStorage.getItem("joy-ops-token") === null) {
