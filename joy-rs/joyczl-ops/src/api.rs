@@ -86,6 +86,23 @@ impl EventPing {
                 turn_id: None,
                 session_id: None,
             },
+            // The long-task engine's knocks: a boundary landed, a crashed turn is being
+            // continued, a checkpoint was closed without resuming.
+            ServerNotification::TurnCheckpointed(n) => EventPing {
+                kind: "task_progress",
+                turn_id: Some(n.turn_id.clone()),
+                session_id: Some(n.session_id.clone()),
+            },
+            ServerNotification::TurnResumed(n) => EventPing {
+                kind: "task_resumed",
+                turn_id: Some(n.turn_id.clone()),
+                session_id: Some(n.session_id.clone()),
+            },
+            ServerNotification::TurnSuspended(n) => EventPing {
+                kind: "task_suspended",
+                turn_id: Some(n.turn_id.clone()),
+                session_id: Some(n.session_id.clone()),
+            },
             // Flow noise (text deltas, tool calls, gates, retries) — knock once per
             // meaningful change, not once per token.
             _ => return None,
@@ -755,6 +772,9 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
         N::ToolStarted(n) => Some(&n.turn_id),
         N::ToolCompleted(n) => Some(&n.turn_id),
         N::TurnCompleted(n) => Some(&n.turn_id),
+        N::TurnCheckpointed(n) => Some(&n.turn_id),
+        N::TurnResumed(n) => Some(&n.turn_id),
+        N::TurnSuspended(n) => Some(&n.turn_id),
         N::ConsolidationCompleted(_)
         | N::GraphStarted(_)
         | N::GraphNodeStarted(_)

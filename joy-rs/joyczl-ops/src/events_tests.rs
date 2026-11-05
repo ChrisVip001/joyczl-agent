@@ -104,3 +104,36 @@ async fn cors_preflight_passes_for_api() {
         Some(&HeaderValue::from_static("*")),
     );
 }
+
+/// The long-task engine's knocks distill like any other: a boundary, a resumed turn and a
+/// closed checkpoint each become one ping carrying the turn and session ids.
+#[test]
+fn task_pings_distill_the_checkpoint_lifecycle() {
+    let checkpointed =
+        ServerNotification::TurnCheckpointed(joyczl_protocol::TurnCheckpointedNotification {
+            turn_id: "t-crash".to_string(),
+            session_id: "default".to_string(),
+            iterations: 3,
+        });
+    let ping = EventPing::of(&checkpointed).expect("边界落盘是一条 ping");
+    assert_eq!(ping.kind, "task_progress");
+    assert_eq!(ping.turn_id.as_deref(), Some("t-crash"));
+
+    let resumed = ServerNotification::TurnResumed(joyczl_protocol::TurnResumedNotification {
+        turn_id: "t-crash".to_string(),
+        session_id: "default".to_string(),
+        from_iterations: 3,
+        reason: "reconcile: crash recovery".to_string(),
+    });
+    let ping = EventPing::of(&resumed).expect("续跑是一条 ping");
+    assert_eq!(ping.kind, "task_resumed");
+    assert_eq!(ping.session_id.as_deref(), Some("default"));
+
+    let suspended = ServerNotification::TurnSuspended(joyczl_protocol::TurnSuspendedNotification {
+        turn_id: "t-crash".to_string(),
+        session_id: "default".to_string(),
+        reason: "interrupted by user".to_string(),
+    });
+    let ping = EventPing::of(&suspended).expect("挂起是一条 ping");
+    assert_eq!(ping.kind, "task_suspended");
+}
