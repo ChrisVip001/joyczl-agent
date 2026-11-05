@@ -20,6 +20,7 @@ use joyczl_protocol::{
     MemoryListEpisodesResponse, MemoryListResponse, ModelProfilesResponse, ModelRemoveParams,
     ModelRemoveResponse, ModelSaveParams, ModelSaveResponse, ScheduleListResponse,
     ServerNotification, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
+    TaskActionParams, TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse,
     TodoListView, TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
     UsageSummaryResponse,
 };
@@ -103,6 +104,13 @@ impl EventPing {
                 turn_id: Some(n.turn_id.clone()),
                 session_id: Some(n.session_id.clone()),
             },
+            // A long task changed state: created / running / paused / done. Same knock — the
+            // receiver pulls the details (the task card is one /api/data away).
+            ServerNotification::TaskUpdated(n) => EventPing {
+                kind: "task",
+                turn_id: None,
+                session_id: Some(n.session_id.clone()),
+            },
             // Flow noise (text deltas, tool calls, gates, retries) — knock once per
             // meaningful change, not once per token.
             _ => return None,
@@ -178,7 +186,7 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
     // Goal and todo are **per viewed session**: only fetched when the page names one.
     // Two read-only RPC methods — ops is a client of app-server, the same world as
     // every other client; the stdio queue is the honest path, even for reads.
-    let (goal, todos) = match session {
+    let (goal, todos, task) = match session {
         Some(id) => {
             let goal: GoalSetResponse = app
                 .request(methods::GOAL_VIEW, json!({ "sessionId": id }))
@@ -186,9 +194,13 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
             let todos: Option<TodoListView> = app
                 .request(methods::TODO_VIEW, json!({ "sessionId": id }))
                 .await?;
-            (Some(goal), todos)
+            // The long task behind that goal (0.11.0): status + round account + the pause switch.
+            let task: TaskViewResponse = app
+                .request(methods::TASK_VIEW, json!({ "sessionId": id }))
+                .await?;
+            (Some(goal), todos, task.task)
         }
-        None => (None, None),
+        None => (None, None, None),
     };
 
     Ok(DashboardData {
@@ -199,6 +211,7 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
         episodes: episodes.data,
         goal,
         todos,
+        task,
     })
 }
 
@@ -240,6 +253,82 @@ pub async fn goal(
         .await
     {
         Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `GET /api/tasks` — the long-task panel: every task, newest first.
+pub async fn tasks(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    match app
+        .request::<TaskListResponse>(methods::TASK_LIST, json!({}))
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+/// `POST /api/task` — create / suspend / resume / cancel, one door for the human's switches.
+///
+/// The body carries `action` plus that action's params; ops only translates — every rule
+/// (one active task per session, paused checkpoints stay resumable) lives in app-server.
+pub async fn task(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let action = body
+        .get("action")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let result = match action.as_str() {
+        "create" => {
+            let params: TaskCreateParams = match serde_json::from_value(body.clone()) {
+                Ok(params) => params,
+                Err(e) => return failed(StatusCode::BAD_REQUEST, ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("建任务的参数不对：{e}"),
+                    data: None,
+                }),
+            };
+            match app
+                .request::<TaskEnvelope>(methods::TASK_CREATE, serde_json::to_value(params).expect("可序列化"))
+                .await
+            {
+                Ok(envelope) => Ok(envelope),
+                Err(error) => Err(error),
+            }
+        }
+        "suspend" | "resume" | "cancel" => {
+            let params: TaskActionParams = match serde_json::from_value(body.clone()) {
+                Ok(params) => params,
+                Err(e) => return failed(StatusCode::BAD_REQUEST, ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("任务动作的参数不对：{e}"),
+                    data: None,
+                }),
+            };
+            let method = match action.as_str() {
+                "suspend" => methods::TASK_SUSPEND,
+                "resume" => methods::TASK_RESUME,
+                _ => methods::TASK_CANCEL,
+            };
+            match app
+                .request::<TaskEnvelope>(method, serde_json::to_value(params).expect("可序列化"))
+                .await
+            {
+                Ok(envelope) => Ok(envelope),
+                Err(error) => Err(error),
+            }
+        }
+        other => Err(ErrorObject {
+            code: codes::INVALID_PARAMS,
+            message: format!("不认识的任务动作：{other}（create/suspend/resume/cancel）"),
+            data: None,
+        }),
+    };
+    match result {
+        Ok(envelope) => Json(envelope).into_response(),
         Err(error) => failed(StatusCode::OK, error),
     }
 }
@@ -775,7 +864,8 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
         N::TurnCheckpointed(n) => Some(&n.turn_id),
         N::TurnResumed(n) => Some(&n.turn_id),
         N::TurnSuspended(n) => Some(&n.turn_id),
-        N::ConsolidationCompleted(_)
+        N::TaskUpdated(_)
+        | N::ConsolidationCompleted(_)
         | N::GraphStarted(_)
         | N::GraphNodeStarted(_)
         | N::GraphNodeEnded(_)

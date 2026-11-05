@@ -291,6 +291,9 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/approval", post(api::approval))
         .route("/api/interrupt", post(api::interrupt))
         .route("/api/goal", post(api::goal))
+        // Long tasks: list + one door for create/suspend/resume/cancel (human-only switches).
+        .route("/api/tasks", get(api::tasks))
+        .route("/api/task", post(api::task))
         .route("/api/usage", get(api::usage))
         .route("/api/approvals", get(api::approvals))
         .route("/api/schedules", get(api::schedules))
