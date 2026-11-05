@@ -41,6 +41,93 @@ const EPISODE_LIMIT: u32 = 20;
 /// and the channel is torn down when the turn ends.
 const TURN_BUFFER: usize = 1024;
 
+/// Cross-device sync ping: a notification distilled to "what happened, where". A ping is
+/// a knock on the door, **not the mail** — the receiver pulls `/api/data` for details.
+/// Deliberately narrow: textDelta / tool-call floods stay inside the owning device's own
+/// turn stream; other devices only learn that *something* happened.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EventPing {
+    pub kind: &'static str,
+    pub turn_id: Option<String>,
+    pub session_id: Option<String>,
+}
+
+impl EventPing {
+    pub(crate) fn of(notification: &ServerNotification) -> Option<EventPing> {
+        let ping = match notification {
+            ServerNotification::TurnStarted(n) => EventPing {
+                kind: "turn_started",
+                turn_id: Some(n.turn_id.clone()),
+                session_id: Some(n.session_id.clone()),
+            },
+            ServerNotification::TurnCompleted(n) => EventPing {
+                kind: "turn_completed",
+                turn_id: Some(n.turn_id.clone()),
+                session_id: None,
+            },
+            ServerNotification::ApprovalRequested(n) => EventPing {
+                kind: "approval",
+                turn_id: Some(n.turn_id.clone()),
+                session_id: None,
+            },
+            ServerNotification::GraphStarted(_) => EventPing {
+                kind: "graph",
+                turn_id: None,
+                session_id: None,
+            },
+            ServerNotification::ConsolidationCompleted(_) => EventPing {
+                kind: "memory",
+                turn_id: None,
+                session_id: None,
+            },
+            ServerNotification::Error(_) => EventPing {
+                kind: "error",
+                turn_id: None,
+                session_id: None,
+            },
+            // Flow noise (text deltas, tool calls, gates, retries) — knock once per
+            // meaningful change, not once per token.
+            _ => return None,
+        };
+        Some(ping)
+    }
+}
+
+/// `GET /api/events` — one SSE channel of pings for this session's app-server.
+///
+/// The connection holds the app-server Arc, so a phone keeping this open pins its
+/// instance in the hub pool (idle eviction skips pinned instances — by design: the
+/// "idle" phone is the cheapest warm start there is).
+pub async fn events(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    use futures_util::StreamExt;
+
+    let rx = app.subscribe();
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(notification) => {
+                    if let Some(ping) = EventPing::of(&notification) {
+                        return Some((ping, rx));
+                    }
+                    // Flow noise: keep waiting for the next meaningful one.
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+    .map(|ping| {
+        Ok::<_, std::convert::Infallible>(
+            Event::default().data(serde_json::to_string(&ping).expect("ping 装得进 JSON")),
+        )
+    });
+
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
 /// `GET /api/data` — everything the first screen needs, fetched in one go.
 ///
 /// One endpoint instead of four concurrent frontend requests: the app-server handles one

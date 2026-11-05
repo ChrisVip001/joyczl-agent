@@ -25,6 +25,10 @@ pub mod hub;
 mod auth_tests;
 
 #[cfg(test)]
+#[path = "events_tests.rs"]
+mod events_tests;
+
+#[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
 
@@ -279,6 +283,9 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub fn router(gate: Gate, assets: PathBuf) -> Router {
     Router::new()
         .route("/api/data", get(api::data))
+        // Cross-device sync: lightweight pings (see EventPing) — other devices learn
+        // "something happened", pull the details themselves.
+        .route("/api/events", get(api::events))
         .route("/api/session", get(api::session))
         .route("/api/turn", post(api::turn))
         .route("/api/approval", post(api::approval))
@@ -320,6 +327,10 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ))
+        // Cross-origin clients (Tauri shell, a PWA served elsewhere) talk to this API with
+        // a Bearer header — never cookies — so a permissive CORS layer adds no new attack
+        // surface: the browser does not attach credentials on its own.
+        .layer(tower_http::cors::CorsLayer::permissive())
         .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024))
         .with_state(gate)
 }

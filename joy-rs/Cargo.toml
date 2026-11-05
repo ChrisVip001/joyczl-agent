@@ -110,7 +110,7 @@ sqlx = { version = "0.8", default-features = false, features = [
 #   set-header = 给静态文件加 no-cache：前端还在天天改，浏览器缓存会让
 #   「我明明改了」变成十分钟的鬼故事。
 axum = "0.8"
-tower-http = { version = "0.6", features = ["fs", "set-header"] }
+tower-http = { version = "0.6", features = ["fs", "set-header", "cors"] }
 
 # ---- 仅代码生成 / 测试用 --------------------------------------------------
 # TypeScript 绑定

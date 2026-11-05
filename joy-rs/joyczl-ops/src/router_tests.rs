@@ -10,7 +10,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::json;
 use tower::ServiceExt;
 
-use crate::client::client_tests::fake;
+pub(crate) use crate::client::client_tests::fake;
 use crate::{constant_time_eq, router, validate_binding, Gate};
 
 /// Start an auto-responder: minimal valid answers per method. **Must answer** — with the
@@ -38,7 +38,7 @@ pub(crate) fn auto_respond(fake: crate::client::client_tests::Fake) {
 }
 
 /// Fire one request, return the status code.
-async fn status_of(router: axum::Router, path: &str, auth: Option<&str>) -> StatusCode {
+pub(crate) async fn status_of(router: axum::Router, path: &str, auth: Option<&str>) -> StatusCode {
     let mut builder = Request::builder().uri(path);
     if let Some(token) = auth {
         builder = builder.header("authorization", format!("Bearer {token}"));
