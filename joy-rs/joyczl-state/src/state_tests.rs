@@ -385,3 +385,69 @@ async fn the_pool_waits_for_locks_and_uses_wal() {
         .unwrap();
     assert_eq!(journal.to_lowercase(), "wal", "读不该被写堵住");
 }
+/// Checkpoints: every boundary overwrites the previous one (only the newest working memory
+/// is worth resuming from); reconciliation hands out exactly the still-`open` rows.
+#[tokio::test]
+async fn checkpoints_keep_the_newest_working_memory_open() {
+    use crate::Checkpoints;
+
+    let checkpoints = Checkpoints::new(temp_db("checkpoints.db").await);
+
+    // First boundary lands, then a second one overwrites it.
+    checkpoints
+        .save(
+            "t1",
+            "s",
+            "帮我排三天会",
+            r#"[{"m":1}]"#,
+            2,
+            r#"{"input_tokens":100}"#,
+        )
+        .await
+        .unwrap();
+    checkpoints
+        .save(
+            "t1",
+            "s",
+            "帮我排三天会",
+            r#"[{"m":2}]"#,
+            5,
+            r#"{"input_tokens":300}"#,
+        )
+        .await
+        .unwrap();
+
+    let rows = checkpoints.open_rows().await.unwrap();
+    assert_eq!(rows.len(), 1, "同一个回合只有一行");
+    assert_eq!(rows[0].iterations, 5, "只留最新的");
+    assert!(
+        rows[0].messages_json.contains(r#"{"m":2}"#),
+        "工作记忆是新版"
+    );
+    assert_eq!(rows[0].status, "open");
+
+    // Done: out of the reconciliation list, but the ledger row stays.
+    checkpoints.finish("t1", "done").await.unwrap();
+    assert!(checkpoints.open_rows().await.unwrap().is_empty());
+
+    // An abandoned one (human interrupt) is not resumed either.
+    checkpoints
+        .save("t2", "s", "长任务", "[]", 1, "{}")
+        .await
+        .unwrap();
+    checkpoints.finish("t2", "abandoned").await.unwrap();
+    assert!(checkpoints.open_rows().await.unwrap().is_empty());
+
+    // Two open checkpoints from two turns: reconciliation sees both, oldest first.
+    checkpoints
+        .save("t3", "s", "先来的", "[]", 1, "{}")
+        .await
+        .unwrap();
+    checkpoints
+        .save("t4", "s", "后来的", "[]", 1, "{}")
+        .await
+        .unwrap();
+    let rows = checkpoints.open_rows().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].turn_id, "t3", "先来先续");
+}

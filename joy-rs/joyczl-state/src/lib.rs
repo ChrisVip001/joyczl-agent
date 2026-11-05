@@ -15,6 +15,7 @@
 pub mod approvals;
 pub mod calendar;
 pub mod chat;
+pub mod checkpoints;
 pub mod conformance;
 pub mod db;
 pub mod episodes;
@@ -28,6 +29,7 @@ pub mod usage;
 pub use approvals::{ApprovalLogRow, Approvals};
 pub use calendar::{Calendar, CalendarRow};
 pub use chat::{Chat, MessageRow, SessionRow};
+pub use checkpoints::{CheckpointRow, Checkpoints};
 pub use db::open;
 pub use episodes::{EpisodeRow, Episodes};
 pub use facts::{FactRow, Facts};
