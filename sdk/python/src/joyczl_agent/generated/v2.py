@@ -596,7 +596,41 @@ class ServerNotification13(BaseModel):
     workflow: str
 
 
+class ServerNotification14(BaseModel):
+    iterations: Annotated[
+        int,
+        Field(
+            description='How many loop iterations are already done (a checkpoint lands at each tool-results boundary).'
+        ),
+    ]
+    sessionId: str
+    turnId: str
+    type: Literal['turnCheckpointed']
+
+
 class ServerNotification15(BaseModel):
+    fromIterations: Annotated[
+        int,
+        Field(description='How many iterations the checkpoint had already completed.'),
+    ]
+    reason: Annotated[
+        str, Field(description='Why it is resuming (`reconcile: crash recovery`, …).')
+    ]
+    sessionId: str
+    turnId: str
+    type: Literal['turnResumed']
+
+
+class ServerNotification16(BaseModel):
+    reason: Annotated[
+        str, Field(description='Why it was abandoned (`interrupted by user`, …).')
+    ]
+    sessionId: str
+    turnId: str
+    type: Literal['turnSuspended']
+
+
+class ServerNotification18(BaseModel):
     code: int
     data: Any | None = None
     message: str
@@ -640,6 +674,10 @@ class SessionSummary(BaseModel):
             description='Session title = the first 60 characters of the first user message.'
         ),
     ]
+
+
+class SessionViewParams(BaseModel):
+    sessionId: str
 
 
 class SettingsPatch(BaseModel):
@@ -689,6 +727,16 @@ class TextDeltaNotification(BaseModel):
         ),
     ]
     turnId: str
+
+
+class TodoItemView(BaseModel):
+    content: str
+    status: str
+
+
+class TodoListView(BaseModel):
+    items: list[TodoItemView]
+    revision: int
 
 
 class TokenUsage(BaseModel):
@@ -815,7 +863,19 @@ class DashboardData(BaseModel):
             description='ISO 8601, millisecond precision. The page shows "when is this data from".'
         ),
     ]
+    goal: Annotated[
+        GoalSetResponse | None,
+        Field(
+            description="The viewed session's goal, when `sessionId` was asked for. Same shape as `goal/set`'s answer — one source of truth, no second modeling."
+        ),
+    ] = None
     sessions: list[SessionSummary]
+    todos: Annotated[
+        TodoListView | None,
+        Field(
+            description="The viewed session's todo sheet, when asked for and non-empty. This is the model's own working sheet (todo_write), shown to the human as the task card."
+        ),
+    ] = None
 
 
 class GateDecision(BaseModel):
@@ -1029,7 +1089,7 @@ class Message(BaseModel):
     role: MessageRole
 
 
-class ServerNotification14(BaseModel):
+class ServerNotification17(BaseModel):
     iterations: int
     meta: TurnMeta
     reply: str
@@ -1055,6 +1115,9 @@ class ServerNotification(
         | ServerNotification13
         | ServerNotification14
         | ServerNotification15
+        | ServerNotification16
+        | ServerNotification17
+        | ServerNotification18
     ]
 ):
     root: Annotated[
@@ -1072,7 +1135,10 @@ class ServerNotification(
         | ServerNotification12
         | ServerNotification13
         | ServerNotification14
-        | ServerNotification15,
+        | ServerNotification15
+        | ServerNotification16
+        | ServerNotification17
+        | ServerNotification18,
         Field(
             description='The full stream of events for one turn.\n\n`type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated union. **No failure here should crash the client**: this only describes "what happened".',
             title='ServerNotification',

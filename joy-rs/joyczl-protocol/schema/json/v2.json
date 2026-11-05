@@ -1775,6 +1775,97 @@
           "type": "object"
         },
         {
+          "description": "A checkpoint is being resumed after crash recovery (finished tools are not re-run).",
+          "properties": {
+            "iterations": {
+              "description": "How many loop iterations are already done (a checkpoint lands at each tool-results boundary).",
+              "format": "int32",
+              "type": "integer"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "turnCheckpointed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "iterations",
+            "sessionId",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A checkpoint is being resumed: startup reconciliation found it unfinished and the loop continues from where it stood (finished tools are not re-run). The human said earlier \"keep going until X\" by starting the turn — resuming is not the model assigning itself work.",
+          "properties": {
+            "fromIterations": {
+              "description": "How many iterations the checkpoint had already completed.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "reason": {
+              "description": "Why it is resuming (`reconcile: crash recovery`, …).",
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "turnResumed"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "fromIterations",
+            "reason",
+            "sessionId",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A checkpoint is abandoned: the human interrupted the turn (or the session moved on) — it will NOT be auto-resumed. Suspended, not silently lost: the ledger says so.",
+          "properties": {
+            "reason": {
+              "description": "Why it was abandoned (`interrupted by user`, …).",
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "turnSuspended"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "sessionId",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.",
           "properties": {
             "iterations": {

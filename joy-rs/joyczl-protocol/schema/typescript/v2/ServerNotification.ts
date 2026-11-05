@@ -12,8 +12,11 @@ import type { RetryNotification } from "./RetryNotification";
 import type { TextDeltaNotification } from "./TextDeltaNotification";
 import type { ToolCompletedNotification } from "./ToolCompletedNotification";
 import type { ToolStartedNotification } from "./ToolStartedNotification";
+import type { TurnCheckpointedNotification } from "./TurnCheckpointedNotification";
 import type { TurnCompletedNotification } from "./TurnCompletedNotification";
+import type { TurnResumedNotification } from "./TurnResumedNotification";
 import type { TurnStartedNotification } from "./TurnStartedNotification";
+import type { TurnSuspendedNotification } from "./TurnSuspendedNotification";
 
 /**
  * The full stream of events for one turn.
@@ -35,5 +38,8 @@ export type ServerNotification =
   | ({ type: "graphNodeStarted" } & GraphNodeStartedNotification)
   | ({ type: "graphNodeEnded" } & GraphNodeEndedNotification)
   | ({ type: "graphEnded" } & GraphEndedNotification)
+  | ({ type: "turnCheckpointed" } & TurnCheckpointedNotification)
+  | ({ type: "turnResumed" } & TurnResumedNotification)
+  | ({ type: "turnSuspended" } & TurnSuspendedNotification)
   | ({ type: "turnCompleted" } & TurnCompletedNotification)
   | ({ type: "error" } & ErrorNotification);

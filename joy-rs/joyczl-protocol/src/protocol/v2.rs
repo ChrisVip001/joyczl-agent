@@ -221,6 +221,45 @@ pub struct GoalRoundNotification {
     pub reason: String,
 }
 
+/// A checkpoint has been written: this turn's working memory (model thoughts, tool results) is now
+/// in state.db — the loop can continue from here after a crash, finished tools are never re-run.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TurnCheckpointedNotification {
+    pub turn_id: String,
+    pub session_id: String,
+    /// How many loop iterations are already done (a checkpoint lands at each tool-results boundary).
+    pub iterations: i32,
+}
+
+/// A checkpoint is being resumed: startup reconciliation found it unfinished and the loop
+/// continues from where it stood (finished tools are not re-run). The human said earlier
+/// "keep going until X" by starting the turn — resuming is not the model assigning itself work.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TurnResumedNotification {
+    pub turn_id: String,
+    pub session_id: String,
+    /// How many iterations the checkpoint had already completed.
+    pub from_iterations: i32,
+    /// Why it is resuming (`reconcile: crash recovery`, …).
+    pub reason: String,
+}
+
+/// A checkpoint is abandoned: the human interrupted the turn (or the session moved on) —
+/// it will NOT be auto-resumed. Suspended, not silently lost: the ledger says so.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TurnSuspendedNotification {
+    pub turn_id: String,
+    pub session_id: String,
+    /// Why it was abandoned (`interrupted by user`, …).
+    pub reason: String,
+}
+
 /// Response to `approval/respond`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1177,6 +1216,10 @@ pub enum ServerNotification {
     GraphNodeStarted(GraphNodeStartedNotification),
     GraphNodeEnded(GraphNodeEndedNotification),
     GraphEnded(GraphEndedNotification),
+    /// A checkpoint is being resumed after crash recovery (finished tools are not re-run).
+    TurnCheckpointed(TurnCheckpointedNotification),
+    TurnResumed(TurnResumedNotification),
+    TurnSuspended(TurnSuspendedNotification),
     /// Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and
     /// notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.
     TurnCompleted(Box<TurnCompletedNotification>),
