@@ -525,7 +525,7 @@ async function boot(): Promise<void> {
 /** Paint one screen of data. */
 async function refresh(): Promise<void> {
   try {
-    const data = await fetchDashboard();
+    const data = await fetchDashboard(current);
     dom.overview.replaceChildren(renderOverview(data, current, (id) => void open(id)));
     dom.memory.replaceChildren(renderMemory(data));
     dom.sessions.replaceChildren(sessionList(data, current, (id) => void open(id)));

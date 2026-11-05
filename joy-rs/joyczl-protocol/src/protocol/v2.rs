@@ -26,6 +26,10 @@ pub mod methods {
     pub const APPROVAL_RESPOND: &str = "approval/respond";
     /// Set/clear a goal (condition). **Only a human can start or stop it** — the model cannot.
     pub const GOAL_SET: &str = "goal/set";
+    /// Read a session's goal state (the dashboard's task card). Read-only, human-facing.
+    pub const GOAL_VIEW: &str = "goal/view";
+    /// Read a session's todo sheet (the dashboard's task card). Read-only, human-facing.
+    pub const TODO_VIEW: &str = "todo/view";
     pub const SESSION_LIST: &str = "session/list";
     pub const SESSION_NEW: &str = "session/new";
     pub const SESSION_MESSAGES: &str = "session/messages";
@@ -190,6 +194,16 @@ pub struct GoalSetResponse {
     #[serde(default)]
     pub rounds_used: i32,
     pub max_rounds: i32,
+}
+
+/// Which session to look at — the shared params of the dashboard's per-session reads
+/// (`goal/view`, `todo/view`). One field, one shape, no per-method re-modeling.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionViewParams {
+    pub session_id: String,
 }
 
 /// One notification per goal-loop verdict — "why did it run another round" is never guessed.
@@ -950,6 +964,39 @@ pub struct DashboardData {
     pub sessions: Vec<SessionSummary>,
     pub facts: Vec<Fact>,
     pub episodes: Vec<Episode>,
+    /// The viewed session's goal, when `sessionId` was asked for. Same shape as
+    /// `goal/set`'s answer — one source of truth, no second modeling.
+    #[serde(default)]
+    #[ts(optional)]
+    pub goal: Option<GoalSetResponse>,
+    /// The viewed session's todo sheet, when asked for and non-empty. This is the
+    /// model's own working sheet (todo_write), shown to the human as the task card.
+    #[serde(default)]
+    #[ts(optional)]
+    pub todos: Option<TodoListView>,
+}
+
+/// One row of the todo sheet. `status` is the wire form of `TodoStatus`
+/// (pending / in_progress / completed / cancelled) — a string, not an enum:
+/// the sheet is the model's vocabulary, the dashboard only paints it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TodoItemView {
+    pub content: String,
+    pub status: String,
+}
+
+/// The whole sheet as the human sees it. `revision` is the board's monotonic
+/// version — the UI can tell "changed" from "refetched" with it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TodoListView {
+    pub revision: i64,
+    pub items: Vec<TodoItemView>,
 }
 
 // ===========================================================================

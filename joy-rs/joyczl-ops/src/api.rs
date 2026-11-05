@@ -20,7 +20,7 @@ use joyczl_protocol::{
     MemoryListEpisodesResponse, MemoryListResponse, ModelProfilesResponse, ModelRemoveParams,
     ModelRemoveResponse, ModelSaveParams, ModelSaveResponse, ScheduleListResponse,
     ServerNotification, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
-    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
+    TodoListView, TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
     UsageSummaryResponse,
 };
 use serde_json::json;
@@ -46,14 +46,17 @@ const TURN_BUFFER: usize = 1024;
 /// One endpoint instead of four concurrent frontend requests: the app-server handles one
 /// request at a time (over stdio it is just a loop), so four requests queue there anyway.
 /// Composing one also guarantees "these numbers are from the same moment".
-pub async fn data(Extension(app): Extension<Arc<AppServer>>) -> Response {
-    match collect(&app).await {
+pub async fn data(
+    Extension(app): Extension<Arc<AppServer>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    match collect(&app, params.get("sessionId").map(String::as_str)).await {
         Ok(data) => Json(data).into_response(),
         Err(error) => failed(StatusCode::BAD_GATEWAY, error),
     }
 }
 
-async fn collect(app: &AppServer) -> Result<DashboardData, ErrorObject> {
+async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData, ErrorObject> {
     let config: ConfigReadResponse = app.request(methods::CONFIG_READ, json!({})).await?;
     let sessions: SessionListResponse = app
         .request(methods::SESSION_LIST, json!({ "limit": SESSION_LIMIT }))
@@ -68,12 +71,30 @@ async fn collect(app: &AppServer) -> Result<DashboardData, ErrorObject> {
         )
         .await?;
 
+    // Goal and todo are **per viewed session**: only fetched when the page names one.
+    // Two read-only RPC methods — ops is a client of app-server, the same world as
+    // every other client; the stdio queue is the honest path, even for reads.
+    let (goal, todos) = match session {
+        Some(id) => {
+            let goal: GoalSetResponse = app
+                .request(methods::GOAL_VIEW, json!({ "sessionId": id }))
+                .await?;
+            let todos: Option<TodoListView> = app
+                .request(methods::TODO_VIEW, json!({ "sessionId": id }))
+                .await?;
+            (Some(goal), todos)
+        }
+        None => (None, None),
+    };
+
     Ok(DashboardData {
         generated_at: Local::now().to_rfc3339(),
         config: config.config,
         sessions: sessions.data,
         facts: facts.data,
         episodes: episodes.data,
+        goal,
+        todos,
     })
 }
 

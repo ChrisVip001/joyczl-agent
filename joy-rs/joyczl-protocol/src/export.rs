@@ -112,6 +112,9 @@ macro_rules! protocol_types {
             ModelListResponse,
             // ---- Dashboard
             DashboardData,
+            TodoItemView,
+            TodoListView,
+            SessionViewParams,
             // ---- Notifications
             TurnStartedNotification,
             TextDeltaNotification,

@@ -70,9 +70,15 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
   return response;
 }
 
-/** First-screen data. Throws `ApiError` on failure. */
-export async function fetchDashboard(): Promise<DashboardData> {
-  const response = await apiFetch("/api/data", { headers: { accept: "application/json" } });
+/**
+ * First-screen data. `sessionId` names the viewed session — the per-session reads
+ * (goal state, todo sheet) ride along only when it's given. Throws `ApiError`.
+ */
+export async function fetchDashboard(sessionId: string | null = null): Promise<DashboardData> {
+  // The literal path stays a literal (smoke-dashboard greps the bundle for it).
+  const path =
+    sessionId === null ? "/api/data" : `/api/data?sessionId=${encodeURIComponent(sessionId)}`;
+  const response = await apiFetch(path, { headers: { accept: "application/json" } });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as DashboardData;
 }

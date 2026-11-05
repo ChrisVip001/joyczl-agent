@@ -13,8 +13,9 @@ use joyczl_protocol::{
     MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo, ModelListParams,
     ModelListResponse, ModelProfilesParams, ModelRemoveParams, ModelSaveParams, RequestId,
     ScheduleListParams, SessionListParams, SessionListResponse, SessionMessagesParams,
-    SessionMessagesResponse, SessionNewParams, SessionNewResponse, TurnInterruptParams,
-    TurnInterruptResponse, TurnStartParams, UsageSummaryParams, JSONRPC_VERSION,
+    SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionViewParams,
+    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, UsageSummaryParams,
+    JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -332,6 +333,19 @@ async fn dispatch(
             let p: GoalSetParams = parse(params, method)?;
             // Only a human can reach here: the model has no such tool, and no other method touches the goal table.
             respond(server.goal_set(&p.session_id, p.condition.as_deref()))
+        }
+
+        methods::GOAL_VIEW => {
+            let p: SessionViewParams = parse(params, method)?;
+            // Read-only: the dashboard's task card asks what the loop is doing. The model
+            // has no path here either — its own goal view arrives via the prompt injection.
+            respond(server.goal_view(&p.session_id))
+        }
+
+        methods::TODO_VIEW => {
+            let p: SessionViewParams = parse(params, method)?;
+            // None = the model never wrote a sheet for this session — the card just doesn't render.
+            respond(server.todo_view(&p.session_id))
         }
 
         methods::APPROVAL_RESPOND => {

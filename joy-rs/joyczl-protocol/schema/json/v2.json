@@ -231,11 +231,35 @@
           "description": "ISO 8601, millisecond precision. The page shows \"when is this data from\".",
           "type": "string"
         },
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GoalSetResponse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The viewed session's goal, when `sessionId` was asked for. Same shape as `goal/set`'s answer — one source of truth, no second modeling."
+        },
         "sessions": {
           "items": {
             "$ref": "#/definitions/SessionSummary"
           },
           "type": "array"
+        },
+        "todos": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TodoListView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The viewed session's todo sheet, when asked for and non-empty. This is the model's own working sheet (todo_write), shown to the human as the task card."
         }
       },
       "required": [
@@ -1970,6 +1994,19 @@
       "title": "SessionSummary",
       "type": "object"
     },
+    "SessionViewParams": {
+      "description": "Which session to look at — the shared params of the dashboard's per-session reads (`goal/view`, `todo/view`). One field, one shape, no per-method re-modeling.",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "SessionViewParams",
+      "type": "object"
+    },
     "SettingsPatch": {
       "description": "The **write patch** for config. Pass only the fields to change; null means leave as-is.",
       "properties": {
@@ -2128,6 +2165,42 @@
         "turnId"
       ],
       "title": "TextDeltaNotification",
+      "type": "object"
+    },
+    "TodoItemView": {
+      "description": "One row of the todo sheet. `status` is the wire form of `TodoStatus` (pending / in_progress / completed / cancelled) — a string, not an enum: the sheet is the model's vocabulary, the dashboard only paints it.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "status"
+      ],
+      "type": "object"
+    },
+    "TodoListView": {
+      "description": "The whole sheet as the human sees it. `revision` is the board's monotonic version — the UI can tell \"changed\" from \"refetched\" with it.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/definitions/TodoItemView"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "revision"
+      ],
       "type": "object"
     },
     "TokenUsage": {

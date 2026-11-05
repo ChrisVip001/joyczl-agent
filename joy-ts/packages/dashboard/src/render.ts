@@ -8,8 +8,10 @@ import type {
   DashboardData,
   Episode,
   Fact,
+  GoalSetResponse,
   Message,
   ScheduleStateRow,
+  TodoListView,
   SessionSummary,
   TokenUsage,
   ToolStartedNotification,
@@ -51,6 +53,18 @@ export function renderOverview(
 ): DocumentFragment {
   const { config } = data;
   const fragment = document.createDocumentFragment();
+
+  // The task card leads the overview when there is anything on it: what the loop is
+  // chasing, what the model ticked off — the two answers to "what is it doing now".
+  if (data.goal !== undefined || data.todos !== undefined) {
+    const emptyTodos: TodoListView = { revision: 0n, items: [] };
+    fragment.append(
+      renderTaskCard(
+        data.goal ?? { active: false, condition: null, roundsUsed: 0, maxRounds: 0 },
+        data.todos ?? emptyTodos,
+      ),
+    );
+  }
 
   fragment.append(
     el(
@@ -106,6 +120,52 @@ export function renderOverview(
     ),
   );
 
+  return fragment;
+}
+
+/**
+ * The task card: the goal loop's state plus the model's own todo sheet, as the human
+ * sees them. Both come from `DashboardData` (goal/todos, filled only when the page
+ * names a session) — this is where "what is the agent actually working on" lives.
+ */
+export function renderTaskCard(goal: GoalSetResponse, todos: TodoListView): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  const block = el("div", { class: "block taskcard" });
+
+  if (goal.active && goal.condition !== null) {
+    block.append(
+      el("h3", { text: "目标" }),
+      el(
+        "div",
+        { class: "task-goal" },
+        el("span", { class: "task-goal-text", text: goal.condition }),
+        el(
+          "span",
+          { class: "tag", text: `第 ${goal.roundsUsed}/${goal.maxRounds} 轮` },
+        ),
+      ),
+    );
+  }
+
+  if (todos.items.length > 0) {
+    block.append(
+      el("h3", { text: "待办" }),
+      el(
+        "ul",
+        { class: "task-todos" },
+        ...todos.items.map((item) =>
+          el(
+            "li",
+            { class: `task-todo st-${item.status}` },
+            el("span", { class: "task-glyph", "aria-hidden": "true" }),
+            el("span", { class: "task-text", text: item.content }),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (block.children.length > 0) fragment.append(block);
   return fragment;
 }
 

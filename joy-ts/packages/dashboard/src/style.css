@@ -1245,6 +1245,65 @@ textarea::placeholder {
   font-size: 13px;
 }
 
+/* ---- 任务卡：目标循环 + 模型自己的待办单 ---------------------------------------- */
+
+.task-goal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-goal-text {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.task-todos {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-todo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.task-glyph::before {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.st-pending .task-glyph::before {
+  content: "○";
+}
+
+.st-in_progress .task-glyph::before {
+  content: "◐";
+  color: var(--accent);
+}
+
+.st-completed .task-glyph::before {
+  content: "●";
+  color: var(--ok);
+}
+
+.st-cancelled .task-glyph::before {
+  content: "—";
+}
+
+.st-completed .task-text,
+.st-cancelled .task-text {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
 .row {
   display: flex;
   gap: 8px;

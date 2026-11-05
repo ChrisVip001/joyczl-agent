@@ -371,6 +371,48 @@ impl Server {
 
     /// This turn's approval channel. `never` mode (the default) returns `None` — nobody asks, so nobody
     /// answers, and actions requiring approval are rejected outright.
+    /// Dashboard read surface: the session's goal state. No goal = `active: false` —
+    /// the shape is the same struct `goal/set` answers with, one source of truth.
+    pub fn goal_view(&self, session_id: &str) -> joyczl_protocol::GoalSetResponse {
+        let table = self.goals.lock().expect("goal 锁不该中毒");
+        let max_rounds = self
+            .settings
+            .read()
+            .expect("settings 锁不该中毒")
+            .goal_max_rounds;
+        match table.get(session_id) {
+            Some(goal) => joyczl_protocol::GoalSetResponse {
+                active: true,
+                condition: Some(goal.condition.clone()),
+                rounds_used: goal.rounds,
+                max_rounds,
+            },
+            None => joyczl_protocol::GoalSetResponse {
+                active: false,
+                condition: None,
+                rounds_used: 0,
+                max_rounds,
+            },
+        }
+    }
+
+    /// Dashboard read surface: the session's todo sheet. `None` = never written.
+    pub fn todo_view(&self, session_id: &str) -> Option<joyczl_protocol::TodoListView> {
+        self.todo
+            .read(session_id)
+            .map(|list| joyczl_protocol::TodoListView {
+                revision: list.revision as i64,
+                items: list
+                    .items
+                    .into_iter()
+                    .map(|item| joyczl_protocol::TodoItemView {
+                        content: item.content,
+                        status: item.status.as_str().to_string(),
+                    })
+                    .collect(),
+            })
+    }
+
     /// Push goal endings outward (M3a): satisfied/impossible/round-limit/blocked all count —
     /// when the autonomous loop stops, a human should know, however ungracefully it stopped.
     pub(crate) fn notify_goal_finished(&self, session_id: &str, status: &str, reason: &str) {
