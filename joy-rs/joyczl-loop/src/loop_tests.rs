@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use joyczl_provider::mock::Mock;
-use joyczl_provider::StopReason;
+use joyczl_provider::{ContentBlock, Message, Role, StopReason, Usage};
 use joyczl_tools::handlers;
 use serde_json::json;
 
@@ -56,6 +56,8 @@ async fn turn<'a>(
         observer,
         on_text: None,
         interrupt: None,
+        checkpoint: None,
+        resume: None,
     })
     .await
     .expect("loop 跑完")
@@ -180,6 +182,8 @@ async fn iteration_limit_stops_the_loop() {
         observer: None,
         on_text: None,
         interrupt: None,
+        checkpoint: None,
+        resume: None,
     })
     .await
     .expect("护栏应当接住，而不是报错");
@@ -277,6 +281,8 @@ async fn streaming_emits_text_deltas_in_order() {
         observer: Some(observer),
         on_text: Some(on_text),
         interrupt: None,
+        checkpoint: None,
+        resume: None,
     })
     .await
     .expect("loop 跑完");
@@ -338,6 +344,8 @@ async fn streaming_works_across_tool_rounds() {
         observer: None,
         on_text: Some(on_text),
         interrupt: None,
+        checkpoint: None,
+        resume: None,
     })
     .await
     .expect("loop 跑完");
@@ -376,6 +384,8 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
         observer: None,
         on_text: None,
         interrupt: Some(interrupt),
+        checkpoint: None,
+        resume: None,
     })
     .await
     .expect("打断不该是错误");
@@ -428,6 +438,8 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
         observer: Some(observer),
         on_text: None,
         interrupt: Some(interrupt),
+        checkpoint: None,
+        resume: None,
     })
     .await
     .expect("打断不该是错误");
@@ -543,6 +555,8 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         observer: None,
         on_text: None,
         interrupt: None,
+        checkpoint: None,
+        resume: None,
     })
     .await
     .expect("loop 跑完");
@@ -579,4 +593,129 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
 
     // The spilled file lives under the session directory (`spill/date/…`).
     assert!(relative.starts_with("spill/"), "{relative}");
+}
+/// Checkpoints land at tool-results boundaries: one per completed iteration, carrying the
+/// full working memory — a crash there is resumable from exactly that point.
+#[tokio::test]
+async fn a_checkpoint_lands_at_every_tool_results_boundary() {
+    let mock = Mock::new(vec![
+        Mock::tool_use(
+            "tu_1",
+            "save_note",
+            json!({"subject": "alex", "content": "喜欢早会"}),
+        ),
+        Mock::text("记好了。"),
+    ]);
+    let tools = handlers::build_default();
+    let checkpoints: Arc<Mutex<Vec<crate::Checkpoint>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = {
+        let checkpoints = checkpoints.clone();
+        Arc::new(move |cp: crate::Checkpoint| {
+            let checkpoints = checkpoints.clone();
+            Box::pin(async move { checkpoints.lock().unwrap().push(cp) })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        }) as crate::CheckpointSink
+    };
+
+    let result = run(Turn {
+        user_images: Vec::new(),
+        client: &mock,
+        model: "test-model",
+        system: "你是 Joy".to_string(),
+        history: vec![],
+        user_message: "记住 alex 喜欢早会".to_string(),
+        tools: &tools,
+        ctx: ctx().await,
+        max_iterations: 5,
+        max_tokens: 1024,
+        tool_result_budget: Default::default(),
+        observer: None,
+        on_text: None,
+        interrupt: None,
+        checkpoint: Some(sink),
+        resume: None,
+    })
+    .await
+    .expect("loop 跑完");
+
+    assert_eq!(result.iterations, 2);
+    let cps = checkpoints.lock().unwrap();
+    assert_eq!(cps.len(), 1, "只有第一个迭代有工具结果边界");
+    assert_eq!(cps[0].iterations, 1);
+    // The checkpoint's working memory holds the tool round: assistant's tool request + the result.
+    let last = cps[0].messages.last().expect("有结果块");
+    assert!(matches!(
+        last.content.first(),
+        Some(joyczl_provider::ContentBlock::ToolResult { .. })
+    ));
+}
+
+/// Resume: the loop continues the checkpointed working memory — no user message is re-added,
+/// no finished tool is re-run, and the pre-crash usage joins the final account.
+#[tokio::test]
+async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
+    let mock = Mock::new(vec![Mock::text("接着上一轮，已经办完了。")]);
+    let tools = handlers::build_default();
+
+    // The checkpoint's working memory: user asked, assistant requested a tool, result came back.
+    let messages = vec![
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "记住 alex 喜欢早会".to_string(),
+            }],
+        },
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "tu_1".to_string(),
+                name: "save_note".to_string(),
+                input: json!({"subject": "alex", "content": "喜欢早会"}),
+                extra: None,
+            }],
+        },
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "tu_1".to_string(),
+                content: "已保存".to_string(),
+            }],
+        },
+    ];
+
+    let result = run(Turn {
+        user_images: Vec::new(),
+        client: &mock,
+        model: "test-model",
+        system: "你是 Joy".to_string(),
+        history: vec![],
+        user_message: String::new(), // resume ignores it entirely
+        tools: &tools,
+        ctx: ctx().await,
+        max_iterations: 5,
+        max_tokens: 1024,
+        tool_result_budget: Default::default(),
+        observer: None,
+        on_text: None,
+        interrupt: None,
+        checkpoint: None,
+        resume: Some(crate::Resume {
+            messages,
+            completed_iterations: 3,
+            usage: Usage {
+                input_tokens: 100,
+                output_tokens: 20,
+            },
+        }),
+    })
+    .await
+    .expect("续跑完成");
+
+    assert_eq!(result.reply, "接着上一轮，已经办完了。");
+    assert_eq!(result.iterations, 4, "3 个已完成迭代 + 1 个新迭代");
+    assert!(result.tool_calls.is_empty(), "已完成的工具绝不重跑");
+    assert_eq!(result.usage.input_tokens, 110, "两段账加在一起（100 + 10）");
+    // The request carried the checkpointed memory verbatim — no second user message appended.
+    let sent = mock.received.lock().unwrap()[0].clone();
+    assert_eq!(sent.messages.len(), 3);
 }

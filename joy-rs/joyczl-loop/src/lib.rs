@@ -108,6 +108,37 @@ pub enum LoopEvent {
 /// so it can be moved together with `on_text` into a 'static closure.
 pub type Observer = Arc<dyn Fn(LoopEvent) + Send + Sync>;
 
+/// One boundary snapshot: the working memory as the model is about to be called again —
+/// assistant thoughts, tool calls and their results all in `messages`, nothing half-done.
+#[derive(Debug, Clone)]
+pub struct Checkpoint {
+    pub messages: Vec<Message>,
+    /// Completed iterations so far (the tool round just fed back included).
+    pub iterations: i32,
+    /// Token usage spent so far (a resumed turn adds both halves up).
+    pub usage: Usage,
+}
+
+/// The checkpoint outlet, called at each tool-results boundary. Awaiting on purpose:
+/// the write must land **before** the next model call, or a crash loses exactly the
+/// boundary it was supposed to save.
+pub type CheckpointSink = Arc<
+    dyn Fn(Checkpoint) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Resume from a checkpoint: the loop continues an existing working memory instead of
+/// assembling history + user message — finished tools are never re-run.
+#[derive(Debug, Clone)]
+pub struct Resume {
+    pub messages: Vec<Message>,
+    /// How many iterations were already completed before the crash.
+    pub completed_iterations: i32,
+    /// Token usage already spent before the crash.
+    pub usage: Usage,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutcome {
     pub name: String,
@@ -172,22 +203,37 @@ pub struct Turn<'a> {
     pub on_text: Option<TextSink>,
     /// Pass it to support interrupts: each model call and tool execution races "cancel".
     pub interrupt: Option<Arc<Interrupt>>,
+    /// Called at each tool-results boundary — the durable "how far did this turn get".
+    pub checkpoint: Option<CheckpointSink>,
+    /// Resume instead of starting fresh: `user_message`, `history` and `user_images` are
+    /// ignored, the loop continues from the checkpointed working memory.
+    pub resume: Option<Resume>,
 }
 
 pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
     let notify: Option<Observer> = turn.observer.clone();
-    let mut messages = turn.history.clone();
-    let mut user_content = vec![ContentBlock::Text {
-        text: turn.user_message.clone(),
-    }];
-    user_content.extend(turn.user_images.iter().cloned());
-    messages.push(Message {
-        role: Role::User,
-        content: user_content,
-    });
-
+    // Fresh start or resume: a resumed turn skips assembly entirely — history, user message
+    // and images were already folded into the checkpointed working memory before the crash.
+    let (mut messages, mut usage, completed_before) = match &turn.resume {
+        Some(resume) => (
+            resume.messages.clone(),
+            resume.usage,
+            resume.completed_iterations,
+        ),
+        None => {
+            let mut messages = turn.history.clone();
+            let mut user_content = vec![ContentBlock::Text {
+                text: turn.user_message.clone(),
+            }];
+            user_content.extend(turn.user_images.iter().cloned());
+            messages.push(Message {
+                role: Role::User,
+                content: user_content,
+            });
+            (messages, Usage::default(), 0)
+        }
+    };
     let mut tool_calls: Vec<ToolOutcome> = Vec::new();
-    let mut usage = Usage::default();
     // Spill directory: `ToolCtx` already carries home, no extra parameter to thread through.
     let spill_dir = turn.ctx.home.join("spill");
     // Last request's local estimate + measured value (app-server calibrates estimate with measured).
@@ -209,7 +255,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         })
     };
 
-    for iteration in 1..=turn.max_iterations.max(1) {
+    for iteration in (completed_before + 1)..=turn.max_iterations.max(1) {
         // ---- Interrupt check: token already flipped down means no new model call; stand down now.
         if turn
             .interrupt
@@ -426,6 +472,17 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             role: Role::User,
             content: results,
         });
+
+        // ---- Checkpoint: this boundary is durable **before** the next model call goes out.
+        // Crash here = resume from exactly here; the finished tool round is never re-run.
+        if let Some(checkpoint) = &turn.checkpoint {
+            checkpoint(Checkpoint {
+                messages: messages.clone(),
+                iterations: iteration,
+                usage,
+            })
+            .await;
+        }
     }
 
     // ---- Guardrail 2: iterations exhausted
