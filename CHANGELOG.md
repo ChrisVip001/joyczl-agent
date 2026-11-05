@@ -2,6 +2,68 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.13.0 — Someone knocks (the workspace version)
+
+### Inbound mail: the door opening the other way
+
+- A hand-written IMAP receiver (LOGIN / SELECT / UID SEARCH / UID FETCH; 993 implicit
+  TLS, 143 STARTTLS, anything else plaintext) — the same reason as SMTP: four commands
+  are wanted, not a mail suite. Fetching always uses `BODY.PEEK[]`: Joy glancing at a
+  mailbox never marks another person's mail as read.
+- The ledger (migration 0015): `connector_inbox` dedupes on (connector, mailbox, uid),
+  `connector_cursors` keeps the high-water mark separately. **The first run only records
+  the water level, it does not pull history** — those few hundred old messages are not
+  "new". Bodies are stored as decoded plain text (text/plain first, text/html stripped as
+  a fallback); attachments are not stored: what arrived is "someone wrote to you", not
+  "someone sent you files".
+- Two ways it becomes work, both written by the human: `imap.mode: "notify"` (default)
+  records + notifies, and the dashboard's inbox card button (`inbox/summarize`) is the
+  human saying "handle these now"; `"turn"` is a standing authorization, never the
+  model's own decision. Polling has a 30-second floor, and a typo'd `mode` fails startup.
+- The dashboard overview grows an inbox card (unread count + newest five); REPL prints
+  one line "N new in the inbox" between turns, leaving the content to the panel.
+- `smoke-connector.sh` gains section 6: shipped binary → poller → scripted IMAP →
+  `state.db` → `inbox/list`, across two boots and the cursor (old mail not repeated,
+  new mail arriving once).
+
+### Feishu user identity: as whom the message is sent
+
+- The app identity says "this app wrote to you"; a user token says "**I** wrote to you".
+  `feishu_oauth` runs the authorization-code grant (no PKCE), catches `code` on a local
+  `127.0.0.1:41766/callback`, stores the token in `<home>/connector-auth/feishu.json`
+  (0600), and refreshes before use. `joy connector feishu login | logout | status`;
+  `"as": "user"` in `connectors.json` sends as that person, the default stays `app` —
+  identity is the human's decision, and a typo fails at startup.
+
+### Business form (M5): wiring Joy into someone else's process
+
+- `POST /api/run`: one turn in, one JSON answer out (`turnId` / `reply` / `model` /
+  `provider` / `routeReason`), body is `TurnStartParams`. The dashboard keeps SSE for
+  people; CI, cron and other agents use this.
+- Inbound webhooks (`<home>/webhooks.json`): no file = no door (404); `X-Joy-Secret` is
+  compared in constant time and an unreadable secret refuses; unknown names and
+  `enabled: false` are also 404; `{{payload}}` is replaced by the raw body. The turn is
+  still an ordinary turn — with nobody at the keyboard, destructive tools time out.
+- A task can declare its tier: `task/create` and `turn/start` accept `tier`
+  (`agent_tasks.tier`, migration 0016), and **a declaration beats `fixed` mode**; a typo
+  is refused on the spot. New `model/routes` / `model/routes/save`, and the dashboard's
+  model panel gains an auto switch plus three "tier ↔ profile" rows.
+
+### Webhook phase 2: what a door needs once strangers knock
+
+- `signature: true`: `X-Joy-Timestamp` plus
+  `X-Joy-Signature` = `hex(HMAC-SHA256(secret, "<timestamp>.<body>"))`; more than ±300s
+  from our clock → 401, and each signature is accepted once (replay → 409; retries must
+  be re-signed). The format is pinned against `openssl dgst -sha256 -hmac`, so the other
+  side installs nothing.
+- `limit: N`: N accepted requests per minute per hook, counting **only authenticated**
+  ones (guessing secrets does not burn the budget), over the cap → 429 +
+  `Retry-After`; `limit: 0` is refused at load.
+- `callback: "https://…"`: the caller gets `202` at once, the turn finishes in the
+  background and the result is POSTed (three attempts, 1s/2s apart, no queue).
+- New `smoke-business.sh` (task API / three webhook modes / tiers) and
+  `fake_callback_server.py`; `fake_sse_server.py` now serves several turns.
+
 ## 0.12.0 — The hand that reaches out (the workspace version)
 
 ### Connectors: the one exception to "draft, never send"

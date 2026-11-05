@@ -56,6 +56,13 @@ pub async fn run_stdio(server: Server) -> Result<()> {
         tokio::spawn(async move { crate::resume::reconcile(&server, &sink).await });
     }
 
+    // Inbound mail: only when connectors.json has an `imap` block — otherwise this returns
+    // immediately and the process looks exactly as before.
+    {
+        let sink = EventSink::new(tx.clone());
+        crate::inbox::spawn(&server, &sink);
+    }
+
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
         let line = line.trim();

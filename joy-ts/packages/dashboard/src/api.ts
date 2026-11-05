@@ -14,12 +14,15 @@ import type {
   ModelProfilesResponse,
   ModelRemoveParams,
   ModelRemoveResponse,
+  ModelRoutesResponse,
+  ModelRoutesSaveParams,
   ModelSaveParams,
   ModelSaveResponse,
   ApprovalLogResponse,
   ScheduleListResponse,
   ServerNotification,
   UsageSummaryResponse,
+  InboxSummarizeResponse,
   SessionMessagesResponse,
   TaskCreateParams,
   TaskEnvelope,
@@ -274,6 +277,22 @@ export async function taskAction(body: TaskActionBody): Promise<TaskEnvelope> {
   return (await response.json()) as TaskEnvelope;
 }
 
+/**
+ * The human's "handle these": one turn over the unseen mail (0.13.0).
+ *
+ * Nothing happens on its own unless connectors.json says `inbound.mode = "turn"` — that
+ * is a standing decision, and this button is the same decision made once.
+ */
+export async function summarizeInbox(sessionId?: string): Promise<InboxSummarizeResponse> {
+  const response = await apiFetch("/api/inbox", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(sessionId === undefined ? {} : { sessionId }),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as InboxSummarizeResponse;
+}
+
 /** Every task, newest first — the panel's list (the card uses `data.task` instead). */
 export async function fetchTasks(): Promise<TaskListResponse> {
   const response = await apiFetch("/api/tasks", { headers: { accept: "application/json" } });
@@ -367,6 +386,31 @@ export async function saveModel(params: ModelSaveParams): Promise<ModelSaveRespo
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as ModelSaveResponse;
+}
+
+/**
+ * The routing table: `fixed` (the active profile wins) or `auto` (pick by task tier),
+ * plus which profile each tier means. Always three rows, in tier order.
+ */
+export async function fetchModelRoutes(): Promise<ModelRoutesResponse> {
+  const response = await apiFetch("/api/model/routes", {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ModelRoutesResponse;
+}
+
+/** Replace the whole table. The server validates both the tier names and the profile ids. */
+export async function saveModelRoutes(
+  params: ModelRoutesSaveParams,
+): Promise<ModelRoutesResponse> {
+  const response = await apiFetch("/api/model/routes/save", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as ModelRoutesResponse;
 }
 
 /** Delete a profile, along with its credentials. */

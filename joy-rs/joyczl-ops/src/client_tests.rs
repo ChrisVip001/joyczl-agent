@@ -17,10 +17,16 @@ pub(crate) struct Fake {
 
 /// One in-memory connection. Left side is our client, right side a fake app-server.
 pub(crate) fn fake() -> (AppServer, Fake) {
+    fake_at(std::env::temp_dir())
+}
+
+/// Same fake, but the child "serves" the home the caller passes in — needed by tests that
+/// read a config file from `<home>` (webhooks.json) instead of the shared temp dir.
+pub(crate) fn fake_at(home: std::path::PathBuf) -> (AppServer, Fake) {
     let (ours, theirs) = tokio::io::duplex(8192);
     let (reader, writer) = tokio::io::split(ours);
     let (theirs_read, theirs_write) = tokio::io::split(theirs);
-    let app = AppServer::attach(std::env::temp_dir(), None, reader, writer);
+    let app = AppServer::attach(home, None, reader, writer);
     let fake = Fake {
         requests: BufReader::new(theirs_read),
         to_client: theirs_write,
@@ -52,7 +58,7 @@ impl Fake {
             .await;
     }
 
-    async fn fail(&mut self, id: &Value, code: i32, message: &str) {
+    pub(crate) async fn fail(&mut self, id: &Value, code: i32, message: &str) {
         self.send(json!({
             "jsonrpc": "2.0",
             "id": id,

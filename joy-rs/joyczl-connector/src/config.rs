@@ -55,6 +55,10 @@ pub struct FeishuConfig {
     pub app_id: String,
     /// `env:VAR` or a `SecretStore` account name.
     pub app_secret: String,
+    /// Who the message comes from: `app` (default, tenant token) or `user` (the person who
+    /// ran `joy connector feishu login`). The human's decision, never guessed.
+    #[serde(default, rename = "as")]
+    pub identity: Option<String>,
     /// `open_id` (a person) or `chat_id` (a group) — must match the ids in the allowlist.
     #[serde(default = "default_receive_id_type")]
     pub receive_id_type: String,
@@ -78,6 +82,17 @@ fn default_feishu_base() -> String {
 }
 
 impl FeishuConfig {
+    /// `app` (default) or `user` — validated at load so a typo cannot silently send as
+    /// the wrong identity.
+    pub fn identity(&self) -> Result<&str, String> {
+        match self.identity.as_deref().unwrap_or("app") {
+            identity @ ("app" | "user") => Ok(identity),
+            other => Err(format!(
+                "feishu.as 只能是 app 或 user，写的是 {other:?}（不填 = app）"
+            )),
+        }
+    }
+
     pub fn permits(&self, receive_id: &str) -> bool {
         let target = receive_id.trim().to_ascii_lowercase();
         !target.is_empty()
@@ -117,6 +132,79 @@ pub struct EmailConfig {
     /// `false` (default): everything goes to `<home>/outbox/`. `true`: real SMTP.
     #[serde(default)]
     pub live: bool,
+    /// Inbound (0.13.0): set this block to poll the mailbox. Unset = no inbound at all,
+    /// and no inbox surface anywhere.
+    #[serde(default)]
+    pub imap: Option<ImapSection>,
+}
+
+/// Mailbox polling. `mode` is the human's standing decision:
+///   notify (default) — record + notify, a person decides what to do
+///   turn             — new mail automatically becomes a turn (the model starts working
+///                       on the standing authorization the human gave in this file)
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImapSection {
+    pub host: String,
+    /// 993 = implicit TLS, 143 = STARTTLS, anything else = plaintext (local test relay).
+    #[serde(default = "default_imap_port")]
+    pub port: u16,
+    #[serde(default = "default_mailbox")]
+    pub mailbox: String,
+    /// Poll interval; 30s floor — polling faster than that is just hurting yourself.
+    #[serde(default = "default_poll_secs")]
+    pub poll_secs: u64,
+    #[serde(default = "default_inbound_mode")]
+    pub mode: String,
+    /// Default to the email section's username / secret.
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub secret: Option<String>,
+}
+
+fn default_imap_port() -> u16 {
+    993
+}
+
+fn default_mailbox() -> String {
+    "INBOX".to_string()
+}
+
+fn default_poll_secs() -> u64 {
+    300
+}
+
+fn default_inbound_mode() -> String {
+    "notify".to_string()
+}
+
+impl ImapSection {
+    /// Validate at load time: a typo in `mode` must fail the start, not silently mean
+    /// "notify" while the human believes the model is handling mail.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.mode != "notify" && self.mode != "turn" {
+            return Err(format!(
+                "imap.mode 只能是 notify 或 turn，写的是 {:?}",
+                self.mode
+            ));
+        }
+        if self.poll_secs < 30 {
+            return Err(format!(
+                "imap.poll_secs 不能小于 30（写的是 {}）",
+                self.poll_secs
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn username(&self, email: &EmailConfig) -> Option<String> {
+        self.username.clone().or_else(|| email.username.clone())
+    }
+
+    pub fn secret(&self, email: &EmailConfig) -> Option<String> {
+        self.secret.clone().or_else(|| email.secret.clone())
+    }
 }
 
 impl EmailConfig {
@@ -165,6 +253,22 @@ impl RecipientPolicy {
 
 /// Load the file. Missing file = no connectors (not an error); a malformed file is.
 pub fn load(home: &Path) -> anyhow::Result<ConnectorConfig> {
+    let config = load_raw(home)?;
+    if let Some(feishu) = &config.feishu {
+        feishu
+            .identity()
+            .map_err(|e| anyhow::anyhow!("connectors.json 里 feishu 有问题：{e}"))?;
+    }
+    if let Some(email) = &config.email {
+        if let Some(imap) = &email.imap {
+            imap.validate()
+                .map_err(|e| anyhow::anyhow!("connectors.json 里 email.imap 有问题：{e}"))?;
+        }
+    }
+    Ok(config)
+}
+
+fn load_raw(home: &Path) -> anyhow::Result<ConnectorConfig> {
     let path = home.join("connectors.json");
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return Ok(ConnectorConfig::default());

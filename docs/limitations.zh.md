@@ -356,11 +356,20 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **边界** —— 连接器没有「重试 / 退避 / 限流」：一次发送失败就是把失败原样交回模型，
   由它决定下一步（改天再发、换人问、如实说没发成）。批量的第三方调用不在这个方案里。
   → `joy-rs/joyczl-connector/src/smtp.rs`、`joy-rs/joyczl-connector/src/feishu.rs`
-* **边界** —— 飞书以**应用身份**（tenant_access_token）发送；以**具体某个人**的身份
-  行事需要 OAuth 授权码 + 控制台登记回调地址，在没有可验证的自建应用之前不写这条
-  不可验证的路。微信同理：个人号没有可编程出站接口，首发不含微信（见配置文档的
-  Chat gateways：入站是另一套东西，不是连接器）。
-  → `joy-rs/joyczl-connector/src/feishu.rs`
+* **边界** —— 飞书默认以**应用身份**（tenant_access_token）发送；以**某个人**的身份
+  发需要一次浏览器授权（`joy connector feishu login`），token 落 0600 文件、用前续期。
+  这条流程没有 PKCE，回调固定 `127.0.0.1:41766/callback` 且必须在控制台登记；
+  refresh token 过期就得重新 login（没有后台定时续期）。微信仍是个人号没有可编程出站
+  接口，不含在其中（入站是另一套东西，见 Chat gateways）。
+  → `joy-rs/joyczl-connector/src/feishu_oauth.rs`
+* **边界** —— 入站邮件是**轮询**（最小 30 秒），没有 IDLE 推送：新信最多晚一个间隔才
+  出现。去重按 IMAP UID，而 UID 在邮箱重建后会从 0 重来 —— 那时旧索引会挡住同 UID 的
+  新信（判断依据在 message_id，但表上的唯一键是 UID）。
+  → `joy-rs/joyczl-connector/src/imap.rs`、`joy-rs/joyczl-state/src/inbox.rs`
+* **边界** —— 入站正文只存纯文本：HTML 去标签、不还原排版；非 UTF-8 字符集按 UTF-8
+  有损解码（不带编码表，见上一条的 GBK 说明）；附件不落盘。首次启动只记水位、不回溯
+  历史。
+  → `joy-rs/joyczl-connector/src/imap.rs`
 * **刻意** —— 白名单是**精确匹配**（邮件另支持 `@域名`）：没有通配、没有正则、没有
   「先问一次以后都放」。名单只有人能改；改完下一回合才生效（工具注册发生在启动时）。
   → `joy-rs/joyczl-connector/src/config.rs`
@@ -405,6 +414,29 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **未做** —— embedding 那条路没有对着真 embedding 服务的端到端测试：融合与降级
   有单测，HTTP 调用本身没有。
   → `joy-rs/joyczl-memory/src/retrieval_tests.rs`
+
+## 业务形态（任务 API / webhook / 档位）
+
+* **刻意** —— `/api/run` 与同步模式的 webhook 都是等这一轮跑完才返回；要「立刻收下、
+  稍后交付」就用 webhook 的 `callback`（202 + 投递）。两者都没有任务队列：异步投递
+  三次不成（或进程中途退出）就丢了这一次投递 —— 答案仍在会话历史里，但不会重投。
+  → `joy-rs/joyczl-ops/src/api.rs`（`run_headless`）、`webhooks.rs`（`deliver`）
+* **刻意** —— 防重放只在 `signature: true` 时成立，而且靠**本地时钟**判新鲜度：机器
+  时钟漂移超过 ±300 秒会把合法请求判成过期（或让旧请求多活一会儿）。plain
+  `X-Joy-Secret` 模式根本不防重放 —— 那是它的定义，不是 bug。
+  → `joy-rs/joyczl-ops/src/webhooks.rs`（`admit`、`SIGNATURE_WINDOW`）
+* **刻意** —— 限流是**进程内**的每分钟计数：重启清零，多进程/多实例不共享。它挡的是
+  「一个 hook 被反复打」，不是「这台机器上所有 hook 合计的负载」，也不区分调用方
+  （没有 per-caller 桶）。
+  → `joy-rs/joyczl-ops/src/webhooks.rs`（`Guard::rate`）
+* **刻意** —— 入站 webhook 只在**单用户模式**存在。hub 模式下一个端口后面是很多
+  home，而一次敲门没有「哪位用户」可挑，所以那里一律 404。
+  → `joy-rs/joyczl-ops/src/api.rs`（`hook`）、`Gate::single_app`
+* **刻意** —— 声明的档位（`tier`）优先于 `fixed` 模式：fixed 是默认策略，不是否决权。
+  代价是 `model-routes.json` 里没配那个档位时会沿缺省链回落到 active —— 于是
+  「声明了 reasoning 却跑在 chat 上」。`TurnMeta.routeReason` 会把这件事写出来
+  （`tier:reasoning → chat-profile`），不会被藏起来。
+  → `joy-rs/joyczl-app-server/src/route.rs`（`resolved_for_turn`）
 
 ## 配置
 

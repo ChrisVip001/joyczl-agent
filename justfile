@@ -123,6 +123,10 @@ smoke-connector: build
 smoke-dashboard: build dashboard-build
     {{ justfile_directory() }}/scripts/smoke-dashboard.sh
 
+# End to end: the business form — task API (/api/run), inbound webhooks, tier routing.
+smoke-business: build dashboard-build
+    {{ justfile_directory() }}/scripts/smoke-business.sh
+
 # ---- Python SDK -------------------------------------------------------------
 # Set up the Python SDK dev environment (uv builds the venv from pyproject, installs locked deps)
 py-install:

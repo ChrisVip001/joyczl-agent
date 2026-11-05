@@ -16,6 +16,10 @@ export type AgentTaskView = {
   roundsUsed: number;
   maxRounds: number;
   /**
+   * The declared model tier (`fast` / `chat` / `reasoning`); absent = per-turn decision.
+   */
+  tier: string | null;
+  /**
    * The turn currently carrying this task (a heartbeat; absent when idle).
    */
   currentTurnId: string | null;

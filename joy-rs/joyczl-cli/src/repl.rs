@@ -398,6 +398,7 @@ async fn chat_turn(
         stream: Some(true),
         cwd: cwd.map(|p| p.display().to_string()),
         attachments: None,
+        tier: None,
     };
     let task_server = server.clone();
     let task =
@@ -520,6 +521,14 @@ async fn chat_turn(
                     );
                 }
                 break;
+            }
+            // Inbound mail: the terminal says how many arrived, not their content.
+            ServerNotification::InboxReceived(inbox) => {
+                end_streamed_line(&mut streamed);
+                println!(
+                    "…收件箱新增 {} 封（connector {}），处理方式看 connectors.json 的 inbound.mode",
+                    inbox.added, inbox.connector
+                );
             }
             // A long task changed state: the terminal says which way it went, never silently.
             ServerNotification::TaskUpdated(updated) => {

@@ -112,6 +112,47 @@ async fn a_second_active_task_is_refused_with_the_first_one_named() {
     create_task(&server, "other", "另一件事", None).await;
 }
 
+/// A task may declare its tier ("the task picks the model"). The declaration lands on the row —
+/// every round runs on it — and a typo is refused at creation, not discovered on a vendor bill.
+#[tokio::test]
+async fn a_task_can_declare_its_tier_and_a_typo_is_refused() {
+    let (server, _home) = boot(None).await;
+
+    let error = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({ "sessionId": "default", "title": "读一遍", "tier": "reasoining" }),
+    )
+    .await
+    .expect_err("拼错的档位要当场拒绝");
+    assert!(
+        error.contains("reasoining"),
+        "错误要带上收到的那串：{error}"
+    );
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({ "sessionId": "default", "title": "读一遍", "tier": "reasoning" }),
+    )
+    .await
+    .expect("合法档位该建得成");
+    assert_eq!(created["task"]["tier"], json!("reasoning"));
+
+    let id = created["task"]["id"].as_str().expect("有 id");
+    let row = server.tasks.get(id).await.expect("查").expect("任务在");
+    assert_eq!(
+        row.tier.as_deref(),
+        Some("reasoning"),
+        "档位落在任务行上，不是某一轮"
+    );
+
+    // No declaration = no field on the wire; never a made-up "chat".
+    let (plain_server, _plain_home) = boot(None).await;
+    let plain = create_task(&plain_server, "default", "随手一问", None).await;
+    assert!(plain.task.tier.is_none());
+}
+
 #[tokio::test]
 async fn goal_set_creates_the_task_and_clearing_keeps_the_row() {
     let (server, _home) = boot(None).await;
@@ -169,6 +210,7 @@ async fn a_single_turn_task_closes_done_when_its_turn_ends() {
             message: "开始吧".to_string(),
             stream: Some(true),
             cwd: None,
+            tier: None,
         },
         RequestId::Number(1),
         &EventSink::new(tx),
@@ -274,20 +316,25 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
     .expect("继续该成功");
     assert_eq!(resumed["task"]["status"], json!("running"));
 
-    // The resume runs as its own task: drain until the checkpoint closes.
+    // The resume runs as its own task. Wait for the **reply**, not the checkpoint: finalize marks
+    // the checkpoint `done` before it writes the chat row, so waiting on the checkpoint and then
+    // reading history is a race (green alone, red under a loaded parallel test run).
+    let mut replied = false;
     for _ in 0..200 {
-        if server
-            .checkpoints
-            .open_rows()
+        replied = server
+            .chat
+            .session_history("default")
             .await
-            .expect("读")
+            .expect("读对话日志")
             .iter()
-            .all(|row| row.turn_id != "t-pause")
-        {
+            .any(|(_, content)| content.contains("接着干完了"));
+        if replied {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    assert!(replied, "续跑的回复落了账");
+
     let checkpoint = server
         .checkpoints
         .get("t-pause")
@@ -295,18 +342,6 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
         .expect("查")
         .expect("在");
     assert_eq!(checkpoint.status, "done", "续跑走完了");
-
-    let history = server
-        .chat
-        .session_history("default")
-        .await
-        .expect("读对话日志");
-    assert!(
-        history
-            .iter()
-            .any(|(_, content)| content.contains("接着干完了")),
-        "续跑的回复落了账"
-    );
 }
 
 #[tokio::test]

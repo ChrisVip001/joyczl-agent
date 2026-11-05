@@ -1222,6 +1222,49 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
+/* 收件箱：邮件是别人的字，安静地排着；未读只多一个小圆点。 */
+.inbox-row {
+  padding: 6px 0;
+  border-top: 1px solid var(--line-soft, var(--line));
+}
+
+.inbox-row:first-of-type {
+  border-top: none;
+}
+
+.inbox-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.inbox-subject {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.inbox-row.unread .inbox-subject::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--accent);
+}
+
+.inbox-snippet {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 /* 连接器：一行一个，安静得像名片；"可发送"才配颜色。 */
 .connector-row {
   display: flex;
@@ -1387,6 +1430,39 @@ textarea::placeholder {
 
 .panel .body .row {
   margin: 4px 0;
+}
+
+/* 档位路由：一条分隔线 + 三行"标签 ↔ 下拉"，克制到不需要标题 */
+.panel .body .split {
+  width: 100%;
+  margin: 12px 0 4px;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+.panel .body .check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel .body .check input {
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.panel .body .tier {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.panel .body .tier select {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ---- 目录选择浮层 -------------------------------------------------------------- */

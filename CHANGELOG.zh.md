@@ -2,6 +2,59 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 0.13.0 — 有人敲门（工作区版本）
+
+### 入站邮件：反方向的那道门
+
+- 手写 IMAP 接收器（LOGIN / SELECT / UID SEARCH / UID FETCH，993 隐式 TLS、143
+  STARTTLS、其它端口明文）——和 SMTP 同一个理由：要四个命令，不要一个邮件全家桶。
+  取信一律 `BODY.PEEK[]`：Joy 看一眼不等于替别人把信标成已读。
+- 台账（migration 0015）：`connector_inbox` 按 (connector, mailbox, uid) 去重，
+  `connector_cursors` 单独存水位。**首次运行只记水位、不拉历史** —— 收件箱里那几百
+  封旧信不是「新来的」。正文只存解出来的纯文本（text/plain 优先，text/html 去标签
+  兜底），附件不落盘：收进来的是「有人给你写了什么」，不是「有人给你发了什么文件」。
+- 处理方式是人写在配置里的：`imap.mode: "notify"`（默认）只记录 + 通知，驾驶舱
+  概览的「收件箱」卡片点「处理这些邮件」（`inbox/summarize`）才是人说「现在处理」；
+  `"turn"` 是常设授权，模型不自己决定。轮询间隔有 30 秒下限，`mode` 写错启动即失败。
+- 驾驶舱概览新增收件箱卡片（未读计数 + 最新五封），REPL 在轮次之间打一行
+  「收件箱新增 N 封」，内容仍留给面板。
+- `smoke-connector.sh` 加第 6 段：真二进制 → 轮询器 → 脚本化 IMAP → `state.db` →
+  `inbox/list`，两次启动跨过水位（旧信不重复、新信才进来）。
+
+### 飞书用户身份：以谁的名义发
+
+- 应用身份说「这个应用写给你」，用户 token 说「**我**写给你」。`feishu_oauth` 走
+  授权码流程（无 PKCE）、本地 `127.0.0.1:41766/callback` 接 `code`、token 落
+  `<home>/connector-auth/feishu.json`（0600），用前按过期时间续期。
+- `joy connector feishu login | logout | status`；`connectors.json` 里
+  `"as": "user"` 才会以这个身份发，默认 `app` —— 身份是人的决定，拼错启动即报错。
+
+### 业务形态（M5）：把 Joy 接进别人的流程
+
+- `POST /api/run`：一轮进、一段 JSON 出（`turnId` / `reply` / `model` /
+  `provider` / `routeReason`），body 就是 `TurnStartParams`。人看驾驶舱走 SSE，
+  CI / cron / 另一个 agent 用这个。
+- 入站 webhook（`<home>/webhooks.json`）：没文件 = 没这扇门（404）；`X-Joy-Secret`
+  常量时间比较、密钥读不到即拒；未知名字与 `enabled: false` 同样是 404；`{{payload}}`
+  换成请求体原文。这一轮仍是普通回合 —— 键盘前没人，破坏性工具会超时被拒。
+- 档位可以由任务声明：`task/create` 与 `turn/start` 接受 `tier`
+  （`agent_tasks.tier`，migration 0016），**声明优先于 `fixed` 模式**，拼错当场拒绝；
+  新增 `model/routes` / `model/routes/save`，驾驶舱「模型」面板多了自动开关与三行
+  「档位 ↔ 配置」。
+
+### webhook 二期：陌生人的门需要的东西
+
+- `signature: true`：必须带 `X-Joy-Timestamp` 与
+  `X-Joy-Signature` = `hex(HMAC-SHA256(secret, "<timestamp>.<body>"))`，与本地时钟
+  相差超过 ±300 秒 → 401，同一签名只收一次（重放 409；重试要换新时间戳）。格式与
+  `openssl dgst -sha256 -hmac` 对过金标量，另一侧不用为它装任何东西。
+- `limit: N`：每个 hook 每分钟 N 次，只计**通过鉴权**的请求（乱试不烧额度），
+  超了 429 + `Retry-After`；`limit: 0` 加载即报错。
+- `callback: "https://…"`：调用方立刻拿到 202，回合在后台跑完再 POST 结果
+  （三次投递、1s/2s 间隔，没有队列）。
+- 新 `smoke-business.sh`（任务 API / 三种 webhook 模式 / 档位）与
+  `fake_callback_server.py`；`fake_sse_server.py` 支持多轮。
+
 ## 0.12.0 — 伸出去的那只手（工作区版本）
 
 ### 连接器：草稿之外的唯一例外

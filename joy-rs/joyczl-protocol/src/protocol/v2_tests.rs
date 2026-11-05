@@ -82,6 +82,7 @@ fn params_are_camel_case_on_the_wire() {
         stream: Some(true),
         cwd: None,
         attachments: None,
+        tier: None,
     };
     let v: serde_json::Value = serde_json::to_value(&p).expect("序列化");
     // Option fields also appear on *Params (as null), so the frontend can tell "not sent" from "empty".

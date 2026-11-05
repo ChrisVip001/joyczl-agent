@@ -5,7 +5,8 @@
 //! boundary as `/model`: the model has no tool to change models, and the user's pin (active profile)
 //! always wins. In `fixed` mode (the default, also when the routes file is absent) this whole module is transparent.
 
-use joyczl_config::routes::{load_routes, RouteFile, RouteMode};
+use joyczl_config::routes::{load_routes, RouteFile, RouteMode, TIERS};
+use joyczl_protocol::{codes, ErrorObject};
 use joyczl_provider::{tokens, Resolved};
 
 use crate::Server;
@@ -45,6 +46,22 @@ pub(crate) fn pick_tier(estimated_tokens: usize, chat_window: u32) -> &'static s
     } else {
         "chat"
     }
+}
+
+/// Validate a declared tier. A typo must be refused, not silently read as "chat": the caller
+/// (task API / webhook / task card) pinned a tier precisely so it would not be guessed at.
+pub(crate) fn clean_tier(raw: Option<&str>) -> Result<Option<String>, ErrorObject> {
+    let Some(text) = raw.map(str::trim).filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
+    if TIERS.contains(&text) {
+        return Ok(Some(text.to_string()));
+    }
+    Err(ErrorObject {
+        code: codes::INVALID_PARAMS,
+        message: format!("tier 只能是 {} —— 收到 '{text}'", TIERS.join(" / ")),
+        data: None,
+    })
 }
 
 /// Tier → profile id fallback chain (missing table entries fall through level by level; the last hop is active):
@@ -109,8 +126,31 @@ impl Server {
         &self,
         base: Resolved,
         message: &str,
+        tier: Option<&str>,
     ) -> (Resolved, Option<String>) {
         let routes = load_routes(&self.settings().home);
+        let active_id = {
+            let file = self.models.read().expect("models 锁不该中毒");
+            file.active.clone()
+        };
+        // A **declared** tier wins over the mode. `fixed` is the default policy, not a veto: a task
+        // card or a webhook saying "this is reasoning work" is a human instruction, like `/model`.
+        // Tier names were validated upstream (`clean_tier`), so anything here is one of the three.
+        if let Some(tier) = tier {
+            let Some(profile_id) = profile_for_tier(&routes, tier, active_id.as_deref()) else {
+                return (
+                    base,
+                    Some(format!("tier:{tier}: 没有可用的 profile，按 active 跑")),
+                );
+            };
+            if active_id.as_deref() == Some(profile_id.as_str()) {
+                return (base, Some(format!("tier:{tier} → {profile_id}（当前）")));
+            }
+            return match self.resolved_profile(&profile_id) {
+                Ok(resolved) => (resolved, Some(format!("tier:{tier} → {profile_id}"))),
+                Err(why) => (base, Some(format!("fallback: {why}"))),
+            };
+        }
         // The JOY_MODEL_ROUTE env var can **force** the mode (auto/fixed) — unattended runs
         // and CI cannot edit the home files; the file's value is its default.
         let mode = match std::env::var("JOY_MODEL_ROUTE").as_deref() {
@@ -121,10 +161,6 @@ impl Server {
         if mode != RouteMode::Auto {
             return (base, None);
         }
-        let active_id = {
-            let file = self.models.read().expect("models 锁不该中毒");
-            file.active.clone()
-        };
         let estimated = tokens::estimate_text(message);
         let window = base.context_window();
         let mut tier: String = pick_tier(estimated, window).to_string();

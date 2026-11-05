@@ -56,6 +56,95 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 路由对自己是透明的：真的发生了选择或回落时，`TurnMeta.routeReason`
 记下 `auto:reasoning → ds-r1` 或 `fallback: …`，驾驶舱页脚照实打印。
 
+### 档位可以由任务声明
+
+`task/create` 与 `turn/start` 都接受 `tier`（`fast` / `chat` / `reasoning`）：
+
+- **声明优先于模式**：即使 `mode: "fixed"`，任务或调用方说了 `reasoning`，
+  这一轮就走 reasoning 档对应的 profile —— fixed 是默认策略，不是否决权；
+- 任务声明的档位挂在任务行上（migration 0016），它的每一轮都沿用，
+  不必每轮重说；
+- 拼错的档位当场报错，不会静默当成 `chat`（那会让账单落在错误的模型上）；
+- 驾驶舱「模型」面板新增档位区：自动开关 + 三行「档位 ↔ 配置」，
+  与 REPL 的 `/route` 写的是同一个 `model-routes.json`。
+
+## 入站 webhook（`<home>/webhooks.json`）
+
+别的系统敲一下，Joy 跑一轮（CI 失败、表单提交、支付到账……）。没有这个文件
+就**没有这扇门**（404），模型也完全不知道它存在：
+
+```json
+{"hooks": [{
+  "name": "deploy",
+  "secret": "env:JOY_HOOK_SECRET",
+  "prompt": "线上出事了，按这个事件处理：\n{{payload}}",
+  "session": "hook:deploy",
+  "tier": "reasoning",
+  "signature": true,
+  "limit": 6,
+  "callback": "https://ci.example.com/joy/hook-result"
+}]}
+```
+
+- `POST /api/hook/<name>`，请求头 `X-Joy-Secret` 必须与 `secret` 一致
+  （`env:VAR` 在请求时读取；读不到 = 拒绝，不退化成空串），错或缺失一律 401；
+- 这条路由**故意在 dashboard 的 token 层之外**：敲门的机器不知道
+  `JOY_OPS_TOKEN`，它只证明自己知道这个 hook 的密钥；反过来，hook 只能
+  **递一句话**，读不了任何状态、开不了第二个回合；
+- 未知名字、`enabled: false`、没有配置文件 —— 三种情况都是 404
+  （门不存在，也不透露它存在过）；
+- `{{payload}}` 换成请求体原文；没有占位符就把它接在 prompt 后面
+  （静默丢掉 body 更糟）；
+- 这一轮仍然是普通的一轮：工具照旧要审批卡，而键盘前没有人 ——
+  破坏性工具会在超时后被拒。webhook 不新增任何能力；
+- 应答是 `RunResponse`（`turnId` / `reply` / `model` / `provider` /
+  `routeReason`），与任务 API 同一个形状（异步模式下它被推到 callback）。
+
+### 三个可选栅栏
+
+- **`signature: true` —— 防重放**。请求必须带 `X-Joy-Timestamp`（秒级整数）与
+  `X-Joy-Signature` = `hex(HMAC-SHA256(secret, "<timestamp>.<body>"))`。
+  时间戳与本地时钟相差超过 ±300 秒 → 401；同一个签名在窗口内第二次出现 →
+  409。验证方式就是另一侧已有的工具：
+
+  ```bash
+  BODY='{"status":"failed"}'; TS=$(date +%s)
+  SIG=$(printf '%s' "$TS.$BODY" | openssl dgst -sha256 -hmac "$JOY_HOOK_SECRET" -r | cut -d' ' -f1)
+  curl -X POST "http://127.0.0.1:7777/api/hook/deploy" \
+    -H "x-joy-timestamp: $TS" -H "x-joy-signature: $SIG" -d "$BODY"
+  ```
+
+  **重试要重新签名**（换一个新时间戳）：同一个签名只被接受一次。
+  不开 `signature` 时 `X-Joy-Secret` 照旧能用 —— 但它只能证明「知道密钥」，
+  **不能否认重放**（同一份请求重发就跑第二轮）。这是要开签名的理由。
+- **`limit: N` —— 限流**。每个 hook 每分钟最多 N 次，计数只算**通过鉴权**的
+  请求（乱试不会烧掉额度）；超了回 429 + `Retry-After` 秒数。进程内计数：
+  重启清零，多进程不共享。`limit: 0` 在加载时直接报错（「配了但永不放行」
+  是打错字，不是策略）。
+- **`callback: "https://…"` —— 异步**。调用方立刻拿到 `202` +
+  `{"accepted":true,"hook":…,"session":…}`，这一轮在后台跑完，结果 POST 到
+  该 URL：`{"hook","session","ok":true,"result":RunResponse}` 或
+  `{"hook","session","ok":false,"error":{code,message}}`。三次投递（间隔 1s、
+  2s），**没有队列**：三次都没成（或进程中途退出）就丢了这次投递 —— 但答案
+  已经在会话历史里，不会消失。callback 必须是 http(s) URL，否则加载即报错。
+
+## 任务 API（`POST /api/run`）
+
+程序用的「一轮进、一段 JSON 出」：请求体就是 `TurnStartParams`
+（与 `/api/turn` 同一个形状），不流式，等这一轮结束才返回：
+
+```bash
+curl -sS -X POST http://127.0.0.1:7777/api/run \
+  -H "Authorization: Bearer $JOY_OPS_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"message":"把昨天的日志总结成三点","tier":"reasoning"}'
+```
+
+- 驾驶舱仍走 SSE（人想看着字一个个出来），这个端点是给 CI / cron /
+  另一个 agent 用的；
+- 走同一条 Bearer：它属于 dashboard，只是没有页面；
+- `model` 与 `routeReason` 是「档位真的生效了吗」的可见证据。
+
 ## 非法值启动即失败
 
 `Settings::validate` 只跑一次，位置在**环境变量与 `<home>/settings.json` 合并
@@ -418,6 +507,8 @@ JOY_HUB_ROOT=~/joy-hub joy hub           # 起多用户驾驶舱，默认仍绑 
 | `live` | 只有 `true` 才会真的发送；从 `false` 改成 `true` 是人的动作 |
 | `receive_id_type` | `open_id`（成员）或 `chat_id`（群） |
 | `base_url` | 飞书自建/私有部署时改这里，默认 `https://open.feishu.cn` |
+| `imap.*` | 入站块：`host` / `port` / `mailbox` / `poll_secs` / `mode`（`notify` 或 `turn`） |
+| `as` | 飞书发送身份：`app`（默认）或 `user`（需先 `joy connector feishu login`） |
 
 人的两个命令（终端直接发不弹审批卡 —— 敲命令的人就是批准人）：
 
@@ -429,6 +520,46 @@ joy connector feishu --to ou_xxx --text 正文 [--dry-run]
 
 模型侧工具是 `email_send` / `feishu_send`，只在连接器启用且白名单非空时注册。
 驾驶舱「连接器」面板只读展示：哪个连接器、能不能真发、白名单多宽。
+
+### 入站邮件（`email.imap`）
+
+出站有「草稿 → 人点头 → 发送」；入站是反方向：外面的东西自己想进来。所以这里只做
+最保守的那件事——**把信原样记下来，等人决定要不要处理它**：
+
+```json
+{"email": {
+  "smtp_host": "smtp.example.com", "smtp_port": 465, "from": "joy@example.com",
+  "username": "joy@example.com", "secret": "keychain:connector:email",
+  "allow_recipients": ["@example.com"],
+  "imap": {"host": "imap.example.com", "port": 993, "mailbox": "INBOX",
+           "poll_secs": 300, "mode": "notify"}
+}}
+```
+
+- 没有 `imap` 块 = **完全没有入站**：不起轮询器，也没有收件箱面；
+- `port`：993 隐式 TLS、143 STARTTLS、其它明文（只给本地假服务器）；`poll_secs`
+  有 30 秒下限；`mode` 只能是 `notify` / `turn`，写错启动即失败；
+- `mode: "notify"`（默认）只记录 + 通知，驾驶舱概览的「收件箱」卡片点
+  「处理这些邮件」（`inbox/summarize`）才是人说「现在处理」；`mode: "turn"` 让新邮件
+  自动开一轮 —— 这是写在文件里的常设授权，模型不自己决定；
+- 首次启动只记水位、**不拉历史**（收件箱里那几百封旧信不算「新来的」），此后按 UID
+  去重；正文只存解出来的纯文本，附件不落盘；
+- 取信一律 `BODY.PEEK[]`：Joy 读一眼不会把别人的信标成已读。
+
+### 飞书用户身份（`"as": "user"`）
+
+默认以应用身份（`tenant_access_token`）发言；要以「某个人」的名义发，得先走一次
+浏览器授权：
+
+```bash
+joy connector feishu login     # 授权码流程，token 落 <home>/connector-auth/feishu.json（0600）
+joy connector feishu status    # 有效 / 已过期（下次发送前会续期）
+joy connector feishu logout    # 删掉 token
+```
+
+然后在 `connectors.json` 的 feishu 块里写 `"as": "user"`。回调固定
+`127.0.0.1:41766/callback`，这个地址要在飞书应用后台**一模一样**地登记；流程没有
+PKCE，refresh token 过期就得重新 login。
 
 ## Chat gateways (joy-ts)
 

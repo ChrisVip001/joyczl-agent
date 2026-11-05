@@ -11,13 +11,18 @@
 use std::path::Path;
 
 use anyhow::{bail, Result};
-use joyczl_connector::{config, email, feishu, Outgoing};
+use joyczl_connector::{config, email, feishu, feishu_oauth, Outgoing};
 
 pub async fn run(home: &Path, args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("list") | None => list(home),
         Some("email") => email_send(home, &args[1..]).await,
-        Some("feishu") => feishu_send(home, &args[1..]).await,
+        Some("feishu") => match args.get(1).map(String::as_str) {
+            Some("login") => feishu_login(home).await,
+            Some("logout") => feishu_logout(home),
+            Some("status") => feishu_status(home),
+            _ => feishu_send(home, &args[1..]).await,
+        },
         Some(other) => bail!("不认识的连接器：{other}（有：email、feishu）"),
     }
 }
@@ -138,6 +143,57 @@ async fn email_send(home: &Path, args: &[String]) -> Result<()> {
     let password = email::password_of(&email_config, home)?;
     email::send_live(&email_config, password, &message).await?;
     println!("已发给 {}。", recipients.join(", "));
+    Ok(())
+}
+
+/// `joy connector feishu login` — browser round trip, token to `<home>/connector-auth/`.
+async fn feishu_login(home: &Path) -> Result<()> {
+    let config = config::load(home)?;
+    let Some(feishu_config) = config.feishu else {
+        bail!(
+            "没配置 feishu 连接器：先写 {}",
+            home.join("connectors.json").display()
+        );
+    };
+    let expires_at = feishu_oauth::login(&feishu_config, home).await?;
+    println!(
+        "已登录飞书用户身份，token 到 {} 过期（文件 {}）。\n\
+         把 connectors.json 里 feishu.as 设成 \"user\" 才会以这个身份发消息。",
+        feishu_oauth::expiry_text(expires_at),
+        home.join("connector-auth/feishu.json").display()
+    );
+    Ok(())
+}
+
+fn feishu_logout(home: &Path) -> Result<()> {
+    if feishu_oauth::logout(home)? {
+        println!("已删掉飞书用户 token。之后要用用户身份发消息，得重新 login。");
+    } else {
+        println!("本来就没有登录。");
+    }
+    Ok(())
+}
+
+fn feishu_status(home: &Path) -> Result<()> {
+    let config = config::load(home)?;
+    let identity = config
+        .feishu
+        .as_ref()
+        .and_then(|feishu| feishu.identity().ok())
+        .unwrap_or("app");
+    println!("发送身份：{identity}");
+    match feishu_oauth::status(home) {
+        None => println!("用户 token：没有（以用户身份发消息前先 login）"),
+        Some((expired, expires_at)) => println!(
+            "用户 token：{}（到 {}）",
+            if expired {
+                "已过期，下次发送会尝试续期"
+            } else {
+                "有效"
+            },
+            feishu_oauth::expiry_text(expires_at)
+        ),
+    }
     Ok(())
 }
 

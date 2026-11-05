@@ -73,6 +73,34 @@ fn tier_lookup_falls_back_through_the_chain() {
     );
 }
 
+/// A declared tier is validated, never guessed at: "reasoining" must be an error, because the caller
+/// pinned a tier precisely so the bill would land on the intended model.
+#[test]
+fn a_declared_tier_is_validated_not_guessed() {
+    use super::clean_tier;
+
+    assert_eq!(clean_tier(None).expect("缺省合法"), None);
+    assert_eq!(clean_tier(Some("   ")).expect("空白 = 没声明"), None);
+    assert_eq!(
+        clean_tier(Some(" reasoning "))
+            .expect("去掉空白")
+            .as_deref(),
+        Some("reasoning")
+    );
+    for tier in ["fast", "chat", "reasoning"] {
+        assert_eq!(
+            clean_tier(Some(tier)).expect("三档都合法").as_deref(),
+            Some(tier)
+        );
+    }
+    let error = clean_tier(Some("reasoining")).expect_err("拼错必须报错");
+    assert!(
+        error.message.contains("fast") && error.message.contains("reasoining"),
+        "错误要说清可选值和收到的值：{}",
+        error.message
+    );
+}
+
 /// The ambiguous band: below 2k is obviously chat (no classify call spent), past half the window L0 has
 /// already ruled — only the middle stretch is worth one cheap-model question.
 #[test]

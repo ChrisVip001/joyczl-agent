@@ -17,4 +17,10 @@ export type TaskCreateParams = {
    * Per-task round cap; absent = `JOY_GOAL_MAX_ROUNDS`.
    */
   maxRounds: number | null;
+  /**
+   * The model tier this task runs on (`fast` / `chat` / `reasoning`). Absent = decide per
+   * turn (auto mode) or use the active profile (fixed mode). A declared tier always wins —
+   * "the task picks the model" is the whole point of the tier.
+   */
+  tier: string | null;
 };

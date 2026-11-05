@@ -51,6 +51,7 @@ async fn joyczl_state_open(home: &std::path::Path) -> sqlx::SqlitePool {
 
 fn config(port: u16, live: bool) -> EmailConfig {
     EmailConfig {
+        imap: None,
         smtp_host: "127.0.0.1".to_string(),
         smtp_port: port,
         from: "joy@corp.com".to_string(),

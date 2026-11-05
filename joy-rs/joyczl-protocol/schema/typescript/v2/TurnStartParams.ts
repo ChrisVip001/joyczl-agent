@@ -19,4 +19,10 @@ export type TurnStartParams = {
    * vision-capable provider; a missing or unreadable file fails the turn up front.
    */
   attachments?: Array<TurnAttachment> | null;
+  /**
+   * Pin this turn to a model tier (`fast` / `chat` / `reasoning`). Absent = let the server
+   * decide (task's declared tier, auto routing, or the active profile — in that order).
+   * Machine callers (task API, webhooks) say the tier; the model itself cannot.
+   */
+  tier?: string | null;
 };

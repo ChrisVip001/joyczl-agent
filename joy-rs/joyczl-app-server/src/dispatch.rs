@@ -7,15 +7,15 @@
 use joyczl_protocol::{
     codes, methods, ApprovalLogParams, ApprovalRespondParams, ApprovalRespondResponse,
     ConfigReadParams, ConfigReadResponse, ConfigWriteParams, ConfigWriteResponse, ErrorObject,
-    GoalSetParams, JsonRpcError, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse,
-    MemoryForgetParams, MemoryForgetResponse, MemoryListEpisodesParams, MemoryListEpisodesResponse,
-    MemoryListParams, MemoryListResponse, MemoryRememberParams, MemoryRememberResponse,
-    MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo, ModelListParams,
-    ModelListResponse, ModelProfilesParams, ModelRemoveParams, ModelSaveParams, RequestId,
-    ScheduleListParams, SessionListParams, SessionListResponse, SessionMessagesParams,
-    SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionViewParams,
-    TaskActionParams, TaskCreateParams, TurnInterruptParams, TurnInterruptResponse,
-    TurnStartParams, UsageSummaryParams, JSONRPC_VERSION,
+    GoalSetParams, InboxSummarizeParams, JsonRpcError, JsonRpcMessage, JsonRpcRequest,
+    JsonRpcResponse, MemoryForgetParams, MemoryForgetResponse, MemoryListEpisodesParams,
+    MemoryListEpisodesResponse, MemoryListParams, MemoryListResponse, MemoryRememberParams,
+    MemoryRememberResponse, MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo,
+    ModelListParams, ModelListResponse, ModelProfilesParams, ModelRemoveParams,
+    ModelRoutesSaveParams, ModelSaveParams, RequestId, ScheduleListParams, SessionListParams,
+    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
+    SessionNewResponse, SessionViewParams, TaskActionParams, TaskCreateParams, TurnInterruptParams,
+    TurnInterruptResponse, TurnStartParams, UsageSummaryParams, JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -244,6 +244,32 @@ async fn dispatch(
             respond(server.model_remove(p))
         }
 
+        methods::MODEL_ROUTES => {
+            // Parameterless, same tolerance as model/profiles: `{}` is fine, anything else is a mistake.
+            if let Some(value) = params {
+                if value.as_object().is_some_and(|o| !o.is_empty()) {
+                    return Err(ErrorObject {
+                        code: codes::INVALID_PARAMS,
+                        message: format!("{method} 不接受参数"),
+                        data: None,
+                    });
+                }
+            }
+            respond(server.model_routes())
+        }
+
+        methods::MODEL_ROUTES_SAVE => {
+            let p: ModelRoutesSaveParams = parse(params, method)?;
+            match server.model_routes_save(p) {
+                Ok(response) => respond(response),
+                Err(message) => Err(ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message,
+                    data: None,
+                }),
+            }
+        }
+
         methods::USAGE_SUMMARY => {
             // Parameterless method: clients habitually pass {} anyway (see the same note under model/profiles).
             if let Some(value) = params {
@@ -380,6 +406,14 @@ async fn dispatch(
         methods::TASK_CANCEL => {
             let p: TaskActionParams = parse(params, method)?;
             respond(crate::task::cancel(server, sink, p).await?)
+        }
+
+        // ---- Inbound mail: the panel's list and the human's "handle these" (0.13.0) ----
+        methods::INBOX_LIST => respond(crate::inbox::list(server).await?),
+
+        methods::INBOX_SUMMARIZE => {
+            let p: InboxSummarizeParams = parse(params, method)?;
+            respond(crate::inbox::summarize(server, sink, p).await?)
         }
 
         methods::TODO_VIEW => {

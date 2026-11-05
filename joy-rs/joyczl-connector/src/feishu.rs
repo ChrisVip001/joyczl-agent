@@ -130,13 +130,18 @@ async fn run(
         bail!("这次发送没有被批准（或没人回答），已跳过。");
     }
 
-    let token = match cache.get() {
-        Some(token) => token,
-        None => {
-            let token = tenant_token(&config, &secret).await?;
-            cache.put(token.clone());
-            token
-        }
+    let token = match config.identity().unwrap_or("app") {
+        // Acting as a person: no cache — the token file is the cache, and refresh is
+        // feishu_oauth's business.
+        "user" => crate::feishu_oauth::access_token(&config, &ctx.home).await?,
+        _ => match cache.get() {
+            Some(token) => token,
+            None => {
+                let token = tenant_token(&config, &secret).await?;
+                cache.put(token.clone());
+                token
+            }
+        },
     };
     let message_id = send_message(&config, &token, &to, &text).await?;
     Ok(format!("已发给 {to}（飞书 message_id {message_id}）。"))
@@ -216,7 +221,10 @@ pub async fn send_live(
     let Some(secret) = config.secret(home) else {
         bail!("飞书 app_secret 找不到（{}）。", config.app_secret);
     };
-    let token = tenant_token(config, &secret).await?;
+    let token = match config.identity().unwrap_or("app") {
+        "user" => crate::feishu_oauth::access_token(config, home).await?,
+        _ => tenant_token(config, &secret).await?,
+    };
     send_message(config, &token, to, text).await
 }
 

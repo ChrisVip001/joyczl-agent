@@ -18,6 +18,7 @@
 mod approval;
 mod dispatch;
 mod goal;
+mod inbox;
 mod jobs;
 /// Guardian lock: only one app-server per home (`joyczl_app_server::lock`).
 pub mod lock;
@@ -60,6 +61,10 @@ mod goal_tests;
 #[cfg(test)]
 #[path = "task_tests.rs"]
 mod task_tests;
+
+#[cfg(test)]
+#[path = "inbox_tests.rs"]
+mod inbox_tests;
 
 #[cfg(test)]
 #[path = "subagent_tests.rs"]
@@ -168,6 +173,9 @@ pub struct Server {
     /// This is the **runner's mirror**: the truth lives in `tasks` (agent_tasks, migration 0014);
     /// boot restores the mirror from it, so a restart no longer loses the target.
     pub(crate) goals: goal::Goals,
+    /// Connector inbox (migration 0015): what came in from the outside, recorded as-is.
+    /// Only the poller and `inbox/*` touch it; the model has no path here at all.
+    pub(crate) inbox: joyczl_state::Inbox,
     /// Long tasks (migration 0014): identity, status, round account. Human-only switches live
     /// in task.rs; the goal loop above is the engine that drives their rounds.
     pub(crate) tasks: joyczl_state::Tasks,
@@ -219,7 +227,14 @@ impl Server {
                 let id = format!("task{}", chrono::Local::now().timestamp_millis());
                 if let Err(e) = self
                     .tasks
-                    .create(&id, session_id, condition, Some(condition), max_rounds)
+                    .create(
+                        &id,
+                        session_id,
+                        condition,
+                        Some(condition),
+                        max_rounds,
+                        None,
+                    )
                     .await
                 {
                     eprintln!("(joy) 目标没建成任务（目标仍在内存里跑）：{e}");
@@ -240,6 +255,16 @@ impl Server {
         }
         goal::set(&self.goals, session_id, trimmed);
         self.goal_view(session_id).await
+    }
+
+    /// The home this server was booted with (connectors.json, outbox — same file the
+    /// ops side reads; one machine, one truth).
+    pub(crate) fn home(&self) -> std::path::PathBuf {
+        self.settings
+            .read()
+            .expect("settings 锁不该中毒")
+            .home
+            .clone()
     }
 
     pub async fn boot(pool: SqlitePool, mut settings: Settings) -> Self {
@@ -352,6 +377,7 @@ impl Server {
         }
 
         let server = Self {
+            inbox: joyczl_state::Inbox::new(pool.clone()),
             facts,
             episodes,
             chat,

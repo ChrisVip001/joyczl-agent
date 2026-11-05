@@ -22,6 +22,8 @@ pub struct TaskRow {
     pub status: String,
     pub rounds_used: i32,
     pub max_rounds: i32,
+    /// The declared model tier (fast / chat / reasoning); `None` = decide per turn.
+    pub tier: Option<String>,
     /// The turn carrying this task right now (a heartbeat; cleared when it ends).
     pub current_turn_id: Option<String>,
     pub suspend_reason: Option<String>,
@@ -29,7 +31,7 @@ pub struct TaskRow {
     pub finished_at: Option<String>,
 }
 
-const COLS: &str = "id, session_id, title, goal_condition, status, rounds_used, max_rounds, \
+const COLS: &str = "id, session_id, title, goal_condition, status, rounds_used, max_rounds, tier, \
                     current_turn_id, suspend_reason, created_at, finished_at";
 
 /// The task store. Clone is cheap (one pool handle).
@@ -52,16 +54,18 @@ impl Tasks {
         title: &str,
         goal_condition: Option<&str>,
         max_rounds: i32,
+        tier: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO agent_tasks (id, session_id, title, goal_condition, max_rounds)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO agent_tasks (id, session_id, title, goal_condition, max_rounds, tier)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(session_id)
         .bind(title)
         .bind(goal_condition)
         .bind(max_rounds)
+        .bind(tier)
         .execute(&self.pool)
         .await?;
         Ok(())

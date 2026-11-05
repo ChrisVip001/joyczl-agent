@@ -449,12 +449,24 @@ about the attachment is checked before the turn starts: containment inside
   the failure back to the model as-is, and *it* decides the next step (try later, ask a
   human, say plainly that nothing was sent). Bulk third-party calls are out of scope.
   → `joy-rs/joyczl-connector/src/smtp.rs`, `joy-rs/joyczl-connector/src/feishu.rs`
-* **Boundary** — Feishu sends as the **app** (`tenant_access_token`); acting as a
-  specific person needs the OAuth code flow with a console-registered redirect URI,
-  which won't be written before there is a real app to verify it against. Same story
-  for WeChat: personal accounts have no programmable outbound API, so the first release
-  has no WeChat (inbound gateways are a different thing — see Chat gateways).
-  → `joy-rs/joyczl-connector/src/feishu.rs`
+* **Boundary** — Feishu sends as the **app** (`tenant_access_token`) by default; acting
+  as a specific person needs one browser authorization (`joy connector feishu login`),
+  the token in a 0600 file, refreshed before use. The flow has no PKCE, the callback is
+  fixed at `127.0.0.1:41766/callback` and must be registered in the console, and an
+  expired refresh token means logging in again (no background renewal). WeChat stays
+  out: a personal account has no programmable outbound API (inbound is a different
+  thing — see Chat gateways).
+  → `joy-rs/joyczl-connector/src/feishu_oauth.rs`
+* **Boundary** — inbound mail is **polling** (30-second floor), no IDLE push: new mail
+  shows up one interval late at worst. Deduping is by IMAP UID, and a rebuilt mailbox
+  restarts UIDs from 0 — the old index then blocks new mail with the same UID (the
+  judgement lives in message_id, but the table's unique key is the UID).
+  → `joy-rs/joyczl-connector/src/imap.rs`, `joy-rs/joyczl-state/src/inbox.rs`
+* **Boundary** — inbound bodies are stored as plain text only: HTML is stripped, layout
+  is not restored; non-UTF-8 charsets are decoded lossily as UTF-8 (no code tables — see
+  the GBK note above); attachments are not stored. The first boot records the water mark
+  and does not back-fill history.
+  → `joy-rs/joyczl-connector/src/imap.rs`
 * **Deliberate** — The allowlist is an **exact match** (plus `@domain` for email): no
   wildcards, no regex, no "ask once, allow forever". Only the human edits it, and a
   change takes effect on the next start (tools are registered at boot).
@@ -510,6 +522,34 @@ about the attachment is checked before the turn starts: containment inside
 * **Gap** — The embedding path has no end-to-end test against a real embedding
   server: fusion and degradation are unit-tested, the HTTP call itself is not.
   → `joy-rs/joyczl-memory/src/retrieval_tests.rs`
+
+## Business form (task API / webhooks / tiers)
+
+* **Deliberate** — `/api/run` and synchronous-mode webhooks wait for the turn to
+  finish; "accept now, deliver later" is the webhook `callback` mode (202 plus a
+  push). Neither has a job queue: if all three delivery attempts fail (or the process
+  dies first) that delivery is lost — the answer itself is in the session history,
+  but it is not re-pushed.
+  → `joy-rs/joyczl-ops/src/api.rs` (`run_headless`), `webhooks.rs` (`deliver`)
+* **Deliberate** — replay protection exists only with `signature: true`, and freshness
+  is judged by the **local clock**: drift beyond ±300s makes honest requests look
+  expired (or lets old ones live a little longer). Plain `X-Joy-Secret` mode does not
+  refuse replays at all — that is its definition, not a bug.
+  → `joy-rs/joyczl-ops/src/webhooks.rs` (`admit`, `SIGNATURE_WINDOW`)
+* **Deliberate** — the rate cap is a **per-process** per-minute counter: a restart
+  clears it and multiple processes do not share it. It stops "one hook being hammered",
+  not "the machine's total hook load", and it has no per-caller buckets.
+  → `joy-rs/joyczl-ops/src/webhooks.rs` (`Guard::rate`)
+* **Deliberate** — inbound webhooks exist in **single-user mode only**. In hub mode one
+  port serves many homes and a knock has no "which user" to choose, so every hook is 404
+  there.
+  → `joy-rs/joyczl-ops/src/api.rs` (`hook`), `Gate::single_app`
+* **Deliberate** — a declared `tier` beats `fixed` mode: fixed is the default policy,
+  not a veto. The cost: when `model-routes.json` has no entry for that tier, it falls
+  through the default chain to the active profile — "declared reasoning, ran on chat".
+  `TurnMeta.routeReason` spells that out (`tier:reasoning → chat-profile`) instead of
+  hiding it.
+  → `joy-rs/joyczl-app-server/src/route.rs` (`resolved_for_turn`)
 
 ## Configuration
 

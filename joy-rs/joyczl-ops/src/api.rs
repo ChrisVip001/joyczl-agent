@@ -7,8 +7,8 @@
 use std::convert::Infallible;
 use std::sync::Arc;
 
-use axum::extract::{Extension, Query};
-use axum::http::StatusCode;
+use axum::extract::{Extension, Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -17,17 +17,19 @@ use futures_util::stream::{self, Stream};
 use joyczl_protocol::{
     codes, methods, ApprovalLogResponse, ApprovalRespondParams, ApprovalRespondResponse,
     ConfigReadResponse, ConnectorStatus, DashboardData, ErrorObject, GoalSetParams,
-    GoalSetResponse, MemoryListEpisodesResponse, MemoryListResponse, ModelProfilesResponse,
-    ModelRemoveParams, ModelRemoveResponse, ModelSaveParams, ModelSaveResponse,
-    ScheduleListResponse, ServerNotification, SessionListResponse, SessionMessagesParams,
-    SessionMessagesResponse, TaskActionParams, TaskCreateParams, TaskEnvelope, TaskListResponse,
-    TaskViewResponse, TodoListView, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
-    TurnStartResponse, UsageSummaryResponse,
+    GoalSetResponse, InboxListView, InboxSummarizeParams, InboxSummarizeResponse,
+    MemoryListEpisodesResponse, MemoryListResponse, MessageRole, ModelProfilesResponse,
+    ModelRemoveParams, ModelRemoveResponse, ModelRoutesResponse, ModelRoutesSaveParams,
+    ModelSaveParams, ModelSaveResponse, RunResponse, ScheduleListResponse, ServerNotification,
+    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, TaskActionParams,
+    TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse, TodoListView,
+    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
+    UsageSummaryResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::AppServer;
+use crate::{webhooks, AppServer};
 
 /// The first screen fetches only this many recent entries: the dashboard must show "the
 /// state right now" at a glance; paging is another matter (the protocol cursor is for that).
@@ -111,6 +113,13 @@ impl EventPing {
                 turn_id: None,
                 session_id: Some(n.session_id.clone()),
             },
+            // Inbound: new mail waiting for a human. Not tied to a session — it is the
+            // inbox's news, and the panel lives on the overview.
+            ServerNotification::InboxReceived(_) => EventPing {
+                kind: "inbox",
+                turn_id: None,
+                session_id: None,
+            },
             // Flow noise (text deltas, tool calls, gates, retries) — knock once per
             // meaningful change, not once per token.
             _ => return None,
@@ -186,6 +195,18 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
     // Goal and todo are **per viewed session**: only fetched when the page names one.
     // Two read-only RPC methods — ops is a client of app-server, the same world as
     // every other client; the stdio queue is the honest path, even for reads.
+    // Inbound mail: the panel's list. Empty when no connector is configured — ops does not
+    // decide that, app-server's inbox table does.
+    let inbox: InboxListView = app
+        .request(methods::INBOX_LIST, json!({}))
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("(joy) 收件箱读不了（面板会显示空）：{}", error.message);
+            InboxListView {
+                items: Vec::new(),
+                unseen: 0,
+            }
+        });
     // Connectors: not part of the app-server protocol — the file is the truth and ops
     // sits on the same machine. A broken file is reported, never rendered as "none".
     let (connectors, connectors_error) = connector_status(app);
@@ -215,6 +236,7 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
         goal,
         todos,
         task,
+        inbox,
         connectors,
         connectors_error,
     })
@@ -285,6 +307,39 @@ fn connector_status(app: &AppServer) -> (Vec<ConnectorStatus>, Option<String>) {
             (rows, None)
         }
         Err(e) => (Vec::new(), Some(e.to_string())),
+    }
+}
+
+/// `POST /api/inbox` — the human's "handle these": one turn over the unseen mail.
+///
+/// Body: `{ "sessionId": "inbox" }` (optional). No model configured → 200 with the
+/// app-server's own honest error, same convention as the task switches.
+pub async fn inbox(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let params: InboxSummarizeParams = match serde_json::from_value(body) {
+        Ok(params) => params,
+        Err(e) => {
+            return failed(
+                StatusCode::BAD_REQUEST,
+                ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("收件箱参数不对：{e}"),
+                    data: None,
+                },
+            )
+        }
+    };
+    match app
+        .request::<InboxSummarizeResponse>(
+            methods::INBOX_SUMMARIZE,
+            serde_json::to_value(params).expect("可序列化"),
+        )
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
     }
 }
 
@@ -710,6 +765,32 @@ pub async fn model_remove(
     }
 }
 
+/// `GET /api/model/routes` — the routing table (fixed / auto + tier → profile id).
+pub async fn model_routes(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    match app
+        .request::<ModelRoutesResponse>(methods::MODEL_ROUTES, json!({}))
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `POST /api/model/routes/save` — replace the whole table. Human-only, like `/model`.
+pub async fn model_routes_save(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<ModelRoutesSaveParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("ModelRoutesSaveParams 一定能序列化");
+    match app
+        .request::<ModelRoutesResponse>(methods::MODEL_ROUTES_SAVE, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
 pub async fn approval(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ApprovalRespondParams>,
@@ -787,6 +868,241 @@ pub async fn turn(
         .into_response()
 }
 
+/// `POST /api/run` — **the task API**: one turn in, one answer out, plain JSON.
+///
+/// Same body as `/api/turn` (`TurnStartParams`, no second shape), but no SSE: a program (CI,
+/// cron, another agent) wants the reply, not a typewriter. The dashboard keeps SSE because a
+/// person wants to watch the words arrive; this endpoint exists for callers that don't.
+pub async fn run(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<TurnStartParams>,
+) -> Response {
+    if params.message.trim().is_empty() {
+        return failed(
+            StatusCode::BAD_REQUEST,
+            ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: "消息是空的".to_string(),
+                data: None,
+            },
+        );
+    }
+    match run_headless(&app, params).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// One turn in, one answer out — shared by `/api/run` and inbound webhooks.
+///
+/// `turn/start` answers only when the turn is over, but its answer carries just the turn id;
+/// the reply rides on `turnCompleted`. So subscribe **before** sending (same reason as `/api/turn`),
+/// then wait. If the completion was lost to a full buffer while the request was still pending,
+/// fall back to the newest assistant row — by then the turn is over and that row exists.
+pub(crate) async fn run_headless(
+    app: &Arc<AppServer>,
+    params: TurnStartParams,
+) -> Result<RunResponse, ErrorObject> {
+    let session_id = params
+        .session_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    let payload = serde_json::to_value(&params).expect("TurnStartParams 一定能序列化");
+    let mut events = app.subscribe();
+    let request = app.request::<TurnStartResponse>(methods::TURN_START, payload);
+    tokio::pin!(request);
+
+    let mut turn_id: Option<String> = None;
+    loop {
+        tokio::select! {
+            result = &mut request => {
+                result?;
+                // Normally unreachable (completion is sent before the response); kept so a lost
+                // notification cannot turn into a hung HTTP request.
+                break;
+            }
+            received = events.recv() => {
+                let notification = match received {
+                    Ok(notification) => notification,
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        eprintln!("(joy) 任务 API 的通知晚了一步，丢了 {missed} 条");
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                let Some(id) = belongs(&notification, &session_id, turn_id.as_deref()) else {
+                    continue;
+                };
+                turn_id = Some(id);
+                if let Some(run) = completed_turn(&notification) {
+                    return Ok(run);
+                }
+            }
+        }
+    }
+
+    // The response and the completion travel the same pipe, completion first: by the time the
+    // request resolves, the notification is already queued. Drain it rather than paying a read.
+    while let Ok(notification) = events.try_recv() {
+        if let Some(run) = completed_turn(&notification) {
+            return Ok(run);
+        }
+    }
+
+    // Fallback: the turn is over, the row is written; read the last assistant message.
+    let last = app
+        .request::<SessionMessagesResponse>(
+            methods::SESSION_MESSAGES,
+            json!({ "sessionId": session_id, "limit": 1 }),
+        )
+        .await?;
+    let reply = last
+        .data
+        .into_iter()
+        .find(|message| matches!(message.role, MessageRole::Assistant))
+        .ok_or_else(|| ErrorObject {
+            code: codes::INTERNAL_ERROR,
+            message: "这一轮跑完了，但答复没读到（通知队列溢出且历史里没有）".to_string(),
+            data: None,
+        })?;
+    let meta = reply.meta;
+    Ok(RunResponse {
+        turn_id: turn_id.unwrap_or_default(),
+        reply: reply.content,
+        model: meta.as_ref().map(|m| m.model.clone()).unwrap_or_default(),
+        provider: meta
+            .as_ref()
+            .map(|m| m.provider.clone())
+            .unwrap_or_default(),
+        route_reason: meta.and_then(|m| m.route_reason),
+    })
+}
+
+/// `POST /api/hook/:name` — an inbound webhook runs one turn (see `webhooks.rs` for the fences).
+///
+/// Deliberately **outside** the dashboard token layer: a foreign machine proves itself with the
+/// hook's own secret (`X-Joy-Secret`), not with a token it was never given. Single-user mode only —
+/// in hub mode there are many homes and an inbound hook has no user to pick, so the door is 404.
+pub async fn hook(
+    State(gate): State<crate::Gate>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let Some(app) = gate.single_app() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let config = match webhooks::load(app.home()) {
+        Ok(config) => config,
+        Err(error) => {
+            // A broken file disables every hook loudly — same discipline as connectors.json.
+            eprintln!("(joy) webhooks.json 有问题，入站 hook 全部不启用：{error:#}");
+            return failed(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorObject {
+                    code: codes::INTERNAL_ERROR,
+                    message: format!("webhooks.json 有问题：{error}"),
+                    data: None,
+                },
+            );
+        }
+    };
+    let Some(hook) = webhooks::find(&config, &name).filter(|hook| hook.enabled()) else {
+        // Unknown and switched-off are the same answer: this door does not exist.
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let credential = webhooks::Credential {
+        secret: header(&headers, "x-joy-secret"),
+        timestamp: header(&headers, "x-joy-timestamp"),
+        signature: header(&headers, "x-joy-signature"),
+    };
+    if let Err(refusal) = webhooks::admit(
+        hook,
+        &credential,
+        &body,
+        chrono::Utc::now().timestamp(),
+        std::time::Instant::now(),
+    ) {
+        return refusal_response(refusal);
+    }
+
+    let session = hook.session_id();
+    let hook_name = hook.name.clone();
+    let params = TurnStartParams {
+        session_id: Some(session.clone()),
+        message: hook.render(&body),
+        // The caller wants one answer, not a stream; text deltas would only fill the buffer.
+        stream: Some(false),
+        cwd: None,
+        attachments: None,
+        tier: hook.tier.clone(),
+    };
+
+    // Async: acknowledge now, push the answer to the callback. The caller is a program that may
+    // time out in 5s, while a turn can take a minute — holding the socket would only buy retries.
+    if let Some(callback) = hook.callback_url().map(str::to_string) {
+        let pushed_session = session.clone();
+        tokio::spawn(async move {
+            let payload = match run_headless(&app, params).await {
+                Ok(run) => json!({
+                    "hook": hook_name,
+                    "session": pushed_session,
+                    "ok": true,
+                    "result": run,
+                }),
+                Err(error) => json!({
+                    "hook": hook_name,
+                    "session": pushed_session,
+                    "ok": false,
+                    "error": error,
+                }),
+            };
+            webhooks::deliver(&callback, payload).await;
+        });
+        return (
+            StatusCode::ACCEPTED,
+            Json(webhooks::accepted(&hook.name, &session)),
+        )
+            .into_response();
+    }
+
+    match run_headless(&app, params).await {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// One header as text; absent or non-UTF8 reads as empty (the policy treats empty as absent).
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+}
+
+/// A refusal a script can read: the status is the contract, this sentence is for the operator.
+fn refuse(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "error": message }))).into_response()
+}
+
+fn refusal_response(refusal: webhooks::Refusal) -> Response {
+    match refusal {
+        webhooks::Refusal::Unauthorized(reason) => refuse(StatusCode::UNAUTHORIZED, reason),
+        webhooks::Refusal::Replay => refuse(StatusCode::CONFLICT, "这个签名已经用过（重放被拒）"),
+        webhooks::Refusal::TooFast(wait) => {
+            let mut response = refuse(
+                StatusCode::TOO_MANY_REQUESTS,
+                &format!("这个 hook 每分钟的额度用完了，{wait} 秒后再试"),
+            );
+            if let Ok(value) = axum::http::HeaderValue::from_str(&wait.to_string()) {
+                response.headers_mut().insert("retry-after", value);
+            }
+            response
+        }
+    }
+}
+
 /// Forward this turn's notifications to the browser one by one (subscriptions + response).
 ///
 /// The request's response (the `turn/start` return) is usually **ignored by everyone** —
@@ -846,6 +1162,20 @@ async fn forward(
     }
 }
 
+/// `turnCompleted` is the one-shot answer: reply + which model actually ran. Anything else: None.
+fn completed_turn(notification: &ServerNotification) -> Option<RunResponse> {
+    let ServerNotification::TurnCompleted(done) = notification else {
+        return None;
+    };
+    Some(RunResponse {
+        turn_id: done.turn_id.clone(),
+        reply: done.reply.clone(),
+        model: done.meta.model.clone(),
+        provider: done.meta.provider.clone(),
+        route_reason: done.meta.route_reason.clone(),
+    })
+}
+
 /// Does this notification belong to this turn? If so, return its turnId.
 ///
 /// The first frame, `turnStarted`, can only be recognized by sessionId (no turnId yet);
@@ -888,6 +1218,7 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
         N::TurnResumed(n) => Some(&n.turn_id),
         N::TurnSuspended(n) => Some(&n.turn_id),
         N::TaskUpdated(_)
+        | N::InboxReceived(_)
         | N::ConsolidationCompleted(_)
         | N::GraphStarted(_)
         | N::GraphNodeStarted(_)

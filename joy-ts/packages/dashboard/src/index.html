@@ -149,6 +149,25 @@
               <button class="ghost" id="mp-save" type="button">保存并切换</button>
               <button class="ghost" id="mp-remove" type="button">删除这套</button>
             </div>
+            <hr class="split" />
+            <p class="hint" id="mr-state">档位：—</p>
+            <label class="check hint">
+              <input type="checkbox" id="mr-auto" />
+              按任务自动选模型（关闭则永远用当前这套）
+            </label>
+            <label class="tier">
+              快问快答
+              <select id="mr-fast" aria-label="fast 档"></select>
+            </label>
+            <label class="tier">
+              日常对话
+              <select id="mr-chat" aria-label="chat 档"></select>
+            </label>
+            <label class="tier">
+              深度推理
+              <select id="mr-reasoning" aria-label="reasoning 档"></select>
+            </label>
+            <button class="ghost" id="mr-save" type="button">保存档位</button>
             <p class="hint">
               密钥优先进系统钥匙串；Windows 与没有钥匙串时会退回明文文件
               （0600）—— 保存后这里会如实说是哪一种。

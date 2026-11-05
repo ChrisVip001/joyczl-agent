@@ -45,6 +45,7 @@ impl Fixture {
 fn config(base_url: String, live: bool) -> FeishuConfig {
     FeishuConfig {
         app_id: "cli_test".to_string(),
+        identity: None,
         app_secret: "env:JOY_FEISHU_TEST_SECRET".to_string(),
         receive_id_type: "open_id".to_string(),
         allow_recipients: vec!["ou_alice".to_string()],

@@ -24,8 +24,10 @@ tokio = { workspace = true }
 tower-http = { workspace = true }
 # token 生成用：已在依赖树里（sqlx/tokio 传递引入），不是新 crate。
 getrandom = "0.3"
-# 密码哈希（PBKDF2-HMAC-SHA256）：ring 已在依赖树里（reqwest → rustls），直接声明不新增编译物。
+# 密码哈希（PBKDF2-HMAC-SHA256）与 webhook 的 HMAC-SHA256：ring 已在依赖树里（reqwest → rustls）。
 ring = "0.17"
+# webhook 的异步回调：POST 一条结果。reqwest 早就在树里（网关 / MCP / 飞书），不是新编译物。
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

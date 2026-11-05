@@ -157,4 +157,99 @@ assert content["text"] == "冒烟测试消息", content
 PY
 echo "  ✓ 飞书 live：租户 token → 文本消息，receive_id / content 形状都对"
 
+# ---- 6. Inbound: a real poller over a scripted IMAP, through the shipped binary ------
+# The whole chain this proves: connectors.json → poller task → IMAP protocol → state.db
+# → inbox/list over JSON-RPC. Nothing is mocked between the binary and the mailbox.
+#
+# Two runs, as in real life: the first knows the mailbox's high-water mark (that is what
+# the cursor is), the second is where new mail actually arrives.
+INBOUND_HOME="$WORK/inbound"
+mkdir -p "$INBOUND_HOME"
+cat > "$INBOUND_HOME/connectors.json" <<'EOF_INBOUND'
+{"email": {"smtp_host": "127.0.0.1", "smtp_port": 2525, "from": "joy@corp.com",
+           "allow_recipients": ["@corp.com"], "live": false}}
+EOF_INBOUND
+
+# Boot once without an imap block: migrations run, no poller starts, no IMAP traffic.
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{}}' \
+  | JOY_HOME="$INBOUND_HOME" JOY_PROVIDER=anthropic JOY_API_KEY=test \
+      "$BIN" app-server >"$WORK/inbound_boot.log" 2>&1
+grep -q '"id":1' "$WORK/inbound_boot.log" || fail "入站场景的第一次启动没应答"
+
+# The cursor says "we have seen up to 100"; the scripted mailbox has 101 and 102.
+python3 - "$INBOUND_HOME/state.db" <<'PY' || fail "预置轮询游标失败"
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute("INSERT INTO connector_cursors (connector, mailbox, last_uid) VALUES ('email', 'INBOX', 100)")
+con.commit()
+PY
+
+python3 - "$INBOUND_HOME/connectors.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+config = json.load(open(path))
+config["email"]["imap"] = {"host": "127.0.0.1", "port": 0, "mailbox": "INBOX", "poll_secs": 30, "mode": "notify"}
+json.dump(config, open(path, "w"))
+PY
+
+python3 "$REPO/scripts/fake_imap_server.py" 101 102 >"$WORK/imap_port" &
+IMAP_PID=$!
+for _ in $(seq 1 50); do
+  [[ -s "$WORK/imap_port" ]] && break
+  sleep 0.1
+done
+IMAP_PORT="$(head -n1 "$WORK/imap_port" 2>/dev/null || true)"
+[[ -n "$IMAP_PORT" ]] || fail "假 IMAP 端点没起来"
+
+# Now point the config at it (port known only after the server started).
+python3 - "$INBOUND_HOME/connectors.json" "$IMAP_PORT" <<'PY'
+import json, sys
+path, port = sys.argv[1], sys.argv[2]
+config = json.load(open(path))
+config["email"]["imap"]["port"] = int(port)
+config["email"]["secret"] = "env:JOY_IMAP_SMOKE_PASSWORD"
+config["email"]["username"] = "joy@corp.com"
+json.dump(config, open(path, "w"))
+PY
+
+mkfifo "$WORK/inbound_in"
+JOY_IMAP_SMOKE_PASSWORD=s3cret JOY_HOME="$INBOUND_HOME" \
+  JOY_PROVIDER=anthropic JOY_API_KEY=test \
+  "$BIN" app-server <"$WORK/inbound_in" >"$WORK/inbound_out.log" 2>&1 &
+INBOUND_PID=$!
+exec 4>"$WORK/inbound_in" # hold stdin open: the poller is a background task
+
+sleep 2
+printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"inbox/list","params":{}}' >&4
+INBOX_JSON=""
+for _ in $(seq 1 50); do
+  if grep -q '"id":9' "$WORK/inbound_out.log" 2>/dev/null; then
+    INBOX_JSON="$(grep '"id":9' "$WORK/inbound_out.log" | head -n1)"
+    break
+  fi
+  sleep 0.1
+done
+exec 4>&-
+# Don't wait for EOF-driven exit here: the FIFO's write end may still be held by a
+# subshell fork, and this smoke only needs the answer it already got.
+kill "$INBOUND_PID" 2>/dev/null || true
+wait "$INBOUND_PID" 2>/dev/null || true
+kill "$IMAP_PID" 2>/dev/null || true
+[[ -n "$INBOX_JSON" ]] || { cat "$WORK/inbound_out.log"; fail "inbox/list 没应答"; }
+
+python3 - "$INBOX_JSON" <<'PY' || fail "收件箱内容不对"
+import json, sys
+response = json.loads(sys.argv[1])["result"]
+assert response["unseen"] == 2, response
+items = response["items"]
+assert len(items) == 2, items
+subjects = {item["subject"] for item in items}
+assert "服务器周报" in subjects, subjects        # RFC 2047 decoded
+assert "发票" in subjects, subjects
+invoice = next(item for item in items if item["subject"] == "发票")
+assert "本月发票" in invoice["snippet"], invoice  # base64 decoded
+assert invoice["fromAddr"] == "alice@corp.com", invoice
+PY
+echo "  ✓ 入站：轮询器真的连了 IMAP，主题/正文解码后进了收件箱，inbox/list 读得回来"
+
 echo "✓ 连接器冒烟测试通过"

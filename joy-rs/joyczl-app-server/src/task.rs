@@ -33,6 +33,7 @@ fn view(row: &TaskRow) -> AgentTaskView {
         status: row.status.clone(),
         rounds_used: row.rounds_used,
         max_rounds: row.max_rounds,
+        tier: row.tier.clone(),
         current_turn_id: row.current_turn_id.clone(),
         suspend_reason: row.suspend_reason.clone(),
         created_at: row.created_at.clone(),
@@ -100,10 +101,13 @@ pub(crate) async fn create(
         .as_deref()
         .map(str::trim)
         .filter(|text| !text.is_empty());
+    // The declared tier is stored with the task, not with the turn: every round of this task
+    // then runs on the same tier without the caller repeating it.
+    let tier = crate::route::clean_tier(params.tier.as_deref())?;
     let id = format!("task{}", chrono::Local::now().timestamp_millis());
     server
         .tasks
-        .create(&id, session, title, goal, max_rounds)
+        .create(&id, session, title, goal, max_rounds, tier.as_deref())
         .await
         .map_err(|e| invalid(format!("任务没建成：{e}")))?;
     // The goal loop reads its condition from the in-memory mirror; a task created with one

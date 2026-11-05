@@ -55,6 +55,7 @@ export function renderOverview(
   session: string,
   onPick: (id: string) => void,
   onTask: (task: AgentTaskView, action: "suspend" | "resume" | "cancel") => void,
+  onInbox: () => void,
 ): DocumentFragment {
   const { config } = data;
   const fragment = document.createDocumentFragment();
@@ -114,6 +115,10 @@ export function renderOverview(
     ),
   );
 
+  if (data.inbox.items.length > 0 || data.inbox.unseen > 0) {
+    fragment.append(renderInbox(data, onInbox));
+  }
+
   if (data.connectors.length > 0 || data.connectorsError != null) {
     fragment.append(renderConnectors(data));
   }
@@ -132,6 +137,51 @@ export function renderOverview(
   );
 
   return fragment;
+}
+
+/**
+ * The inbox: what came in, and the single button that turns it into work.
+ *
+ * Read-only otherwise — polling never marks mail as read, and nothing here replies. The
+ * list is capped by the app-server (20); this shows the newest five so the panel stays a
+ * glance, not a mail client.
+ */
+function renderInbox(data: DashboardData, onInbox: () => void): HTMLElement {
+  const block = el(
+    "div",
+    { class: "block inbox" },
+    el("h3", {
+      text: data.inbox.unseen > 0 ? `收件箱 · ${data.inbox.unseen} 封等你处理` : "收件箱",
+    }),
+  );
+  for (const item of data.inbox.items.slice(0, 5)) {
+    block.append(
+      el(
+        "div",
+        { class: `inbox-row${item.seen ? "" : " unread"}` },
+        el("div", { class: "inbox-meta", text: `${item.fromAddr} · ${item.receivedAt}` }),
+        el("div", { class: "inbox-subject", text: item.subject }),
+        el("div", { class: "inbox-snippet", text: item.snippet }),
+      ),
+    );
+  }
+  if (data.inbox.unseen > 0) {
+    block.append(
+      el("button", {
+        class: "task-act",
+        type: "button",
+        text: "处理这些邮件",
+        onclick: onInbox,
+      }),
+    );
+  }
+  block.append(
+    el("p", {
+      class: "connector-note",
+      text: "只看不标已读；处理是把它们交给一个回合，不会替你回信。",
+    }),
+  );
+  return block;
 }
 
 /// Connectors: one quiet row each — name, whether it can actually send, allowlist width.

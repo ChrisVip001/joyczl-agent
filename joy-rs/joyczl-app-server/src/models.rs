@@ -8,10 +8,12 @@
 //! cannot reach the keys — if it could make Joy switch providers itself, it could plug itself into another server.
 
 use joyczl_config::models as cfg;
+use joyczl_config::routes::{load_routes, save_routes, RouteFile, RouteMode, TIERS};
 use joyczl_protocol::{
     ApprovalLogEntry, ApprovalLogResponse, ModelProfileView, ModelProfilesResponse,
-    ModelRemoveParams, ModelRemoveResponse, ModelSaveParams, ModelSaveResponse,
-    ScheduleListResponse, ScheduleStateRow, UsageByModel, UsageSummaryResponse,
+    ModelRemoveParams, ModelRemoveResponse, ModelRoutesResponse, ModelRoutesSaveParams,
+    ModelSaveParams, ModelSaveResponse, ScheduleListResponse, ScheduleStateRow, TierRoute,
+    UsageByModel, UsageSummaryResponse,
 };
 use std::sync::{Mutex, RwLock};
 
@@ -55,6 +57,24 @@ fn views(file: &cfg::ModelsFile) -> Vec<ModelProfileView> {
             active: active == Some(p.id.as_str()),
         })
         .collect()
+}
+
+/// The routing table's wire shape. Rows always come in `TIERS` order so the panel and the file agree.
+fn routes_view(file: &RouteFile) -> ModelRoutesResponse {
+    ModelRoutesResponse {
+        mode: match file.mode {
+            RouteMode::Fixed => "fixed",
+            RouteMode::Auto => "auto",
+        }
+        .to_string(),
+        routes: TIERS
+            .iter()
+            .map(|tier| TierRoute {
+                tier: (*tier).to_string(),
+                profile_id: file.routes.get(*tier).cloned(),
+            })
+            .collect(),
+    }
 }
 
 /// `provider / model`: the one-liner for "which model is current" in the UI.
@@ -301,6 +321,58 @@ impl Server {
         let active_id = file.active.clone();
         drop(file);
         ModelRemoveResponse { removed, active_id }
+    }
+
+    /// The routing table (`model/routes`). Always three rows in `TIERS` order — the panel has
+    /// nothing to sort or invent, and "no file" is honestly `fixed` + three nulls.
+    pub fn model_routes(&self) -> ModelRoutesResponse {
+        routes_view(&load_routes(&self.settings().home))
+    }
+
+    /// Replace the whole table (`model/routes/save`). Validated **before** writing: a typo in a tier
+    /// name or a profile id that does not exist would otherwise only surface as a silent fallback
+    /// on some later turn, which is exactly the kind of "it just picked another model" nobody can debug.
+    pub fn model_routes_save(
+        &self,
+        p: ModelRoutesSaveParams,
+    ) -> Result<ModelRoutesResponse, String> {
+        let mode = match p.mode.trim() {
+            "fixed" => RouteMode::Fixed,
+            "auto" => RouteMode::Auto,
+            other => return Err(format!("mode 只能是 fixed / auto —— 收到 '{other}'")),
+        };
+        let known: Vec<String> = {
+            let file = self.models.read().expect("models 锁不该中毒");
+            file.profiles
+                .iter()
+                .map(|profile| profile.id.clone())
+                .collect()
+        };
+        let mut routes = std::collections::HashMap::new();
+        for entry in p.routes {
+            let tier = entry.tier.trim();
+            if !TIERS.contains(&tier) {
+                return Err(format!("档位只能是 {} —— 收到 '{tier}'", TIERS.join(" / ")));
+            }
+            let Some(id) = entry
+                .profile_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            else {
+                continue; // Empty = "follow the fallback chain" — absence is a valid answer.
+            };
+            if !known.iter().any(|known| known == id) {
+                return Err(format!(
+                    "路由表引用的 '{id}' 不存在 —— 先把这套模型配好再挂到档位上"
+                ));
+            }
+            routes.insert(tier.to_string(), id.to_string());
+        }
+        let file = RouteFile { mode, routes };
+        save_routes(&self.settings().home, &file)
+            .map_err(|e| format!("写 model-routes.json 失败：{e}"))?;
+        Ok(routes_view(&file))
     }
 
     /// Apply the active profile into Settings and **re-resolve** the provider: switching takes effect immediately.

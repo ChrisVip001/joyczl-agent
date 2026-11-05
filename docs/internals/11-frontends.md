@@ -75,6 +75,9 @@ Rust 侧（`joyczl-ops`）做的是「HTTP ↔ JSON-RPC 的翻译」：
 | `GET /api/data` | `config/read` + `session/list{limit:20}` + `memory/list{limit:30}` + `memory/list-episodes{limit:20}` 合成一个 `DashboardData` |
 | `GET /api/session` | `session/messages` |
 | `POST /api/turn` | `turn/start`，应答改用 **SSE** 推通知流 |
+| `POST /api/run` | `turn/start`，但**同步**等这一轮跑完，返回 `RunResponse`（任务 API；程序用的那一半） |
+| `POST /api/hook/{name}` | 读 `<home>/webhooks.json` → 鉴权（`X-Joy-Secret` 或时间戳+HMAC 签名，重放 409）→ 限流（429）→ `turn/start`；配了 `callback` 就 202 + 后台跑完再推结果（入站 webhook；**在 token 层之外**） |
+| `GET /api/model/routes` / `POST /api/model/routes/save` | `model/routes` / `model/routes/save`：档位路由表 |
 
 SSE 那两个细节值得记：
 

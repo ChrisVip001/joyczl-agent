@@ -47,6 +47,7 @@ async fn collect(server: &crate::Server, message: &str) -> (String, String) {
             message: message.to_string(),
             stream: Some(true),
             cwd: None,
+            tier: None,
         },
         RequestId::Number(1),
         &sink,

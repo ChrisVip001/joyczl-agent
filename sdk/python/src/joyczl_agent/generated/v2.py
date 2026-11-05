@@ -34,6 +34,12 @@ class AgentTaskView(BaseModel):
     sessionId: str
     status: str
     suspendReason: str | None = None
+    tier: Annotated[
+        str | None,
+        Field(
+            description='The declared model tier (`fast` / `chat` / `reasoning`); absent = per-turn decision.'
+        ),
+    ] = None
     title: str
 
 
@@ -261,6 +267,37 @@ class GraphStartedNotification(BaseModel):
     workflow: str
 
 
+class InboxItemView(BaseModel):
+    fromAddr: str
+    id: int
+    receivedAt: str
+    seen: bool
+    snippet: str
+    subject: str
+
+
+class InboxListView(BaseModel):
+    items: list[InboxItemView]
+    unseen: int
+
+
+class InboxReceivedNotification(BaseModel):
+    added: Annotated[
+        int, Field(description='How many messages this poll added (deduped by uid).')
+    ]
+    connector: Annotated[str, Field(description='`email` today.')]
+
+
+class InboxSummarizeParams(BaseModel):
+    sessionId: str | None = None
+
+
+class InboxSummarizeResponse(BaseModel):
+    count: int
+    message: str
+    sessionId: str
+
+
 class JsonRpcNotification(BaseModel):
     jsonrpc: str
     method: str
@@ -464,6 +501,24 @@ class RetryNotification(BaseModel):
     reason: Annotated[
         str, Field(description='Why it is retrying (`HTTP 429` / `network error: …`).')
     ]
+    turnId: str
+
+
+class RunResponse(BaseModel):
+    model: Annotated[
+        str,
+        Field(
+            description='The model that actually answered — the visible proof that a tier pin took effect.'
+        ),
+    ]
+    provider: str
+    reply: str
+    routeReason: Annotated[
+        str | None,
+        Field(
+            description='Why this model was chosen (`tier:fast → mini`, `auto:reasoning → ds-r1`); absent = no routing.'
+        ),
+    ] = None
     turnId: str
 
 
@@ -677,7 +732,15 @@ class ServerNotification17(BaseModel):
     type: Literal['taskUpdated']
 
 
-class ServerNotification19(BaseModel):
+class ServerNotification18(BaseModel):
+    added: Annotated[
+        int, Field(description='How many messages this poll added (deduped by uid).')
+    ]
+    connector: Annotated[str, Field(description='`email` today.')]
+    type: Literal['inboxReceived']
+
+
+class ServerNotification20(BaseModel):
     code: int
     data: Any | None = None
     message: str
@@ -783,6 +846,12 @@ class TaskCreateParams(BaseModel):
         Field(description='Per-task round cap; absent = `JOY_GOAL_MAX_ROUNDS`.'),
     ] = None
     sessionId: str
+    tier: Annotated[
+        str | None,
+        Field(
+            description='The model tier this task runs on (`fast` / `chat` / `reasoning`). Absent = decide per turn (auto mode) or use the active profile (fixed mode). A declared tier always wins — "the task picks the model" is the whole point of the tier.'
+        ),
+    ] = None
     title: Annotated[
         str,
         Field(
@@ -823,6 +892,16 @@ class TextDeltaNotification(BaseModel):
         ),
     ]
     turnId: str
+
+
+class TierRoute(BaseModel):
+    profileId: Annotated[
+        str | None,
+        Field(
+            description='`null` is a real answer ("follow the chain"), so it is always on the wire — the panel distinguishes "not configured" from "field missing" by reading this, not by guessing.'
+        ),
+    ] = None
+    tier: Annotated[str, Field(description='fast / chat / reasoning.')]
 
 
 class TodoItemView(BaseModel):
@@ -923,6 +1002,12 @@ class TurnStartParams(BaseModel):
             description='Whether to stream `textDelta` token by token. On for the dashboard, off for scripts.'
         ),
     ] = None
+    tier: Annotated[
+        str | None,
+        Field(
+            description="Pin this turn to a model tier (`fast` / `chat` / `reasoning`). Absent = let the server decide (task's declared tier, auto routing, or the active profile — in that order). Machine callers (task API, webhooks) say the tier; the model itself cannot."
+        ),
+    ] = None
 
 
 class TurnStartResponse(BaseModel):
@@ -1009,6 +1094,12 @@ class DashboardData(BaseModel):
             description="The viewed session's goal, when `sessionId` was asked for. Same shape as `goal/set`'s answer — one source of truth, no second modeling."
         ),
     ] = None
+    inbox: Annotated[
+        InboxListView,
+        Field(
+            description='The connector inbox (0.13.0): newest mail plus how many still wait for a person. Always present (empty when no connector is configured) so the panel needs no branches.'
+        ),
+    ]
     sessions: list[SessionSummary]
     task: Annotated[
         AgentTaskView | None,
@@ -1082,6 +1173,21 @@ class JsonRpcResponse(BaseModel):
             description='The concrete shape depends on method; decoders narrow it to the matching `*Response` type themselves.'
         ),
     ]
+
+
+class ModelRoutesResponse(BaseModel):
+    mode: Annotated[
+        str,
+        Field(
+            description='`fixed` (default, active profile wins) or `auto` (per-turn tier pick).'
+        ),
+    ]
+    routes: list[TierRoute]
+
+
+class ModelRoutesSaveParams(BaseModel):
+    mode: str
+    routes: Annotated[list[TierRoute] | None, Field(validate_default=True)] = []
 
 
 class ScheduleListResponse(BaseModel):
@@ -1235,7 +1341,7 @@ class Message(BaseModel):
     role: MessageRole
 
 
-class ServerNotification18(BaseModel):
+class ServerNotification19(BaseModel):
     iterations: int
     meta: TurnMeta
     reply: str
@@ -1265,6 +1371,7 @@ class ServerNotification(
         | ServerNotification17
         | ServerNotification18
         | ServerNotification19
+        | ServerNotification20
     ]
 ):
     root: Annotated[
@@ -1286,7 +1393,8 @@ class ServerNotification(
         | ServerNotification16
         | ServerNotification17
         | ServerNotification18
-        | ServerNotification19,
+        | ServerNotification19
+        | ServerNotification20,
         Field(
             description='The full stream of events for one turn.\n\n`type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated union. **No failure here should crash the client**: this only describes "what happened".',
             title='ServerNotification',

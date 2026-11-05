@@ -50,6 +50,13 @@
             "null"
           ]
         },
+        "tier": {
+          "description": "The declared model tier (`fast` / `chat` / `reasoning`); absent = per-turn decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "title": {
           "type": "string"
         }
@@ -348,6 +355,14 @@
           "default": null,
           "description": "The viewed session's goal, when `sessionId` was asked for. Same shape as `goal/set`'s answer — one source of truth, no second modeling."
         },
+        "inbox": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/InboxListView"
+            }
+          ],
+          "description": "The connector inbox (0.13.0): newest mail plus how many still wait for a person. Always present (empty when no connector is configured) so the panel needs no branches."
+        },
         "sessions": {
           "items": {
             "$ref": "#/definitions/SessionSummary"
@@ -384,6 +399,7 @@
         "episodes",
         "facts",
         "generatedAt",
+        "inbox",
         "sessions"
       ],
       "title": "DashboardData",
@@ -771,6 +787,115 @@
         "workflow"
       ],
       "title": "GraphStartedNotification",
+      "type": "object"
+    },
+    "InboxItemView": {
+      "description": "One received message, as the panel shows it. `snippet` is a first-line preview; the full body stays in state.db — the dashboard never needs to ship it around.",
+      "properties": {
+        "fromAddr": {
+          "type": "string"
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "receivedAt": {
+          "type": "string"
+        },
+        "seen": {
+          "type": "boolean"
+        },
+        "snippet": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fromAddr",
+        "id",
+        "receivedAt",
+        "seen",
+        "snippet",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "InboxListView": {
+      "description": "`inbox/list`: what came in, and how much still waits for a person.",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/definitions/InboxItemView"
+          },
+          "type": "array"
+        },
+        "unseen": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "unseen"
+      ],
+      "type": "object"
+    },
+    "InboxReceivedNotification": {
+      "description": "New mail landed in the connector inbox. One knock, no content: the panel pulls the list.",
+      "properties": {
+        "added": {
+          "description": "How many messages this poll added (deduped by uid).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "connector": {
+          "description": "`email` today.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "added",
+        "connector"
+      ],
+      "title": "InboxReceivedNotification",
+      "type": "object"
+    },
+    "InboxSummarizeParams": {
+      "description": "`inbox/summarize`: the human's \"handle these\" — turns the unseen mail into one turn. Empty `session_id` means the dedicated `inbox` session.",
+      "properties": {
+        "sessionId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "InboxSummarizeParams",
+      "type": "object"
+    },
+    "InboxSummarizeResponse": {
+      "description": "`inbox/summarize`'s answer: how many mails went into the turn (0 = nothing waiting).",
+      "properties": {
+        "count": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "count",
+        "message",
+        "sessionId"
+      ],
+      "title": "InboxSummarizeResponse",
       "type": "object"
     },
     "JsonRpcError": {
@@ -1277,6 +1402,47 @@
       "title": "ModelRemoveResponse",
       "type": "object"
     },
+    "ModelRoutesResponse": {
+      "description": "`model/routes`: the routing table as the panel shows it. Always three rows (the tiers are fixed), each maybe pointing at nothing — an empty table is a valid, honest state.",
+      "properties": {
+        "mode": {
+          "description": "`fixed` (default, active profile wins) or `auto` (per-turn tier pick).",
+          "type": "string"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/definitions/TierRoute"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "routes"
+      ],
+      "title": "ModelRoutesResponse",
+      "type": "object"
+    },
+    "ModelRoutesSaveParams": {
+      "description": "`model/routes/save`: write the whole table (no patch semantics — three rows are cheap and \"replace the table\" cannot leave a half-edited state behind).",
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "routes": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/TierRoute"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "ModelRoutesSaveParams",
+      "type": "object"
+    },
     "ModelSaveParams": {
       "description": "Parameters for `model/save`. `provider` is required only when **creating** — passing only `id` + `make_active` means switch.",
       "properties": {
@@ -1412,6 +1578,39 @@
         "turnId"
       ],
       "title": "RetryNotification",
+      "type": "object"
+    },
+    "RunResponse": {
+      "description": "The task API's one-shot shape (`POST /api/run`): a whole turn in, one answer out.\n\nSame request body as `turn/start` (`TurnStartParams`), no stream — the HTTP call returns when the turn finishes. Built for programs (CI, cron, another agent), not for a browser: the dashboard keeps SSE, because a person wants to watch the answer arrive.",
+      "properties": {
+        "model": {
+          "description": "The model that actually answered — the visible proof that a tier pin took effect.",
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "reply": {
+          "type": "string"
+        },
+        "routeReason": {
+          "description": "Why this model was chosen (`tier:fast → mini`, `auto:reasoning → ds-r1`); absent = no routing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "provider",
+        "reply",
+        "turnId"
+      ],
+      "title": "RunResponse",
       "type": "object"
     },
     "ScheduleListParams": {
@@ -2021,6 +2220,32 @@
           "type": "object"
         },
         {
+          "description": "New mail in the connector inbox (inbound, 0.13.0). A knock — the panel pulls details.",
+          "properties": {
+            "added": {
+              "description": "How many messages this poll added (deduped by uid).",
+              "format": "int32",
+              "type": "integer"
+            },
+            "connector": {
+              "description": "`email` today.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "inboxReceived"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "added",
+            "connector",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.",
           "properties": {
             "iterations": {
@@ -2439,6 +2664,13 @@
         "sessionId": {
           "type": "string"
         },
+        "tier": {
+          "description": "The model tier this task runs on (`fast` / `chat` / `reasoning`). Absent = decide per turn (auto mode) or use the active profile (fixed mode). A declared tier always wins — \"the task picks the model\" is the whole point of the tier.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "title": {
           "description": "What this task is, in the human's words — the card's first line.",
           "type": "string"
@@ -2547,6 +2779,28 @@
         "turnId"
       ],
       "title": "TextDeltaNotification",
+      "type": "object"
+    },
+    "TierRoute": {
+      "description": "One tier's entry in the routing table. `profile_id` absent = \"follow the fallback chain\" (`reasoning` → `chat` → active, `fast` → `chat` → active), i.e. what the router does anyway.",
+      "properties": {
+        "profileId": {
+          "default": null,
+          "description": "`null` is a real answer (\"follow the chain\"), so it is always on the wire — the panel distinguishes \"not configured\" from \"field missing\" by reading this, not by guessing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "description": "fast / chat / reasoning.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tier"
+      ],
+      "title": "TierRoute",
       "type": "object"
     },
     "TodoItemView": {
@@ -2963,6 +3217,13 @@
           "description": "Whether to stream `textDelta` token by token. On for the dashboard, off for scripts.",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "tier": {
+          "description": "Pin this turn to a model tier (`fast` / `chat` / `reasoning`). Absent = let the server decide (task's declared tier, auto routing, or the active profile — in that order). Machine callers (task API, webhooks) say the tier; the model itself cannot.",
+          "type": [
+            "string",
             "null"
           ]
         }

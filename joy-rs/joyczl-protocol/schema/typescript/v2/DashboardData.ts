@@ -4,6 +4,7 @@ import type { ConnectorStatus } from "./ConnectorStatus";
 import type { Episode } from "./Episode";
 import type { Fact } from "./Fact";
 import type { GoalSetResponse } from "./GoalSetResponse";
+import type { InboxListView } from "./InboxListView";
 import type { SessionSummary } from "./SessionSummary";
 import type { SettingsView } from "./SettingsView";
 import type { TodoListView } from "./TodoListView";
@@ -42,6 +43,11 @@ export type DashboardData = {
    * The viewed session's current task (goal upgraded to a persisted entity), when asked for.
    */
   task?: AgentTaskView;
+  /**
+   * The connector inbox (0.13.0): newest mail plus how many still wait for a person.
+   * Always present (empty when no connector is configured) so the panel needs no branches.
+   */
+  inbox: InboxListView;
   /**
    * Connectors configured on this machine (0.12.0). Read from connectors.json by ops:
    * it is the same file the app-server registered tools from, on the same machine.

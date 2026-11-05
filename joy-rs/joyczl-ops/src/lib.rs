@@ -19,6 +19,7 @@ mod auth;
 mod client;
 mod freshness;
 pub mod hub;
+mod webhooks;
 
 #[cfg(test)]
 #[path = "auth_tests.rs"]
@@ -31,6 +32,10 @@ mod events_tests;
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
+
+#[cfg(test)]
+#[path = "webhook_tests.rs"]
+mod webhook_tests;
 
 #[cfg(test)]
 #[path = "hub_tests.rs"]
@@ -188,6 +193,13 @@ impl Gate {
     pub(crate) fn hub_ref(&self) -> Option<&Arc<hub::Hub>> {
         self.hub.as_ref()
     }
+
+    /// The single-user app-server. Unauthenticated routes (inbound webhooks) need it too:
+    /// their proof is the hook's own secret, not the dashboard token — and in hub mode there
+    /// is no user to pick, so the door simply does not exist there.
+    pub(crate) fn single_app(&self) -> Option<Arc<AppServer>> {
+        self.single.clone()
+    }
 }
 
 async fn authorize(
@@ -294,6 +306,8 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         // Long tasks: list + one door for create/suspend/resume/cancel (human-only switches).
         .route("/api/tasks", get(api::tasks))
         .route("/api/task", post(api::task))
+        // Inbound mail: the human's "handle these".
+        .route("/api/inbox", post(api::inbox))
         .route("/api/usage", get(api::usage))
         .route("/api/approvals", get(api::approvals))
         .route("/api/schedules", get(api::schedules))
@@ -310,6 +324,11 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/model/profiles", get(api::model_profiles))
         .route("/api/model/save", post(api::model_save))
         .route("/api/model/remove", post(api::model_remove))
+        // The routing table: fixed / auto, and which profile each task tier means.
+        .route("/api/model/routes", get(api::model_routes))
+        .route("/api/model/routes/save", post(api::model_routes_save))
+        // The task API: one turn in, one JSON answer out (no SSE) — for programs, not people.
+        .route("/api/run", post(api::run))
         // The token layer only covers the /api/* routes above (route_layer does not affect
         // the fallback static files): static assets carry no data; the page sends the token.
         .route_layer(axum::middleware::from_fn_with_state(
@@ -320,6 +339,10 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         // only /api/* reachable without a token. That is the whole point of login.
         .route("/api/auth/register", post(crate::auth::register))
         .route("/api/auth/login", post(crate::auth::login))
+        // Inbound webhooks — also after the token layer, on purpose: the caller is a foreign
+        // machine that proves itself with the hook's secret (`X-Joy-Secret`), never the dashboard
+        // token. Unknown/disabled names 404, a wrong secret 401 (see `webhooks.rs`).
+        .route("/api/hook/{name}", post(api::hook))
         // Static file fallback. `ServeDir` instead of reading files ourselves: path traversal
         // (`/../../.env`) is the kind of thing written correctly countless times — don't rewrite
         // it. `append_index_html_on_directories` makes `/` land on index.html.

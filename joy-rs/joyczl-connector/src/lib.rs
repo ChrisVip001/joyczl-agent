@@ -15,11 +15,14 @@
 pub mod config;
 pub mod email;
 pub mod feishu;
+pub mod feishu_oauth;
+pub mod imap;
 pub mod smtp;
 
-pub use config::{ConnectorConfig, EmailConfig, FeishuConfig, RecipientPolicy};
+pub use config::{ConnectorConfig, EmailConfig, FeishuConfig, ImapSection, RecipientPolicy};
 pub use email::email_send_tool;
 pub use feishu::feishu_send_tool;
+pub use imap::{fetch as imap_fetch, FetchOutcome, ImapConfig, Incoming};
 
 #[cfg(test)]
 #[path = "email_tests.rs"]
@@ -28,6 +31,14 @@ mod email_tests;
 #[cfg(test)]
 #[path = "feishu_tests.rs"]
 mod feishu_tests;
+
+#[cfg(test)]
+#[path = "imap_tests.rs"]
+mod imap_tests;
+
+#[cfg(test)]
+#[path = "feishu_oauth_tests.rs"]
+mod feishu_oauth_tests;
 
 /// A message that may leave the machine. Built by the tool, sent by a transport.
 #[derive(Debug, Clone, PartialEq, Eq)]

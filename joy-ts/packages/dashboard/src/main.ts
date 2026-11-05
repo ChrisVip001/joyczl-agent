@@ -5,7 +5,12 @@
 // viewed" and "whether a turn is streaming"; a refresh returns to defaults. In other words, if the
 // browser crashes or the tab closes, nothing is lost — that's the most valuable part of this layering.
 
-import type { AgentTaskView, TurnAttachment, TurnCompletedNotification } from "./protocol";
+import type {
+  AgentTaskView,
+  ModelProfileView,
+  TurnAttachment,
+  TurnCompletedNotification,
+} from "./protocol";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
@@ -14,13 +19,16 @@ import {
   fetchDashboard,
   fetchMessages,
   fetchModelProfiles,
+  fetchModelRoutes,
   fetchSchedules,
+  summarizeInbox,
   taskAction,
   fetchUsage,
   interruptTurn,
   removeModel,
   respondApproval,
   saveModel,
+  saveModelRoutes,
   setGoal,
   createFolder,
   fetchFs,
@@ -82,6 +90,12 @@ const dom = {
   mpKey: must<HTMLInputElement>("mp-key"),
   mpSave: must<HTMLButtonElement>("mp-save"),
   mpRemove: must<HTMLButtonElement>("mp-remove"),
+  mrState: must<HTMLElement>("mr-state"),
+  mrAuto: must<HTMLInputElement>("mr-auto"),
+  mrFast: must<HTMLSelectElement>("mr-fast"),
+  mrChat: must<HTMLSelectElement>("mr-chat"),
+  mrReasoning: must<HTMLSelectElement>("mr-reasoning"),
+  mrSave: must<HTMLButtonElement>("mr-save"),
   send: must<HTMLButtonElement>("send"),
   refresh: must<HTMLButtonElement>("refresh"),
   older: must<HTMLButtonElement>("older"),
@@ -177,11 +191,16 @@ function renderStaged(): void {
  * Overview/memory follow the full-screen poll; usage/approvals/schedules are fetched on demand —
  * only the **currently open** tab is refreshed, paying no requests for panels that aren't visible.
  */
-type TabId = "overview" | "memory" | "usage" | "approvals" | "schedules" | "model";
+const TAB_IDS = ["overview", "memory", "usage", "approvals", "schedules", "model"] as const;
+type TabId = (typeof TAB_IDS)[number];
 let activeTab: TabId = "overview";
 
 function switchTab(tab: TabId): void {
   activeTab = tab;
+  // Deep-linkable panels: `#usage` reopens the same view on reload or from a bookmark.
+  if (location.hash !== `#${tab}`) {
+    history.replaceState(null, "", `#${tab}`);
+  }
   for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
     button.classList.toggle("active", button.dataset.tab === tab);
   }
@@ -195,6 +214,12 @@ function switchTab(tab: TabId): void {
 /** The panel drawer slides in from the right; the chat column never squeezes. */
 function openDrawer(): void {
   dom.drawer.hidden = false;
+}
+
+/** Open the panel named in the URL hash, if it is one we know. */
+function openHashPanel(): void {
+  const tab = location.hash.slice(1);
+  if ((TAB_IDS as readonly string[]).includes(tab)) switchTab(tab as TabId);
 }
 
 function closeDrawer(): void {
@@ -344,8 +369,71 @@ async function refreshModels(): Promise<void> {
         dom.model.append(option);
       }
     }
+    await refreshModelRoutes(response.profiles);
   } catch (error: unknown) {
     dom.mpState.textContent = `模型面板没刷出来：${String(error)}`;
+  }
+}
+
+/** One tier row: "follow the default" first, then every configured profile. */
+function fillTier(
+  select: HTMLSelectElement,
+  profiles: ModelProfileView[],
+  chosen: string | null,
+): void {
+  const follow = document.createElement("option");
+  follow.value = "";
+  follow.textContent = "跟随默认";
+  select.replaceChildren(follow);
+  for (const profile of profiles) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.id;
+    select.append(option);
+  }
+  select.value = chosen ?? "";
+}
+
+/**
+ * The routing table: is the model picked per task (`auto`) or always the active one (`fixed`),
+ * and which profile each tier means. Read-only here — the server validated whatever was saved.
+ */
+async function refreshModelRoutes(profiles: ModelProfileView[]): Promise<void> {
+  try {
+    const routes = await fetchModelRoutes();
+    dom.mrAuto.checked = routes.mode === "auto";
+    const byTier = new Map(routes.routes.map((row) => [row.tier, row.profileId]));
+    fillTier(dom.mrFast, profiles, byTier.get("fast") ?? null);
+    fillTier(dom.mrChat, profiles, byTier.get("chat") ?? null);
+    fillTier(dom.mrReasoning, profiles, byTier.get("reasoning") ?? null);
+    dom.mrState.textContent = modeLabel(routes.mode);
+  } catch (error: unknown) {
+    dom.mrState.textContent = `档位没读出来：${String(error)}`;
+  }
+}
+
+function modeLabel(mode: string): string {
+  return mode === "auto"
+    ? "档位：自动（每一轮按任务挑模型）"
+    : "档位：固定（永远用当前这套）";
+}
+
+/** Persist the tier table. An empty pick is "follow the default" — written as null, not "". */
+async function saveRoutes(): Promise<void> {
+  const pick = (select: HTMLSelectElement): string | null =>
+    select.value === "" ? null : select.value;
+  try {
+    const saved = await saveModelRoutes({
+      mode: dom.mrAuto.checked ? "auto" : "fixed",
+      routes: [
+        { tier: "fast", profileId: pick(dom.mrFast) },
+        { tier: "chat", profileId: pick(dom.mrChat) },
+        { tier: "reasoning", profileId: pick(dom.mrReasoning) },
+      ],
+    });
+    dom.mrState.textContent = `${modeLabel(saved.mode)}；已保存`;
+  } catch (error: unknown) {
+    dom.mrState.textContent = `档位没存上：${String(error)}`;
   }
 }
 
@@ -483,6 +571,8 @@ async function boot(): Promise<void> {
 
   await refresh();
   await open(current);
+  // A bookmarked panel opens on load (`#usage`); without a hash the drawer stays shut.
+  openHashPanel();
   // Goal bar: set/clear both go through the same place (`goal/set`) — same as `/goal` in the terminal.
   const applyGoal = (condition: string | null) => {
     void setGoal({ sessionId: current, condition })
@@ -534,6 +624,7 @@ async function boot(): Promise<void> {
 
   // Model panel: switch, save, remove all go through `model/*` — same as /model in the terminal.
   dom.mpSave.addEventListener("click", () => void applyModel());
+  dom.mrSave.addEventListener("click", () => void saveRoutes());
   dom.mpPicker.addEventListener("change", () => {
     void switchModel(dom.mpPicker.value);
   });
@@ -577,6 +668,18 @@ async function switchTask(
   await refreshPanels();
 }
 
+/** One click: hand the unseen mail to a turn. Errors land on the panel, never silently. */
+async function handleInbox(): Promise<void> {
+  try {
+    await summarizeInbox();
+  } catch (error) {
+    dom.overview.prepend(failureOf(error));
+    return;
+  }
+  await refresh();
+  await refreshPanels();
+}
+
 async function refresh(): Promise<void> {
   try {
     const data = await fetchDashboard(current);
@@ -586,6 +689,7 @@ async function refresh(): Promise<void> {
         current,
         (id) => void open(id),
         (task, action) => void switchTask(task, action),
+        () => void handleInbox(),
       ),
     );
     dom.memory.replaceChildren(renderMemory(data));

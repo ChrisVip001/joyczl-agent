@@ -97,6 +97,108 @@ Routing is transparent about itself: `TurnMeta.routeReason` records
 `auto:reasoning → ds-r1` or `fallback: …` whenever a choice or a fallback
 actually happened; the dashboard footer prints it.
 
+### A task can declare its tier
+
+`task/create` and `turn/start` both accept `tier` (`fast` / `chat` / `reasoning`):
+
+- **A declaration beats the mode**: even with `mode: "fixed"`, a task or a
+  caller saying `reasoning` runs this turn on the reasoning profile — fixed is
+  the default policy, not a veto;
+- A task's declared tier is stored on the task row (migration 0016) and every
+  round of that task reuses it — no need to repeat it per turn;
+- A mistyped tier is an error on the spot, never a silent `chat` (that would put
+  the bill on the wrong model);
+- The dashboard's model panel gained a tier block: an auto switch plus three
+  "tier ↔ profile" rows, writing the same `model-routes.json` as REPL `/route`.
+
+## Inbound webhooks (`<home>/webhooks.json`)
+
+Another system knocks, Joy runs one turn (CI failure, form submitted, payment
+landed…). Without this file there is **no door at all** (404), and the model
+never learns the hook exists:
+
+```json
+{"hooks": [{
+  "name": "deploy",
+  "secret": "env:JOY_HOOK_SECRET",
+  "prompt": "Production is unhappy — handle this event:\n{{payload}}",
+  "session": "hook:deploy",
+  "tier": "reasoning",
+  "signature": true,
+  "limit": 6,
+  "callback": "https://ci.example.com/joy/hook-result"
+}]}
+```
+
+- `POST /api/hook/<name>`; the `X-Joy-Secret` header must match `secret`
+  (`env:VAR` is read per request; unreadable = refuse, never degrade to an
+  empty string). Wrong or missing is always 401;
+- This route sits **outside** the dashboard token layer on purpose: the calling
+  machine has never heard of `JOY_OPS_TOKEN`; what it proves is that it knows
+  this hook's secret. In return a hook can only **hand over one message** — it
+  cannot read state or start a second turn;
+- Unknown name, `enabled: false`, no config file — all three are 404 (the door
+  does not exist, and its existence is not revealed);
+- `{{payload}}` is replaced by the raw request body; without the placeholder the
+  body is appended to the prompt (silently dropping a body would be worse);
+- The turn is still an ordinary turn: tools keep their approval cards, and
+  nobody is at the keyboard — destructive tools time out and are denied.
+  A webhook adds no capability;
+- The answer is a `RunResponse` (`turnId` / `reply` / `model` / `provider` /
+  `routeReason`) — the same shape as the task API (pushed to the callback in async
+  mode).
+
+### Three optional fences
+
+- **`signature: true` — no replays.** The request must carry `X-Joy-Timestamp`
+  (epoch seconds) and `X-Joy-Signature` =
+  `hex(HMAC-SHA256(secret, "<timestamp>.<body>"))`. A timestamp more than ±300s
+  away from our clock → 401; the same signature seen twice inside the window →
+  409. The other side verifies with tools it already has:
+
+  ```bash
+  BODY='{"status":"failed"}'; TS=$(date +%s)
+  SIG=$(printf '%s' "$TS.$BODY" | openssl dgst -sha256 -hmac "$JOY_HOOK_SECRET" -r | cut -d' ' -f1)
+  curl -X POST "http://127.0.0.1:7777/api/hook/deploy" \
+    -H "x-joy-timestamp: $TS" -H "x-joy-signature: $SIG" -d "$BODY"
+  ```
+
+  **Retries must be re-signed** (a new timestamp): each signature is accepted once.
+  Without `signature`, plain `X-Joy-Secret` still works — it proves "knows the
+  secret" and **cannot refuse a replay** (the same request runs a second turn).
+  That difference is why the signature exists.
+- **`limit: N` — rate.** At most N accepted requests per rolling minute per hook;
+  only requests that pass auth are counted (guessing secrets does not burn the
+  budget), and going over answers 429 + `Retry-After` seconds. The counter is
+  per-process: a restart clears it, multiple processes do not share it.
+  `limit: 0` is refused at load ("configured but can never pass" is a typo, not
+  a policy).
+- **`callback: "https://…"` — async.** The caller gets `202` +
+  `{"accepted":true,"hook":…,"session":…}` at once; the turn runs in the
+  background and its result is POSTed to that URL:
+  `{"hook","session","ok":true,"result":RunResponse}` or
+  `{"hook","session","ok":false,"error":{code,message}}`. Three attempts (1s and
+  2s apart), **no queue**: if all three fail (or the process dies first) that
+  delivery is lost — the answer itself is in the session history and is not gone.
+  A callback must be an http(s) URL, or loading fails loudly.
+
+## Task API (`POST /api/run`)
+
+"One turn in, one JSON answer out" for programs: the body is `TurnStartParams`
+(the same shape as `/api/turn`), no streaming, and it returns when the turn ends:
+
+```bash
+curl -sS -X POST http://127.0.0.1:7777/api/run \
+  -H "Authorization: Bearer $JOY_OPS_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"message":"Summarise yesterday in three points","tier":"reasoning"}'
+```
+
+- The dashboard keeps SSE (a person wants to watch the words arrive); this
+  endpoint is for CI / cron / another agent;
+- It takes the same Bearer: it is part of the dashboard, just without a page;
+- `model` and `routeReason` are the visible proof that the tier pin took effect.
+
 ## Invalid values fail at startup
 
 `Settings::validate` runs once, **after** the environment and
@@ -489,6 +591,8 @@ JOY_HUB_ROOT=~/joy-hub joy hub           # multi-user dashboard, still binds 127
 | `live` | only `true` actually sends; flipping it is a human act |
 | `receive_id_type` | `open_id` (a person) or `chat_id` (a group) |
 | `base_url` | for self-hosted Lark; defaults to `https://open.feishu.cn` |
+| `imap.*` | the inbound block: `host` / `port` / `mailbox` / `poll_secs` / `mode` (`notify` or `turn`) |
+| `as` | Feishu sending identity: `app` (default) or `user` (needs `joy connector feishu login` first) |
 
 The human's own commands (the terminal sends without an approval card — the person
 typing is the approval):
@@ -502,6 +606,51 @@ joy connector feishu --to ou_xxx --text text [--dry-run]
 Model-side tools are `email_send` / `feishu_send`, registered only when the connector is
 configured and its allowlist is non-empty. The dashboard's connector panel is read-only:
 which connector, whether it can really send, how wide the allowlist is.
+
+### Inbound mail (`email.imap`)
+
+Outbound is "draft → a human nods → send"; inbound is the other direction: the outside
+world wants in by itself. So this does the most conservative thing available — **record
+the mail as it is, and let a person decide whether to act on it**:
+
+```json
+{"email": {
+  "smtp_host": "smtp.example.com", "smtp_port": 465, "from": "joy@example.com",
+  "username": "joy@example.com", "secret": "keychain:connector:email",
+  "allow_recipients": ["@example.com"],
+  "imap": {"host": "imap.example.com", "port": 993, "mailbox": "INBOX",
+           "poll_secs": 300, "mode": "notify"}
+}}
+```
+
+- No `imap` block = **no inbound at all**: no poller, no inbox surface;
+- `port`: 993 implicit TLS, 143 STARTTLS, anything else plaintext (local fake servers
+  only); `poll_secs` has a 30-second floor; `mode` is `notify` or `turn`, and a typo
+  fails startup;
+- `mode: "notify"` (default) records + notifies, and the dashboard's inbox card button
+  (`inbox/summarize`) is the human saying "handle these now"; `mode: "turn"` turns new
+  mail into a turn by itself — a standing authorization written in the file, never the
+  model's decision;
+- The first boot only records the high-water mark and **does not pull history** (those
+  few hundred old messages are not "new"); after that, deduping is by UID. Bodies are
+  stored as decoded plain text; attachments are not stored;
+- Fetching always uses `BODY.PEEK[]`: Joy reading a mailbox never marks another person's
+  mail as read.
+
+### Feishu user identity (`"as": "user"`)
+
+By default messages come from the app identity (`tenant_access_token`). To send as a
+person, run one browser authorization first:
+
+```bash
+joy connector feishu login     # authorization-code grant, token at <home>/connector-auth/feishu.json (0600)
+joy connector feishu status    # valid / expired (refreshed before the next send)
+joy connector feishu logout    # delete the token
+```
+
+Then set `"as": "user"` in the feishu block of `connectors.json`. The callback is fixed
+at `127.0.0.1:41766/callback` and must be registered **exactly** in the app console;
+there is no PKCE, and an expired refresh token means logging in again.
 
 ## Chat gateways (joy-ts)
 

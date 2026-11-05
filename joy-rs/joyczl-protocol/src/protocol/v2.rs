@@ -38,6 +38,9 @@ pub mod methods {
     pub const TASK_SUSPEND: &str = "task/suspend";
     pub const TASK_RESUME: &str = "task/resume";
     pub const TASK_CANCEL: &str = "task/cancel";
+    /// Inbound connector mail (0.13.0): the panel's list, and the human's "handle these".
+    pub const INBOX_LIST: &str = "inbox/list";
+    pub const INBOX_SUMMARIZE: &str = "inbox/summarize";
     pub const SESSION_LIST: &str = "session/list";
     pub const SESSION_NEW: &str = "session/new";
     pub const SESSION_MESSAGES: &str = "session/messages";
@@ -55,6 +58,10 @@ pub mod methods {
     /// only `id` + `make_active` means "switch" — switching must not force re-sending a key.
     pub const MODEL_SAVE: &str = "model/save";
     pub const MODEL_REMOVE: &str = "model/remove";
+    /// The routing table (`<home>/model-routes.json`): fixed / auto, and tier → profile id.
+    /// **Human-only to change** — the model cannot route itself, exactly like `/model`.
+    pub const MODEL_ROUTES: &str = "model/routes";
+    pub const MODEL_ROUTES_SAVE: &str = "model/routes/save";
     /// Usage summary (migration 0010): per-model aggregates + totals. **Bookkeeping only, no enforcement** —
     /// no quotas, no rate limits; in BYOK mode the cost lands on the user's own vendor bill.
     pub const USAGE_SUMMARY: &str = "usage/summary";
@@ -227,6 +234,9 @@ pub struct AgentTaskView {
     pub status: String,
     pub rounds_used: i32,
     pub max_rounds: i32,
+    /// The declared model tier (`fast` / `chat` / `reasoning`); absent = per-turn decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
     /// The turn currently carrying this task (a heartbeat; absent when idle).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_turn_id: Option<String>,
@@ -251,6 +261,11 @@ pub struct TaskCreateParams {
     /// Per-task round cap; absent = `JOY_GOAL_MAX_ROUNDS`.
     #[serde(default)]
     pub max_rounds: Option<i32>,
+    /// The model tier this task runs on (`fast` / `chat` / `reasoning`). Absent = decide per
+    /// turn (auto mode) or use the active profile (fixed mode). A declared tier always wins —
+    /// "the task picks the model" is the whole point of the tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -302,6 +317,60 @@ pub struct TaskUpdatedNotification {
     pub rounds_used: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// One received message, as the panel shows it. `snippet` is a first-line preview;
+/// the full body stays in state.db — the dashboard never needs to ship it around.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct InboxItemView {
+    pub id: i64,
+    pub from_addr: String,
+    pub subject: String,
+    pub received_at: String,
+    pub snippet: String,
+    pub seen: bool,
+}
+
+/// `inbox/list`: what came in, and how much still waits for a person.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct InboxListView {
+    pub items: Vec<InboxItemView>,
+    pub unseen: i64,
+}
+
+/// `inbox/summarize`: the human's "handle these" — turns the unseen mail into one turn.
+/// Empty `session_id` means the dedicated `inbox` session.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct InboxSummarizeParams {
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+/// `inbox/summarize`'s answer: how many mails went into the turn (0 = nothing waiting).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct InboxSummarizeResponse {
+    pub count: i64,
+    pub session_id: String,
+    pub message: String,
+}
+
+/// New mail landed in the connector inbox. One knock, no content: the panel pulls the list.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct InboxReceivedNotification {
+    /// `email` today.
+    pub connector: String,
+    /// How many messages this poll added (deduped by uid).
+    pub added: i32,
 }
 
 /// Which session to look at — the shared params of the dashboard's per-session reads
@@ -664,6 +733,11 @@ pub struct TurnStartParams {
     /// vision-capable provider; a missing or unreadable file fails the turn up front.
     #[ts(optional = nullable)]
     pub attachments: Option<Vec<TurnAttachment>>,
+    /// Pin this turn to a model tier (`fast` / `chat` / `reasoning`). Absent = let the server
+    /// decide (task's declared tier, auto routing, or the active profile — in that order).
+    /// Machine callers (task API, webhooks) say the tier; the model itself cannot.
+    #[ts(optional = nullable)]
+    pub tier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -672,6 +746,25 @@ pub struct TurnStartParams {
 #[ts(export_to = "v2/")]
 pub struct TurnStartResponse {
     pub turn_id: String,
+}
+
+/// The task API's one-shot shape (`POST /api/run`): a whole turn in, one answer out.
+///
+/// Same request body as `turn/start` (`TurnStartParams`), no stream — the HTTP call returns
+/// when the turn finishes. Built for programs (CI, cron, another agent), not for a browser:
+/// the dashboard keeps SSE, because a person wants to watch the answer arrive.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct RunResponse {
+    pub turn_id: String,
+    pub reply: String,
+    /// The model that actually answered — the visible proof that a tier pin took effect.
+    pub model: String,
+    pub provider: String,
+    /// Why this model was chosen (`tier:fast → mini`, `auto:reasoning → ds-r1`); absent = no routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -1041,6 +1134,42 @@ pub struct ModelRemoveResponse {
     pub active_id: Option<String>,
 }
 
+/// One tier's entry in the routing table. `profile_id` absent = "follow the fallback chain"
+/// (`reasoning` → `chat` → active, `fast` → `chat` → active), i.e. what the router does anyway.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TierRoute {
+    /// fast / chat / reasoning.
+    pub tier: String,
+    /// `null` is a real answer ("follow the chain"), so it is always on the wire — the panel
+    /// distinguishes "not configured" from "field missing" by reading this, not by guessing.
+    #[serde(default)]
+    pub profile_id: Option<String>,
+}
+
+/// `model/routes`: the routing table as the panel shows it. Always three rows (the tiers are
+/// fixed), each maybe pointing at nothing — an empty table is a valid, honest state.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelRoutesResponse {
+    /// `fixed` (default, active profile wins) or `auto` (per-turn tier pick).
+    pub mode: String,
+    pub routes: Vec<TierRoute>,
+}
+
+/// `model/routes/save`: write the whole table (no patch semantics — three rows are cheap and
+/// "replace the table" cannot leave a half-edited state behind).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelRoutesSaveParams {
+    pub mode: String,
+    #[serde(default)]
+    pub routes: Vec<TierRoute>,
+}
+
 /// Response to `usage/summary`: per-model aggregates + totals. In hub mode this is per-user
 /// bookkeeping (one home and one state.db per user — the ledger is isolated by person by construction).
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -1125,6 +1254,9 @@ pub struct DashboardData {
     #[serde(default)]
     #[ts(optional)]
     pub task: Option<AgentTaskView>,
+    /// The connector inbox (0.13.0): newest mail plus how many still wait for a person.
+    /// Always present (empty when no connector is configured) so the panel needs no branches.
+    pub inbox: InboxListView,
     /// Connectors configured on this machine (0.12.0). Read from connectors.json by ops:
     /// it is the same file the app-server registered tools from, on the same machine.
     #[serde(default)]
@@ -1358,6 +1490,8 @@ pub enum ServerNotification {
     TurnSuspended(TurnSuspendedNotification),
     /// The task behind this turn changed state (created / running / suspended / done…).
     TaskUpdated(TaskUpdatedNotification),
+    /// New mail in the connector inbox (inbound, 0.13.0). A knock — the panel pulls details.
+    InboxReceived(InboxReceivedNotification),
     /// Boxed: its `TurnMeta` is an order of magnitude bigger than the others, and
     /// notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.
     TurnCompleted(Box<TurnCompletedNotification>),

@@ -37,7 +37,7 @@ use joyczl_protocol::{
 };
 use joyczl_provider::{ContentBlock, CreateRequest, Message, Resolved, Role, TextSink, Usage};
 
-use crate::{narrow, trace, EventSink, Server};
+use crate::{narrow, route, trace, EventSink, Server};
 
 const DEFAULT_SOUL: &str = "\
 你是 Joy，一个跑在用户自己电脑上的本地个人助手。
@@ -170,6 +170,22 @@ pub async fn run_turn(
 ) -> Result<(), ErrorObject> {
     let started = std::time::Instant::now();
 
+    let session_id = params
+        .session_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "default".to_string());
+
+    // ---- Long task: if the session has an active one, this turn carries it. The heartbeat
+    // (`current_turn_id`) is what `task/suspend`, `task/resume` and the boot reconcile hang on.
+    // Read before model resolution: a task may **declare its tier**, and that pins this turn's model.
+    let task = server.tasks.active(&session_id).await.ok().flatten();
+
+    // The turn's tier: an explicit `tier` (task API / webhook) wins over the task's declaration;
+    // a typo is refused here, before any side effect (a silently-guessed tier would bill the wrong model).
+    let tier = route::clean_tier(params.tier.as_deref())?
+        .or_else(|| task.as_ref().and_then(|task| task.tier.clone()));
+
     // Model not configured: spell out "what to do" instead of just dropping a "no key".
     let resolved: Resolved = server.resolved().ok_or_else(|| ErrorObject {
         code: codes::PROVIDER_ERROR,
@@ -180,25 +196,20 @@ pub async fn run_turn(
         data: None,
     })?;
 
-    // Auto-select a model by task tier (route.rs). In fixed mode, or when the selected model is
-    // already active, return as-is with zero overhead; the fallback and selection reasons go into route_reason, unhidden.
-    let (resolved, turn_route) = server.resolved_for_turn(resolved, &params.message).await;
+    // Pick the model (route.rs): a declared tier always wins; otherwise auto mode decides per
+    // message; fixed mode, or "the picked one is already active", return as-is with zero overhead.
+    // The fallback and selection reasons go into route_reason, unhidden.
+    let (resolved, turn_route) = server
+        .resolved_for_turn(resolved, &params.message, tier.as_deref())
+        .await;
 
     // ---- Attachments: staged images, read + base64'd here. Gates on the provider's vision
     // capability and the file's existence **before any side effect** — a bad attachment must
     // not leave a half-turn behind.
     let user_images = resolve_attachments(server, &params, &resolved.provider_id, resolved.vision)?;
 
-    let session_id = params
-        .session_id
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "default".to_string());
     let turn_id = new_turn_id();
 
-    // ---- Long task: if the session has an active one, this turn carries it. The heartbeat
-    // (`current_turn_id`) is what `task/suspend`, `task/resume` and the boot reconcile hang on.
-    let task = server.tasks.active(&session_id).await.ok().flatten();
     if let Some(task) = &task {
         match server.tasks.set_running(&task.id, &turn_id).await {
             Ok(()) => {
