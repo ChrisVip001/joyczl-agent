@@ -39,6 +39,37 @@ pub async fn reconcile(server: &Server, sink: &EventSink) {
     }
 }
 
+/// Continue a **suspended** checkpoint on a human's say-so (`task/resume`).
+///
+/// This is the other half of reconcile: crash recovery resumes what the process left `open`
+/// (nobody asked), while a pause is the human's decision and waits for their "continue".
+/// Returns false when there is no suspended checkpoint for that turn (the task then waits
+/// for its next message instead).
+pub(crate) async fn resume_suspended(server: &Server, sink: &EventSink, turn_id: &str) -> bool {
+    let row = match server.checkpoints.get(turn_id).await {
+        Ok(Some(row)) if row.status == "suspended" => row,
+        Ok(_) => return false,
+        Err(e) => {
+            eprintln!("(joy) 读不了暂停中的 checkpoint（{turn_id}）：{e}");
+            return false;
+        }
+    };
+    // Back to `open` **before** the loop runs: every further boundary checkpoints normally,
+    // and if this process dies mid-resume the next boot continues it like any other crash.
+    if let Err(e) = server.checkpoints.reopen(turn_id).await {
+        eprintln!("(joy) 续跑前没能把 checkpoint 改回 open：{e}");
+        return false;
+    }
+    let server = server.clone();
+    let sink = sink.clone();
+    let turn_id = turn_id.to_string();
+    tokio::spawn(async move {
+        eprintln!("(joy) 任务从暂停处继续：回合 {turn_id}");
+        resume_turn(&server, &sink, row).await;
+    });
+    true
+}
+
 /// Continue one checkpointed turn and give it the same accounting as a fresh one.
 async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
     let resolved: Resolved = match server.resolved() {
@@ -71,6 +102,15 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
         user_message: row.user_message.clone(),
         ts: chrono::Local::now().to_rfc3339(),
     }));
+    // The task carrying this turn comes back to life with it: boot reconciled a `running` row
+    // to `suspended` (the process had died), and continuing is what flips it back.
+    if let Ok(Some(task)) = server.tasks.active(&session_id).await {
+        if server.tasks.set_running(&task.id, &turn_id).await.is_ok() {
+            if let Ok(Some(row)) = server.tasks.get(&task.id).await {
+                crate::task::notify(sink, &row, Some("回合继续"));
+            }
+        }
+    }
     sink.notification(ServerNotification::TurnResumed(TurnResumedNotification {
         turn_id: turn_id.clone(),
         session_id: session_id.clone(),

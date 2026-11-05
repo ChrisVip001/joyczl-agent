@@ -14,8 +14,8 @@ use joyczl_protocol::{
     ModelListResponse, ModelProfilesParams, ModelRemoveParams, ModelSaveParams, RequestId,
     ScheduleListParams, SessionListParams, SessionListResponse, SessionMessagesParams,
     SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionViewParams,
-    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, UsageSummaryParams,
-    JSONRPC_VERSION,
+    TaskActionParams, TaskCreateParams, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    UsageSummaryParams, JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -332,14 +332,54 @@ async fn dispatch(
         methods::GOAL_SET => {
             let p: GoalSetParams = parse(params, method)?;
             // Only a human can reach here: the model has no such tool, and no other method touches the goal table.
-            respond(server.goal_set(&p.session_id, p.condition.as_deref()))
+            respond(server.goal_set(&p.session_id, p.condition.as_deref()).await)
         }
 
         methods::GOAL_VIEW => {
             let p: SessionViewParams = parse(params, method)?;
             // Read-only: the dashboard's task card asks what the loop is doing. The model
             // has no path here either — its own goal view arrives via the prompt injection.
-            respond(server.goal_view(&p.session_id))
+            respond(server.goal_view(&p.session_id).await)
+        }
+
+        // ---- Long tasks: every branch is human-only (the model has no task tool) ----
+        methods::TASK_CREATE => {
+            let p: TaskCreateParams = parse(params, method)?;
+            respond(crate::task::create(server, p).await?)
+        }
+
+        methods::TASK_LIST => {
+            // Parameterless method: see the same note under model/profiles.
+            if let Some(value) = params {
+                if value.as_object().is_some_and(|o| !o.is_empty()) {
+                    return Err(ErrorObject {
+                        code: codes::INVALID_PARAMS,
+                        message: format!("{method} 不接受参数"),
+                        data: None,
+                    });
+                }
+            }
+            respond(crate::task::list(server).await)
+        }
+
+        methods::TASK_VIEW => {
+            let p: SessionViewParams = parse(params, method)?;
+            respond(crate::task::view_of(server, &p.session_id).await)
+        }
+
+        methods::TASK_SUSPEND => {
+            let p: TaskActionParams = parse(params, method)?;
+            respond(crate::task::suspend(server, sink, p).await?)
+        }
+
+        methods::TASK_RESUME => {
+            let p: TaskActionParams = parse(params, method)?;
+            respond(crate::task::resume(server, sink, p).await?)
+        }
+
+        methods::TASK_CANCEL => {
+            let p: TaskActionParams = parse(params, method)?;
+            respond(crate::task::cancel(server, sink, p).await?)
         }
 
         methods::TODO_VIEW => {

@@ -196,6 +196,21 @@ pub async fn run_turn(
         .unwrap_or_else(|| "default".to_string());
     let turn_id = new_turn_id();
 
+    // ---- Long task: if the session has an active one, this turn carries it. The heartbeat
+    // (`current_turn_id`) is what `task/suspend`, `task/resume` and the boot reconcile hang on.
+    let task = server.tasks.active(&session_id).await.ok().flatten();
+    if let Some(task) = &task {
+        match server.tasks.set_running(&task.id, &turn_id).await {
+            Ok(()) => {
+                if let Ok(Some(row)) = server.tasks.get(&task.id).await {
+                    crate::task::notify(sink, &row, None);
+                }
+            }
+            Err(e) => eprintln!("(joy) 任务心跳没记上（任务卡片会显示旧状态）：{e}"),
+        }
+    }
+    let task_id = task.as_ref().map(|task| task.id.clone());
+
     // Register the cancellation token: turn/interrupt finds it by turn_id. However this turn
     // exits (success, error, interrupted), the guard's Drop removes it from the table.
     let interrupt = server.register_turn(&turn_id);
@@ -341,6 +356,18 @@ pub async fn run_turn(
     let (graph, mut full) = match dispatched {
         Ok(pair) => pair,
         Err(e) => {
+            // This turn **did not finish** (model died, graph blew up...): close both ledgers
+            // honestly before leaving — an open checkpoint would be resumed on next boot as if
+            // the failure never happened, and the task card would keep saying "running".
+            if let Err(write) = server.checkpoints.finish(&turn_id, "abandoned").await {
+                eprintln!("(joy) 失败回合的 checkpoint 没标上：{write}");
+            }
+            if let Some(id) = &task_id {
+                let _ = server.tasks.finish(id, "failed").await;
+                if let Ok(Some(row)) = server.tasks.get(id).await {
+                    crate::task::notify(sink, &row, Some(&e.message));
+                }
+            }
             // StopFailure: this turn **did not finish** (model died, graph blew up...). Observe-only event —
             // problems in the hook itself must not overwrite the original error.
             crate::fire_hook(
@@ -420,6 +447,13 @@ pub async fn run_turn(
         );
         loop {
             goal_rounds = crate::goal::bump(&server.goals, &session_id);
+            // The round account lives on the task row too: the card shows how much was spent
+            // even after a restart (the in-memory mirror alone would forget).
+            if let Some(id) = &task_id {
+                if let Err(e) = server.tasks.record_round(id, goal_rounds).await {
+                    eprintln!("(joy) 轮次没记进任务台账：{e}");
+                }
+            }
             let transcript = judge_transcript(server, &session_id, &full.result.reply).await;
             let verdict = crate::goal::judge(&resolved, &goal.condition, &transcript).await;
 
@@ -589,8 +623,13 @@ pub(crate) async fn finalize_turn(
 
     // ---- Checkpoint bookkeeping: the turn reached an end **in this process**. From here on,
     // `open` can only mean "the process died mid-turn" — the invariant the startup reconcile
-    // relies on. An interrupted turn is the human's explicit stop: abandoned, never auto-resumed.
-    let (final_status, suspended_reason) = if result.interrupted {
+    // relies on. Two kinds of interruption must not be conflated:
+    //   * a stop (turn/interrupt): `abandoned`, never auto-resumed;
+    //   * a pause (task/suspend): `suspended`, kept resumable — `task/resume` continues it.
+    let paused = server.take_suspending(&turn_id);
+    let (final_status, suspended_reason) = if paused {
+        ("suspended", Some("已暂停，可从断点继续"))
+    } else if result.interrupted {
         ("abandoned", Some("interrupted by user"))
     } else {
         ("done", None)
@@ -606,6 +645,59 @@ pub(crate) async fn finalize_turn(
                 reason: reason.to_string(),
             },
         ));
+    }
+
+    // ---- Task bookkeeping: the same single tail (a resumed turn goes through here too).
+    if let Some(task) = server.tasks.by_turn(&turn_id).await.ok().flatten() {
+        let verdict_reason = match (paused, result.interrupted, goal_status.as_deref()) {
+            // Paused or stopped by the human: the task waits, it did not finish.
+            (true, _, _) | (_, true, _) => {
+                let reason = if paused {
+                    "已暂停，可从断点继续"
+                } else {
+                    "用户中断，任务停在原地"
+                };
+                let _ = server.tasks.suspend(&task.id, Some(reason)).await;
+                Some(reason.to_string())
+            }
+            // The loop's own verdicts, mapped honestly: not-done is not done.
+            (_, _, Some("satisfied")) => {
+                let _ = server.tasks.finish(&task.id, "done").await;
+                None
+            }
+            (_, _, Some("impossible")) | (_, _, Some("round-limit")) => {
+                let _ = server.tasks.finish(&task.id, "failed").await;
+                goal_status.clone()
+            }
+            // The judge broke down: keep the task alive (suspended) — the human decides.
+            (_, _, Some("blocked")) => {
+                let _ = server
+                    .tasks
+                    .suspend(&task.id, Some("判断器故障，已停在这里"))
+                    .await;
+                Some("判断器故障，已停在这里".to_string())
+            }
+            // No goal condition = single-turn task; or a goal that simply did not run this turn.
+            (_, _, None) => {
+                if task.goal_condition.is_some() {
+                    let _ = server
+                        .tasks
+                        .suspend(&task.id, Some("目标这一轮没推进，等待下一句话"))
+                        .await;
+                    Some("目标这一轮没推进，等待下一句话".to_string())
+                } else {
+                    let _ = server.tasks.finish(&task.id, "done").await;
+                    None
+                }
+            }
+            (_, _, Some(_)) => {
+                let _ = server.tasks.clear_turn(&task.id).await;
+                None
+            }
+        };
+        if let Ok(Some(row)) = server.tasks.get(&task.id).await {
+            crate::task::notify(sink, &row, verdict_reason.as_deref());
+        }
     }
 
     for call in &result.tool_calls {

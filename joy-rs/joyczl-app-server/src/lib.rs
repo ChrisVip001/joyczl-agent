@@ -26,6 +26,7 @@ mod resume;
 mod route;
 mod stdio;
 mod subagent;
+mod task;
 mod trace;
 mod turn;
 
@@ -57,10 +58,14 @@ mod lock_tests;
 mod goal_tests;
 
 #[cfg(test)]
+#[path = "task_tests.rs"]
+mod task_tests;
+
+#[cfg(test)]
 #[path = "subagent_tests.rs"]
 mod subagent_tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
@@ -160,7 +165,15 @@ pub struct Server {
     /// Background job table (switched on/off together with `JOY_EXEC`).
     pub(crate) jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
     /// Session -> goal (see goal.rs). Only a human can set one; the model cannot even see this path.
+    /// This is the **runner's mirror**: the truth lives in `tasks` (agent_tasks, migration 0014);
+    /// boot restores the mirror from it, so a restart no longer loses the target.
     pub(crate) goals: goal::Goals,
+    /// Long tasks (migration 0014): identity, status, round account. Human-only switches live
+    /// in task.rs; the goal loop above is the engine that drives their rounds.
+    pub(crate) tasks: joyczl_state::Tasks,
+    /// Turns a human just asked to suspend (`task/suspend`): at finalize time the checkpoint is
+    /// kept as `suspended` instead of `abandoned` — pausing is not stopping.
+    pub(crate) suspending: Arc<Mutex<HashSet<String>>>,
     /// Multiple model profiles (`<home>/models.json`) and the credentials backend (see models.rs).
     /// Switching models = edit here + re-resolve the provider, no restart.
     pub(crate) models: models::Models,
@@ -187,23 +200,46 @@ impl Server {
     ///
     /// dispatch and the REPL share one implementation: two copies would eventually forget a
     /// validation or the `max_rounds` on one of them.
-    pub fn goal_set(
+    pub async fn goal_set(
         &self,
         session_id: &str,
         condition: Option<&str>,
     ) -> joyczl_protocol::GoalSetResponse {
-        let goal = goal::set(&self.goals, session_id, condition);
-        let max_rounds = self
-            .settings
-            .read()
-            .expect("settings 锁不该中毒")
-            .goal_max_rounds;
-        joyczl_protocol::GoalSetResponse {
-            active: goal.is_some(),
-            condition: goal.as_ref().map(|goal| goal.condition.clone()),
-            rounds_used: goal.as_ref().map(|goal| goal.rounds).unwrap_or(0),
-            max_rounds,
+        let trimmed = condition.map(str::trim).filter(|text| !text.is_empty());
+        let active = self.tasks.active(session_id).await.ok().flatten();
+        match (trimmed, active) {
+            // Setting a goal on a session with no task: the goal **creates** the task — the
+            // compatibility layer that keeps `/goal` and the task card pointing at one row.
+            (Some(condition), None) => {
+                let max_rounds = self
+                    .settings
+                    .read()
+                    .expect("settings 锁不该中毒")
+                    .goal_max_rounds;
+                let id = format!("task{}", chrono::Local::now().timestamp_millis());
+                if let Err(e) = self
+                    .tasks
+                    .create(&id, session_id, condition, Some(condition), max_rounds)
+                    .await
+                {
+                    eprintln!("(joy) 目标没建成任务（目标仍在内存里跑）：{e}");
+                }
+            }
+            (Some(condition), Some(task)) => {
+                if let Err(e) = self.tasks.set_goal(&task.id, Some(condition)).await {
+                    eprintln!("(joy) 目标没写进任务台账（内存里仍然生效）：{e}");
+                }
+            }
+            // Clearing: the task survives as a single-turn one (its title remains the record).
+            (None, Some(task)) => {
+                if let Err(e) = self.tasks.set_goal(&task.id, None).await {
+                    eprintln!("(joy) 清目标没写进任务台账：{e}");
+                }
+            }
+            (None, None) => {}
         }
+        goal::set(&self.goals, session_id, trimmed);
+        self.goal_view(session_id).await
     }
 
     pub async fn boot(pool: SqlitePool, mut settings: Settings) -> Self {
@@ -315,7 +351,7 @@ impl Server {
             )));
         }
 
-        Self {
+        let server = Self {
             facts,
             episodes,
             chat,
@@ -333,12 +369,45 @@ impl Server {
             todo,
             jobs: jobs_handle,
             goals: goal::store(),
+            tasks: joyczl_state::Tasks::new(pool.clone()),
+            suspending: Arc::new(Mutex::new(HashSet::new())),
             models,
             route_cache,
             catalog,
             session_locks: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             pool,
+        };
+        server.restore_tasks().await;
+        server
+    }
+
+    /// Boot restore for long tasks (migration 0014):
+    /// 1. a `running` row means the previous process died while carrying it — mark it suspended
+    ///    with the honest reason (the turn's `open` checkpoint may then flip it back to running);
+    /// 2. load surviving goals into the runner's mirror — a restart no longer forgets the target.
+    async fn restore_tasks(&self) {
+        match self.tasks.reconcile_restart().await {
+            Ok(rows) if !rows.is_empty() => {
+                for row in &rows {
+                    eprintln!(
+                        "(joy) 对账：任务「{}」在进程退出时还在跑，先标挂起（会话 {}）",
+                        row.title, row.session_id
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("(joy) 任务对账读不了库（不挡启动）：{e}"),
+        }
+        match self.tasks.list_active().await {
+            Ok(rows) => {
+                for row in rows {
+                    if let Some(condition) = &row.goal_condition {
+                        goal::set(&self.goals, &row.session_id, Some(condition));
+                    }
+                }
+            }
+            Err(e) => eprintln!("(joy) 活跃任务读不出来（目标不会自动恢复）：{e}"),
         }
     }
 
@@ -383,25 +452,28 @@ impl Server {
     /// answers, and actions requiring approval are rejected outright.
     /// Dashboard read surface: the session's goal state. No goal = `active: false` —
     /// the shape is the same struct `goal/set` answers with, one source of truth.
-    pub fn goal_view(&self, session_id: &str) -> joyczl_protocol::GoalSetResponse {
-        let table = self.goals.lock().expect("goal 锁不该中毒");
-        let max_rounds = self
+    ///
+    /// Since 0.11.0 the answer is read from the **task row**: the mirror in memory drives the
+    /// loop, but the ledger is what the human sees across restarts.
+    pub async fn goal_view(&self, session_id: &str) -> joyczl_protocol::GoalSetResponse {
+        let settings_max = self
             .settings
             .read()
             .expect("settings 锁不该中毒")
             .goal_max_rounds;
-        match table.get(session_id) {
-            Some(goal) => joyczl_protocol::GoalSetResponse {
-                active: true,
-                condition: Some(goal.condition.clone()),
-                rounds_used: goal.rounds,
-                max_rounds,
+        let task = self.tasks.active(session_id).await.ok().flatten();
+        match task {
+            Some(task) => joyczl_protocol::GoalSetResponse {
+                active: task.goal_condition.is_some(),
+                condition: task.goal_condition,
+                rounds_used: task.rounds_used,
+                max_rounds: task.max_rounds.max(settings_max),
             },
             None => joyczl_protocol::GoalSetResponse {
                 active: false,
                 condition: None,
                 rounds_used: 0,
-                max_rounds,
+                max_rounds: settings_max,
             },
         }
     }
@@ -574,6 +646,36 @@ impl Server {
             .lock()
             .expect("approvals 锁不该中毒")
             .remove(turn_id);
+    }
+
+    /// A human pressed pause on the turn a task carries: mark it **and** interrupt it, in one
+    /// step. The mark only lands when a live turn exists — otherwise a stale flag would make
+    /// the *next* turn (a resume!) think it was paused, and finalize would keep it suspended.
+    /// Returns false = no live turn (the task was idle; nothing to interrupt).
+    pub(crate) fn suspend_turn(&self, turn_id: &str) -> bool {
+        let interrupt = self
+            .turns
+            .lock()
+            .expect("turns 锁不该中毒")
+            .get(turn_id)
+            .cloned();
+        let Some(interrupt) = interrupt else {
+            return false;
+        };
+        self.suspending
+            .lock()
+            .expect("suspending 锁不该中毒")
+            .insert(turn_id.to_string());
+        interrupt.cancel();
+        true
+    }
+
+    /// Was this turn paused rather than stopped? Consumes the flag: one verdict per turn.
+    pub(crate) fn take_suspending(&self, turn_id: &str) -> bool {
+        self.suspending
+            .lock()
+            .expect("suspending 锁不该中毒")
+            .remove(turn_id)
     }
 
     /// Interrupt a running turn. Returns false = not found (already finished).

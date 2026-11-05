@@ -54,7 +54,7 @@ pub async fn run(server: Server) -> Result<()> {
             }
             "/sessions" => list_sessions(&server).await,
             s if s.starts_with("/memory") => show_memory(&server, s).await,
-            s if s.starts_with("/goal") => set_goal(&server, &session_id, s),
+            s if s.starts_with("/goal") => set_goal(&server, &session_id, s).await,
             s if s.starts_with("/cwd") => cwd = set_cwd(cwd, s),
             s if s.starts_with("/model") => models(&server, s),
             s if s.starts_with("/route") => route_cmd(&server, s),
@@ -323,10 +323,12 @@ fn models(server: &Server, input: &str) {
 ///
 /// Goals are **human-only**: the model cannot see this path, so "the model
 /// assigning itself work" isn't forbidden here — it simply doesn't exist.
-fn set_goal(server: &Server, session_id: &str, input: &str) {
+async fn set_goal(server: &Server, session_id: &str, input: &str) {
     let condition = input.trim_start_matches("/goal").trim();
     let cleared = condition.is_empty() || condition.eq_ignore_ascii_case("clear");
-    let response = server.goal_set(session_id, if cleared { None } else { Some(condition) });
+    let response = server
+        .goal_set(session_id, if cleared { None } else { Some(condition) })
+        .await;
 
     if !response.active {
         println!("目标已清除（这个会话现在没有目标）。");
@@ -518,6 +520,21 @@ async fn chat_turn(
                     );
                 }
                 break;
+            }
+            // A long task changed state: the terminal says which way it went, never silently.
+            ServerNotification::TaskUpdated(updated) => {
+                end_streamed_line(&mut streamed);
+                println!(
+                    "…任务「{}」：{}（{} 轮）{}",
+                    updated.task_id,
+                    updated.status,
+                    updated.rounds_used,
+                    updated
+                        .reason
+                        .as_deref()
+                        .map(|reason| format!("—— {reason}"))
+                        .unwrap_or_default()
+                );
             }
             // Resumed / suspended are rare and meaningful — one honest line each. A boundary
             // checkpoint (every tool round) is too chatty for the terminal; the trace has it.
