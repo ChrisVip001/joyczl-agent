@@ -181,10 +181,17 @@ export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotif
   });
   if (!response.ok || response.body === null) throw new ApiError(await errorOf(response));
 
-  const reader = response.body.getReader();
+  for await (const frame of frames(response.body)) {
+    const payload = dataOf(frame);
+    if (payload !== null) yield payload;
+  }
+}
+
+/** One SSE frame (blank-line separated). Leaving early releases the connection. */
+async function* frames(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -193,16 +200,38 @@ export async function* talk(params: TurnStartParams): AsyncGenerator<ServerNotif
 
       let cut = buffer.indexOf("\n\n");
       while (cut >= 0) {
-        const payload = dataOf(buffer.slice(0, cut));
+        yield buffer.slice(0, cut);
         buffer = buffer.slice(cut + 2);
-        if (payload !== null) yield payload;
         cut = buffer.indexOf("\n\n");
       }
     }
   } finally {
-    // Leaving early (turn finished, or the user navigated away) releases the connection,
-    // otherwise the browser would hold an unread stream until it times out on its own.
     await reader.cancel().catch(() => undefined);
+  }
+}
+
+/** What /api/events pushes: "something happened", the receiver pulls the details. */
+export interface EventPing {
+  kind: string;
+  turnId?: string;
+  sessionId?: string;
+}
+
+/**
+ * The cross-device channel: GET /api/events, one ping per meaningful change elsewhere.
+ *
+ * EventSource can't carry the Bearer header, so this is a fetch + manual reader — the
+ * same frames talk() speaks, quieter content.
+ */
+export async function* followEvents(): AsyncGenerator<EventPing> {
+  const response = await apiFetch("/api/events", {
+    headers: { accept: "text/event-stream" },
+  });
+  if (!response.ok || response.body === null) throw new ApiError(await errorOf(response));
+
+  for await (const frame of frames(response.body)) {
+    const payload = frameData(frame);
+    if (payload !== null) yield payload as EventPing;
   }
 }
 
@@ -240,8 +269,8 @@ export async function respondApproval(
   return (await response.json()) as ApprovalRespondResponse;
 }
 
-/** What follows `data:` in one frame. Keep-alive-style comment frames return null. */
-function dataOf(frame: string): ServerNotification | null {
+/** What follows `data:` in one frame, as raw JSON. Keep-alive-style comment frames return null. */
+function frameData(frame: string): unknown {
   const payload = frame
     // \r exists because some proxies rewrite line endings; at end of line it doesn't affect the payload.
     .split("\n")
@@ -251,7 +280,12 @@ function dataOf(frame: string): ServerNotification | null {
     .join("");
 
   if (payload === "") return null;
-  return JSON.parse(payload) as ServerNotification;
+  return JSON.parse(payload);
+}
+
+function dataOf(frame: string): ServerNotification | null {
+  const payload = frameData(frame);
+  return payload === null ? null : (payload as ServerNotification);
 }
 
 /**

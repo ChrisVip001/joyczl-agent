@@ -8,6 +8,7 @@
 import type { TurnAttachment, TurnCompletedNotification } from "./protocol";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
+import { startSync } from "./sync";
 import {
   fetchApprovals,
   fetchDashboard,
@@ -449,6 +450,18 @@ async function boot(): Promise<void> {
       void refreshPanels();
     }
   }, POLL_MS);
+
+  // Cross-device pulse: a ping from /api/events (another device turned, an approval is
+  // waiting, memory consolidated) → same refresh as the poll, but *now*. open() guards
+  // itself with `busy`, so a same-session ping never clobbers a streaming bubble.
+  startSync({
+    onActivity: (ping) => {
+      if (busy) return;
+      void refresh();
+      void refreshPanels();
+      if (ping.sessionId === current) void open(current);
+    },
+  });
 
   await refresh();
   await open(current);
