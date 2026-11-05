@@ -24,6 +24,7 @@ pub mod fts;
 pub mod jobs;
 pub mod schedules;
 pub mod store;
+pub mod tasks;
 pub mod usage;
 
 pub use approvals::{ApprovalLogRow, Approvals};
@@ -36,6 +37,7 @@ pub use facts::{FactRow, Facts};
 pub use jobs::{JobRow, Jobs};
 pub use schedules::{ScheduleRow, Schedules};
 pub use store::{EpisodicStore, SemanticStore};
+pub use tasks::{TaskRow, Tasks};
 pub use usage::{Usage, UsageByModel, UsageSummary};
 
 #[cfg(test)]

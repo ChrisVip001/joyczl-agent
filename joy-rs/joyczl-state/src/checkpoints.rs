@@ -83,6 +83,29 @@ impl Checkpoints {
         Ok(())
     }
 
+    /// A suspended checkpoint the human chose to continue: back to `open`, so every further
+    /// boundary overwrites it normally and a crash during the resume is recovered like any other.
+    pub async fn reopen(&self, turn_id: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE turn_checkpoints SET status = 'open', updated_at = datetime('now') WHERE turn_id = ?",
+        )
+        .bind(turn_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// One checkpoint by turn id — `task/resume` looks up the `suspended` row it wants to continue.
+    pub async fn get(&self, turn_id: &str) -> Result<Option<CheckpointRow>> {
+        Ok(sqlx::query_as::<_, CheckpointRow>(
+            "SELECT turn_id, session_id, user_message, messages_json, iterations, usage_json, status, updated_at
+             FROM turn_checkpoints WHERE turn_id = ?",
+        )
+        .bind(turn_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     /// Startup reconciliation: all `open` checkpoints (leftovers of the last crash),
     /// oldest first — a resumed turn may itself checkpoint, so consume in order.
     /// `rowid` not `updated_at`: two checkpoints inside the same second must still keep
