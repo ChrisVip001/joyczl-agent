@@ -2,6 +2,52 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.9.0 — Accounts and every screen (the workspace version)
+
+### Hub: register / login
+
+- `POST /api/auth/register|login` — the only `/api/*` outside the authorize
+  layer. Passwords are PBKDF2-HMAC-SHA256 (ring — already in the tree via
+  rustls), salted, constant-time verified; unknown users get the same verdict
+  and the same wall-clock as wrong passwords.
+- users.json v2: `user → { credential, devices: {name → token} }`. **登录即
+  配对** — logging in from a device pairs it; same device + password returns
+  the same token. The flat v1 file migrates on load.
+- Seats: `JOY_HUB_MAX_OPEN` doubles as the user cap. The first user must
+  register from loopback or via `joy hub adduser` — a fresh public hub never
+  lets a stranger claim it. Empty users.json now opens.
+
+### Dashboard: a client of any Joy server
+
+- Server address configurable; login card (server / username / password /
+  device) replaces the whole view until authed. Remote 401s open the card
+  ("session expired"); same-origin token deployments keep the one-time prompt.
+- Verified against a live hub in a real browser: register → token → app boots
+  pinned to that user's isolated home.
+
+### Cross-device sync
+
+- `GET /api/events`: one SSE channel of pings per app-server — {kind, turnId,
+  sessionId} for turns, approvals, memory consolidation, errors. Pings are
+  knocks; the client re-pulls `/api/data`. 500 ms coalescing; reconnect
+  forever. The connection pins the user's app-server (warm by design).
+- `CorsLayer::permissive()` on `/api/*` — clients authenticate by header,
+  never cookies, so cross-origin adds no CSRF surface.
+
+### PWA + Tauri desktop
+
+- PWA: manifest, SVG icons (brand wordmark, maskable), service worker that
+  caches static assets and never touches `/api` — installable on phones.
+- Tauri 2 shell (`desktop/src-tauri`, its own workspace): one window, the
+  bundled dashboard, the login card points it anywhere. `just desktop-dev` /
+  `desktop-build`.
+
+### Docs
+
+- configuration (+zh): the hub chapter rewritten around accounts, pairing,
+  seats and the deployment matrix; limitations (+zh): what bare accounts don't
+  do (recovery, rate limits, 2FA) and why sync is a knock, not a feed.
+
 ## 0.8.0 — Write, see, declare, ship (the workspace version; `v0.5.0` is the previous tagged release)
 
 ### File-writing tools: `write_file` / `edit`

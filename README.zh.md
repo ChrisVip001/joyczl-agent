@@ -109,6 +109,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P8 ✅ | 启动期配置校验、工具参数 schema 校验、循环护栏、token 预算、沙箱且默认断网的执行、可见的重试、超长输出落盘、子代理、交互式批准、技能策略字段、记忆类别 |
 | P9 ✅ | 工具结果预算（按行落盘 + 实测 prefill 校准）、子代理报告扫描与 `result_schema`、MCP 熔断与命名去重、记忆写入去重、12 个生命周期钩子（`JOY_HOOKS`）、待办清单、后台作业、目标循环（`/goal`） |
 | P10 ✅ | 文件写入工具（`write_file`/`edit`）、图片输入、模型目录、HTTP 钩子、声明式工作流、per-session 写段锁、Windows 边界（仅 Unix）、分发物料（npm shim / brew / PyPI / release workflow） |
+| P11 ✅ | 账号与多端：hub 注册登录（PBKDF2、每设备 token、座位上限）、dashboard 远程模式与登录卡、跨端事件同步、CORS、PWA 骨架、Tauri 桌面壳 |
 
 ## 命名
 

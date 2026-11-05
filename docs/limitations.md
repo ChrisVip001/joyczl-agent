@@ -42,12 +42,17 @@ means "we would like this, nobody has built it".
   carry. The Slack `{"text": …}` format also works with self-hosted ntfy/Gotify
   endpoints; DingTalk/WeCom signed formats are not implemented.
 
-- **Admission to `joy hub` is one token**: there is no pairing flow, invite
-  link, or OAuth — the admin runs `joy hub adduser` and the token is printed
-  once. A pairing flow (self-service request + owner approval +
-  rate limits/lockout) needs an unauthenticated request endpoint; it waits
-  until there is a real second user. Per-user quotas likewise record but do
-  not enforce (usage data is accumulating; enforcement waits for billing)
+- **Hub accounts are real but bare**: register/login issues per-device
+  tokens (登录即配对), yet there is **no password recovery flow** (the owner
+  edits users.json via CLI), **no rate limiting / lockout** on login (one
+  short delay per miss, nothing more), **no email verification or 2FA**, and
+  **no invite links or OAuth** — admission is a seat cap plus the first-user
+  loopback rule. Per-user quotas likewise record but do not enforce (usage
+  data is accumulating; enforcement waits for billing).
+- **Cross-device sync is a knock, not a feed**: `/api/events` pings say
+  "something happened" and the client re-pulls everything it shows. There is
+  no message-level delta protocol, no offline queue, no push notifications
+  (APNs/FCM) — a phone learns about finished work when the PWA is open.
 
 ## Long-running and the daemon lock
 

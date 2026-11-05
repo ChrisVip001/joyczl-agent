@@ -2,6 +2,50 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 0.9.0 — 账号与每一块屏幕（工作区版本）
+
+### hub：注册 / 登录
+
+- `POST /api/auth/register|login` —— 全部 `/api/*` 里唯一在鉴权层之外的端点。
+  密码用 PBKDF2-HMAC-SHA256（ring——经由 rustls 早就在依赖树里），加盐、
+  常量时间验证；未知用户与错密码同判定、同耗时。
+- users.json v2：`用户名 → { 密码凭证, devices: {设备名 → token} }`。
+  **登录即配对**——从哪台设备登录就配哪台；同设备同密码拿同一个 token。
+  旧的扁平 v1 文件装载时自动迁移。
+- 座位：`JOY_HUB_MAX_OPEN` 兼任用户数上限。第一个用户必须从本机注册，或走
+  `joy hub adduser`——全新的公网 hub 绝不让陌生人抢先认领。空 users.json
+  现在允许启动。
+
+### dashboard：任何一台 Joy 服务器的客户端
+
+- 服务器地址可配置；登录卡（服务器 / 用户名 / 密码 / 设备名）在认证前取代
+  整个视图。远程 401 打开登录卡（「登录已过期」）；本机同源部署保留一次性
+  token 询问。
+- 在真实浏览器里对活 hub 验证过：注册 → token → 应用启动并钉在该用户
+  隔离的 home 上。
+
+### 跨端同步
+
+- `GET /api/events`：每个 app-server 一路 SSE 提示——回合、审批、记忆提炼、
+  错误，各折成 {kind, turnId, sessionId}。提示是敲门；客户端重拉
+  `/api/data`。500 毫秒合拍；断线永远重连。连接 pin 住用户的 app-server
+  （暖着是刻意的）。
+- `/api/*` 挂 `CorsLayer::permissive()`——客户端用请求头鉴权、从不带
+  Cookie，跨源不加 CSRF 面。
+
+### PWA + Tauri 桌面
+
+- PWA：manifest、SVG 图标（品牌字标，含 maskable），service worker 缓存
+  静态资源、永不碰 `/api`——手机上可安装。
+- Tauri 2 壳（`desktop/src-tauri`，独立 workspace）：一个窗口、打包好的
+  驾驶舱、登录卡指向任意服务器。`just desktop-dev` / `desktop-build`。
+
+### 文档
+
+- configuration（中英）：hub 章节围绕账号、配对、座位与部署矩阵重写；
+  limitations（中英）：素账号不做什么（找回、限速、双因素），以及为什么
+  同步是敲门不是投递。
+
 ## 0.8.0 — 能写、能看、能声明、能分发（工作区版本；`v0.5.0` 是上一个已打 tag 的发布）
 
 ### 文件写入工具：`write_file` / `edit`

@@ -417,20 +417,36 @@ shape across the reference
 implementations; none of them build an account system).
 
 ```
-joy hub adduser alice --root ~/joy-hub   # mints a token (printed once), writes users.json (0600)
 JOY_HUB_ROOT=~/joy-hub joy hub           # multi-user dashboard, still binds 127.0.0.1 by default
 ```
 
-- **Admission is one token**: users.json maps `user → token`, compared in
-  constant time; to rotate, delete the line and adduser again. No accounts, no
-  password store.
+- **Accounts are self-service, seats are capped**: open the dashboard and
+  register (username + password + device name). `JOY_HUB_MAX_OPEN` doubles as
+  the seat count — full table, registration closes. The **first** user must
+  register from loopback (or via `joy hub adduser alice --root ~/joy-hub`,
+  which mints a CLI token printed once) — a fresh hub on a public bind never
+  lets a stranger claim it.
+- **Logging in pairs the device** (登录即配对): each device name gets its own
+  token, stored in `users.json` (0600) next to the PBKDF2-SHA256 password
+  credential (ring, salted, constant-time verify). Same device + password
+  returns the same token — logging in twice does not multiply tokens. The old
+  flat `user → token` file migrates on load (token becomes device `cli`).
+- **Password reset is a CLI matter** (deliberate): re-register the same
+  username from loopback is refused while it exists; an owner fixes a lost
+  password by removing the user's entry in users.json and re-adding —
+  no email flow, no reset links.
 - **Isolation is structural**: one home per user (state.db, models.json, jobs,
   skills — the full set), each with its own app-server child, spawned lazily on
   first use. A's keys cannot appear in B's paths — there is no shared path.
 - User names allow lowercase letters, digits, and hyphens (≤32) — names become
   directories, so `../` is refused at load time.
 - Auth semantics are **the same Bearer path** as single-user mode: a static
-  `JOY_OPS_TOKEN` and per-user hub tokens run through the same code.
+  `JOY_OPS_TOKEN` and per-device hub tokens run through the same code.
+- **Cross-device sync**: `GET /api/events` (Bearer) streams lightweight pings
+  — "a turn started / finished somewhere", "an approval is waiting". Clients
+  pull `/api/data` for details; pings carry no payload. CORS is permissive on
+  `/api/*` because clients (Tauri shell, PWA) authenticate by header, never
+  cookies.
 
 ## Chat gateways (joy-ts)
 

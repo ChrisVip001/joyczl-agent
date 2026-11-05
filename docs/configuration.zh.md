@@ -354,19 +354,30 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 同类参考实现的 profile 与会话键都是这个形状；没有一家做账号系统）。
 
 ```
-joy hub adduser alice --root ~/joy-hub   # 生成 token（只打印这一次），写进 users.json（0600）
 JOY_HUB_ROOT=~/joy-hub joy hub           # 起多用户驾驶舱，默认仍绑 127.0.0.1
 ```
 
-- **准入就是一枚 token**：users.json 里 `用户名 → token`，常量时间比对；
-  换 token = 删掉那行再 adduser。没有账号、没有密码库。
+- **账号自助注册，座位有上限**：打开驾驶舱即可注册（用户名 + 密码 + 设备名）。
+  `JOY_HUB_MAX_OPEN` 兼任座位数——满员即关闭注册。**第一个用户**必须从本机
+  （回环地址）注册，或用 `joy hub adduser alice --root ~/joy-hub` 生成一枚
+  只打印一次的 CLI token——公网新 hub 绝不让最先撞上来的陌生人当主人。
+- **登录即配对**：每台设备名一枚自己的 token，与 PBKDF2-SHA256 密码凭证
+  （ring，加盐、常量时间验证）一起存在 `users.json`（0600）。同设备同密码
+  拿同一个 token——登两次不会翻倍。旧的扁平 `用户名 → token` 文件装载时
+  自动迁移（token 变成设备 `cli`）。
+- **密码找回走 CLI（刻意如此）**：用户名已存在时本机重注册也会被拒；主人
+  找回密码 = 删掉 users.json 里该用户的条目重新添加——没有邮件流程、
+  没有重置链接。
 - **隔离是结构性的**：每个用户一个 home（state.db、models.json、jobs、
   技能全套），各自的 app-server 子进程懒加载（用到才起）。A 的密钥不可能
   出现在 B 的路径里 —— 因为根本没有共享路径。
 - 用户名只许小写字母、数字与连字符（≤32）—— 名字会变成目录，`../` 在
   装载期就拒收。
 - 鉴权语义与单用户模式**同一条 Bearer 路径**：单用户设 `JOY_OPS_TOKEN` 与
-  hub 模式的 per-user token，走的是同一段代码。
+  hub 模式的 per-device token，走的是同一段代码。
+- **跨端同步**：`GET /api/events`（Bearer）推轻量提示——「别处有回合开始/
+  结束」「有授权待批」。细节由客户端拉 `/api/data`；提示不带载荷。`/api/*`
+  的 CORS 是放行的，因为客户端（Tauri 壳、PWA）用请求头鉴权，从不带 Cookie。
 
 ## Chat gateways (joy-ts)
 
