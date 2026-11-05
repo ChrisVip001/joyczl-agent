@@ -770,6 +770,17 @@ class TurnAttachment(BaseModel):
     path: str
 
 
+class TurnCheckpointedNotification(BaseModel):
+    iterations: Annotated[
+        int,
+        Field(
+            description='How many loop iterations are already done (a checkpoint lands at each tool-results boundary).'
+        ),
+    ]
+    sessionId: str
+    turnId: str
+
+
 class TurnInterruptParams(BaseModel):
     turnId: str
 
@@ -781,6 +792,18 @@ class TurnInterruptResponse(BaseModel):
             description='false = this turn already finished; nothing was interrupted.'
         ),
     ]
+
+
+class TurnResumedNotification(BaseModel):
+    fromIterations: Annotated[
+        int,
+        Field(description='How many iterations the checkpoint had already completed.'),
+    ]
+    reason: Annotated[
+        str, Field(description='Why it is resuming (`reconcile: crash recovery`, …).')
+    ]
+    sessionId: str
+    turnId: str
 
 
 class TurnStartParams(BaseModel):
@@ -815,6 +838,14 @@ class TurnStartedNotification(BaseModel):
     ts: Annotated[str, Field(description='ISO 8601, millisecond precision.')]
     turnId: str
     userMessage: str
+
+
+class TurnSuspendedNotification(BaseModel):
+    reason: Annotated[
+        str, Field(description='Why it was abandoned (`interrupted by user`, …).')
+    ]
+    sessionId: str
+    turnId: str
 
 
 class UsageByModel(BaseModel):

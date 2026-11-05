@@ -130,6 +130,9 @@ macro_rules! protocol_types {
             GraphNodeEndedNotification,
             GraphEndedNotification,
             TurnCompletedNotification,
+            TurnCheckpointedNotification,
+            TurnResumedNotification,
+            TurnSuspendedNotification,
             ErrorNotification,
             ServerNotification,
         )

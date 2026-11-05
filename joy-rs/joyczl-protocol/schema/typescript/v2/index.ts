@@ -88,5 +88,8 @@ export type * from "./GraphNodeStartedNotification";
 export type * from "./GraphNodeEndedNotification";
 export type * from "./GraphEndedNotification";
 export type * from "./TurnCompletedNotification";
+export type * from "./TurnCheckpointedNotification";
+export type * from "./TurnResumedNotification";
+export type * from "./TurnSuspendedNotification";
 export type * from "./ErrorNotification";
 export type * from "./ServerNotification";

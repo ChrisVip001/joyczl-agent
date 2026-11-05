@@ -2414,6 +2414,29 @@
       ],
       "type": "object"
     },
+    "TurnCheckpointedNotification": {
+      "description": "A checkpoint has been written: this turn's working memory (model thoughts, tool results) is now in state.db — the loop can continue from here after a crash, finished tools are never re-run.",
+      "properties": {
+        "iterations": {
+          "description": "How many loop iterations are already done (a checkpoint lands at each tool-results boundary).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "iterations",
+        "sessionId",
+        "turnId"
+      ],
+      "title": "TurnCheckpointedNotification",
+      "type": "object"
+    },
     "TurnCompletedNotification": {
       "properties": {
         "iterations": {
@@ -2589,6 +2612,34 @@
       "title": "TurnMeta",
       "type": "object"
     },
+    "TurnResumedNotification": {
+      "description": "A checkpoint is being resumed: startup reconciliation found it unfinished and the loop continues from where it stood (finished tools are not re-run). The human said earlier \"keep going until X\" by starting the turn — resuming is not the model assigning itself work.",
+      "properties": {
+        "fromIterations": {
+          "description": "How many iterations the checkpoint had already completed.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Why it is resuming (`reconcile: crash recovery`, …).",
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fromIterations",
+        "reason",
+        "sessionId",
+        "turnId"
+      ],
+      "title": "TurnResumedNotification",
+      "type": "object"
+    },
     "TurnStartParams": {
       "properties": {
         "attachments": {
@@ -2666,6 +2717,28 @@
         "userMessage"
       ],
       "title": "TurnStartedNotification",
+      "type": "object"
+    },
+    "TurnSuspendedNotification": {
+      "description": "A checkpoint is abandoned: the human interrupted the turn (or the session moved on) — it will NOT be auto-resumed. Suspended, not silently lost: the ledger says so.",
+      "properties": {
+        "reason": {
+          "description": "Why it was abandoned (`interrupted by user`, …).",
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "sessionId",
+        "turnId"
+      ],
+      "title": "TurnSuspendedNotification",
       "type": "object"
     },
     "UsageByModel": {
