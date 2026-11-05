@@ -104,6 +104,13 @@ gateway-lark *args:
 dashboard-build: ts-install
     cd {{ ts_dir }} && npm run build --workspace @joy/dashboard
 
+# 桌面壳（Tauri）：先出驾驶舱 dist，再编译壳。构建产物在 desktop/src-tauri/target/。
+# debug 开发窗口用 `desktop-dev`；发布二进制/安装包用 `desktop-build`（去 --no-bundle 打安装包）。
+@desktop-dev: dashboard-build
+    cd desktop/src-tauri && cargo tauri dev
+@desktop-build: dashboard-build
+    cd desktop/src-tauri && cargo tauri build --no-bundle
+
 # Start the dashboard → http://localhost:7777 (JOY_PORT changes the port).
 dashboard *args:
     cd {{ rust_dir }} && cargo run --bin joy -- dashboard {{args}}

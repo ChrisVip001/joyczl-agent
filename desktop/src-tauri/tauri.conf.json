@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Joy",
+  "version": "0.9.0",
+  "identifier": "app.joyczl.desktop",
+  "build": {
+    "frontendDist": "../../joy-ts/packages/dashboard/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Joy",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "backgroundColor": "#0C0D10"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

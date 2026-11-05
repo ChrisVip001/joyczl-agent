@@ -1,0 +1,14 @@
+[package]
+name = "joy-desktop"
+version = "0.9.0"
+description = "Joy 桌面壳：驾驶舱前端 + 任意 Joy 服务器的客户端"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+# 独立 workspace：桌面壳的依赖树（tauri/wry）不该混进 joy-rs 的每一次 cargo build。
+[workspace]
