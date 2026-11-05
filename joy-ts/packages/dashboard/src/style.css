@@ -537,54 +537,6 @@ textarea::placeholder {
   background: var(--ok);
 }
 
-.chip.done-ok {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
-}
-
-.chip.done-ok::before {
-  background: var(--ok);
-}
-
-.chip.done-bad {
-  color: var(--bad);
-  border-color: color-mix(in srgb, var(--bad) 30%, transparent);
-}
-
-.chip.done-bad::before {
-  background: var(--bad);
-}
-
-.toolcard {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  background: var(--surface);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius);
-  font-size: 12px;
-  min-width: 0;
-}
-
-.toolcard-name {
-  font-family: var(--mono);
-  color: var(--text);
-}
-
-.toolcard-detail {
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 320px;
-}
-
-.toolcard-time {
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---- 活动时间线：agent 正在做什么，一条安静的细线轴 ---------------------------- */
 
 .timeline {

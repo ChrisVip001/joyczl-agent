@@ -12,7 +12,7 @@ import { el, formatMs } from "./render";
 
 /** One step on the thread. */
 interface Entry {
-  kind: "gate" | "tool" | "graph" | "note" | "bad";
+  kind: "gate" | "tool" | "graph" | "note";
   label: string;
   detail?: string;
 }
@@ -38,7 +38,9 @@ function headText(steps: number, latest: string): string {
 }
 
 export function createTimeline(): Timeline {
-  const entries: Entry[] = [];
+  // The head line needs only "how many steps + the latest label" — the DOM keeps the rest.
+  let steps = 0;
+  let latestLabel = "";
   const list = el("div", { class: "tl-body" });
   list.hidden = true;
 
@@ -55,12 +57,12 @@ export function createTimeline(): Timeline {
   });
 
   function paintHead(): void {
-    const latest = entries[entries.length - 1];
-    head.textContent = latest === undefined ? "" : headText(entries.length, latest.label);
+    head.textContent = steps === 0 ? "" : headText(steps, latestLabel);
   }
 
   function push(entry: Entry): HTMLElement {
-    entries.push(entry);
+    steps += 1;
+    latestLabel = entry.label;
     const row = tlRow(entry);
     list.append(row);
     while (list.children.length > 50) list.firstElementChild?.remove();
