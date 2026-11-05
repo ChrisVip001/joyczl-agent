@@ -1222,6 +1222,42 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
+/* 连接器：一行一个，安静得像名片；"可发送"才配颜色。 */
+.connector-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.connector-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.connector-mode.live {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.connector-allow {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.connector-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.connector-broken {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--bad);
+}
+
 /* 任务状态：只上颜色，不加装饰 —— 状态是事实，不是警报。 */
 .task-state.st-running {
   color: var(--accent);

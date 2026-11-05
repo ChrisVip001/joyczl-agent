@@ -112,6 +112,7 @@ macro_rules! protocol_types {
             ModelListResponse,
             // ---- Dashboard
             DashboardData,
+            ConnectorStatus,
             TodoItemView,
             TodoListView,
             SessionViewParams,

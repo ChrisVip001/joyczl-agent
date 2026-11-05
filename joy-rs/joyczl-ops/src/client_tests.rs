@@ -20,7 +20,7 @@ pub(crate) fn fake() -> (AppServer, Fake) {
     let (ours, theirs) = tokio::io::duplex(8192);
     let (reader, writer) = tokio::io::split(ours);
     let (theirs_read, theirs_write) = tokio::io::split(theirs);
-    let app = AppServer::attach(None, reader, writer);
+    let app = AppServer::attach(std::env::temp_dir(), None, reader, writer);
     let fake = Fake {
         requests: BufReader::new(theirs_read),
         to_client: theirs_write,

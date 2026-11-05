@@ -117,6 +117,20 @@ class ConfigReadParams(BaseModel):
     ] = None
 
 
+class ConnectorStatus(BaseModel):
+    allowRecipients: Annotated[
+        int,
+        Field(
+            description='How many entries the recipient allowlist has. `0` means nobody — said, not implied.',
+            ge=0,
+        ),
+    ]
+    id: Annotated[str, Field(description='`email` / `feishu`.')]
+    live: Annotated[
+        bool, Field(description='`false` = draft-only: nothing leaves the machine.')
+    ]
+
+
 class ConsolidationCompletedNotification(BaseModel):
     newFacts: Annotated[
         int,
@@ -968,6 +982,19 @@ class ConfigWriteResponse(BaseModel):
 
 class DashboardData(BaseModel):
     config: SettingsView
+    connectors: Annotated[
+        list[ConnectorStatus] | None,
+        Field(
+            description='Connectors configured on this machine (0.12.0). Read from connectors.json by ops: it is the same file the app-server registered tools from, on the same machine.',
+            validate_default=True,
+        ),
+    ] = []
+    connectorsError: Annotated[
+        str | None,
+        Field(
+            description='Why the connector file could not be read, if it could not — the panel shows this instead of silently pretending there are no connectors.'
+        ),
+    ] = None
     episodes: list[Episode]
     facts: list[Fact]
     generatedAt: Annotated[

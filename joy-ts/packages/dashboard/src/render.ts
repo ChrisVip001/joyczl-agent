@@ -61,7 +61,7 @@ export function renderOverview(
 
   // The task card leads the overview when there is anything on it: what the loop is
   // chasing, what the model ticked off — the two answers to "what is it doing now".
-  if (data.goal !== undefined || data.todos !== undefined || data.task !== undefined) {
+  if (data.goal !== undefined || data.todos !== undefined || data.task != null) {
     const emptyTodos: TodoListView = { revision: 0n, items: [] };
     fragment.append(
       renderTaskCard(
@@ -114,6 +114,10 @@ export function renderOverview(
     ),
   );
 
+  if (data.connectors.length > 0 || data.connectorsError != null) {
+    fragment.append(renderConnectors(data));
+  }
+
   fragment.append(
     section(
       `最近会话（当前：${session}）`,
@@ -128,6 +132,46 @@ export function renderOverview(
   );
 
   return fragment;
+}
+
+/// Connectors: one quiet row each — name, whether it can actually send, allowlist width.
+/// Read-only on purpose: the switch lives in connectors.json, a file only the human edits.
+function renderConnectors(data: DashboardData): HTMLElement {
+  const names: Record<string, string> = { email: "邮件", feishu: "飞书" };
+  const block = el("div", { class: "block connectors" }, el("h3", { text: "连接器" }));
+  if (data.connectorsError !== null) {
+    block.append(el("div", { class: "connector-broken", text: data.connectorsError }));
+  }
+  for (const connector of data.connectors) {
+    block.append(
+      el(
+        "div",
+        { class: "connector-row" },
+        el("span", {
+          class: "connector-name",
+          text: names[connector.id] ?? connector.id,
+        }),
+        el("span", {
+          class: `tag connector-mode ${connector.live ? "live" : "draft"}`,
+          text: connector.live ? "可发送" : "草稿",
+        }),
+        el("span", {
+          class: "connector-allow",
+          text:
+            connector.allowRecipients === 0
+              ? "白名单空 —— 谁都不能收"
+              : `白名单 ${connector.allowRecipients} 个`,
+        }),
+      ),
+    );
+  }
+  block.append(
+    el("p", {
+      class: "connector-note",
+      text: "开关在 connectors.json 里 —— 只有人能改；实际发送每次都会问。",
+    }),
+  );
+  return block;
 }
 
 /**
@@ -154,7 +198,7 @@ export function renderTaskCard(
     failed: "未达成",
     cancelled: "已取消",
   };
-  if (task !== undefined) {
+  if (task != null) {
     const live = task.status === "running" || task.status === "pending";
     block.append(
       el("h3", { text: "任务" }),
@@ -211,7 +255,7 @@ export function renderTaskCard(
 
   // A goal set on an existing task has its own text; when it is just the title repeated,
   // the task block above already says it.
-  const duplicated = task !== undefined && task.goalCondition === task.title;
+  const duplicated = task != null && task.goalCondition === task.title;
   if (goal.active && goal.condition !== null && !duplicated) {
     block.append(
       el("h3", { text: "目标" }),
@@ -220,7 +264,7 @@ export function renderTaskCard(
         { class: "task-goal" },
         el("span", { class: "task-goal-text", text: goal.condition }),
         // The task block above already carries the round account; don't say it twice.
-        task === undefined
+        task == null
           ? el("span", { class: "tag", text: `第 ${goal.roundsUsed}/${goal.maxRounds} 轮` })
           : document.createDocumentFragment(),
       ),

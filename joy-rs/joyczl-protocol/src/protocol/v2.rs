@@ -1125,6 +1125,30 @@ pub struct DashboardData {
     #[serde(default)]
     #[ts(optional)]
     pub task: Option<AgentTaskView>,
+    /// Connectors configured on this machine (0.12.0). Read from connectors.json by ops:
+    /// it is the same file the app-server registered tools from, on the same machine.
+    #[serde(default)]
+    pub connectors: Vec<ConnectorStatus>,
+    /// Why the connector file could not be read, if it could not — the panel shows this
+    /// instead of silently pretending there are no connectors.
+    #[serde(default)]
+    #[ts(optional)]
+    pub connectors_error: Option<String>,
+}
+
+/// One configured connector, as far as the dashboard needs to know: which one, whether
+/// it can actually send, and how wide the door is (allowlist size).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConnectorStatus {
+    /// `email` / `feishu`.
+    pub id: String,
+    /// `false` = draft-only: nothing leaves the machine.
+    pub live: bool,
+    /// How many entries the recipient allowlist has. `0` means nobody — said, not implied.
+    pub allow_recipients: usize,
 }
 
 /// One row of the todo sheet. `status` is the wire form of `TodoStatus`

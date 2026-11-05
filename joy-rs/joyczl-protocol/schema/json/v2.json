@@ -259,6 +259,31 @@
       "title": "ConfigWriteResponse",
       "type": "object"
     },
+    "ConnectorStatus": {
+      "description": "One configured connector, as far as the dashboard needs to know: which one, whether it can actually send, and how wide the door is (allowlist size).",
+      "properties": {
+        "allowRecipients": {
+          "description": "How many entries the recipient allowlist has. `0` means nobody — said, not implied.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "`email` / `feishu`.",
+          "type": "string"
+        },
+        "live": {
+          "description": "`false` = draft-only: nothing leaves the machine.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "allowRecipients",
+        "id",
+        "live"
+      ],
+      "type": "object"
+    },
     "ConsolidationCompletedNotification": {
       "properties": {
         "newFacts": {
@@ -278,6 +303,22 @@
       "properties": {
         "config": {
           "$ref": "#/definitions/SettingsView"
+        },
+        "connectors": {
+          "default": [],
+          "description": "Connectors configured on this machine (0.12.0). Read from connectors.json by ops: it is the same file the app-server registered tools from, on the same machine.",
+          "items": {
+            "$ref": "#/definitions/ConnectorStatus"
+          },
+          "type": "array"
+        },
+        "connectorsError": {
+          "default": null,
+          "description": "Why the connector file could not be read, if it could not — the panel shows this instead of silently pretending there are no connectors.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "episodes": {
           "items": {

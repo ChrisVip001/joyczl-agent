@@ -71,6 +71,7 @@ export type * from "./ConfigWriteResponse";
 export type * from "./ModelListParams";
 export type * from "./ModelListResponse";
 export type * from "./DashboardData";
+export type * from "./ConnectorStatus";
 export type * from "./TodoItemView";
 export type * from "./TodoListView";
 export type * from "./SessionViewParams";

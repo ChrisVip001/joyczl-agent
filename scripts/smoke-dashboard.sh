@@ -49,6 +49,16 @@ PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0))
 # key_source reads JOY_API_KEY from the environment and whose base_url is the fake SSE
 # endpoint. JOY_PROVIDER/JOY_API_KEY below stay — provider is still the fallback vendor.
 mkdir -p "$WORK/.joy"
+
+# One connector, draft mode: the panel must show it without the tool ever sending anything.
+cat > "$WORK/.joy/connectors.json" <<'EOF_CONNECTOR'
+{"email": {
+  "smtp_host": "127.0.0.1", "smtp_port": 2525,
+  "from": "joy@corp.com",
+  "allow_recipients": ["@corp.com", "alice@other.org"],
+  "live": false
+}}
+EOF_CONNECTOR
 cat > "$WORK/.joy/models.json" <<EOF
 {"active":"smoke","profiles":[{"id":"smoke","provider":"anthropic","base_url":"http://127.0.0.1:$MODEL_PORT","key_source":"env:JOY_API_KEY"}]}
 EOF
@@ -179,6 +189,12 @@ grep -q '"status":"cancelled"' "$WORK/cancel.json" || fail "取消失败"
 curl -sS "$BASE/api/tasks" >"$WORK/tasks.json"
 grep -q '"tasks":\[' "$WORK/tasks.json" || fail "任务列表没有 tasks 数组"
 echo "  ✓ 任务：建 → 首屏可见 → 拒第二个 → 暂停 → 继续 → 取消"
+
+# The connector panel is read-only truth from connectors.json: draft mode + allowlist width.
+curl -sS "$BASE/api/data?sessionId=default" >"$WORK/data4.json"
+grep -q '"connectors":\[{"id":"email","live":false,"allowRecipients":2}\]' "$WORK/data4.json" \
+  || fail "连接器面板数据不对：$(python3 -c "import json,sys; print(json.load(open('$WORK/data4.json')).get('connectors'))")"
+echo "  ✓ 连接器：草稿模式 + 白名单 2 个，窗口如实显示"
 
 # Sessions are hard boundaries: paging an untouched session must yield an empty page, never default's.
 curl -sS "$BASE/api/session?sessionId=nobody" | grep -q '"data":\[\]' \

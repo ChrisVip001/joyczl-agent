@@ -16,13 +16,13 @@ use chrono::Local;
 use futures_util::stream::{self, Stream};
 use joyczl_protocol::{
     codes, methods, ApprovalLogResponse, ApprovalRespondParams, ApprovalRespondResponse,
-    ConfigReadResponse, DashboardData, ErrorObject, GoalSetParams, GoalSetResponse,
-    MemoryListEpisodesResponse, MemoryListResponse, ModelProfilesResponse, ModelRemoveParams,
-    ModelRemoveResponse, ModelSaveParams, ModelSaveResponse, ScheduleListResponse,
-    ServerNotification, SessionListResponse, SessionMessagesParams, SessionMessagesResponse,
-    TaskActionParams, TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse,
-    TodoListView, TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
-    UsageSummaryResponse,
+    ConfigReadResponse, ConnectorStatus, DashboardData, ErrorObject, GoalSetParams,
+    GoalSetResponse, MemoryListEpisodesResponse, MemoryListResponse, ModelProfilesResponse,
+    ModelRemoveParams, ModelRemoveResponse, ModelSaveParams, ModelSaveResponse,
+    ScheduleListResponse, ServerNotification, SessionListResponse, SessionMessagesParams,
+    SessionMessagesResponse, TaskActionParams, TaskCreateParams, TaskEnvelope, TaskListResponse,
+    TaskViewResponse, TodoListView, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    TurnStartResponse, UsageSummaryResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -186,6 +186,9 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
     // Goal and todo are **per viewed session**: only fetched when the page names one.
     // Two read-only RPC methods — ops is a client of app-server, the same world as
     // every other client; the stdio queue is the honest path, even for reads.
+    // Connectors: not part of the app-server protocol — the file is the truth and ops
+    // sits on the same machine. A broken file is reported, never rendered as "none".
+    let (connectors, connectors_error) = connector_status(app);
     let (goal, todos, task) = match session {
         Some(id) => {
             let goal: GoalSetResponse = app
@@ -212,6 +215,8 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
         goal,
         todos,
         task,
+        connectors,
+        connectors_error,
     })
 }
 
@@ -254,6 +259,32 @@ pub async fn goal(
     {
         Ok(response) => Json(response).into_response(),
         Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// What the connector panel shows: one row per configured connector, or the reason the
+/// file could not be read. The allowlist size is the visible width of the door.
+fn connector_status(app: &AppServer) -> (Vec<ConnectorStatus>, Option<String>) {
+    match joyczl_connector::config::load(app.home()) {
+        Ok(config) => {
+            let mut rows = Vec::new();
+            if let Some(email) = config.email {
+                rows.push(ConnectorStatus {
+                    id: "email".to_string(),
+                    live: email.live,
+                    allow_recipients: email.allow_recipients.len(),
+                });
+            }
+            if let Some(feishu) = config.feishu {
+                rows.push(ConnectorStatus {
+                    id: "feishu".to_string(),
+                    live: feishu.live,
+                    allow_recipients: feishu.allow_recipients.len(),
+                });
+            }
+            (rows, None)
+        }
+        Err(e) => (Vec::new(), Some(e.to_string())),
     }
 }
 

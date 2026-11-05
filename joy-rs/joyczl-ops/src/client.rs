@@ -12,7 +12,7 @@
 //! carries the only useful information; "dashboard request failed" would throw it away.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,6 +43,9 @@ struct Shared {
 
 /// A running app-server, plus the two pipes for talking to it.
 pub struct AppServer {
+    /// The home the child was told to use — ops may read the same files (connectors.json)
+    /// without asking the child, because it is the same machine and the same truth.
+    home: PathBuf,
     /// Child process. `None` in tests — the pipes then connect to an in-memory fake server.
     ///
     /// The field stays not only to kill the process on drop: `kill_on_drop` is so that
@@ -60,6 +63,7 @@ impl AppServer {
     /// are subcommands of the same executable; forking yourself is more reliable than
     /// searching PATH for a same-named binary — that one may be another version, or absent.
     pub fn spawn(home: &Path) -> Result<Self> {
+        let home = home.to_path_buf();
         let exe = std::env::current_exe().context("拿不到自己的可执行文件路径")?;
         let mut command = Command::new(exe);
         command
@@ -67,7 +71,7 @@ impl AppServer {
             // JOY_HOME is passed down explicitly: the dashboard page shows "where memory
             // is", and the child must read the same copy, or the page shows another home's
             // memory — "where did my memory go" is the hardest class of bug to trace.
-            .env("JOY_HOME", home)
+            .env("JOY_HOME", &home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // The child's logs go straight to our stderr. stdout is the protocol channel;
@@ -78,11 +82,12 @@ impl AppServer {
         let mut child = command.spawn().context("起 app-server 子进程失败")?;
         let stdin = child.stdin.take().expect("刚 piped 的 stdin");
         let stdout = child.stdout.take().expect("刚 piped 的 stdout");
-        Ok(Self::attach(Some(child), stdout, stdin))
+        Ok(Self::attach(home, Some(child), stdout, stdin))
     }
 
     /// Attach the two pipes. Real and test paths differ only in "is there a child process".
     fn attach(
+        home: PathBuf,
         process: Option<Child>,
         reader: impl AsyncRead + Unpin + Send + 'static,
         writer: impl AsyncWrite + Unpin + Send + 'static,
@@ -93,11 +98,17 @@ impl AppServer {
         });
         tokio::spawn(read_loop(Arc::clone(&shared), reader));
         Self {
+            home,
             _process: process,
             stdin: AsyncMutex::new(Box::new(writer)),
             shared,
             next_id: AtomicI32::new(1),
         }
+    }
+
+    /// The home this child serves (connectors, memory — one machine, one truth).
+    pub fn home(&self) -> &Path {
+        &self.home
     }
 
     /// Send a request and wait for its answer.
