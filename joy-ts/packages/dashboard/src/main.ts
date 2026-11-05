@@ -7,6 +7,7 @@
 
 import type { TurnAttachment, TurnCompletedNotification } from "./protocol";
 import { createTimeline } from "./timeline";
+import { showLogin } from "./login";
 import {
   fetchApprovals,
   fetchDashboard,
@@ -1068,4 +1069,15 @@ function must<T extends HTMLElement = HTMLElement>(id: string): T {
   return node as T;
 }
 
-void boot();
+// 登录门：远程模式（配置了服务器地址）且本设备还没有 token → 先登录，再进应用。
+// 本机同源模式不设门——`joy dashboard` 打开即用，401 时才有一次性 token 询问。
+if (localStorage.getItem("joy-server") !== null && localStorage.getItem("joy-ops-token") === null) {
+  showLogin({ onAuthed: () => void boot() });
+} else {
+  void boot();
+}
+
+// 远程模式下的 401：会话过期或 token 被撤。登录卡回来，成功后整页重载拿干净状态。
+window.addEventListener("joy:unauthorized", () => {
+  showLogin({ notice: "登录已过期，请重新登录", onAuthed: () => location.reload() });
+});

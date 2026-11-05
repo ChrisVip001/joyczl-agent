@@ -45,20 +45,41 @@ export class ApiError extends Error {
 }
 
 /**
- * The unified entry for `/api/*`: automatically attaches the deployment-plane Bearer token.
+ * The remote Joy server, or "" for same-origin (the local `joy dashboard`).
  *
- * When the server sets `JOY_OPS_TOKEN`, every API request must carry `Authorization: Bearer …`;
- * the token is stored in localStorage (a **deployment-plane** credential, a different thing
- * from model keys). On a 401 it asks once — using `prompt` instead of a DOM: this path is
- * walked once per deployment; ask, save, and it's never seen again.
+ * Empty = the app was opened on its own server (the common case). Non-empty = the page
+ * is a client of a remote hub (Tauri shell, a PWA on another origin) — every request is
+ * prefixed, and 401 hands over to the login card instead of the one-time prompt.
+ */
+export function serverBase(): string {
+  return localStorage.getItem("joy-server") ?? "";
+}
+
+export function setServerBase(base: string): void {
+  const trimmed = base.trim().replace(/\/+$/, "");
+  if (trimmed === "") localStorage.removeItem("joy-server");
+  else localStorage.setItem("joy-server", trimmed);
+}
+
+/**
+ * The unified entry for `/api/*`: attaches the Bearer token (account or deployment-plane —
+ * both travel the same header) and prefixes the remote base when one is configured.
+ *
+ * Same-origin deployments keep the one-time `prompt` for `JOY_OPS_TOKEN` (walked once per
+ * deployment; ask, save, never seen again). Remote deployments dispatch `joy:unauthorized`
+ * — the login card listens for it, because a prompt can't explain "your session expired".
  */
 async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   const token = localStorage.getItem("joy-ops-token");
   if (token) headers.set("authorization", `Bearer ${token}`);
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(serverBase() + path, { ...init, headers });
   if (response.status === 401) {
+    if (serverBase() !== "") {
+      window.dispatchEvent(new CustomEvent("joy:unauthorized"));
+      return response;
+    }
     const entered = window.prompt("这台 Joy 的 API 需要 token（服务端的 JOY_OPS_TOKEN）");
     if (entered) {
       localStorage.setItem("joy-ops-token", entered);
@@ -68,6 +89,45 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
     }
   }
   return response;
+}
+
+/** What register/login answers: the account name and this device's token. */
+export interface AuthOutcome {
+  user: string;
+  token: string;
+}
+
+/**
+ * Register or log in on the configured server.
+ *
+ * Deliberately *not* via `apiFetch`: these two endpoints are reachable without a token,
+ * and their 401 ("wrong password") must surface as an inline error on the card — not as
+ * "session expired" chatter.
+ */
+async function authPost(path: string, body: AuthBody): Promise<AuthOutcome> {
+  const response = await fetch(serverBase() + path, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as AuthOutcome;
+}
+
+interface AuthBody {
+  username: string;
+  password: string;
+  device: string;
+}
+
+/** Create an account and pair this device in one step. */
+export function registerAccount(params: AuthBody): Promise<AuthOutcome> {
+  return authPost("/api/auth/register", params);
+}
+
+/** Verify the password and pair this device (same device → same token). */
+export function loginAccount(params: AuthBody): Promise<AuthOutcome> {
+  return authPost("/api/auth/login", params);
 }
 
 /**

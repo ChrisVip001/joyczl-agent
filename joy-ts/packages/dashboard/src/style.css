@@ -1433,3 +1433,96 @@ textarea::placeholder {
     scroll-behavior: auto;
   }
 }
+
+/* ---- 登录卡：远程 Joy 的唯一一扇门 ---------------------------------------------- */
+
+.login-view {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  z-index: 50;
+  animation: fade 200ms ease-out;
+}
+
+.login-card {
+  width: min(360px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 28px 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-float);
+  animation: rise 240ms ease-out;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.login-brand .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.login-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.login-card input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.login-error:empty {
+  display: none;
+}
+
+.login-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.login-primary {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.login-primary:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #fff);
+}
+
+.login-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
