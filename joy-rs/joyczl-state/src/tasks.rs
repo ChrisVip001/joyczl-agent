@@ -45,7 +45,6 @@ impl Tasks {
 
     /// Insert a new task. The partial unique index refuses a second active one; the caller
     /// checks first (for a human-readable message), this is the backstop.
-    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         &self,
         id: &str,
@@ -70,12 +69,10 @@ impl Tasks {
 
     pub async fn get(&self, id: &str) -> Result<Option<TaskRow>> {
         Ok(
-            sqlx::query_as::<_, TaskRow>(&format!(
-                "SELECT {COLS} FROM agent_tasks WHERE id = ?"
-            ))
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?,
+            sqlx::query_as::<_, TaskRow>(&format!("SELECT {COLS} FROM agent_tasks WHERE id = ?"))
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?,
         )
     }
 
@@ -123,13 +120,15 @@ impl Tasks {
 
     /// A turn starts carrying this task.
     pub async fn set_running(&self, id: &str, turn_id: &str) -> Result<()> {
-        self.touch(
+        sqlx::query(
             "UPDATE agent_tasks SET status = 'running', current_turn_id = ?, suspend_reason = NULL,
              updated_at = datetime('now') WHERE id = ?",
-            turn_id,
-            id,
         )
-        .await
+        .bind(turn_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// The carrying turn ended (whatever its verdict); the row stays as it is.
@@ -224,14 +223,5 @@ impl Tasks {
         .execute(&self.pool)
         .await?;
         Ok(rows)
-    }
-
-    async fn touch(&self, sql: &str, a: &str, b: &str) -> Result<()> {
-        sqlx::query(sql)
-            .bind(a)
-            .bind(b)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 }

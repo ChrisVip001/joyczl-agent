@@ -43,22 +43,25 @@ pub async fn reconcile(server: &Server, sink: &EventSink) {
 ///
 /// This is the other half of reconcile: crash recovery resumes what the process left `open`
 /// (nobody asked), while a pause is the human's decision and waits for their "continue".
-/// Returns false when there is no suspended checkpoint for that turn (the task then waits
-/// for its next message instead).
-pub(crate) async fn resume_suspended(server: &Server, sink: &EventSink, turn_id: &str) -> bool {
+/// No suspended checkpoint for that turn → nothing to continue (the task then waits for
+/// its next message instead) — said out loud, not silently skipped.
+pub(crate) async fn resume_suspended(server: &Server, sink: &EventSink, turn_id: &str) {
     let row = match server.checkpoints.get(turn_id).await {
         Ok(Some(row)) if row.status == "suspended" => row,
-        Ok(_) => return false,
+        Ok(_) => {
+            eprintln!("(joy) 回合 {turn_id} 没有可续的暂停点，等下一句话再推进");
+            return;
+        }
         Err(e) => {
             eprintln!("(joy) 读不了暂停中的 checkpoint（{turn_id}）：{e}");
-            return false;
+            return;
         }
     };
     // Back to `open` **before** the loop runs: every further boundary checkpoints normally,
     // and if this process dies mid-resume the next boot continues it like any other crash.
     if let Err(e) = server.checkpoints.reopen(turn_id).await {
         eprintln!("(joy) 续跑前没能把 checkpoint 改回 open：{e}");
-        return false;
+        return;
     }
     let server = server.clone();
     let sink = sink.clone();
@@ -67,7 +70,6 @@ pub(crate) async fn resume_suspended(server: &Server, sink: &EventSink, turn_id:
         eprintln!("(joy) 任务从暂停处继续：回合 {turn_id}");
         resume_turn(&server, &sink, row).await;
     });
-    true
 }
 
 /// Continue one checkpointed turn and give it the same accounting as a fresh one.

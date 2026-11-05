@@ -112,9 +112,7 @@ pub(crate) async fn create(
         crate::goal::set(&server.goals, session, Some(condition));
     }
     let row = reload(server, &id).await?;
-    Ok(TaskEnvelope {
-        task: view(&row),
-    })
+    Ok(TaskEnvelope { task: view(&row) })
 }
 
 pub(crate) async fn list(server: &Server) -> TaskListResponse {
@@ -176,9 +174,7 @@ pub(crate) async fn suspend(
         .map_err(|e| invalid(format!("暂停没记上：{e}")))?;
     let row = reload(server, &row.id).await?;
     notify(sink, &row, Some(&reason));
-    Ok(TaskEnvelope {
-        task: view(&row),
-    })
+    Ok(TaskEnvelope { task: view(&row) })
 }
 
 /// Continue: a suspended task goes back to running. If its turn left a `suspended` checkpoint,
@@ -209,13 +205,9 @@ pub(crate) async fn resume(
 
     // The paused turn's checkpoint is the resumable half: continue it in the background.
     if let Some(turn_id) = &row.current_turn_id {
-        let reason = params.reason.as_deref().unwrap_or("用户点了继续");
-        let _ = reason;
         crate::resume::resume_suspended(server, sink, turn_id).await;
     }
-    Ok(TaskEnvelope {
-        task: view(&row),
-    })
+    Ok(TaskEnvelope { task: view(&row) })
 }
 
 /// Stop: interrupt whatever is running and close the row as `cancelled`. The checkpoint goes
@@ -245,7 +237,5 @@ pub(crate) async fn cancel(
     crate::goal::set(&server.goals, &row.session_id, None);
     let row = reload(server, &row.id).await?;
     notify(sink, &row, Some(reason));
-    Ok(TaskEnvelope {
-        task: view(&row),
-    })
+    Ok(TaskEnvelope { task: view(&row) })
 }

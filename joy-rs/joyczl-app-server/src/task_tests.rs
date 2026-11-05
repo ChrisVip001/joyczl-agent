@@ -78,7 +78,12 @@ async fn call(
     }
 }
 
-async fn create_task(server: &Server, session: &str, title: &str, goal: Option<&str>) -> TaskEnvelope {
+async fn create_task(
+    server: &Server,
+    session: &str,
+    title: &str,
+    goal: Option<&str>,
+) -> TaskEnvelope {
     let result = call(
         server,
         joyczl_protocol::methods::TASK_CREATE,
@@ -121,7 +126,12 @@ async fn goal_set_creates_the_task_and_clearing_keeps_the_row() {
     assert_eq!(response["condition"], json!("把测试跑绿"));
 
     // The compatibility layer: the goal **is** a task row now.
-    let task = server.tasks.active("default").await.expect("查").expect("有任务");
+    let task = server
+        .tasks
+        .active("default")
+        .await
+        .expect("查")
+        .expect("有任务");
     assert_eq!(task.goal_condition.as_deref(), Some("把测试跑绿"));
     assert_eq!(task.title, "把测试跑绿");
 
@@ -227,7 +237,9 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
     .expect("暂停该成功");
     assert_eq!(suspended["task"]["status"], json!("suspended"));
     assert!(
-        suspended["task"]["suspendReason"].as_str().is_some_and(|r| !r.is_empty()),
+        suspended["task"]["suspendReason"]
+            .as_str()
+            .is_some_and(|r| !r.is_empty()),
         "暂停理由要记下来"
     );
     let checkpoint = server
@@ -236,9 +248,19 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
         .await
         .expect("查")
         .expect("checkpoint 还在");
-    assert_eq!(checkpoint.status, "suspended", "暂停把 checkpoint 留着，不标 abandoned");
     assert_eq!(
-        server.tasks.get(&task.task.id).await.expect("查").expect("在").current_turn_id.as_deref(),
+        checkpoint.status, "suspended",
+        "暂停把 checkpoint 留着，不标 abandoned"
+    );
+    assert_eq!(
+        server
+            .tasks
+            .get(&task.task.id)
+            .await
+            .expect("查")
+            .expect("在")
+            .current_turn_id
+            .as_deref(),
         Some("t-pause"),
         "挂起的任务记得自己停在哪个回合"
     );
@@ -266,12 +288,23 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let checkpoint = server.checkpoints.get("t-pause").await.expect("查").expect("在");
+    let checkpoint = server
+        .checkpoints
+        .get("t-pause")
+        .await
+        .expect("查")
+        .expect("在");
     assert_eq!(checkpoint.status, "done", "续跑走完了");
 
-    let history = server.chat.session_history("default").await.expect("读对话日志");
+    let history = server
+        .chat
+        .session_history("default")
+        .await
+        .expect("读对话日志");
     assert!(
-        history.iter().any(|(_, content)| content.contains("接着干完了")),
+        history
+            .iter()
+            .any(|(_, content)| content.contains("接着干完了")),
         "续跑的回复落了账"
     );
 }
@@ -300,7 +333,12 @@ async fn cancelling_closes_the_task_and_never_auto_continues() {
     .expect("取消该成功");
     assert_eq!(cancelled["task"]["status"], json!("cancelled"));
 
-    let checkpoint = server.checkpoints.get("t-stop").await.expect("查").expect("在");
+    let checkpoint = server
+        .checkpoints
+        .get("t-stop")
+        .await
+        .expect("查")
+        .expect("在");
     assert_eq!(checkpoint.status, "abandoned", "取消的回合绝不自动续跑");
     assert!(
         server.checkpoints.open_rows().await.expect("读").is_empty(),
@@ -324,7 +362,9 @@ async fn a_restart_marks_a_running_task_suspended_honestly() {
     drop(server); // the process "dies" with the task running
 
     // Same home, fresh process: boot reconcile must not pretend it is still running.
-    let pool = joyczl_state::open(&home.join("state.db")).await.expect("重开库");
+    let pool = joyczl_state::open(&home.join("state.db"))
+        .await
+        .expect("重开库");
     let rebooted = Server::boot(
         pool,
         Settings {
@@ -342,7 +382,9 @@ async fn a_restart_marks_a_running_task_suspended_honestly() {
         .expect("还在");
     assert_eq!(row.status, "suspended");
     assert!(
-        row.suspend_reason.as_deref().is_some_and(|r| r.contains("进程重启")),
+        row.suspend_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("进程重启")),
         "理由得说清楚：{:?}",
         row.suspend_reason
     );
@@ -362,7 +404,11 @@ async fn an_unknown_task_id_is_an_error_not_a_panic() {
 
     // And a task that already finished cannot be resumed either.
     let task = create_task(&server, "default", "已完成", None).await;
-    server.tasks.finish(&task.task.id, "done").await.expect("收尾");
+    server
+        .tasks
+        .finish(&task.task.id, "done")
+        .await
+        .expect("收尾");
     let error = call(
         &server,
         joyczl_protocol::methods::TASK_RESUME,
@@ -387,7 +433,9 @@ async fn task_transitions_are_announced() {
         task_id: task.task.id.clone(),
         reason: Some("测试暂停".to_string()),
     };
-    crate::task::suspend(&server, &sink, params).await.expect("暂停");
+    crate::task::suspend(&server, &sink, params)
+        .await
+        .expect("暂停");
 
     let mut announced = Vec::new();
     while let Ok(frame) = rx.try_recv() {

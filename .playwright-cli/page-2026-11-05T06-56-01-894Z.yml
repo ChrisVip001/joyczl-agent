@@ -1,0 +1,88 @@
+- generic [ref=f3e2]:
+  - complementary [ref=f3e3]:
+    - heading "Joy" [level=1] [ref=f3e6]
+    - navigation "面板" [ref=f3e7]:
+      - button "概览" [active] [ref=f3e8] [cursor=pointer]
+      - button "记忆" [ref=f3e9] [cursor=pointer]
+      - button "用量" [ref=f3e10] [cursor=pointer]
+      - button "审批" [ref=f3e11] [cursor=pointer]
+      - button "定时" [ref=f3e12] [cursor=pointer]
+      - button "模型" [ref=f3e13] [cursor=pointer]
+    - generic [ref=f3e14]:
+      - paragraph [ref=f3e15]: 会话
+      - list [ref=f3e16]:
+        - paragraph [ref=f3e17]: 还没有会话
+    - generic [ref=f3e18]:
+      - combobox "切换模型" [disabled] [ref=f3e19]:
+        - option "没配模型" [selected]
+      - generic "/tmp/joy-task-visual/.joy" [ref=f3e20]
+      - generic [ref=f3e21]:
+        - generic [ref=f3e22]: 14:55 更新
+        - button "刷新" [ref=f3e23] [cursor=pointer]
+  - main [ref=f3e24]:
+    - generic [ref=f3e25]:
+      - paragraph [ref=f3e26]:
+        - text: 会话 ·
+        - code [ref=f3e27]: default
+      - button "浏览…" [ref=f3e28] [cursor=pointer]
+      - textbox "本轮工作目录" [ref=f3e29]:
+        - /placeholder: 工作目录（可选）—— 命令与相对路径都按它解析
+    - generic [ref=f3e30]:
+      - textbox "目标" [ref=f3e31]:
+        - /placeholder: 目标（比如：让测试全绿）。没达成会自动续轮，直到你说撤掉
+      - button "设目标" [ref=f3e32] [cursor=pointer]
+      - button "撤掉" [ref=f3e33] [cursor=pointer]
+    - generic "对话" [ref=f3e34]:
+      - generic [ref=f3e35]:
+        - paragraph [ref=f3e36]: 你好，我是 Joy
+        - paragraph [ref=f3e37]: 把要做的事说清楚就行 —— 长任务会一步步来，需要你拍板时会停下来问。
+    - generic [ref=f3e39]:
+      - button "＋" [ref=f3e40] [cursor=pointer]
+      - textbox "消息" [ref=f3e41]:
+        - /placeholder: 说点什么…（Enter 发送，Shift+Enter 换行）
+      - button "发送" [ref=f3e42] [cursor=pointer]
+  - complementary [ref=f3e43]:
+    - generic [ref=f3e44]:
+      - paragraph [ref=f3e45]: 面板
+      - button "收起面板" [ref=f3e46] [cursor=pointer]: ×
+    - generic [ref=f3e48]:
+      - generic [ref=f3e49]:
+        - heading "任务" [level=3] [ref=f3e50]
+        - generic [ref=f3e51]:
+          - generic [ref=f3e52]: 盯着服务器三天
+          - generic [ref=f3e53]: 等待开始 · 第 0/5 轮
+        - generic [ref=f3e54]:
+          - button "暂停" [ref=f3e55] [cursor=pointer]
+          - button "取消" [ref=f3e56] [cursor=pointer]
+        - heading "目标" [level=3] [ref=f3e57]
+        - generic [ref=f3e58]: 三天内 CPU 不超过 80%，异常立刻记录
+      - generic [ref=f3e60]: anthropic
+      - generic "/tmp/joy-task-visual/.joy" [ref=f3e62]
+      - generic [ref=f3e63]:
+        - generic [ref=f3e64]:
+          - generic [ref=f3e65]: "0"
+          - text: 会话
+        - generic [ref=f3e66]:
+          - generic [ref=f3e67]: "0"
+          - text: 事实
+        - generic [ref=f3e68]:
+          - generic [ref=f3e69]: "0"
+          - text: 情景
+      - generic [ref=f3e70]:
+        - heading "怎么想的" [level=3] [ref=f3e71]
+        - generic [ref=f3e72]:
+          - term [ref=f3e73]: 小模型
+          - definition [ref=f3e74]
+          - term [ref=f3e75]: 工作记忆
+          - definition [ref=f3e76]: 最近 12 轮
+          - term [ref=f3e77]: 提炼频率
+          - definition [ref=f3e78]: 每 6 轮
+          - term [ref=f3e79]: 检索条数
+          - definition [ref=f3e80]: "4"
+          - term [ref=f3e81]: 最多迭代
+          - definition [ref=f3e82]: "10"
+          - term [ref=f3e83]: 实验
+          - definition [ref=f3e84]: 关
+      - generic [ref=f3e85]:
+        - heading "最近会话（当前：default）" [level=3] [ref=f3e86]
+        - paragraph [ref=f3e87]: 还没有会话。说第一句话就有了。

@@ -281,51 +281,43 @@ pub async fn task(
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_string();
-    let result = match action.as_str() {
-        "create" => {
-            let params: TaskCreateParams = match serde_json::from_value(body.clone()) {
-                Ok(params) => params,
-                Err(e) => return failed(StatusCode::BAD_REQUEST, ErrorObject {
-                    code: codes::INVALID_PARAMS,
-                    message: format!("建任务的参数不对：{e}"),
-                    data: None,
-                }),
-            };
-            match app
-                .request::<TaskEnvelope>(methods::TASK_CREATE, serde_json::to_value(params).expect("可序列化"))
-                .await
-            {
-                Ok(envelope) => Ok(envelope),
-                Err(error) => Err(error),
-            }
-        }
-        "suspend" | "resume" | "cancel" => {
-            let params: TaskActionParams = match serde_json::from_value(body.clone()) {
-                Ok(params) => params,
-                Err(e) => return failed(StatusCode::BAD_REQUEST, ErrorObject {
-                    code: codes::INVALID_PARAMS,
-                    message: format!("任务动作的参数不对：{e}"),
-                    data: None,
-                }),
-            };
-            let method = match action.as_str() {
-                "suspend" => methods::TASK_SUSPEND,
-                "resume" => methods::TASK_RESUME,
-                _ => methods::TASK_CANCEL,
-            };
-            match app
-                .request::<TaskEnvelope>(method, serde_json::to_value(params).expect("可序列化"))
-                .await
-            {
-                Ok(envelope) => Ok(envelope),
-                Err(error) => Err(error),
-            }
-        }
+    // Translate the action into (method, payload); the request happens once, below.
+    let translated: Result<(&str, serde_json::Value), ErrorObject> = match action.as_str() {
+        "create" => serde_json::from_value::<TaskCreateParams>(body.clone())
+            .map(|params| {
+                (
+                    methods::TASK_CREATE,
+                    serde_json::to_value(params).expect("可序列化"),
+                )
+            })
+            .map_err(|e| ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: format!("建任务的参数不对：{e}"),
+                data: None,
+            }),
+        "suspend" | "resume" | "cancel" => serde_json::from_value::<TaskActionParams>(body.clone())
+            .map(|params| {
+                let method = match action.as_str() {
+                    "suspend" => methods::TASK_SUSPEND,
+                    "resume" => methods::TASK_RESUME,
+                    _ => methods::TASK_CANCEL,
+                };
+                (method, serde_json::to_value(params).expect("可序列化"))
+            })
+            .map_err(|e| ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: format!("任务动作的参数不对：{e}"),
+                data: None,
+            }),
         other => Err(ErrorObject {
             code: codes::INVALID_PARAMS,
             message: format!("不认识的任务动作：{other}（create/suspend/resume/cancel）"),
             data: None,
         }),
+    };
+    let result = match translated {
+        Ok((method, payload)) => app.request::<TaskEnvelope>(method, payload).await,
+        Err(error) => Err(error),
     };
     match result {
         Ok(envelope) => Json(envelope).into_response(),
