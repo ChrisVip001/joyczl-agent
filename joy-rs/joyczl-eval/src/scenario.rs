@@ -25,6 +25,10 @@ pub struct Scenario {
     /// Single-turn convenience field: interrupt after the Nth streaming increment.
     #[serde(default)]
     pub interrupt_after_deltas: Option<usize>,
+    /// This turn's chosen workspace — `{{home}}` expands to the case's temp home. Write
+    /// tools have no writable root unless a workspace was chosen, so write cases must set it.
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// Multi-turn: one script per turn (gate / responses / session id / interrupt / config patch).
     #[serde(default)]
     pub turns: Option<Vec<TurnScript>>,
@@ -59,6 +63,9 @@ pub struct TurnScript {
     /// Interrupt this turn after the Nth streaming increment (verifies turn/interrupt).
     #[serde(default)]
     pub interrupt_after_deltas: Option<usize>,
+    /// The workspace this turn picked (see `Scenario::cwd`).
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// Case-level overrides of Settings knobs.
@@ -115,6 +122,7 @@ impl Scenario {
             responses: self.responses.clone(),
             apply_patch: None,
             interrupt_after_deltas: self.interrupt_after_deltas,
+            cwd: self.cwd.clone(),
         }]
     }
 

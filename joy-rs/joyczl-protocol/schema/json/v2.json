@@ -1335,6 +1335,13 @@
             "string",
             "null"
           ]
+        },
+        "vision": {
+          "description": "Whether this profile's model accepts images. `null` = follow the vendor's default model (the catalog row).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1492,6 +1499,13 @@
         "smallModel": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "vision": {
+          "description": "Whether this model accepts images. Absent = keep the vendor's default (patch semantics, same as `model`); `true` is how \"this vendor's default is text-only, but *this* model sees\" gets declared at the moment the profile is created.",
+          "type": [
+            "boolean",
             "null"
           ]
         }

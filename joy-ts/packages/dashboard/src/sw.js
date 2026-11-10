@@ -1,10 +1,12 @@
-// Joy 的 service worker：静态资源缓存优先，/api 永远直连。
+// Joy 的 service worker：页面与样式网络优先，其余静态资源缓存优先，/api 永远直连。
 //
-// 两条纪律：
+// 三条纪律：
 // 1. /api/* 一帧也不缓存——对话、记忆、审批都是活的；服务端已发 no-store，这里同样直通。
-// 2. 静态资源缓存优先、后台更新（stale-while-revalidate 的手写最小版）：安装包秒开，
-//    新版本在下次访问时悄悄换上。版本号一变，旧缓存整体作废。
-const VERSION = "joy-v1";
+// 2. index.html / style.css 网络优先：缓存优先会造成「改好了但浏览器还在显示旧版」，
+//    布局修复尤其明显。网络拿不到才回落缓存，离线照样能开。
+// 3. 其余静态资源缓存优先、后台更新；版本号一变，旧缓存整体作废。
+// Bump on every shipped frontend change: a stale cache means a stale layout.
+const VERSION = "joy-v3";
 const CORE = ["./", "./index.html", "./style.css", "./main.js", "./icon.svg", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -26,6 +28,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
 
+  // 导航请求与样式必须先看网络：一次刷新就要拿到新布局，不能等后台更新悄悄换上。
+  const pageLike = url.pathname.endsWith("/") || /\.(?:html|css)$/.test(url.pathname);
   event.respondWith(
     caches.open(VERSION).then(async (cache) => {
       const cached = await cache.match(event.request);
@@ -37,7 +41,7 @@ self.addEventListener("fetch", (event) => {
           return response;
         })
         .catch(() => cached);
-      return cached ?? fresh;
+      return pageLike ? (await fresh) ?? cached : cached ?? fresh;
     }),
   );
 });

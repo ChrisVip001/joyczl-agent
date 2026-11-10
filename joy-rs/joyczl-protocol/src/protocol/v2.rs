@@ -1063,6 +1063,10 @@ pub struct ModelProfileView {
     /// **A pointer, not the key itself** — the UI uses it to honestly show "where your key is stored".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_source: Option<String>,
+    /// Whether this profile's model accepts images.
+    /// `null` = follow the vendor's default model (the catalog row).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
     /// Whether this profile is currently active.
     pub active: bool,
 }
@@ -1098,6 +1102,11 @@ pub struct ModelSaveParams {
     /// Joy only reads it and never copies it into any file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_env: Option<String>,
+    /// Whether this model accepts images. Absent = keep the vendor's default (patch
+    /// semantics, same as `model`); `true` is how "this vendor's default is text-only,
+    /// but *this* model sees" gets declared at the moment the profile is created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
     /// Make it active right after saving (default true — the smoothest on first setup).
     #[serde(default)]
     pub make_active: Option<bool>,

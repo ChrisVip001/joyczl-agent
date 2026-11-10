@@ -5,36 +5,23 @@
 // viewed" and "whether a turn is streaming"; a refresh returns to defaults. In other words, if the
 // browser crashes or the tab closes, nothing is lost — that's the most valuable part of this layering.
 
-import type {
-  AgentTaskView,
-  ModelProfileView,
-  TurnAttachment,
-  TurnCompletedNotification,
-} from "./protocol";
+import type { AgentTaskView, TurnAttachment, TurnCompletedNotification } from "./protocol";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
 import {
-  fetchApprovals,
-  fetchDashboard,
-  fetchMessages,
-  fetchModelProfiles,
-  fetchModelRoutes,
-  fetchSchedules,
-  summarizeInbox,
-  taskAction,
-  fetchUsage,
-  interruptTurn,
-  removeModel,
-  respondApproval,
-  saveModel,
-  saveModelRoutes,
-  setGoal,
   createFolder,
+  fetchDashboard,
   fetchFs,
+  fetchMessages,
   fetchRecents,
+  interruptTurn,
   recordRecent,
+  respondApproval,
+  setGoal,
+  summarizeInbox,
   talk,
+  taskAction,
   uploadFile,
 } from "./api";
 import {
@@ -48,11 +35,7 @@ import {
   formatStamp,
   messageRow,
   muted,
-  renderApprovals,
-  renderMemory,
   renderOverview,
-  renderSchedules,
-  renderUsage,
   sessionList,
   toolSummary,
   turnFooter,
@@ -82,41 +65,50 @@ const dom = {
   goalSet: must<HTMLButtonElement>("goal-set"),
   goalClear: must<HTMLButtonElement>("goal-clear"),
   goalState: must<HTMLElement>("goal-state"),
-  mpState: must<HTMLElement>("mp-state"),
-  mpPicker: must<HTMLSelectElement>("mp-picker"),
-  mpId: must<HTMLInputElement>("mp-id"),
-  mpProvider: must<HTMLInputElement>("mp-provider"),
-  mpModel: must<HTMLInputElement>("mp-model"),
-  mpKey: must<HTMLInputElement>("mp-key"),
-  mpSave: must<HTMLButtonElement>("mp-save"),
-  mpRemove: must<HTMLButtonElement>("mp-remove"),
-  mrState: must<HTMLElement>("mr-state"),
-  mrAuto: must<HTMLInputElement>("mr-auto"),
-  mrFast: must<HTMLSelectElement>("mr-fast"),
-  mrChat: must<HTMLSelectElement>("mr-chat"),
-  mrReasoning: must<HTMLSelectElement>("mr-reasoning"),
-  mrSave: must<HTMLButtonElement>("mr-save"),
   send: must<HTMLButtonElement>("send"),
   refresh: must<HTMLButtonElement>("refresh"),
   older: must<HTMLButtonElement>("older"),
   overview: must("overview"),
-  memory: must("memory"),
-  usage: must("usage"),
-  approvals: must("approvals"),
-  schedules: must("schedules"),
   status: must("status"),
-  model: must<HTMLSelectElement>("model"),
-  cwd: must<HTMLInputElement>("cwd"),
+  /** A button, never an input: the human picks a folder, and that pick is the write boundary. */
+  cwd: must<HTMLButtonElement>("cwd"),
+  cwdLabel: must<HTMLElement>("cwd-label"),
+  progress: must<HTMLButtonElement>("progress"),
   attach: must<HTMLButtonElement>("attach"),
   file: must<HTMLInputElement>("file"),
   staged: must<HTMLElement>("staged"),
-  home: must("home"),
   session: must("session"),
   stamp: must("stamp"),
   sessions: must("sessions"),
+  newSession: must<HTMLButtonElement>("new-session"),
   drawer: must("drawer"),
   drawerClose: must<HTMLButtonElement>("drawer-close"),
 };
+
+/**
+ * The chosen workspace. It is the only client-side state we keep (localStorage): a person
+ * expects a folder picker to remember the folder, and the server already records it in
+ * workspaces.json for the "recents" list. Never a path typed by hand.
+ */
+const WORKSPACE_KEY = "joy.workspace";
+let workspace: string | null = localStorage.getItem(WORKSPACE_KEY);
+/** Where uploads land. Kept off-screen (config is not the point of this page), but needed to
+ *  tell the model where to find a non-image attachment. */
+let joyHome = "";
+
+function setWorkspace(path: string | null): void {
+  workspace = path;
+  if (path === null) {
+    localStorage.removeItem(WORKSPACE_KEY);
+    dom.cwdLabel.textContent = "选择工作目录";
+    dom.cwd.title = "选一个文件夹作为工作目录——它同时也是唯一的可写范围";
+  } else {
+    localStorage.setItem(WORKSPACE_KEY, path);
+    // A folder's name is what a person recognizes; the full path stays in the tooltip.
+    dom.cwdLabel.textContent = path.split("/").filter(Boolean).at(-1) ?? path;
+    dom.cwd.title = `工作目录：${path}（只有这里能写文件）`;
+  }
+}
 
 let busy = false;
 
@@ -186,29 +178,16 @@ function renderStaged(): void {
   dom.staged.replaceChildren(...nodes);
 }
 
-/**
- * Navigation for the right-side panels (data as navigation).
- * Overview/memory follow the full-screen poll; usage/approvals/schedules are fetched on demand —
- * only the **currently open** tab is refreshed, paying no requests for panels that aren't visible.
- */
-const TAB_IDS = ["overview", "memory", "usage", "approvals", "schedules", "model"] as const;
+/** One panel remains: the goal's progress. Config surfaces belong to the CLI, not the chat. */
+const TAB_IDS = ["overview"] as const;
 type TabId = (typeof TAB_IDS)[number];
-let activeTab: TabId = "overview";
 
 function switchTab(tab: TabId): void {
-  activeTab = tab;
-  // Deep-linkable panels: `#usage` reopens the same view on reload or from a bookmark.
+  // `#overview` is still a bookmark: one URL opens the progress drawer on load.
   if (location.hash !== `#${tab}`) {
     history.replaceState(null, "", `#${tab}`);
   }
-  for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
-    button.classList.toggle("active", button.dataset.tab === tab);
-  }
-  for (const section of document.querySelectorAll<HTMLElement>(".panels .panel")) {
-    section.hidden = section.id !== `panel-${tab}`;
-  }
   openDrawer();
-  void refreshPanels();
 }
 
 /** The panel drawer slides in from the right; the chat column never squeezes. */
@@ -224,29 +203,6 @@ function openHashPanel(): void {
 
 function closeDrawer(): void {
   dom.drawer.hidden = true;
-}
-
-/** On-demand panels: only fire a request when the current tab is one of the three new panels. */
-async function refreshPanels(): Promise<void> {
-  try {
-    if (activeTab === "usage") {
-      dom.usage.replaceChildren(renderUsage(await fetchUsage()));
-    } else if (activeTab === "approvals") {
-      dom.approvals.replaceChildren(renderApprovals((await fetchApprovals()).entries));
-    } else if (activeTab === "schedules") {
-      dom.schedules.replaceChildren(renderSchedules((await fetchSchedules()).jobs));
-    }
-  } catch (error) {
-    const target =
-      activeTab === "usage"
-        ? dom.usage
-        : activeTab === "approvals"
-          ? dom.approvals
-          : activeTab === "schedules"
-            ? dom.schedules
-            : null;
-    if (target !== null) target.replaceChildren(failureOf(error));
-  }
 }
 
 // --- Run state, three kinds -----------------------
@@ -329,174 +285,10 @@ function addStopButton(): void {
   dom.status.append(stop);
 }
 
-/**
- * Refresh the model panel: **no keys in the response** — only the active profile and key location.
- */
-async function refreshModels(): Promise<void> {
-  try {
-    const response = await fetchModelProfiles();
-    const active = response.profiles.find((profile) => profile.active);
-    dom.mpState.textContent = active
-      ? `当前：${active.id} · ${active.provider}${
-          active.model ? ` / ${active.model}` : ""
-        } · key 在 ${active.keySource ?? "—"}`
-      : "当前：还没配（环境变量里的那套在用）";
-
-    dom.mpPicker.replaceChildren();
-    for (const profile of response.profiles) {
-      const option = document.createElement("option");
-      option.value = profile.id;
-      option.textContent = `${profile.active ? "★ " : ""}${profile.id} · ${profile.provider}`;
-      option.selected = profile.active;
-      dom.mpPicker.append(option);
-    }
-    dom.mpPicker.hidden = response.profiles.length === 0;
-
-    // Quick switch in the header (pi's /model shape): one glance away, no panel needed.
-    dom.model.replaceChildren();
-    if (response.profiles.length === 0) {
-      const option = document.createElement("option");
-      option.textContent = "没配模型";
-      dom.model.append(option);
-      dom.model.disabled = true;
-    } else {
-      dom.model.disabled = false;
-      for (const profile of response.profiles) {
-        const option = document.createElement("option");
-        option.value = profile.id;
-        option.textContent = `${profile.id} · ${profile.provider}`;
-        option.selected = profile.active;
-        dom.model.append(option);
-      }
-    }
-    await refreshModelRoutes(response.profiles);
-  } catch (error: unknown) {
-    dom.mpState.textContent = `模型面板没刷出来：${String(error)}`;
-  }
-}
-
-/** One tier row: "follow the default" first, then every configured profile. */
-function fillTier(
-  select: HTMLSelectElement,
-  profiles: ModelProfileView[],
-  chosen: string | null,
-): void {
-  const follow = document.createElement("option");
-  follow.value = "";
-  follow.textContent = "跟随默认";
-  select.replaceChildren(follow);
-  for (const profile of profiles) {
-    const option = document.createElement("option");
-    option.value = profile.id;
-    option.textContent = profile.id;
-    select.append(option);
-  }
-  select.value = chosen ?? "";
-}
-
-/**
- * The routing table: is the model picked per task (`auto`) or always the active one (`fixed`),
- * and which profile each tier means. Read-only here — the server validated whatever was saved.
- */
-async function refreshModelRoutes(profiles: ModelProfileView[]): Promise<void> {
-  try {
-    const routes = await fetchModelRoutes();
-    dom.mrAuto.checked = routes.mode === "auto";
-    const byTier = new Map(routes.routes.map((row) => [row.tier, row.profileId]));
-    fillTier(dom.mrFast, profiles, byTier.get("fast") ?? null);
-    fillTier(dom.mrChat, profiles, byTier.get("chat") ?? null);
-    fillTier(dom.mrReasoning, profiles, byTier.get("reasoning") ?? null);
-    dom.mrState.textContent = modeLabel(routes.mode);
-  } catch (error: unknown) {
-    dom.mrState.textContent = `档位没读出来：${String(error)}`;
-  }
-}
-
-function modeLabel(mode: string): string {
-  return mode === "auto"
-    ? "档位：自动（每一轮按任务挑模型）"
-    : "档位：固定（永远用当前这套）";
-}
-
-/** Persist the tier table. An empty pick is "follow the default" — written as null, not "". */
-async function saveRoutes(): Promise<void> {
-  const pick = (select: HTMLSelectElement): string | null =>
-    select.value === "" ? null : select.value;
-  try {
-    const saved = await saveModelRoutes({
-      mode: dom.mrAuto.checked ? "auto" : "fixed",
-      routes: [
-        { tier: "fast", profileId: pick(dom.mrFast) },
-        { tier: "chat", profileId: pick(dom.mrChat) },
-        { tier: "reasoning", profileId: pick(dom.mrReasoning) },
-      ],
-    });
-    dom.mrState.textContent = `${modeLabel(saved.mode)}；已保存`;
-  } catch (error: unknown) {
-    dom.mrState.textContent = `档位没存上：${String(error)}`;
-  }
-}
-
-/**
- * Save (and switch). Filling the key field with `env:VAR_NAME` only reads the env var
- * without storing it; a real key is handed to the system keychain first.
- */
-/**
- * Switch to a configured model profile: only the id is sent, the rest left empty = keep
- * as is (a switch shouldn't re-send the key). Shared by the header dropdown and the panel.
- */
-async function switchModel(id: string): Promise<void> {
-  if (id === "") return;
-  try {
-    const response = await saveModel({
-      id,
-      provider: null,
-      model: null,
-      smallModel: null,
-      baseUrl: null,
-      apiKey: null,
-      keyEnv: null,
-      makeActive: true,
-    });
-    dom.mpState.textContent = `已切到 ${response.id}（${response.current ?? "还没配好"}）`;
-  } catch (error: unknown) {
-    dom.mpState.textContent = `切不过去：${String(error)}`;
-  }
-  await refreshModels();
-}
-
-async function applyModel(): Promise<void> {
-  const id = dom.mpId.value.trim();
-  if (id === "") {
-    dom.mpState.textContent = "先给这套起个名字。";
-    return;
-  }
-  const rawKey = dom.mpKey.value.trim();
-  const fromEnv = rawKey.startsWith("env:");
-  try {
-    const response = await saveModel({
-      id,
-      provider: dom.mpProvider.value.trim() || null,
-      model: dom.mpModel.value.trim() || null,
-      smallModel: null,
-      baseUrl: null,
-      apiKey: !fromEnv && rawKey !== "" ? rawKey : null,
-      keyEnv: fromEnv ? rawKey.slice(4) : null,
-      makeActive: true,
-    });
-    dom.mpState.textContent = `已切到 ${response.id}（${
-      response.current ?? "还没配好"
-    }）；密钥存在：${response.keyStoredIn}`;
-    dom.mpKey.value = "";
-    await refreshModels();
-  } catch (error: unknown) {
-    dom.mpState.textContent = `没存上：${String(error)}`;
-  }
-}
-
 async function boot(): Promise<void> {
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
+  dom.newSession.addEventListener("click", () => void newSession());
   dom.drawerClose.addEventListener("click", closeDrawer);
 
   // Click a thumbnail anywhere in the flow (or the staging strip) → full view.
@@ -508,12 +300,11 @@ async function boot(): Promise<void> {
     });
   }
 
-  // Right-side tabs: data as navigation — each button carries one tab name; behavior in switchTab.
-  for (const button of document.querySelectorAll<HTMLButtonElement>(".tabs .tab")) {
-    button.addEventListener("click", () => {
-      if (button.dataset.tab !== undefined) switchTab(button.dataset.tab as TabId);
-    });
-  }
+  // The only drawer: goal progress. Same button closes it.
+  dom.progress.addEventListener("click", () => {
+    if (dom.drawer.hidden) switchTab("overview");
+    else closeDrawer();
+  });
 
   dom.composer.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -538,7 +329,6 @@ async function boot(): Promise<void> {
     // Don't refresh while streaming: panel numbers would jump, but the bubble's words matter more.
     if (!busy) {
       void refresh();
-      void refreshPanels();
     }
   }, POLL_MS);
 
@@ -564,14 +354,13 @@ async function boot(): Promise<void> {
         resumeNotice = window.setTimeout(hideStatus, 5000);
       }
       void refresh();
-      void refreshPanels();
       if (ping.sessionId === current) void open(current);
     },
   });
 
   await refresh();
   await open(current);
-  // A bookmarked panel opens on load (`#usage`); without a hash the drawer stays shut.
+  // A bookmarked `#overview` opens the progress drawer; without a hash it stays shut.
   openHashPanel();
   // Goal bar: set/clear both go through the same place (`goal/set`) — same as `/goal` in the terminal.
   const applyGoal = (condition: string | null) => {
@@ -599,15 +388,10 @@ async function boot(): Promise<void> {
     }
   });
 
-  // The working directory's "Browse" button: pick a folder like a desktop app (server lists it).
-  const cwdBrowse = el("button", {
-    class: "ghost",
-    text: "浏览…",
-    title: "选一个文件夹作为工作目录（也可以直接在左边手输）",
-    type: "button",
-  });
-  cwdBrowse.addEventListener("click", () => void cwdPicker());
-  dom.cwd.before(cwdBrowse);
+  // Working directory: a folder chip. Clicking opens the server-side folder browser —
+  // no path is ever typed by hand, and the choice survives a reload.
+  setWorkspace(workspace);
+  dom.cwd.addEventListener("click", () => void cwdPicker());
 
   // Attachments: staged first, uploaded on send — backing out mid-way costs nothing.
   dom.attach.addEventListener("click", () => dom.file.click());
@@ -616,31 +400,6 @@ async function boot(): Promise<void> {
     dom.file.value = "";
     renderStaged();
   });
-
-  // Header quick switch: same implementation as the panel dropdown (saveModel with id only = keep).
-  dom.model.addEventListener("change", () => {
-    void switchModel(dom.model.value).then(() => refreshModels());
-  });
-
-  // Model panel: switch, save, remove all go through `model/*` — same as /model in the terminal.
-  dom.mpSave.addEventListener("click", () => void applyModel());
-  dom.mrSave.addEventListener("click", () => void saveRoutes());
-  dom.mpPicker.addEventListener("change", () => {
-    void switchModel(dom.mpPicker.value);
-  });
-  dom.mpRemove.addEventListener("click", () => {
-    const id = dom.mpPicker.value || dom.mpId.value.trim();
-    if (id === "") return;
-    void removeModel({ id })
-      .then(async (response) => {
-        dom.mpState.textContent = response.removed ? `已删掉 ${id}` : `没有叫 ${id} 的配置`;
-        await refreshModels();
-      })
-      .catch((error: unknown) => {
-        dom.mpState.textContent = `删不掉：${String(error)}`;
-      });
-  });
-  void refreshModels();
 
   dom.input.focus();
 }
@@ -665,7 +424,6 @@ async function switchTask(
     return;
   }
   await refresh();
-  await refreshPanels();
 }
 
 /** One click: hand the unseen mail to a turn. Errors land on the panel, never silently. */
@@ -677,12 +435,12 @@ async function handleInbox(): Promise<void> {
     return;
   }
   await refresh();
-  await refreshPanels();
 }
 
 async function refresh(): Promise<void> {
   try {
     const data = await fetchDashboard(current);
+    joyHome = data.config.home;
     dom.overview.replaceChildren(
       renderOverview(
         data,
@@ -692,10 +450,7 @@ async function refresh(): Promise<void> {
         () => void handleInbox(),
       ),
     );
-    dom.memory.replaceChildren(renderMemory(data));
     dom.sessions.replaceChildren(sessionList(data, current, (id) => void open(id)));
-    dom.home.textContent = data.config.home;
-    dom.home.title = data.config.home;
     dom.stamp.textContent = formatStamp(data.generatedAt);
   } catch (error) {
     // Failing to fetch data is normal (app-server just started, or the process died),
@@ -724,7 +479,7 @@ async function cwdPicker(): Promise<void> {
   };
   document.addEventListener("keydown", esc);
 
-  let current = dom.cwd.value.trim();
+  let current = workspace ?? "";
   // Dot-prefixed directories are hidden by default; a fixed toggle sits at the bottom.
   let showHidden = false;
   // "Recents": fetched once when the overlay opens (refreshed after picking).
@@ -819,7 +574,7 @@ async function cwdPicker(): Promise<void> {
 
     const pick = el("button", { class: "approve", text: "选这个目录", type: "button" });
     pick.addEventListener("click", () => {
-      dom.cwd.value = listing.path;
+      setWorkspace(listing.path);
       // Recorded into "Recents" — right at the top next time the overlay opens.
       void recordRecent(listing.path).then(() => {
         recents = [listing.path, ...recents.filter((p) => p !== listing.path)].slice(0, 8);
@@ -858,7 +613,7 @@ async function submit(): Promise<void> {
   let full = text;
   let attachments: TurnAttachment[] | null = null;
   if (staged.length > 0) {
-    const home = dom.home.textContent ?? "";
+    const home = joyHome;
     const lines: string[] = [];
     try {
       for (const file of staged) {
@@ -930,13 +685,12 @@ async function send(
   showStatus("thinking", "思考中");
 
   try {
-    // Working directory for this turn (session-level working-directory): empty string = unset.
-    const turnCwd = dom.cwd.value.trim();
+    // The picked folder travels with every turn: it is the sandbox root for writes.
     for await (const notification of talk({
       sessionId: current,
       message: text,
       stream: true,
-      cwd: turnCwd === "" ? null : turnCwd,
+      cwd: workspace,
       attachments,
     })) {
       switch (notification.type) {
@@ -1126,6 +880,34 @@ async function send(
  *
  * No switching while streaming — that turn's bytes would otherwise pour into another session.
  */
+/**
+ * Start a new line. A session is only a label on chat_log — there is nothing to create on the
+ * server; the first turn writes it into existence. So "new" means: pick an unused id, clear
+ * every piece of the previous session's state (draft, attachments, goal, status line) and
+ * paint the empty welcome screen. The old session stays in the list, one click away.
+ */
+async function newSession(): Promise<void> {
+  if (busy) return;
+  const id = `s-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 4)}`;
+  current = id;
+  olderCursor = null;
+  activeTurnId = null;
+  dom.session.textContent = id;
+  dom.goal.value = "";
+  dom.goalState.textContent = "没有目标";
+  dom.input.value = "";
+  dom.input.style.height = "auto";
+  staged.length = 0;
+  renderStaged();
+  dom.messages.replaceChildren(welcome());
+  dom.older.hidden = true;
+  hideStatus();
+  // Refresh paints the session list with a "新会话" placeholder for this id (see render.ts).
+  await refresh();
+  dom.input.focus();
+  scrollToEnd();
+}
+
 async function open(sessionId: string): Promise<void> {
   if (busy) return;
 
@@ -1187,6 +969,8 @@ async function older(): Promise<void> {
 function setBusy(value: boolean): void {
   busy = value;
   dom.send.disabled = value;
+  // Switching sessions mid-stream would pour that turn's bytes into another session.
+  dom.newSession.disabled = value;
   dom.composer.classList.toggle("busy", value);
 }
 

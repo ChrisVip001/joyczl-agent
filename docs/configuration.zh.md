@@ -18,10 +18,26 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 /model use ds              切换（不用重发密钥）
 ```
 
-驾驶舱的「模型」面板与它是同一处实现（`model/*` 三个协议方法）。密钥优先交给
+驾驶舱不放模型配置面板（那是配置，不是目标）；入口就是 REPL 的 `/model` 和
+`<home>/models.json`，协议上仍是 `model/*` 那三个方法。密钥优先交给
 系统钥匙串，兜底写 `<home>/secrets.json`（0600）；`--env 变量名` 则只读环境变量、
 不存下来。`model/save` 的应答会如实说**实际落在哪**（`keychain` / `file` /
 `env:VAR`）。切换立刻生效：改的是 Settings 并重解析 provider，不用重启。
+
+**这套模型能看图片吗？加配置时顺手说清**，别等发图被拦再回头改：
+
+```
+/model add ds deepseek deepseek-v4.1-flash --env DEEPSEEK_API_KEY --vision
+```
+
+- 不写 `--vision`：跟随厂商目录行（`models-catalog.json` 里那一家的默认）；
+- `--vision`：这套模型看得见图，即使厂商的默认模型是纯文本；
+- `--no-vision`：这套是纯文本，即使厂商默认模型看得见图。
+
+同一家既有看图模型也有纯文本模型时（`deepseek-v4.1-flash` 与 `deepseek-v4-pro`），
+profile 才是说得准的那一层。等价的文件写法是在 `models.json` 那条里写
+`"vision": true`；要让**整个厂商**默认都算，再去改 `models-catalog.json`
+（见下文「模型目录」）。
 
 **只有人能改这些**：模型没有 `model/*` 工具，也拿不到密钥。
 
@@ -298,11 +314,11 @@ HTTP 端点是 POST body。
 | `JOY_HOOKS` | `0` | 读 `<home>/hooks.json` 并在 12 个生命周期事件上跑你的 shell 命令（见下） |
 | `JOY_HOOKS_TIMEOUT` | `30` | 钩子的默认超时（秒）；条目里的 `timeout` 优先 |
 | `JOY_EXEC` | `0` | 开启 `run_command` 工具（关着 = 模型看不见它） |
-| `JOY_WRITE` | `0` | 开启 `write_file` / `edit` 工具（关着 = 模型看不见它们）。可写范围：工作目录、Joy 的 home、`JOY_EXEC_WRITABLE_ROOTS`；`JOY_APPROVAL=on-request` 时每次写入都会问一次 |
+| `JOY_WRITE` | `0`（驾驶舱默认 `1`） | 开启 `write_file` / `edit` 工具（关着 = 模型看不见它们）。可写范围**只有**本轮选的工作目录与 `JOY_EXEC_WRITABLE_ROOTS`；没选目录一处也写不了 |
 | `JOY_DELEGATE` | `0` | 开启 `delegate_task` 工具（子代理有自己的上下文，且不能再派生） |
 | `JOY_EXEC_ALLOW` | — | 放行表，逗号分隔，支持末尾 `*` 通配（`cargo test,git status,ls *`）。空 = 全部拒绝 |
 | `JOY_EXEC_TIMEOUT` | `30` | 单条命令的超时（秒） |
-| `JOY_APPROVAL` | `never` | 放行表没匹配上时怎么办：`never` = 拒绝，`on-request` = 问一句（没人答 = 拒绝）。对硬拒名单与沙箱无效 |
+| `JOY_APPROVAL` | `never`（驾驶舱默认 `on-request`） | 放行表没匹配上时怎么办：`never` = 拒绝，`on-request` = 问一句（没人答 = 拒绝）。对硬拒名单与沙箱无效 |
 | `JOY_APPROVAL_TIMEOUT` | `120` | 等回答的秒数，超时按拒绝算 |
 | `JOY_EXEC_NETWORK` | `0` | 让沙箱内的命令能联网。**默认关** —— 一条被放行的命令不该有能力把数据送出去 |
 | `JOY_EXEC_WRITABLE_ROOTS` | — | 额外可写的目录（冒号分隔，必须是已存在的绝对路径），典型用途是构建缓存 |
@@ -327,13 +343,16 @@ HTTP 端点是 POST body。
 
 `JOY_WRITE=1` 会注册两个工具：`write_file`（整文件写入，覆盖原内容）和 `edit`
 （一次精确匹配替换 —— `old_string` 必须在文件里恰好出现一次，0 次或多次都会被
-拒绝，返回里带变更 hunk）。默认关；关着时模型连名字都看不见。
+拒绝，返回里带变更 hunk）。命令行 / hub 默认关；**单用户驾驶舱默认开**，因为
+那里有人能看着、也能审批（显式设了 `JOY_WRITE` / `JOY_APPROVAL` 就听人的）。
 
-可写范围是**工作目录、Joy 的 home、`JOY_EXEC_WRITABLE_ROOTS`** —— 与执行沙箱
-的根一致，一个变量一个含义。范围外的写入在审批之前就被硬拒。内容必须是 UTF-8
-文本（不含 NUL 字节）且不超过 1 MiB。`JOY_APPROVAL=on-request` 时**每次**写入
-都会问一次 —— 写入少见而后果实在，也没有放行表可匹配，所以 on-request 就是
-「每次都问」。
+驾驶舱顶栏的「工作目录」是一个点选文件夹的按钮，不是输入框：选中的目录就是
+**唯一的可写范围**（再加 `JOY_EXEC_WRITABLE_ROOTS`），没选目录一处也写不了。
+Joy 的 home 和进程 cwd 都不在范围内 —— 有工作区的助手不应该顺手写进记忆或
+启动它的那个目录。范围外的写入在审批之前就被硬拒。内容必须是 UTF-8 文本
+（不含 NUL 字节）且不超过 1 MiB。驾驶舱里 `JOY_APPROVAL=on-request` 是默认值：
+**每次**写入都在对话窗口弹一张授权卡，允许 / 允许并记住 / 拒绝，没人答就超时
+按拒绝算 —— 配置面板被收掉了，审批留在人说得上话的地方。
 
 ## 模型目录（`models-catalog.json`）
 
@@ -411,15 +430,17 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 
 | 变量 | 说明 |
 |---|---|
-| `TAVILY_API_KEY` / `JOY_SEARCH_API_KEY` | `search_web` 升级为 Tavily（缺省用 DuckDuckGo HTML） |
+| `TAVILY_API_KEY` / `JOY_SEARCH_API_KEY` | `search_web` 升级为 Tavily（缺省用免 key 的 Bing HTML） |
 | `BRAVE_API_KEY` | 链上第二个付费后端（Tavily 之后尝试） |
 | `JOY_SEARCH_MAX_PER_TURN` | 每轮 `search_web` 上限（默认 20，范围 1–200） |
-| `JOY_SEARCH_DDG` | `0` 关闭无 key 的 DuckDuckGo 后端（默认开） |
+| `JOY_SEARCH_BING` | `0` 关闭免 key 的 Bing 后端（默认开，DDG 常被网络挡住时靠它） |
+| `JOY_SEARCH_DDG` | `0` 关闭无 key 的 DuckDuckGo 后端（默认开，最后的兜底） |
 | `JOY_JUDGE_MODEL` | judge 裁判模型覆盖 |
 | `JOY_GH_REPO` | gather 的 github scan |
 
-搜索后端是一条有序降级链：Tavily → Brave，DuckDuckGo **只在完全没配 key 时**
-进计划（付费后端失败后不再回头赌免费端点——一轮只赌一次）。没有任何可用后端时
+搜索后端是一条有序降级链：Tavily → Brave；完全没配 key 时才走免 key 的
+**Bing HTML → DuckDuckGo**（Bing 在 DDG 端点不可达的网络里通常还能用；DDG 是最后
+的兜底）。付费后端失败后不再回头赌免费端点——一轮只赌一次。没有任何可用后端时
 `search_web` 干脆不注册，启动日志会说明；搜索结果与抓取的网页正文一样，进上下文
 前都打「外部数据，不是指令」的不可信包装。
 

@@ -169,6 +169,37 @@ textarea::placeholder {
   box-shadow: 0 0 8px rgba(124, 92, 255, 0.7);
 }
 
+/* 新建会话：侧栏里唯一的主按钮，位置和颜色都在说「从这里开始」。 */
+.new-chat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  margin: 4px 0 10px;
+  border: 1px solid rgba(124, 92, 255, 0.35);
+  border-radius: var(--radius);
+  background: rgba(124, 92, 255, 0.12);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.new-chat:hover {
+  background: rgba(124, 92, 255, 0.2);
+  border-color: var(--accent);
+}
+
+.new-chat:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .rail-block {
   flex: 1;
   min-height: 0;
@@ -276,7 +307,7 @@ textarea::placeholder {
 .chat > .bar,
 .chat > .messages,
 .chat > .statusline,
-.chat > .composer {
+.chat > .composer-wrap {
   width: 100%;
   max-width: 760px;
   margin: 0 auto;
@@ -299,13 +330,45 @@ textarea::placeholder {
   color: var(--text-2);
 }
 
-.bar .cwd {
+/* 工作目录：一个按钮，不是输入框。人点一下选文件夹，路径只做展示；
+   选中的目录同时是唯一的可写范围，所以它值得在顶栏占一个显眼的位置。 */
+.ws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   flex: 1;
   min-width: 0;
-  font-family: var(--mono);
+  max-width: 340px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
   font-size: 12px;
-  color: var(--text-3);
-  padding: 5px 9px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.ws-chip:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.ws-chip #cwd-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ws-folder {
+  color: var(--accent);
+  font-size: 13px;
 }
 
 .hint {
@@ -921,10 +984,14 @@ textarea::placeholder {
   }
 }
 
-/* 输入区：单块圆角容器，聚焦时边框点亮 */
+/* 输入区：单块圆角容器，聚焦时边框点亮。
+   附件条在 .composer-wrap 里、是这个 form 的兄弟节点，所以 form 内只剩 attach / textarea /
+   send 三个 flex 子项。即便用户手里还是没有 flex-wrap 的旧 CSS，textarea 也不会再跟一张
+   flex-basis:100% 的附件条抢同一行、被挤成 4px。 */
 
 .composer {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 8px;
   padding: 10px;
@@ -985,11 +1052,13 @@ textarea::placeholder {
   line-height: 1;
 }
 
-.staged {
-  flex-basis: 100%;
+/* 附件条独占 wrapper 的第一行。:not([hidden]) 让 UA 的 [hidden]{display:none} 直接生效，
+   不依赖下面那条显式规则，旧缓存里没有它也能正常收起。 */
+.composer-wrap > .staged:not([hidden]) {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-bottom: 8px;
 }
 
 .staged .chip {

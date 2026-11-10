@@ -62,7 +62,13 @@ impl AppServer {
     /// The binary is `joy` itself (`current_exe()`): `joy dashboard` and `joy app-server`
     /// are subcommands of the same executable; forking yourself is more reliable than
     /// searching PATH for a same-named binary — that one may be another version, or absent.
-    pub fn spawn(home: &Path) -> Result<Self> {
+    ///
+    /// `interactive` = a human is looking at a single-user dashboard. That is the capability
+    /// switch: writing files is enabled there, but every write still needs an approval card
+    /// in the chat window, and only inside the working directory the human picked. Hub users
+    /// and headless `joy app-server` keep the conservative defaults (no write, never ask).
+    /// A human-set environment variable always wins.
+    pub fn spawn(home: &Path, interactive: bool) -> Result<Self> {
         let home = home.to_path_buf();
         let exe = std::env::current_exe().context("拿不到自己的可执行文件路径")?;
         let mut command = Command::new(exe);
@@ -78,6 +84,14 @@ impl AppServer {
             // one log line mixed in would be a frame of unreadable JSON.
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
+        if interactive {
+            if std::env::var_os("JOY_WRITE").is_none() {
+                command.env("JOY_WRITE", "1");
+            }
+            if std::env::var_os("JOY_APPROVAL").is_none() {
+                command.env("JOY_APPROVAL", "on-request");
+            }
+        }
 
         let mut child = command.spawn().context("起 app-server 子进程失败")?;
         let stdin = child.stdin.take().expect("刚 piped 的 stdin");

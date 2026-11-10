@@ -515,7 +515,9 @@ pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<R
                 .unwrap_or_else(|| info.model.clone())
         }),
         context_window: info.context_window,
-        vision: info.vision,
+        // The profile's own declaration wins: one vendor can ship a vision model and a
+        // text-only one, and the catalog row only describes the vendor's **default** model.
+        vision: settings.vision.unwrap_or(info.vision),
     })
 }
 
@@ -536,6 +538,6 @@ fn no_key_message(id: &str, key_env: &str, known: &str) -> String {
         id = id,
     ));
     msg.push_str(&format!("其他 provider：{known}"));
-    msg.push_str("\n切到另一套：/model use <名字>（驾驶舱的「模型」面板是同一处实现）。");
+    msg.push_str("\n切到另一套：/model use <名字>（配置在 REPL 与 <home>/models.json，驾驶舱不放模型面板）。");
     msg
 }

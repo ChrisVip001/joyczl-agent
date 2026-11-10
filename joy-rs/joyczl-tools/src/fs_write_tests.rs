@@ -17,7 +17,8 @@ async fn test_ctx(approval: Option<Arc<dyn ApprovalBroker>>) -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     ToolCtx {
-        cwd: None,
+        // The suite writes under `home`; treat it as the human's chosen workspace.
+        cwd: Some(home.clone()),
         approval,
         jobs: None,
         hooks: None,
@@ -112,6 +113,45 @@ async fn a_write_outside_the_roots_is_refused_without_asking() {
     assert!(out.starts_with("Error:"), "{out}");
     assert!(out.contains("可写范围之外"), "{out}");
     assert!(!std::path::Path::new("/etc/joy-fs-write-test-denied.txt").exists());
+}
+
+/// Choosing a workspace is the human's capability switch: with none selected, even a path
+/// inside the Joy home is refused — and the refusal says what to do instead of just "outside".
+#[tokio::test]
+async fn no_chosen_workspace_means_no_writes_at_all() {
+    let mut ctx = test_ctx(None).await;
+    ctx.cwd = None;
+    let reg = registry();
+    let path = ctx.home.join("notes/nope.md");
+    let out = reg
+        .execute(
+            ctx,
+            "write_file",
+            json!({"path": path.display().to_string(), "content": "hi\n"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("还没有选择工作目录"), "{out}");
+    assert!(!path.exists());
+}
+
+/// The workspace is the *whole* boundary: the Joy home is not writable just because it is ours.
+#[tokio::test]
+async fn a_write_outside_the_chosen_workspace_is_refused_even_under_home() {
+    let mut ctx = test_ctx(None).await;
+    let workspace = ctx.home.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("建工作目录");
+    ctx.cwd = Some(workspace);
+    let path = ctx.home.join("memory/escape.md");
+    let out = registry()
+        .execute(
+            ctx,
+            "write_file",
+            json!({"path": path.display().to_string(), "content": "hi\n"}),
+        )
+        .await;
+    assert!(out.contains("可写范围之外"), "{out}");
+    assert!(!path.exists());
 }
 
 #[tokio::test]

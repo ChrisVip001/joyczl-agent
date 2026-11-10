@@ -20,6 +20,12 @@ export type ModelSaveParams = {
    */
   keyEnv: string | null;
   /**
+   * Whether this model accepts images. Absent = keep the vendor's default (patch
+   * semantics, same as `model`); `true` is how "this vendor's default is text-only,
+   * but *this* model sees" gets declared at the moment the profile is created.
+   */
+  vision: boolean | null;
+  /**
    * Make it active right after saving (default true — the smoothest on first setup).
    */
   makeActive: boolean | null;

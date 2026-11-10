@@ -19,7 +19,7 @@ const HELP: &str = "\
   /sessions      列出历史会话
   /new           开一个新会话
   /quit          退出（/exit 也行）
-其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] 加一套\n/cwd [路径]    看或设本会话的工作目录（/cwd clear 清除）；相对路径都按它解析\n/route          看模型路由表；/route auto|fixed 切模式；/route set <档位> <配置名> 改映射";
+其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] [--vision] 加一套\n/cwd [路径]    看或设本会话的工作目录（/cwd clear 清除）；相对路径都按它解析\n/route          看模型路由表；/route auto|fixed 切模式；/route set <档位> <配置名> 改映射";
 
 /// Enters the terminal conversation. Receives an already-assembled Server.
 pub async fn run(server: Server) -> Result<()> {
@@ -200,9 +200,15 @@ fn models(server: &Server, input: &str) {
                 let mark = if profile.active { "*" } else { " " };
                 let model = profile.model.as_deref().unwrap_or("（厂商默认）");
                 let key = profile.key_source.as_deref().unwrap_or("无需 key");
+                // `null` is not "no images": it means "whatever the vendor's default does".
+                let vision = match profile.vision {
+                    Some(true) => "视觉",
+                    Some(false) => "纯文本",
+                    None => "跟随厂商",
+                };
                 println!(
-                    " {mark} {:<12} {:<12} {:<24} key: {key}",
-                    profile.id, profile.provider, model
+                    " {mark} {:<12} {:<12} {:<24} {:<10} key: {key}",
+                    profile.id, profile.provider, model, vision
                 );
             }
             println!("（* = 当前生效）");
@@ -222,6 +228,8 @@ fn models(server: &Server, input: &str) {
                 base_url: None,
                 api_key: None,
                 key_env: None,
+                // Switching must not rewrite what this profile can see.
+                vision: None,
                 make_active: Some(true),
             }) {
                 Ok(response) => println!(
@@ -240,8 +248,9 @@ fn models(server: &Server, input: &str) {
             let provider = rest.get(3).map(|s| s.to_string());
             if id.is_empty() || provider.is_none() {
                 println!(
-                    "用法：/model add <名字> <厂商> [模型] [--env 变量名] [--key 密钥] [--url 端点]\n\
-                     例：/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY"
+                    "用法：/model add <名字> <厂商> [模型] [--env 变量名] [--key 密钥] [--url 端点] \
+                     [--vision|--no-vision]\n\
+                     例：/model add ds deepseek deepseek-v4.1-flash --env DEEPSEEK_API_KEY --vision"
                 );
                 return;
             }
@@ -249,10 +258,21 @@ fn models(server: &Server, input: &str) {
             let mut key_env = None;
             let mut api_key = None;
             let mut base_url = None;
+            // `None` = follow the vendor default; `--vision` = the vendor's default model is
+            // text-only but this one sees. Declared while adding, not discovered via an error.
+            let mut vision = None;
             let mut positionals = 0;
             let mut i = 4;
             while i < rest.len() {
                 match rest[i] {
+                    "--vision" => {
+                        vision = Some(true);
+                        i += 1;
+                    }
+                    "--no-vision" => {
+                        vision = Some(false);
+                        i += 1;
+                    }
                     "--env" => {
                         key_env = rest.get(i + 1).map(|s| s.to_string());
                         i += 2;
@@ -285,6 +305,7 @@ fn models(server: &Server, input: &str) {
                 base_url,
                 api_key,
                 key_env,
+                vision,
                 make_active: Some(true),
             }) {
                 Ok(response) => println!(

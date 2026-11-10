@@ -66,13 +66,13 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `job_output` / `job_list` / `job_kill` | 读写后台作业（`run_command` 的 `background=true` 起的那些） |
 | `todo_write` | 维护一张每轮重新注入的待办清单（整表替换；同时只能一项 `in_progress`） |
 | `current_time` | 本地时间（含星期与时区） |
-| `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——默认关（`JOY_WRITE=1` 才开）；可写范围 = 工作目录 + Joy home + `JOY_EXEC_WRITABLE_ROOTS` |
+| `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——终端与 hub 默认关，驾驶舱默认开且每次写入在对话里问一次；可写范围 = **本轮选的工作目录** + `JOY_EXEC_WRITABLE_ROOTS`，没选目录一处也写不了 |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)）；`background=true` 丢到后台跑 |
 | `delegate_task` | 把一件自成一体的活交给子代理——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生；可给 `result_schema` 要结构化结论（不合规重试一次后回落散文） |
 
 ### 模型与密钥
 
-**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切——而且不改代码也能扩：`<home>/models-catalog.json` 可以补丁内置默认值或新增一家（见 [docs/configuration.zh.md](docs/configuration.zh.md)）。`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。驾驶舱的「模型」面板是同一处实现。密钥优先进系统钥匙串；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。
+**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切——而且不改代码也能扩：`<home>/models-catalog.json` 可以补丁内置默认值或新增一家（见 [docs/configuration.zh.md](docs/configuration.zh.md)）。`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。模型配置在终端的 `/model` 或 `models.json` 里，驾驶舱不再摆配置面板。密钥优先进系统钥匙串；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。
 
 工具失败以文本回给模型——loop 绝不因一次工具失败而崩。
 
@@ -113,7 +113,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P12 ✅ | 长任务引擎（回合级 checkpoint）：工具边界落盘工作记忆、kill -9 后启动对账自动续跑（已完成的工具不重跑）、`task_*` 事件 ping、dashboard 续跑提示 |
 | P13 ✅ | 长任务实体（`agent_tasks`）：任务 → 目标循环执行器、一会话一活跃、创建/暂停/继续/取消、暂停保留断点（继续即续跑）、重启对账标挂起、dashboard 任务卡开关 |
 | P14 ✅ | 连接器（M4）：email（SMTP）与飞书（应用身份）——白名单硬边界、默认草稿、每次实发一问；`joy connector` 人类入口；驾驶舱只读面板 |
-| P15 ✅ | 业务形态（M5）：任务 API（`POST /api/run`，一轮进、一段 JSON 出）、入站 webhook（`webhooks.json` + `X-Joy-Secret`，没配置就没这扇门）、档位路由（任务/接口声明 `tier`，fixed 模式下也生效；驾驶舱模型面板可配） |
+| P15 ✅ | 业务形态（M5）：任务 API（`POST /api/run`，一轮进、一段 JSON 出）、入站 webhook（`webhooks.json` + `X-Joy-Secret`，没配置就没这扇门）、档位路由（任务/接口声明 `tier`，fixed 模式下也生效；档位表在 `model-routes.json` / REPL `/route`） |
 
 ## 命名
 

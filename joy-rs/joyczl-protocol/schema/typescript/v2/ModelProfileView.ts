@@ -18,6 +18,11 @@ export type ModelProfileView = {
    */
   keySource: string | null;
   /**
+   * Whether this profile's model accepts images.
+   * `null` = follow the vendor's default model (the catalog row).
+   */
+  vision: boolean | null;
+  /**
    * Whether this profile is currently active.
    */
   active: boolean;

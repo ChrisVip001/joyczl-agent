@@ -76,7 +76,7 @@ pub async fn serve(settings: Settings) -> Result<()> {
         );
     }
 
-    let app = Arc::new(AppServer::spawn(&settings.home)?);
+    let app = Arc::new(AppServer::spawn(&settings.home, true)?);
     let assets = assets_dir();
     if let Err(why) = freshness::check_dashboard_freshness(&assets) {
         anyhow::bail!("{why}");

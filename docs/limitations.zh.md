@@ -69,9 +69,9 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   列出的目录。要下载东西的命令得同时打开这两个开关。
   → `joy-rs/joyczl-tools/src/exec.rs`（`sandbox_argv`）
 * **刻意** —— 写入工具（`write_file` / `edit`，`JOY_WRITE=1`）**没有进程沙箱**：
-  写发生在进程内，所以硬闸是可写范围（工作目录 + home + `JOY_EXEC_WRITABLE_ROOTS`，
-  逐跳解析符号链接）。范围外在审批之前就被拒绝——审批只可能放行一条本来就
-  在范围内的写入。`require_str` 会 trim，所以写入工具的正文走不 trim 的取值
+  写发生在进程内，所以硬闸是可写范围（本轮选的工作目录 + `JOY_EXEC_WRITABLE_ROOTS`，
+  逐跳解析符号链接）。**没选工作目录就一处也写不了**；Joy 的 home 和进程 cwd 都不在
+  范围里。范围外在审批之前就被拒绝——审批只可能放行一条本来就在范围内的写入。`require_str` 会 trim，所以写入工具的正文走不 trim 的取值
   ——尾部换行是数据，不是噪音。
   → `joy-rs/joyczl-tools/src/fs_write.rs`（`contained`、`raw_str`）
 * **刻意** —— 落盘的命令输出只按**时间**清（`spill/` 保留 7 天，启动时打扫），
@@ -259,10 +259,13 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   上传路径），历史重建走文本——恢复后的会话是「描述」那张图，而不是重新
   展示它。要补就得持久化字节（或恢复时做一次引用解析）。
   → `joy-rs/joyczl-app-server/src/turn.rs`（`resolve_attachments`、`load_history`）
-* **刻意** —— `vision` 标志描述的是厂商的**默认模型**，且宁可写 `false`：错标
-  `false` 只少一个能力；错标 `true` 要多跑一趟远端、换一个看不懂的 400。可在
-  `models-catalog.json` 里按厂商覆盖。
-  → `joy-rs/joyczl-provider/src/lib.rs`（`ProviderInfo::vision`）
+* **刻意** —— `vision` 描述的是**这套配置的模型**，默认跟随厂商目录行，且宁可
+  写 `false`：错标 `false` 只少一个能力；错标 `true` 要多跑一趟远端、换一个
+  看不懂的 400。但这套模型自己声明了就听它的 —— 同一家既有看图模型也有纯文本
+  模型。声明：`/model add <名字> <厂商> <模型> --vision`，等价于 `models.json`
+  那条里写 `"vision": true`；要让整个厂商都算，再改 `models-catalog.json`。
+  → `joyczl-config/src/models.rs`（`ModelProfile::vision`）、
+  `joyczl-provider/src/lib.rs`（`Resolved::vision`）
 
 ## 记忆
 

@@ -12,21 +12,17 @@
   </head>
   <body>
     <div class="app">
-      <!-- 侧栏：品牌 / 会话列表 / 面板入口。数据在 Rust 侧，这里只是导航。 -->
+      <!-- 侧栏只有会话：记忆、用量、模型、定时、审批审计都是配置，不占人的注意力。 -->
       <aside class="sidebar" id="sidebar">
         <div class="brand">
           <span class="dot" aria-hidden="true"></span>
           <h1>Joy</h1>
         </div>
 
-        <nav class="tabs rail" aria-label="面板">
-          <button class="tab" data-tab="overview" type="button">概览</button>
-          <button class="tab" data-tab="memory" type="button">记忆</button>
-          <button class="tab" data-tab="usage" type="button">用量</button>
-          <button class="tab" data-tab="approvals" type="button">审批</button>
-          <button class="tab" data-tab="schedules" type="button">定时</button>
-          <button class="tab" data-tab="model" type="button">模型</button>
-        </nav>
+        <!-- 新建会话是聊天应用的标配：一屏一目标，旧会话留在下面随时能切回去。 -->
+        <button class="new-chat" id="new-session" type="button" title="新建一个会话">
+          <span aria-hidden="true">＋</span> 新建会话
+        </button>
 
         <div class="rail-block">
           <p class="rail-label">会话</p>
@@ -34,8 +30,6 @@
         </div>
 
         <div class="sidebar-foot">
-          <select class="pill" id="model" aria-label="切换模型"></select>
-          <span class="path" id="home"></span>
           <div class="foot-row">
             <span class="stamp" id="stamp"></span>
             <button class="ghost" id="refresh" type="button">刷新</button>
@@ -43,136 +37,71 @@
         </div>
       </aside>
 
-      <!-- 主对话区：单列居中，agent 的活动内嵌在消息流里。 -->
+      <!-- 主对话区：目标在最上，工作目录是点一下就能选的文件夹，交付结果就落在消息流里。 -->
       <main class="chat">
-        <div class="bar">
-          <p class="hint">
-            会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
-          </p>
-          <input
-            id="cwd"
-            class="cwd"
-            type="text"
-            placeholder="工作目录（可选）—— 命令与相对路径都按它解析"
-            aria-label="本轮工作目录"
-            spellcheck="false"
-          />
-          <button class="ghost" id="older" type="button" hidden>更早的 ↑</button>
-        </div>
         <div class="bar goal">
           <input
             id="goal"
             type="text"
-            placeholder="目标（比如：让测试全绿）。没达成会自动续轮，直到你说撤掉"
+            placeholder="给一个目标，比如「把登录页的测试全绿」，剩下的交给我"
             aria-label="目标"
           />
           <button class="ghost" id="goal-set" type="button">设目标</button>
           <button class="ghost" id="goal-clear" type="button">撤掉</button>
           <span class="hint" id="goal-state"></span>
         </div>
-        <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
-        <!-- Run state, three kinds:
-             Waiting = a static line; Thinking = shimmer; Working = tool name. hidden is managed by main. -->
-        <div class="statusline" id="status" hidden aria-live="polite"></div>
-        <form class="composer" id="composer" autocomplete="off">
-          <div class="staged" id="staged" hidden></div>
-          <input id="file" type="file" multiple hidden />
+        <div class="bar">
+          <p class="hint">
+            会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
+          </p>
           <button
-            class="ghost attach"
-            id="attach"
+            class="ws-chip"
+            id="cwd"
             type="button"
-            title="附上文件（20MB 以内；模型会自己去读）"
+            title="选一个文件夹作为工作目录——它同时也是唯一的可写范围"
           >
-            ＋
+            <span class="ws-folder" aria-hidden="true">▤</span>
+            <span id="cwd-label">选择工作目录</span>
           </button>
-          <textarea
-            id="input"
-            rows="1"
-            placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
-            aria-label="消息"
-          ></textarea>
-          <button id="send" type="submit">发送</button>
-        </form>
+          <button class="ghost" id="progress" type="button">进度</button>
+          <button class="ghost" id="older" type="button" hidden>更早的 ↑</button>
+        </div>
+        <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
+        <div class="statusline" id="status" hidden aria-live="polite"></div>
+        <!-- 附件条是输入框的**兄弟**，不是 flex 子项：无论 CSS 有没有换行规则，
+             它都不会跟 textarea 抢同一行的宽度。宽度写在这里，是为了连旧缓存里的
+             CSS（只认 .chat > .composer）也能让输入区保持居中。 -->
+        <div class="composer-wrap" style="width: 100%; max-width: 760px; margin: 0 auto">
+          <div class="staged" id="staged" hidden></div>
+          <form class="composer" id="composer" autocomplete="off">
+            <input id="file" type="file" multiple hidden />
+            <button
+              class="ghost attach"
+              id="attach"
+              type="button"
+              title="附上文件（20MB 以内；模型会自己去读）"
+            >
+              ＋
+            </button>
+            <textarea
+              id="input"
+              rows="1"
+              placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
+              aria-label="消息"
+            ></textarea>
+            <button id="send" type="submit">发送</button>
+          </form>
+        </div>
       </main>
 
-      <!-- 面板抽屉：从右滑入，不挤压聊天列。tabs 在侧栏，这里只有内容。 -->
+      <!-- 唯一的抽屉：这一轮的目标与进度。审批卡片在聊天窗口里，不在这里。 -->
       <aside class="panels" id="drawer" hidden>
         <div class="drawer-head">
-          <p class="hint">面板</p>
-          <button class="ghost" id="drawer-close" type="button" aria-label="收起面板">×</button>
+          <p class="hint">目标进度</p>
+          <button class="ghost" id="drawer-close" type="button" aria-label="收起">×</button>
         </div>
         <section class="panel active" id="panel-overview">
           <div class="body" id="overview"></div>
-        </section>
-        <section class="panel" id="panel-memory" hidden>
-          <div class="body" id="memory"></div>
-        </section>
-        <section class="panel" id="panel-usage" hidden>
-          <div class="body" id="usage"></div>
-        </section>
-        <section class="panel" id="panel-approvals" hidden>
-          <div class="body" id="approvals"></div>
-        </section>
-        <section class="panel" id="panel-schedules" hidden>
-          <div class="body" id="schedules"></div>
-        </section>
-        <section class="panel" id="panel-model" hidden>
-          <div class="body">
-            <p class="hint" id="mp-state">当前：—</p>
-            <select id="mp-picker" aria-label="已配置的模型"></select>
-            <input
-              id="mp-id"
-              type="text"
-              placeholder="名字（比如 ds、公司-openai）"
-              aria-label="配置名字"
-            />
-            <input
-              id="mp-provider"
-              type="text"
-              placeholder="厂商（deepseek / openai / ollama…）"
-              aria-label="厂商"
-            />
-            <input
-              id="mp-model"
-              type="text"
-              placeholder="模型（留空用厂商默认）"
-              aria-label="模型"
-            />
-            <input
-              id="mp-key"
-              type="password"
-              autocomplete="off"
-              placeholder="密钥，或 env:DEEPSEEK_API_KEY 这种变量名"
-              aria-label="密钥"
-            />
-            <div class="row">
-              <button class="ghost" id="mp-save" type="button">保存并切换</button>
-              <button class="ghost" id="mp-remove" type="button">删除这套</button>
-            </div>
-            <hr class="split" />
-            <p class="hint" id="mr-state">档位：—</p>
-            <label class="check hint">
-              <input type="checkbox" id="mr-auto" />
-              按任务自动选模型（关闭则永远用当前这套）
-            </label>
-            <label class="tier">
-              快问快答
-              <select id="mr-fast" aria-label="fast 档"></select>
-            </label>
-            <label class="tier">
-              日常对话
-              <select id="mr-chat" aria-label="chat 档"></select>
-            </label>
-            <label class="tier">
-              深度推理
-              <select id="mr-reasoning" aria-label="reasoning 档"></select>
-            </label>
-            <button class="ghost" id="mr-save" type="button">保存档位</button>
-            <p class="hint">
-              密钥优先进系统钥匙串；Windows 与没有钥匙串时会退回明文文件
-              （0600）—— 保存后这里会如实说是哪一种。
-            </p>
-          </div>
         </section>
       </aside>
     </div>

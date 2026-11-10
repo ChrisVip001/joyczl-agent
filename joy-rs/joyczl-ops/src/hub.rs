@@ -529,7 +529,7 @@ impl Hub {
         }
 
         // No spawn under the lock: build outside; if someone else raced us in, use theirs.
-        let spawned = AppServer::spawn(&self.home(user))?;
+        let spawned = AppServer::spawn(&self.home(user), false)?;
         let app = Arc::new(spawned);
         let entry = clients.entry(user.to_string()).or_insert(PoolEntry {
             app,

@@ -354,12 +354,25 @@ export function sessionList(
   onPick: (id: string) => void,
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  if (data.sessions.length === 0) {
+  const sessions = [...data.sessions];
+  // A brand-new session has no messages yet, so /api/data cannot list it. Keep it on screen
+  // and selected until the first turn gives it a real title — otherwise "new chat" looks broken.
+  if (!sessions.some((item) => item.id === current)) {
+    const fresh: SessionSummary = {
+      id: current,
+      title: "新会话",
+      messages: 0,
+      startedAt: null,
+      lastAt: null,
+    };
+    sessions.unshift(fresh);
+  }
+  if (sessions.length === 0) {
     fragment.append(muted("还没有会话"));
     return fragment;
   }
   fragment.append(
-    el("ul", { class: "list" }, ...data.sessions.map((item) => sessionRow(item, current, onPick))),
+    el("ul", { class: "list" }, ...sessions.map((item) => sessionRow(item, current, onPick))),
   );
   return fragment;
 }

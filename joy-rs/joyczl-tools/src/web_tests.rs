@@ -239,23 +239,59 @@ async fn the_tool_refuses_loopback_without_the_test_knob() {
 use super::web::{plan_backends, search_web, Backend, TurnLimits};
 use std::sync::atomic::Ordering;
 
-/// Ordering policy: keyed providers first (in order), DDG only when no key exists —
-/// after a keyed backend fails, gambling on the free endpoint stays out of the plan.
+/// Ordering policy: keyed providers first (in order); without a key, Bing then DDG —
+/// after a keyed backend fails, gambling on a free endpoint stays out of the plan.
 #[test]
-fn backend_plan_prefers_keyed_and_only_falls_back_to_ddg_without_keys() {
-    let plan = plan_backends(Some("t".into()), None, true);
-    assert_eq!(plan.len(), 1, "有 key 时 DDG 不进计划");
+fn backend_plan_prefers_keyed_and_puts_bing_ahead_of_ddg_without_keys() {
+    let plan = plan_backends(Some("t".into()), None, true, true);
+    assert_eq!(plan.len(), 1, "有 key 时免 key 后端不进计划");
     assert!(matches!(plan[0], Backend::Tavily(_)));
 
-    let plan = plan_backends(None, Some("b".into()), true);
+    let plan = plan_backends(None, Some("b".into()), true, true);
     assert!(matches!(plan[0], Backend::Brave(_)));
 
-    let plan = plan_backends(None, None, true);
-    assert!(matches!(plan[0], Backend::DuckDuckGo), "无 key 时 DDG 兜底");
-
+    let plan = plan_backends(None, None, true, true);
+    assert_eq!(plan.len(), 2, "无 key 时两个免 key 后端都试");
     assert!(
-        plan_backends(None, None, false).is_empty(),
+        matches!(plan[0], Backend::Bing),
+        "Bing 先试：DDG 常被网络挡住"
+    );
+    assert!(matches!(plan[1], Backend::DuckDuckGo), "DDG 仍是最后兜底");
+
+    assert!(matches!(
+        plan_backends(None, None, false, true)[0],
+        Backend::DuckDuckGo
+    ));
+    assert!(matches!(
+        plan_backends(None, None, true, false)[0],
+        Backend::Bing
+    ));
+    assert!(
+        plan_backends(None, None, false, false).is_empty(),
         "全关就是没有后端 —— search_ready 必须已经把它挡在注册之外"
+    );
+}
+
+/// Bing's public result page: `<li class="b_algo"><h2><a href>…` — parsing is pure, so
+/// the shape that actually comes back is pinned here instead of guessed at in production.
+#[test]
+fn bing_result_page_parses_into_hits() {
+    let page = r#"<html><body>
+      <li class="b_algo" data-id="1"><h2><a href="https://example.com/a">CodeBuddy &amp; IDE</a></h2>
+        <div class="b_caption"><p>一个 <b>IDE</b> 的介绍</p></div></li>
+      <li class="b_algo"><h2><a href="https://example.com/b">第二条</a></h2>
+        <div class="b_caption"><p>另一个结果</p></div></li>
+    </body></html>"#;
+    let hits = super::web::parse_bing(page, 5);
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].0, "CodeBuddy & IDE", "HTML 实体要解开");
+    assert_eq!(hits[0].1, "一个 IDE 的介绍", "标签要去掉");
+    assert_eq!(hits[0].2, "https://example.com/a");
+    assert_eq!(hits[1].0, "第二条");
+    assert_eq!(
+        super::web::parse_bing(page, 1).len(),
+        1,
+        "max_results 要生效"
     );
 }
 

@@ -177,6 +177,11 @@ pub struct Settings {
     pub model: Option<String>,
     /// Cheap model: used by the retrieval gate and consolidation.
     pub small_model: Option<String>,
+    /// Whether the **selected model** accepts images. `None` = take the catalog row's
+    /// default; `Some(true)` = this model sees even on a vendor whose default does not
+    /// (deepseek-v4.1-flash next to deepseek-v4-pro), `Some(false)` = text-only. Filled
+    /// by `models::apply_profile` — a per-model property, not a per-vendor one.
+    pub vision: Option<bool>,
 
     // ---- Home: all of Joy's state lives here (state.db, SOUL.md, traces/).
     pub home: PathBuf,
@@ -312,6 +317,7 @@ impl Default for Settings {
             base_url: None,
             model: None,
             small_model: None,
+            vision: None,
             home: PathBuf::from(".joy"),
             goal_max_rounds: 5,
             llm_retries: 2,
@@ -368,6 +374,8 @@ impl Settings {
             base_url: None,
             model: None,
             small_model: None,
+            // Filled by `models::apply_profile` with the profile's own declaration.
+            vision: None,
             home: env("JOY_HOME").map(PathBuf::from).unwrap_or(d.home),
             goal_max_rounds: env_int("JOY_GOAL_MAX_ROUNDS", d.goal_max_rounds),
             llm_retries: env_int("JOY_LLM_RETRIES", d.llm_retries),

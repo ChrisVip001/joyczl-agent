@@ -104,9 +104,10 @@ fn resolve_attachments(
     };
     if !vision {
         return Err(bad(format!(
-            "当前厂商 {provider_id} 的默认模型不支持图片输入。换支持视觉的厂商 \
-             （anthropic / openai / gemini / xai），或在 <home>/models-catalog.json 给 \
-             对应行加 \"vision\": true 后重启。"
+            "当前配置 {provider_id} 的模型不支持图片输入。给这套配置声明视觉：\
+             /model add <名字> {provider_id} <模型> --vision（等价于在 <home>/models.json \
+             那一条里写 \"vision\": true）；想整个厂商都算，就在 \
+             <home>/models-catalog.json 对应行加 \"vision\": true 后重启。"
         )));
     }
     let home = server.settings().home;
@@ -190,8 +191,7 @@ pub async fn run_turn(
     let resolved: Resolved = server.resolved().ok_or_else(|| ErrorObject {
         code: codes::PROVIDER_ERROR,
         message: "模型还没配好：缺 API key。配一套就能用 —— \
-                  /model add <名字> <厂商> --env 变量名（key 交给系统钥匙串），\
-                  或在驾驶舱的「模型」面板里填。"
+                  /model add <名字> <厂商> --env 变量名（key 交给系统钥匙串）。"
             .to_string(),
         data: None,
     })?;

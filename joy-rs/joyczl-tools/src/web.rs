@@ -3,10 +3,11 @@
 //! "Find how many World Cup matches are left, then put them in my calendar" crosses tools:
 //! search_web (read the web) → reasoning → create_event. The LOOP box on the whiteboard spins.
 //!
-//! Two backends:
-//!   default   DuckDuckGo HTML — no key, zero config, enough for a demo (often blocked by anti-bot)
-//!   better    Tavily — used when `TAVILY_API_KEY` (or `JOY_SEARCH_API_KEY`) is set;
-//!             an agent-friendly search API with clean results (free tier)
+//! Backends, in the order they are tried:
+//!   best     Tavily / Brave — used when `TAVILY_API_KEY` (`JOY_SEARCH_API_KEY`) or
+//!            `BRAVE_API_KEY` is set; clean results meant for agents (free tiers)
+//!   keyless  Bing HTML — zero config, reachable from networks that block DuckDuckGo
+//!   last     DuckDuckGo HTML — the old keyless fallback (often blocked by anti-bot)
 //!
 //! What the model gets back is plain text — Joy never parses HTML for the model, just readable results.
 
@@ -267,9 +268,12 @@ async fn duckduckgo(query: &str, max_results: u32) -> Result<Vec<Hit>> {
         let Some((_after_href, href)) = find_attr_after(&page, marker, "href") else {
             break;
         };
-        let Some((after_text, title)) = find_link_text(&page, marker) else {
+        let Some((after_text_rel, title)) = find_link_text(&page, marker) else {
             break;
         };
+        // `find_link_text` returns an offset relative to `marker`; make it absolute before
+        // slicing the page again, or the cursor re-reads the same result forever.
+        let after_text = marker + after_text_rel;
         // The snippet follows the title; if not found, leave it empty — don't force one.
         let snippet = page[after_text..]
             .find("result__snippet\"")
@@ -289,6 +293,66 @@ async fn duckduckgo(query: &str, max_results: u32) -> Result<Vec<Hit>> {
         cursor = after_text;
     }
     Ok(hits)
+}
+
+// ---- Scraping Bing HTML -------------------------------------------------------
+//
+// Added because DuckDuckGo's endpoint is unreachable from some networks (including the one
+// this project is developed on) while Bing's public result page still is. Same rule as DDG:
+// no regex, advance on the result marker, tolerate a missing snippet, cap the result count.
+
+/// Pure so the shape of Bing's page can be pinned in a test without touching the network.
+pub(crate) fn parse_bing(page: &str, max_results: u32) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = Vec::new();
+    let mut cursor = 0usize;
+    while hits.len() < max_results as usize {
+        let Some(rel) = page[cursor..].find("class=\"b_algo") else {
+            break;
+        };
+        let marker = cursor + rel;
+        // Results start with `<h2><a href="…">title</a></h2>`; anchor on the h2 so the first
+        // `href` we find is the result's own link, not the `li`'s tracking attributes.
+        let Some(h2_rel) = page[marker..].find("<h2") else {
+            break;
+        };
+        let h2 = marker + h2_rel;
+        let Some((_, href)) = find_attr_after(page, h2, "href") else {
+            break;
+        };
+        let Some((after_title_rel, title)) = find_link_text(page, h2) else {
+            break;
+        };
+        // Both helpers return offsets **relative to `from`**; the cursor needs an absolute one.
+        let after_title = h2 + after_title_rel;
+        // `<div class="b_caption"><p>snippet</p>` — optional, never worth failing the hit.
+        let snippet = page[after_title..]
+            .find("<p")
+            .and_then(|rel| {
+                let start = after_title + rel;
+                let inner = page[start..].find('>')? + start + 1;
+                let end = page[inner..].find("</p>")? + inner;
+                Some(strip_html(&page[inner..end]))
+            })
+            .unwrap_or_default();
+        if !title.is_empty() && href.starts_with("http") {
+            hits.push((title, snippet, href.to_string()));
+        }
+        cursor = after_title;
+    }
+    hits
+}
+
+async fn bing(query: &str, max_results: u32) -> Result<Vec<Hit>> {
+    let url = format!("https://www.bing.com/search?q={}", urlencode(query));
+    let page = client()?
+        .get(&url)
+        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    Ok(parse_bing(&page, max_results))
 }
 
 /// URL encoding (everything outside RFC 3986 unreserved chars gets escaped). Public for
@@ -370,11 +434,20 @@ fn ddg_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Is the keyless Bing HTML backend allowed? On by default — it is reachable from
+/// networks where DuckDuckGo's endpoint is not. `JOY_SEARCH_BING=0` turns it off.
+fn bing_enabled() -> bool {
+    std::env::var("JOY_SEARCH_BING")
+        .ok()
+        .map(|v| !matches!(v.trim(), "0" | "false" | "no"))
+        .unwrap_or(true)
+}
+
 /// Is any backend usable? `false` = the tool should not be registered at all —
 /// a tool that cannot run must not appear in the model's view (it would only
 /// invite calls that are guaranteed to fail).
 pub fn search_ready() -> bool {
-    tavily_key().is_some() || brave_key().is_some() || ddg_enabled()
+    tavily_key().is_some() || brave_key().is_some() || bing_enabled() || ddg_enabled()
 }
 
 /// Which backends to try, in order. Keyed providers first (most-reliable first);
@@ -385,6 +458,7 @@ pub fn search_ready() -> bool {
 pub(crate) fn plan_backends(
     tavily: Option<String>,
     brave: Option<String>,
+    bing: bool,
     ddg: bool,
 ) -> Vec<Backend> {
     let mut plan = Vec::new();
@@ -394,8 +468,15 @@ pub(crate) fn plan_backends(
     if let Some(key) = brave {
         plan.push(Backend::Brave(key));
     }
-    if plan.is_empty() && ddg {
-        plan.push(Backend::DuckDuckGo);
+    if plan.is_empty() {
+        // Keyless backends are tried in this order on purpose: Bing is reachable from
+        // networks where DDG's endpoint times out, and DDG stays as a last resort.
+        if bing {
+            plan.push(Backend::Bing);
+        }
+        if ddg {
+            plan.push(Backend::DuckDuckGo);
+        }
     }
     plan
 }
@@ -403,6 +484,7 @@ pub(crate) fn plan_backends(
 pub(crate) enum Backend {
     Tavily(String),
     Brave(String),
+    Bing,
     DuckDuckGo,
 }
 
@@ -411,6 +493,7 @@ impl Backend {
         match self {
             Backend::Tavily(_) => "Tavily",
             Backend::Brave(_) => "Brave",
+            Backend::Bing => "Bing",
             Backend::DuckDuckGo => "DuckDuckGo",
         }
     }
@@ -419,6 +502,7 @@ impl Backend {
         match self {
             Backend::Tavily(key) => tavily(query, key, max_results).await,
             Backend::Brave(key) => brave(query, key, max_results).await,
+            Backend::Bing => bing(query, max_results).await,
             Backend::DuckDuckGo => duckduckgo(query, max_results).await,
         }
     }
@@ -454,11 +538,14 @@ pub fn search_web() -> Tool {
                 let query = require_str(&args, "query")?;
                 let max_results = opt_u32(&args, "max_results", 5)?.clamp(1, 10);
 
-                let plan = plan_backends(tavily_key(), brave_key(), ddg_enabled());
+                let plan = plan_backends(tavily_key(), brave_key(), bing_enabled(), ddg_enabled());
                 if plan.is_empty() {
-                    return Ok("Error: 没有可用的搜索后端（无 key 且 JOY_SEARCH_DDG=0）。\
-                               配一个 key（TAVILY_API_KEY / BRAVE_API_KEY）或恢复 DDG。"
-                        .to_string());
+                    return Ok(
+                        "Error: 没有可用的搜索后端（无 key 且 Bing/DDG 都被关掉了）。\
+                               配一个 key（TAVILY_API_KEY / BRAVE_API_KEY），或恢复 \
+                               JOY_SEARCH_BING / JOY_SEARCH_DDG。"
+                            .to_string(),
+                    );
                 }
                 let mut failures: Vec<String> = Vec::new();
                 let mut outcome = None;
@@ -479,10 +566,12 @@ pub fn search_web() -> Tool {
                         failures.join("; ")
                     ));
                 };
-                let keyed = !matches!(plan.first(), Some(Backend::DuckDuckGo));
+                let keyed = plan
+                    .iter()
+                    .any(|backend| matches!(backend, Backend::Tavily(_) | Backend::Brave(_)));
                 if hits.is_empty() {
                     return Ok(if !keyed {
-                        "没有搜到结果 —— DuckDuckGo 的免费端点经常拦自动化请求。\
+                        "没有搜到结果 —— 免 key 的结果页经常拦自动化请求。\
                          要稳定搜索，去 https://tavily.com 领一个免费 key 填进 .env \
                          （TAVILY_API_KEY）。现在先告诉用户搜不了，请他配 key。"
                             .to_string()

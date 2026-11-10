@@ -54,6 +54,8 @@ fn views(file: &cfg::ModelsFile) -> Vec<ModelProfileView> {
             base_url: p.base_url.clone(),
             // Only the pointer, never the key itself.
             key_source: p.key_source.clone(),
+            // `null` is meaningful: "follow the vendor default", not "no images".
+            vision: p.vision,
             active: active == Some(p.id.as_str()),
         })
         .collect()
@@ -265,6 +267,7 @@ impl Server {
             small_model: None,
             base_url: None,
             key_source: None,
+            vision: None,
         });
         cfg::upsert(
             &mut file,
@@ -274,6 +277,9 @@ impl Server {
                 model: pick(p.model, existing_fields.model),
                 small_model: pick(p.small_model, existing_fields.small_model),
                 base_url: pick(p.base_url, existing_fields.base_url),
+                // Same patch convention as the strings above: absent keeps the old
+                // declaration (`None` stays `None` = follow the vendor default).
+                vision: p.vision.or(existing_fields.vision),
                 key_source,
             },
         );

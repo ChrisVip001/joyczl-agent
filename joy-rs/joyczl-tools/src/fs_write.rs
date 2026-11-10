@@ -62,17 +62,18 @@ impl ApprovalBroker for AlreadyApproved {
     }
 }
 
-/// Writable roots for this call: the working directory (turn's, else the process's), the Joy
-/// home (outbox, skills, spill all live there), plus the policy's extra roots.
+/// Writable roots for this call: **the working directory the human picked**, plus the
+/// policy's explicitly added roots. Nothing else.
+///
+/// `ctx.cwd` is `Some` only when the turn declared one (see `resolve_turn_cwd`) — that act is
+/// the capability switch: no chosen workspace ⇒ no writable root ⇒ no write at all. The Joy
+/// home and the process cwd are deliberately *not* roots: an assistant with a workspace must
+/// not be able to wander into memory, skills or wherever the server happened to be started.
 fn writable_roots(ctx: &ToolCtx, policy: &WritePolicy) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(cwd) = &ctx.cwd {
-        roots.push(cwd.clone());
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd);
-    }
-    roots.push(ctx.home.clone());
+    let Some(workspace) = &ctx.cwd else {
+        return Vec::new();
+    };
+    let mut roots = vec![workspace.clone()];
     roots.extend(policy.extra_roots.iter().cloned());
     roots
 }
@@ -96,6 +97,11 @@ fn existing_ancestor(path: &Path) -> PathBuf {
 /// The hard gate: `path` (after symlink resolution) must land inside one of `roots`.
 /// Not configurable, not negotiable — approval is never consulted for an outside path.
 fn contained(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
+    if roots.is_empty() {
+        return Err(
+            "还没有选择工作目录：先在驾驶舱选一个文件夹，工作目录就是唯一的可写范围。".to_string(),
+        );
+    }
     let real = existing_ancestor(path);
     for root in roots {
         if let Ok(root_real) = root.canonicalize() {

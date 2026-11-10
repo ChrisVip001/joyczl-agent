@@ -88,9 +88,10 @@ extraction use `run_command` + curl or an MCP fetching service.
   → `joy-rs/joyczl-tools/src/exec.rs` (`sandbox_argv`)
 * **Deliberate** — The write tools (`write_file` / `edit`, `JOY_WRITE=1`) have
   **no process sandbox**: the write happens in-process, so the hard gate is the
-  writable roots (workdir + home + `JOY_EXEC_WRITABLE_ROOTS`, resolved through
-  symlinks). Outside them is refused before approval is consulted — approval
-  only unlocks writes already inside the boundary. `require_str` trims, so the
+  writable roots (this turn's chosen workdir + `JOY_EXEC_WRITABLE_ROOTS`,
+  resolved through symlinks). **With no folder chosen nothing is writable**; the
+  Joy home and the process cwd are outside the boundary. Outside them is refused
+  before approval is consulted — approval only unlocks writes already inside it. `require_str` trims, so the
   write tools take content via a no-trim reader: a trailing newline is data,
   not noise.
   → `joy-rs/joyczl-tools/src/fs_write.rs` (`contained`, `raw_str`)
@@ -333,11 +334,15 @@ about the attachment is checked before the turn starts: containment inside
   re-showing it. Persisting the bytes (or a reference resolution pass on
   restore) would close this.
   → `joy-rs/joyczl-app-server/src/turn.rs` (`resolve_attachments`, `load_history`)
-* **Deliberate** — The `vision` flag describes the provider's **default
-  models** and errs toward `false`: a wrong `false` costs one capability; a
-  wrong `true` costs a round trip and a cryptic remote 400. Overridable per
-  provider in `models-catalog.json`.
-  → `joy-rs/joyczl-provider/src/lib.rs` (`ProviderInfo::vision`)
+* **Deliberate** — `vision` describes **this profile's model**: it follows the
+  vendor's catalog row by default and errs toward `false` (a wrong `false`
+  costs one capability; a wrong `true` costs a round trip and a cryptic remote
+  400). A declaration on the profile wins, because one vendor can ship both a
+  vision model and a text-only one. Declare it with `--vision` on `/model add`
+  (or `"vision": true` on that profile in `models.json`); to change the
+  **whole vendor**, edit `models-catalog.json`.
+  → `joyczl-config/src/models.rs` (`ModelProfile::vision`),
+  `joyczl-provider/src/lib.rs` (`Resolved::vision`)
 
 ## Memory
 

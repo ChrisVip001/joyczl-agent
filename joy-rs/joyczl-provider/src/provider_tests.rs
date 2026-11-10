@@ -602,6 +602,43 @@ fn resolve_with_an_unknown_provider_lists_catalog_ids() {
     assert!(error.contains("deepseek"), "{error}");
 }
 
+/// 一套模型自己声明视觉，优先于厂商默认：同一家既有看图模型也有纯文本模型。
+#[test]
+fn a_profile_vision_declaration_beats_the_vendor_default() {
+    let catalog = crate::catalog::Catalog::built_in();
+    let base = joyczl_config::Settings {
+        provider: "deepseek".to_string(),
+        api_key: Some("sk-test".to_string()),
+        ..Default::default()
+    };
+
+    let plain = crate::resolve_with(&base, &catalog).expect("可解析");
+    assert!(!plain.vision, "没声明就跟着目录行（deepseek 默认不看图）");
+
+    let declared = crate::resolve_with(
+        &joyczl_config::Settings {
+            vision: Some(true),
+            ..base.clone()
+        },
+        &catalog,
+    )
+    .expect("可解析");
+    assert!(declared.vision, "这套模型声明了视觉，就该放行图片");
+
+    // 反方向也要能收：openai 的目录行是 true，声明 false 就成了纯文本。
+    let off = crate::resolve_with(
+        &joyczl_config::Settings {
+            provider: "openai".to_string(),
+            api_key: Some("sk-test".to_string()),
+            vision: Some(false),
+            ..Default::default()
+        },
+        &catalog,
+    )
+    .expect("可解析");
+    assert!(!off.vision, "声明的 false 不该被厂商默认盖回去");
+}
+
 // ---- 多模态：Image 块在两条 wire 上的形状 ----
 
 #[test]

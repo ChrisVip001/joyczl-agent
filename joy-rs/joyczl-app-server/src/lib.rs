@@ -898,8 +898,8 @@ async fn builtin_tools(
         tools.register(joyczl_tools::fs_write::write_file(policy.clone()));
         tools.register(joyczl_tools::fs_write::edit(policy));
         eprintln!(
-            "(joy) 文件写入工具已启用：write_file / edit（可写范围 = 工作目录 + Joy home + \
-             额外可写根；JOY_APPROVAL=on-request 时每次写入都会问）"
+            "(joy) 文件写入工具已启用：write_file / edit（可写范围 = 本轮选的工作目录 + \
+             额外可写根；没选目录就一处也写不了；JOY_APPROVAL=on-request 时每次写入都会问）"
         );
     }
     // Connectors: `<home>/connectors.json` **is** the switch — no file, no connector tools

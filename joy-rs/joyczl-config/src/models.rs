@@ -40,6 +40,12 @@ pub struct ModelProfile {
     /// needs no key (ollama, LM Studio). **Only a pointer is stored here, never the key itself.**
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key_source: Option<String>,
+    /// Whether **this profile's model** accepts images. Absent = the vendor's default
+    /// (catalog row); `false` = text-only even on a vendor that ships vision models.
+    /// Declared when the model is added, because "which model" and "what it can see" are
+    /// the same decision — one vendor can ship both kinds.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub vision: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -133,6 +139,8 @@ pub fn apply_profile(
     settings.small_model = profile.small_model.clone();
     settings.base_url = profile.base_url.clone();
     settings.api_key = resolve_key(profile, home, store);
+    // Per-model, not per-vendor: absent here means "fall back to the catalog row".
+    settings.vision = profile.vision;
 }
 
 /// Fetch the real key per `key_source`. `env:` reads the env var directly (**never copied
@@ -439,6 +447,7 @@ mod models_tests {
             small_model: None,
             base_url: None,
             key_source: None,
+            vision: None,
         }
     }
 
@@ -608,6 +617,38 @@ mod models_tests {
             &mut settings,
         );
         assert_eq!(settings.provider, "ollama");
+    }
+
+    /// `vision` 跟着配置走：不写 = 跟随厂商默认，写了 = 这套模型说了算。
+    /// 同一家既有看图模型也有纯文本模型，这是唯一说得准的地方。
+    #[test]
+    fn applying_a_profile_carries_its_vision_declaration() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let mut store = SecretStore::memory();
+        let mut settings = crate::Settings::default();
+        assert_eq!(settings.vision, None, "默认跟随厂商");
+
+        let mut models = ModelsFile::default();
+        upsert(
+            &mut models,
+            ModelProfile {
+                vision: Some(true),
+                ..profile("ds", "deepseek")
+            },
+        );
+        models.active = Some("ds".to_string());
+        apply_active(&models, dir.path(), &mut store, &mut settings);
+        assert_eq!(settings.vision, Some(true), "声明要进运行时设置");
+
+        upsert(
+            &mut models,
+            ModelProfile {
+                vision: Some(false),
+                ..profile("ds", "deepseek")
+            },
+        );
+        apply_active(&models, dir.path(), &mut store, &mut settings);
+        assert_eq!(settings.vision, Some(false), "换成纯文本模型要收回能力");
     }
 
     /// Read/write round trip: the file holds only config and credential **pointers**, never keys.

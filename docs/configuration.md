@@ -19,12 +19,29 @@ all a user does is pick one and supply a key:
 /model use ds                switch (no need to retype the key)
 ```
 
-The dashboard's "Model" panel is the same implementation (`model/*` protocol
-methods). Keys go to the OS keychain first, falling back to
+The dashboard no longer has a model panel (that is configuration, not a goal);
+the entry points are the REPL's `/model` and `<home>/models.json`, over the same
+`model/*` protocol methods. Keys go to the OS keychain first, falling back to
 `<home>/secrets.json` (0600); `--env VAR` reads the environment and stores
 nothing. `model/save` reports **where the key actually landed** (`keychain` /
 `file` / `env:VAR`). Switching takes effect immediately: it rewrites Settings and
 re-resolves the provider — no restart.
+
+**Can this model see images? Declare it when you add the profile**, instead of
+being told by an error later:
+
+```
+/model add ds deepseek deepseek-v4.1-flash --env DEEPSEEK_API_KEY --vision
+```
+
+- no flag: follow the vendor's catalog row (the vendor's **default** model);
+- `--vision`: this model sees images even though the vendor's default does not;
+- `--no-vision`: this model is text-only even though the vendor's default sees.
+
+When one vendor ships both kinds (`deepseek-v4.1-flash` beside
+`deepseek-v4-pro`), the profile is the only layer that can be right. The file
+form is `"vision": true` on that profile in `models.json`; to change the
+**whole vendor**, edit `models-catalog.json` instead (see "The model catalog").
 
 **Only a human can change any of this**: the model has no `model/*` tool and
 never sees a key.
@@ -355,11 +372,11 @@ and the context keeps the head and tail — **complete lines only** — plus
 | `JOY_HOOKS` | `0` | read `<home>/hooks.json` and run your shell commands on twelve lifecycle events (below) |
 | `JOY_HOOKS_TIMEOUT` | `30` | default hook timeout in seconds; a per-entry `timeout` wins |
 | `JOY_EXEC` | `0` | enable the `run_command` tool (off = the model never sees it) |
-| `JOY_WRITE` | `0` | enable the `write_file` / `edit` tools (off = the model never sees them). Writable boundary: the working directory, the Joy home, and `JOY_EXEC_WRITABLE_ROOTS`; with `JOY_APPROVAL=on-request` every write asks once |
+| `JOY_WRITE` | `0` (`1` in the dashboard) | enable the `write_file` / `edit` tools (off = the model never sees them). Writable boundary: **only** this turn's chosen working directory plus `JOY_EXEC_WRITABLE_ROOTS`; with no folder chosen nothing can be written |
 | `JOY_DELEGATE` | `0` | enable the `delegate_task` tool (a subagent gets its own context; it cannot delegate again) |
 | `JOY_EXEC_ALLOW` | — | allowlist, comma separated, trailing `*` wildcards (`cargo test,git status,ls *`). Empty = deny everything |
 | `JOY_EXEC_TIMEOUT` | `30` | per-command timeout in seconds |
-| `JOY_APPROVAL` | `never` | what to do when the allowlist does not match: `never` = refuse, `on-request` = ask (no answer = refusal). Never applies to the deny list or the sandbox |
+| `JOY_APPROVAL` | `never` (`on-request` in the dashboard) | what to do when the allowlist does not match: `never` = refuse, `on-request` = ask (no answer = refusal). Never applies to the deny list or the sandbox |
 | `JOY_APPROVAL_TIMEOUT` | `120` | seconds to wait for an answer before treating it as a refusal |
 | `JOY_EXEC_NETWORK` | `0` | let sandboxed commands reach the network. **Off by default** — an allowed command should not be able to send your data out |
 | `JOY_EXEC_WRITABLE_ROOTS` | — | extra writable directories (colon separated, must be existing absolute paths), e.g. a build cache |
@@ -389,15 +406,21 @@ effect on the next start.
 `JOY_WRITE=1` registers two tools: `write_file` (whole-file write, overwrites)
 and `edit` (one exact-match replacement — `old_string` must appear exactly
 once, 0 or several matches are refused, and the reply carries a change hunk).
-Off by default; off, the model cannot even see the names.
+The CLI and hub keep the conservative off-by-default; the **single-user dashboard
+defaults to on**, because a human is watching and can approve (explicit
+`JOY_WRITE` / `JOY_APPROVAL` environment variables always win).
 
-The writable boundary is the **working directory, the Joy home, and
-`JOY_EXEC_WRITABLE_ROOTS`** — the same roots the exec sandbox may write, one
-variable, one meaning. Outside them the write is refused before approval is
-ever consulted. Content must be UTF-8 text (no NUL bytes) and at most 1 MiB.
-With `JOY_APPROVAL=on-request` **every** write asks once — writes are rare and
-consequential, and there is no allow table to match, so on-request means "ask
-each time".
+In the dashboard the working directory is a folder-picker button, not a text
+field: the chosen folder is the **only** writable root (plus
+`JOY_EXEC_WRITABLE_ROOTS`), and with no folder chosen nothing is writable. The
+Joy home and the process cwd are deliberately outside it — an assistant with a
+workspace must not wander into memory or wherever the server was started.
+Outside the boundary the write is refused before approval is ever consulted.
+Content must be UTF-8 text (no NUL bytes) and at most 1 MiB. The dashboard also
+defaults `JOY_APPROVAL=on-request`: **every** write shows an approval card in the
+chat window (allow / allow and remember / deny; no answer times out as denial).
+The config panels were removed from the page — approvals stay where a human can
+answer them.
 
 ## The model catalog (`models-catalog.json`)
 
@@ -485,18 +508,21 @@ which variable to set.
 
 | Variable | Purpose |
 |---|---|
-| `TAVILY_API_KEY` / `JOY_SEARCH_API_KEY` | upgrade `search_web` to Tavily (default: DuckDuckGo HTML) |
+| `TAVILY_API_KEY` / `JOY_SEARCH_API_KEY` | upgrade `search_web` to Tavily (default: keyless Bing HTML) |
 | `BRAVE_API_KEY` | second keyed backend in the chain (tried after Tavily) |
 | `JOY_SEARCH_MAX_PER_TURN` | per-turn `search_web` cap (default 20, range 1–200) |
-| `JOY_SEARCH_DDG` | `0` disables the keyless DuckDuckGo backend (default on) |
+| `JOY_SEARCH_BING` | `0` disables the keyless Bing backend (default on; the one that works where DDG is blocked) |
+| `JOY_SEARCH_DDG` | `0` disables the keyless DuckDuckGo backend (default on; last resort) |
 | `JOY_JUDGE_MODEL` | judge referee override |
 | `JOY_GH_REPO` | gather's GitHub scan target |
 
-Search backends form an ordered chain: Tavily, then Brave, with DuckDuckGo entering
-the plan **only when no key is configured** (after a keyed backend fails, the free
-endpoint stays out of the plan — one gamble per turn, not two). When no backend is
-usable, `search_web` is not registered at all and startup says so; search results
-are wrapped as untrusted external data, same as a fetched page body.
+Search backends form an ordered chain: Tavily, then Brave; without any key the
+keyless **Bing HTML → DuckDuckGo** pair enters the plan (Bing is usually reachable
+on networks that block DDG, so DDG is only the last resort). After a keyed backend
+fails, the free endpoints stay out of the plan — one gamble per turn, not two.
+When no backend is usable, `search_web` is not registered at all and startup says
+so; search results are wrapped as untrusted external data, same as a fetched
+page body.
 
 ## Dashboard and binaries
 

@@ -13,6 +13,7 @@ fn profile(id: &str, provider: &str, key: Option<&str>) -> cfg::ModelProfile {
         small_model: None,
         base_url: None,
         key_source: key.map(|k| k.to_string()),
+        vision: None,
     }
 }
 
@@ -120,6 +121,7 @@ fn save(id: &str, provider: &str, model: Option<&str>) -> ModelSaveParams {
         base_url: None,
         api_key: None,
         key_env: Some("JOY_TEST_KEY".to_string()),
+        vision: None,
         make_active: None,
     }
 }
@@ -210,4 +212,43 @@ async fn a_new_profile_needs_a_provider() {
         })
         .unwrap_err();
     assert!(err.contains("第一次配置"), "{err}");
+}
+
+/// 加配置时顺手声明视觉：一次写清，不必等发图被拦再回头改目录文件。
+#[tokio::test]
+async fn a_profile_can_declare_vision_over_the_vendor_default() {
+    let (server, _dir) = server().await;
+    // deepseek 的目录行是 vision:false（它的默认模型是纯文本）——这套模型自己说看得见。
+    server
+        .model_save(ModelSaveParams {
+            api_key: Some("sk-vision".to_string()),
+            key_env: None,
+            vision: Some(true),
+            ..save("ds", "deepseek", Some("deepseek-v4.1-flash"))
+        })
+        .expect("存一套声明了视觉的配置");
+
+    assert!(
+        server.resolved().expect("应当能解析").vision,
+        "解析结果要带上声明，否则门口仍然拦图片"
+    );
+    assert_eq!(
+        server.model_profiles().profiles[0].vision,
+        Some(true),
+        "列表里也要如实显示"
+    );
+
+    // 只改模型名、不提 vision：声明要留住（patch 语义，和 model/base_url 一致）。
+    server
+        .model_save(ModelSaveParams {
+            model: Some("deepseek-v4.1-flash".to_string()),
+            key_env: None,
+            ..save("ds", "deepseek", None)
+        })
+        .expect("改模型");
+    assert_eq!(
+        server.model_profiles().profiles[0].vision,
+        Some(true),
+        "没提 vision 就不该把它抹掉"
+    );
 }

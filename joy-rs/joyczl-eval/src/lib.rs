@@ -252,7 +252,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
             session_id: Some(session_id),
             message,
             stream: Some(true),
-            cwd: None,
+            cwd: turn.cwd.as_deref().map(|text| expand_home(text, home)),
             attachments: None,
             tier: None,
         };
