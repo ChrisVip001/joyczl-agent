@@ -271,6 +271,7 @@ nothing", which is the default.
 | `JOY_RETRIEVAL_TOP_K` | `4` | facts fetched when the gate opens |
 | `JOY_GRAPH_WORKFLOWS` | `0` | enable the triage front-door graph (fail-open, costs time only) |
 | `JOY_APPLE_CALENDAR` | `0` | sync `create_event` to Calendar.app via AppleScript |
+| `JOY_GOOGLE_CALENDAR` | `0` | the Google Calendar connection is **not implemented**; setting this makes `create_event` say so honestly in its receipt instead of staying silent — an honesty switch, not a sync switch |
 | `JOY_SKILL_DIRS` | — | colon-separated extra skill directories (besides `home/skills`) |
 | `JOY_JUDGE_MODEL` | small model | referee model for `joy judge` (the referee is not a contestant) |
 | `JOY_GH_REPO` | — | repository for gather's GitHub scan (owner/repo) |
@@ -343,7 +344,7 @@ observation events time out **open**. Per-entry `timeout` wins, then
 change that should stop and be seen.
 
 A blocking `Stop` re-runs the turn **once**: it is the ancestor of the goal loop
-(`goal/set`), without the round cap, judge or human-authority boundary.
+(`/goal`), without the round cap, judge or human-authority boundary.
 
 ## Per-turn tool-result budget
 

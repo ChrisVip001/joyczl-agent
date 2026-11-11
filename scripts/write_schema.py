@@ -212,12 +212,11 @@ def main() -> int:
                         help="透传给 cargo test 的额外参数")
     args = parser.parse_args()
 
-    scratch: str | None = None
-    if args.check:
-        scratch = tempfile.mkdtemp(prefix="joyczl-schema-")
-        out_dir = Path(scratch)
-    else:
-        out_dir = GENERATED_ROOT
+    # 两种模式都先生成到临时目录：write 模式必须先知道「这次到底产出了哪些文件」，
+    # 才能删掉仓库里不再生成的孤儿 —— ts-rs 只写不删，协议里删掉一个类型，
+    # 旧文件会一直留在库里充数（`--check` 会报「已提交但不再生成」）。
+    scratch = tempfile.mkdtemp(prefix="joyczl-schema-")
+    out_dir = Path(scratch)
 
     try:
         rc = run_cargo_export(out_dir, list(args.cargo_args))
@@ -267,6 +266,19 @@ def main() -> int:
                 return 1
             print("✓ 生成物与 Rust 协议定义一致")
             return 0
+
+        # 以这次的产出为准同步仓库：不在产出里的就是孤儿，删掉；在的逐个覆写。
+        committed = snapshot(GENERATED_ROOT / "typescript")
+        fresh = snapshot(out_dir / "typescript")
+        for rel in sorted(set(committed) - set(fresh)):
+            (GENERATED_ROOT / "typescript" / rel).unlink()
+            print(f"✓ 删掉孤儿生成物 typescript/{rel}")
+        for rel in sorted(fresh):
+            target = GENERATED_ROOT / "typescript" / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(out_dir / "typescript" / rel, target)
+        for name in ("v2.json", "consts.json"):
+            shutil.copyfile(out_dir / "json" / name, GENERATED_ROOT / "json" / name)
 
         print(SEPARATOR)
         print(f"✓ TypeScript → {GENERATED_ROOT / 'typescript'}")

@@ -42,30 +42,41 @@ async fn server(mock: Arc<Mock>, goal_max_rounds: i32) -> (Server, tempfile::Tem
     (server, dir)
 }
 
-/// Set, clear, count rounds, stamp a terminal state.
+/// Setting a goal **is** creating a task: one row, no second record to disagree with it.
 #[tokio::test]
-async fn setting_and_clearing_a_goal() {
+async fn a_goal_is_the_task_row_and_nothing_else() {
     let (server, _dir) = server(Arc::new(Mock::new(Vec::new())), 5).await;
-    let goals = &server.goals;
 
-    assert!(crate::goal::active(goals, "s1").is_none(), "一开始没目标");
+    let row = server
+        .set_task_goal("s1", Some("  让测试全绿  "))
+        .await
+        .expect("设目标该建任务");
+    assert_eq!(
+        row.goal_condition.as_deref(),
+        Some("让测试全绿"),
+        "两侧空白该被去掉"
+    );
+    assert_eq!(row.rounds_used, 0);
+    assert_eq!(row.max_rounds, 5, "上限来自 settings");
 
-    let goal = crate::goal::set(goals, "s1", Some("  让测试全绿  ")).expect("设上");
-    assert_eq!(goal.condition, "让测试全绿", "两侧空白该被去掉");
-    assert_eq!(goal.rounds, 0);
-    assert!(crate::goal::active(goals, "s1").is_some());
+    // Setting again edits that row — it must not stack a second task on the session.
+    let same = server
+        .set_task_goal("s1", Some("让 clippy 也绿"))
+        .await
+        .expect("任务仍在");
+    assert_eq!(same.id, row.id);
+    assert_eq!(same.goal_condition.as_deref(), Some("让 clippy 也绿"));
 
-    assert_eq!(crate::goal::bump(goals, "s1"), 1);
-    assert_eq!(crate::goal::bump(goals, "s1"), 2, "轮次跨 turn 累计");
+    // Clearing takes the condition off and leaves the row (its title is the record).
+    let cleared = server
+        .set_task_goal("s1", Some("   "))
+        .await
+        .expect("任务仍在");
+    assert_eq!(cleared.id, row.id);
+    assert!(cleared.goal_condition.is_none(), "目标清掉了");
 
-    // After a terminal state the loop no longer runs on its own (but the record stays — a human can see why it stopped).
-    crate::goal::finish(goals, "s1", "round-limit");
-    assert!(crate::goal::active(goals, "s1").is_none(), "停了就不活跃");
-    assert!(crate::goal::read(goals, "s1").is_some(), "但没被清掉");
-
-    // An empty condition = clear.
-    assert!(crate::goal::set(goals, "s1", Some("   ")).is_none());
-    assert!(crate::goal::read(goals, "s1").is_none());
+    // A session with nothing: clearing is a no-op, not an error and not a new row.
+    assert!(server.set_task_goal("s2", None).await.is_none());
 }
 
 /// `ok` and `impossible` both true = a muddled judge → counts as not done (and says so).
@@ -105,7 +116,10 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
         Mock::text(r#"{"ok": true, "impossible": false, "reason": "全绿了"}"#),
     ]));
     let (server, _dir) = server(mock.clone(), 5).await;
-    crate::goal::set(&server.goals, "goal-session", Some("让测试全绿")).expect("设上");
+    server
+        .set_task_goal("goal-session", Some("让测试全绿"))
+        .await
+        .expect("设上");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     crate::turn::run_turn(
@@ -178,7 +192,10 @@ async fn running_out_of_rounds_is_reported_honestly() {
         Mock::text(r#"{"ok": false, "impossible": false, "reason": "还差一点"}"#),
     ]));
     let (server, _dir) = server(mock, 1).await;
-    crate::goal::set(&server.goals, "goal-session", Some("做到 X")).expect("设上");
+    server
+        .set_task_goal("goal-session", Some("做到 X"))
+        .await
+        .expect("设上");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     crate::turn::run_turn(
@@ -204,8 +221,16 @@ async fn running_out_of_rounds_is_reported_honestly() {
         }
     }
     assert_eq!(statuses, vec!["round-limit".to_string()], "一轮就是上限");
-    assert!(
-        crate::goal::read(&server.goals, "goal-session").is_some(),
-        "不伪装完成，也不清掉目标"
+    let row = server
+        .tasks
+        .latest("goal-session")
+        .await
+        .expect("查")
+        .expect("任务还在");
+    assert_eq!(row.status, joyczl_state::TaskStatus::Failed, "不伪装完成");
+    assert_eq!(
+        row.goal_condition.as_deref(),
+        Some("做到 X"),
+        "也不清掉目标：停下等人决定"
     );
 }

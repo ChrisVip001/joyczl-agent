@@ -4,6 +4,25 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### Collapse: a goal is no longer an object — it lives on the task row
+
+- Removed the protocol methods `goal/set` and `goal/view`, the types `GoalSetParams` /
+  `GoalSetResponse`, the HTTP route `POST /api/goal`, and `Server.goals` — the "runner's mirror".
+  The truth has been `agent_tasks.goal_condition` since 0.14; the mirror was a second copy restored
+  at boot and kept in step by hand in several places, and two truths eventually diverge.
+- The loop now reads the row: condition from `task.goal_condition`, rounds from `round_no` (written
+  on the same row), terminal state from `TaskStatus` (`failed` + reason). No third state. `goal.rs`
+  is down to the judge.
+- One human door: `/goal <condition>` (creates the task if there is none, edits it if there is;
+  `/goal clear` takes only the condition off and leaves the row as record). The protocol therefore
+  has **no** way to set a goal — programs use `task/create {goalCondition}`.
+- The dashboard's task card no longer reads `DashboardData.goal`: it was already reading
+  `data.task` (the same row), and the extra "目标" block was duplicate modelling.
+- Tests: `a_goal_is_the_task_row_and_nothing_else` asserts the row itself (set / edit the same row /
+  clear the condition / an empty session creates nothing); the loop tests start through
+  `set_task_goal`, and the round-limit assertion changed from "the goal is still in memory" to
+  "the row is still there, `status = failed`, the condition was not cleared".
+
 ### Cleanup: three switches nobody read
 
 - `experimental` (`JOY_EXPERIMENTAL`) is gone from `Settings` / `SettingsView` / `SettingsPatch`:

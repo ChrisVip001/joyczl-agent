@@ -233,25 +233,6 @@ class GoalRoundNotification(BaseModel):
     turnId: str
 
 
-class GoalSetParams(BaseModel):
-    condition: Annotated[
-        str | None,
-        Field(
-            description='The goal condition (natural language, e.g. "make the tests green"). Empty/absent = clear.'
-        ),
-    ] = None
-    sessionId: str
-
-
-class GoalSetResponse(BaseModel):
-    active: Annotated[bool, Field(description='Whether a goal is currently active.')]
-    condition: str | None = None
-    maxRounds: int
-    roundsUsed: Annotated[
-        int | None, Field(description='How many rounds this goal has already consumed.')
-    ] = 0
-
-
 class GraphEndedNotification(BaseModel):
     error: str | None = None
     ms: int
@@ -1337,12 +1318,6 @@ class DashboardData(BaseModel):
             description='ISO 8601, millisecond precision. The page shows "when is this data from".'
         ),
     ]
-    goal: Annotated[
-        GoalSetResponse | None,
-        Field(
-            description="The viewed session's goal, when `sessionId` was asked for. Same shape as `goal/set`'s answer — one source of truth, no second modeling."
-        ),
-    ] = None
     inbox: Annotated[
         InboxListView,
         Field(

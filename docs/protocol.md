@@ -5,7 +5,7 @@ English | [简体中文](protocol.zh.md)
 `joy app-server` speaks **newline-delimited JSON-RPC 2.0** on stdin/stdout:
 one request per line; responses and notifications interleave (notifications
 before the response). Every type is defined in
-`joyczl-protocol/src/protocol/v2.rs` (63 types) and generated into TypeScript
+`joyczl-protocol/src/protocol/v2.rs` (130 types, JSON-RPC envelopes included) and generated into TypeScript
 (`schema/typescript/v2/`) and Python pydantic (`sdk/python/generated/`).
 **Changing the protocol requires `just write-app-server-schema`.**
 
@@ -20,8 +20,6 @@ before the response). Every type is defined in
 | `turn/list` | `TurnListParams` → `TurnListResponse` | turns currently running, filterable by `sessionId` |
 | `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | answer one approval request; `accepted: false` when it arrived too late |
 | `approval/log` | `ApprovalLogParams` → `ApprovalLogResponse` | the approval audit (migration 0011): the last 100 records, four outcomes `approved` / `denied` / `timeout` / `voided` |
-| `goal/set` | `GoalSetParams` → `GoalSetResponse` | set or clear a goal; human-only — the model has no such tool |
-| `goal/view` | `SessionViewParams` → `GoalSetResponse` | this session's goal state (rounds, outcome, reason) |
 | `todo/view` | `SessionViewParams` → `TodoListView` | the current todo sheet; nothing renders when the model never wrote one |
 | `task/create` | `TaskCreateParams` → `TaskEnvelope` | create a task: session optional, with acceptance, budget and working directory |
 | `task/list` | — → `TaskListResponse` | every task, newest first |
@@ -63,12 +61,14 @@ camelCase; integers are `i32` only (`i64` maps to ts-rs `bigint` while
 
 ### Using the goal loop
 
-`goal/set` (set or clear a goal) and the `GoalRound` notification (one per judgement):
+A goal is **not an object of its own**: it is a column on the task row (`goalCondition`, since
+0.17), which is why there is no `goal/set` / `goal/view` method — a human writes it through
+`/goal` or `task/create {goalCondition}`, and the loop reads the same row. The only protocol
+surface left is the `GoalRound` notification (one per judgement):
 
 ```
 you>  /goal make the tests green
-       → goal/set  {sessionId, condition: "make the tests green"}
-       ← {active: true, condition: "make the tests green", roundsUsed: 0, maxRounds: 5}
+       → task/create  {sessionId: "…", title: "make the tests green", goalCondition: "make the tests green"}
 … the turn ends without satisfying it …
        ← GoalRound {turnId, round: 1, maxRounds: 5, status: "continuing", reason: "two red"}
 … another round …
@@ -116,7 +116,7 @@ unknown value is normalised to `fact`.
 | -32700 / -32600 / -32601 / -32602 / -32603 | standard JSON-RPC: parse / request / method not found / params / internal |
 | `-32000` PROVIDER_ERROR | model-side failure (missing key, 401, rate limit…), with what to do |
 | `-32001` TOOL_ERROR | tool execution failed (the error also returns to the model as text; the turn continues) |
-| `-32002` NOT_IMPLEMENTED | defined but not yet implemented (all 41 methods are implemented) |
+| `-32002` NOT_IMPLEMENTED | defined but not yet implemented (all 39 methods are implemented) |
 
 ## Clients
 

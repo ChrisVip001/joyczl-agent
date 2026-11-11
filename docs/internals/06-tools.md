@@ -193,7 +193,8 @@ loopback / 内网 / link-local / 保留段就拒，`169.254.169.254` 这类 meta
 
 ## 6.2 注册顺序：显式，不用宏也不用扫目录
 
-`handlers.rs（build_default）` 按固定顺序 register **11 个**工具：
+`handlers.rs（build_default）` 按固定顺序 register **11 个**基础工具（`write_file` / `edit` / `todo_write` / 作业三件套等
+另有各自的开关与位置，见上文各节）：
 
 ```
 save_note → forget_note → search_memory → list_memory → current_time
@@ -206,7 +207,10 @@ save_note → forget_note → search_memory → list_memory → current_time
 
 `run_command` **不在这里**：它由 `app-server` 在 `settings.exec_enabled` 为真时
 才追加（见 ⑨）。没开 `JOY_EXEC` 时模型连它的名字都看不见——这是「默认关」的实现
-方式，不是在工具里判断开关。
+方式，不是在工具里判断开关。`write_file` / `edit`（`JOY_WRITE`）、`todo_write`、
+后台作业三件套（`job_output` / `job_list` / `job_kill`）、`delegate_task`
+（`JOY_DELEGATE`，常量 `subagent::NAME`）同理：**注册即能力**，开关决定的是「在不在表里」，
+不是「执行时再拒绝」。
 
 ## 6.3 记忆类四件套 + 时间
 

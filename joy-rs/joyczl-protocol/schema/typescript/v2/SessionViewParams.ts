@@ -2,6 +2,6 @@
 
 /**
  * Which session to look at — the shared params of the dashboard's per-session reads
- * (`goal/view`, `todo/view`). One field, one shape, no per-method re-modeling.
+ * (`todo/view`, `session/get`). One field, one shape, no per-method re-modeling.
  */
 export type SessionViewParams = { sessionId: string };

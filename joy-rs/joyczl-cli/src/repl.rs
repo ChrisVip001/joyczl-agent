@@ -340,25 +340,29 @@ fn models(server: &Server, input: &str) {
     }
 }
 
-/// `/goal <condition>` sets a goal; `/goal clear` (or bare `/goal`) clears it.
+/// `/goal <condition>` attaches the condition to this session's task (creating the task if
+/// there is none); `/goal clear` (or bare `/goal`) takes it off, and the task stays behind as a
+/// single-turn one.
 ///
 /// Goals are **human-only**: the model cannot see this path, so "the model
-/// assigning itself work" isn't forbidden here — it simply doesn't exist.
+/// assigning itself work" isn't forbidden here — it simply doesn't exist. There is no separate
+/// goal record any more (0.17): the condition is a column on the task row, so the card and the
+/// loop read exactly what this command wrote.
 async fn set_goal(server: &Server, session_id: &str, input: &str) {
     let condition = input.trim_start_matches("/goal").trim();
     let cleared = condition.is_empty() || condition.eq_ignore_ascii_case("clear");
-    let response = server
-        .goal_set(session_id, if cleared { None } else { Some(condition) })
+    let row = server
+        .set_task_goal(session_id, if cleared { None } else { Some(condition) })
         .await;
 
-    if !response.active {
+    let Some(row) = row.filter(|row| row.goal_condition.is_some()) else {
         println!("目标已清除（这个会话现在没有目标）。");
         return;
-    }
+    };
     println!(
         "目标已设置：{}\n（最多自动续 {} 轮；停下来的理由每次都会打在这里；\n  /goal clear 可以随时撤掉）",
-        response.condition.unwrap_or_default(),
-        response.max_rounds
+        row.goal_condition.unwrap_or_default(),
+        row.max_rounds
     );
 }
 

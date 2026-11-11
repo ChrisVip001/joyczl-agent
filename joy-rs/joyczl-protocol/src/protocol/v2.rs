@@ -24,14 +24,10 @@ pub mod methods {
     pub const TURN_START: &str = "turn/start";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const APPROVAL_RESPOND: &str = "approval/respond";
-    /// Set/clear a goal (condition). **Only a human can start or stop it** — the model cannot.
-    pub const GOAL_SET: &str = "goal/set";
-    /// Read a session's goal state (the dashboard's task card). Read-only, human-facing.
-    pub const GOAL_VIEW: &str = "goal/view";
     /// Read a session's todo sheet (the dashboard's task card). Read-only, human-facing.
     pub const TODO_VIEW: &str = "todo/view";
     /// Long tasks: create / list / view / get / runs / artifacts / suspend / resume / cancel.
-    /// **All human-only** — the model has no path to any of them (like `goal/set`).
+    /// **All human-only** — the model has no path to any of them.
     pub const TASK_CREATE: &str = "task/create";
     pub const TASK_LIST: &str = "task/list";
     pub const TASK_VIEW: &str = "task/view";
@@ -52,7 +48,7 @@ pub mod methods {
     /// One session's own record: name, working directory, message count.
     pub const SESSION_GET: &str = "session/get";
     /// Rename a session or rebind its working directory (`""` clears). **Human-only** —
-    /// the model has no path here, exactly like `goal/set` and `task/*`.
+    /// the model has no path here, exactly like `task/*`.
     pub const SESSION_UPDATE: &str = "session/update";
     /// Which turns are running right now, optionally narrowed to one session. The dashboard's
     /// "正在跑第几轮" and the CLI's "what is happening" both read from here.
@@ -199,31 +195,6 @@ pub struct ApprovalRespondParams {
     /// `<home>/settings.json` (no wildcards — the user approved this command, not this kind).
     #[serde(default)]
     pub remember: bool,
-}
-
-/// Parameters for `goal/set`. Empty `condition` = clear the goal.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
-pub struct GoalSetParams {
-    pub session_id: String,
-    /// The goal condition (natural language, e.g. "make the tests green"). Empty/absent = clear.
-    #[serde(default)]
-    pub condition: Option<String>,
-}
-
-/// Response to `goal/set`: the authoritative state after setting.
-#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
-pub struct GoalSetResponse {
-    /// Whether a goal is currently active.
-    pub active: bool,
-    pub condition: Option<String>,
-    /// How many rounds this goal has already consumed.
-    #[serde(default)]
-    pub rounds_used: i32,
-    pub max_rounds: i32,
 }
 
 // ===========================================================================
@@ -541,7 +512,7 @@ pub struct InboxReceivedNotification {
 }
 
 /// Which session to look at — the shared params of the dashboard's per-session reads
-/// (`goal/view`, `todo/view`). One field, one shape, no per-method re-modeling.
+/// (`todo/view`, `session/get`). One field, one shape, no per-method re-modeling.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -1541,11 +1512,6 @@ pub struct DashboardData {
     pub sessions: Vec<SessionSummary>,
     pub facts: Vec<Fact>,
     pub episodes: Vec<Episode>,
-    /// The viewed session's goal, when `sessionId` was asked for. Same shape as
-    /// `goal/set`'s answer — one source of truth, no second modeling.
-    #[serde(default)]
-    #[ts(optional)]
-    pub goal: Option<GoalSetResponse>,
     /// The viewed session's todo sheet, when asked for and non-empty. This is the
     /// model's own working sheet (todo_write), shown to the human as the task card.
     #[serde(default)]

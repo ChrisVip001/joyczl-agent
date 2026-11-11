@@ -4,7 +4,6 @@ import type { ArtifactView } from "./ArtifactView";
 import type { ConnectorStatus } from "./ConnectorStatus";
 import type { Episode } from "./Episode";
 import type { Fact } from "./Fact";
-import type { GoalSetResponse } from "./GoalSetResponse";
 import type { InboxListView } from "./InboxListView";
 import type { SessionSummary } from "./SessionSummary";
 import type { SettingsView } from "./SettingsView";
@@ -30,11 +29,6 @@ export type DashboardData = {
   sessions: Array<SessionSummary>;
   facts: Array<Fact>;
   episodes: Array<Episode>;
-  /**
-   * The viewed session's goal, when `sessionId` was asked for. Same shape as
-   * `goal/set`'s answer — one source of truth, no second modeling.
-   */
-  goal?: GoalSetResponse;
   /**
    * The viewed session's todo sheet, when asked for and non-empty. This is the
    * model's own working sheet (todo_write), shown to the human as the task card.

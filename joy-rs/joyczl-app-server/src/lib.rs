@@ -196,10 +196,6 @@ pub struct Server {
     pub(crate) todo: Arc<joyczl_tools::todo::TodoBoard>,
     /// Background job table (switched on/off together with `JOY_EXEC`).
     pub(crate) jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
-    /// Session -> goal (see goal.rs). Only a human can set one; the model cannot even see this path.
-    /// This is the **runner's mirror**: the truth lives in `tasks` (agent_tasks, migration 0014);
-    /// boot restores the mirror from it, so a restart no longer loses the target.
-    pub(crate) goals: goal::Goals,
     /// Connector inbox (migration 0015): what came in from the outside, recorded as-is.
     /// Only the poller and `inbox/*` touch it; the model has no path here at all.
     pub(crate) inbox: joyczl_state::Inbox,
@@ -236,26 +232,27 @@ pub struct Server {
     /// Lazily created and **never removed**: removal would race two concurrent turns
     /// into holding two different locks.
     pub(crate) session_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
-    #[allow(dead_code)]
     pub(crate) pool: SqlitePool,
 }
 
 impl Server {
     /// Assembled from state.db. A provider-resolution failure is not fatal — record the reason and report it at turn time.
-    /// Set or clear a goal. **Only a human can reach here** — the model has no `goal/set` tool.
+    /// Set or clear the goal on this session's task. **Only a human can reach here** — the model
+    /// has no task tool, and the REPL's `/goal` is the only caller.
     ///
-    /// dispatch and the REPL share one implementation: two copies would eventually forget a
-    /// validation or the `max_rounds` on one of them.
-    pub async fn goal_set(
+    /// A goal is a column on the row (`agent_tasks.goal_condition`), not a record of its own, so
+    /// "set a goal" is either "create that task" or "edit it". Clearing keeps the row and its
+    /// title: the task survives as a single-turn one. Returns the row as it now reads, so the
+    /// caller prints what the ledger says instead of what it hoped.
+    pub async fn set_task_goal(
         &self,
         session_id: &str,
         condition: Option<&str>,
-    ) -> joyczl_protocol::GoalSetResponse {
+    ) -> Option<joyczl_state::TaskRow> {
         let trimmed = condition.map(str::trim).filter(|text| !text.is_empty());
         let active = self.tasks.active(session_id).await.ok().flatten();
         match (trimmed, active) {
-            // Setting a goal on a session with no task: the goal **creates** the task — the
-            // compatibility layer that keeps `/goal` and the task card pointing at one row.
+            // No task yet: the goal **is** what creates one — the same row the card and the loop read.
             (Some(condition), None) => {
                 let max_rounds = self
                     .settings
@@ -278,12 +275,13 @@ impl Server {
                     })
                     .await
                 {
-                    eprintln!("(joy) 目标没建成任务（目标仍在内存里跑）：{e}");
+                    eprintln!("(joy) 目标没建成任务：{e}");
+                    return None;
                 }
             }
             (Some(condition), Some(task)) => {
                 if let Err(e) = self.tasks.set_goal(&task.id, Some(condition)).await {
-                    eprintln!("(joy) 目标没写进任务台账（内存里仍然生效）：{e}");
+                    eprintln!("(joy) 目标没写进任务台账：{e}");
                 }
             }
             // Clearing: the task survives as a single-turn one (its title remains the record).
@@ -292,10 +290,9 @@ impl Server {
                     eprintln!("(joy) 清目标没写进任务台账：{e}");
                 }
             }
-            (None, None) => {}
+            (None, None) => return None,
         }
-        goal::set(&self.goals, session_id, trimmed);
-        self.goal_view(session_id).await
+        self.tasks.active(session_id).await.ok().flatten()
     }
 
     /// The home this server was booted with (connectors.json, outbox — same file the
@@ -435,7 +432,6 @@ impl Server {
             hooks,
             todo,
             jobs: jobs_handle,
-            goals: goal::store(),
             queue: joyczl_state::Queue::new(pool.clone()),
             tasks: joyczl_state::Tasks::new(pool.clone()),
             runs: joyczl_state::Runs::new(pool.clone()),
@@ -460,8 +456,10 @@ impl Server {
     ///    **never replayed**: a write that may already have happened is a human's call;
     /// 2. a run left `running` belonged to the dead process: closed as `waiting` too;
     /// 3. a `running` task row is marked suspended with the honest reason (the turn's `open`
-    ///    checkpoint may then flip it back to running);
-    /// 4. surviving goals are loaded into the runner's mirror — a restart no longer forgets.
+    ///    checkpoint may then flip it back to running).
+    ///
+    /// There is no goal to restore any more: a goal is a column on the row, so step 3 already
+    /// brings it back with everything else.
     async fn restore_tasks(&self) {
         match self
             .steps
@@ -506,19 +504,6 @@ impl Server {
             Ok(_) => {}
             Err(e) => eprintln!("(joy) 任务对账读不了库（不挡启动）：{e}"),
         }
-        match self.tasks.list_active().await {
-            Ok(rows) => {
-                for row in rows {
-                    // A session-less task has no mirror slot — its condition lives on the row.
-                    if let (Some(condition), Some(session)) = (&row.goal_condition, &row.session_id)
-                    {
-                        goal::set(&self.goals, session, Some(condition));
-                    }
-                }
-            }
-            Err(e) => eprintln!("(joy) 活跃任务读不出来（目标不会自动恢复）：{e}"),
-        }
-
         // A queued follow-up is a promise made before the restart: "do this when you are done".
         // Handing it back to a turn is the difference between a queue and a note to self.
         match self.queue.sessions_with_pending().await {
@@ -570,36 +555,6 @@ impl Server {
         )
     }
 
-    /// This turn's approval channel. `never` mode (the default) returns `None` — nobody asks, so nobody
-    /// answers, and actions requiring approval are rejected outright.
-    /// Dashboard read surface: the session's goal state. No goal = `active: false` —
-    /// the shape is the same struct `goal/set` answers with, one source of truth.
-    ///
-    /// Since 0.11.0 the answer is read from the **task row**: the mirror in memory drives the
-    /// loop, but the ledger is what the human sees across restarts.
-    pub async fn goal_view(&self, session_id: &str) -> joyczl_protocol::GoalSetResponse {
-        let settings_max = self
-            .settings
-            .read()
-            .expect("settings 锁不该中毒")
-            .goal_max_rounds;
-        let task = self.tasks.active(session_id).await.ok().flatten();
-        match task {
-            Some(task) => joyczl_protocol::GoalSetResponse {
-                active: task.goal_condition.is_some(),
-                condition: task.goal_condition,
-                rounds_used: task.rounds_used,
-                max_rounds: task.max_rounds.max(settings_max),
-            },
-            None => joyczl_protocol::GoalSetResponse {
-                active: false,
-                condition: None,
-                rounds_used: 0,
-                max_rounds: settings_max,
-            },
-        }
-    }
-
     /// Dashboard read surface: the session's todo sheet. `None` = never written.
     pub fn todo_view(&self, session_id: &str) -> Option<joyczl_protocol::TodoListView> {
         self.todo
@@ -629,6 +584,8 @@ impl Server {
         }
     }
 
+    /// This turn's approval channel. `never` mode (the default) returns `None` — nobody asks, so nobody
+    /// answers, and actions requiring approval are rejected outright.
     pub(crate) fn approval_bridge(
         &self,
         turn_id: &str,

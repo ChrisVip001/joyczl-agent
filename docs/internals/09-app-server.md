@@ -46,9 +46,10 @@
 用户消息**回到同一个会话**再跑一轮。
 
 三处纪律都在代码里：轮次上限（`JOY_GOAL_MAX_ROUNDS`）到了就置 `round-limit` 并如实
-说没完成；判断器调用失败就置 `blocked` 停续轮**并保住目标**；终止态记在目标上
-（`Goal.status`），循环不再自己跑 —— 否则每一轮都会把同一个判断再问一遍。目标只有人
-能设（`/goal` 或 `goal/set`），模型连这条路径都看不见。
+说没完成；判断器调用失败就置 `blocked` 停续轮**并保住条件**；终止态记在任务行上
+（`agent_tasks.status`），循环不再自己跑 —— 否则每一轮都会把同一个判断再问一遍。目标
+只有人能设（`/goal`，写进同一行的 `goalCondition`），模型连这条路径都看不见；0.17 起
+内存里没有第二份目标记录了，`goal.rs` 只剩那个判断器。
 
 `GoalRound` 通知是「为什么又跑了一轮」的唯一答案，REPL 每次都会打一行。
 
@@ -165,7 +166,7 @@ clone settings
 `builtin_tools` 的三段：
 
 ```
-1. handlers::build_default()                           ← 11 个内置工具（⑥）
+1. handlers::build_default()                           ← 22 个内置工具（⑥）
 2. if settings.exec_enabled { register(run_command) }   ← 默认关；开了才注册（⑥）
 3. McpClient::connect(home/mcp.json) → warnings 打 stderr、每个工具注册进来
 ```
@@ -173,34 +174,73 @@ clone settings
 第 3 段的容错：连不上的服务器**只留一行警告**，Joy 照样启动；没有 `mcp.json`
 就等于没配 MCP。
 
-## 9.2 `run_turn`：17 步流水线
+## 9.2 `run_turn`：一轮的全流程
 
-`turn.rs（run_turn）`。顺序本身是设计，逐步讲：
+`turn.rs（run_turn）`。顺序本身是设计；按「准备 → 执行 → 决策 → 收尾」四段讲。
+每一格的要点是**为什么在这个位置**——位置错了，语义就错了。
+
+### 准备段：任何副作用之前
 
 | # | 步骤 | 为什么在这个位置 |
 |---|---|---|
-| 1 | `settings = server.settings()`（快照）、`started = Instant::now()` | 一轮之内配置不变 |
-| 2 | `resolved = server.resolved()`，为 `None` → `PROVIDER_ERROR`「模型还没配好：缺 API key…」 | 缺 key 的报错要说清「怎么办」（③ 的 `no_key_message` 是同一套语气） |
-| 3 | `session_id`：空/纯空白 → `"default"` | |
-| 4 | `turn_id = new_turn_id()`（`"t{纳秒}"`） | |
-| 5 | **登记取消令牌** + `_guard = TurnGuard{…}` | 守卫先建，无论怎么退出都摘表 |
-| 6 | 发 `TurnStarted` | 客户端据此显示用户消息 |
-| 7 | **前门 `graph_route`**；返回 `None`（图关着/坏了）就调 `full_turn` | 图只能省时间，不能减能力 |
-| 7b | `full_turn` 里先算**上下文预算**（窗口 × `JOY_COMPACT_THRESHOLD` 减掉 system/工具/答案/摘要的预留），再用它决定保留几轮历史 | token 是闸门、轮数是上限（⑦） |
-| 7c | loop 抛错时只有**上下文溢出**会触发「强制压缩 + 重试一次」 | 别的错误重试只会以同样方式再失败 |
-| 8 | 补发 `ToolCompleted` 通知（每个工具一条） | `ToolStarted` 在 loop 期间由 observer 发（⑨.4），这里补的是结束态 |
-| 9 | `fold_tool_activity(reply, tool_calls)` | 见 9.3 |
-| 10 | `quick = graph.route == Quick` | |
-| 11 | 组装 `TurnMeta{gate, graph, iterations, latency_ms, tools, model（quick 时是小模型）, provider, usage, interrupted, guard_hits, guard_note}` | 「你是什么模型」不会被自己答错；循环护栏的账也记在这儿 |
-| 12 | `meta_json = to_string(&meta)` | |
-| 13 | **trace 与 usage 各写一行** | 观测不是可选项，但写失败只喊 stderr |
-| 14 | `chat.append_exchange(user, reply, session_id, "app-server", meta_json)` | assistant 行带 meta |
-| 15 | `consolidate_if_due(...)` → `>0` 时发 `ConsolidationCompleted` | 攒够了才提炼（⑦） |
-| 16 | `export_markdown(...)`（MEMORY.md 镜像） | 失败只 eprintln——「镜子」不该让整轮报错 |
-| 17 | 发 `TurnCompleted`，**最后**发 JSON-RPC 应答 | 保证客户端先收全通知再收应答 |
+| 1 | `settings` 快照、`started = Instant::now()` | 一轮之内配置不变 |
+| 2 | `session_id`：空/纯空白 → `"default"` | |
+| 3 | **认领任务**：`tasks.active(session)` | 在模型解析之前——任务可能**声明档位**，钉住这一轮用什么模型 |
+| 4 | `tier`：显式参数 > 任务声明；拼错在这里被拒 | 档位拼错等于把钱记到别的模型上，不能静默猜 |
+| 5 | `resolved()`：没 key → `PROVIDER_ERROR` 带指引 | 报错要说「怎么办」（③ 的 `no_key_message` 同一套语气） |
+| 6 | `resolved_for_turn`：档位/自动路由定模型，理由进 `route_reason` | 选择的**原因**不藏——`meta.routeReason` 透明 |
+| 7 | 附件：读文件 + base64 + 视觉能力门 | 坏附件不许留下半轮 |
+| 8 | `turn_id = new_turn_id()` | |
+| 9 | **会话门** `begin_turn`：占用 → `SESSION_BUSY`(-32003) 带占用者 `turnId` | **任何副作用之前**：被拒的回合不许把任务翻成 `running`、不许留 checkpoint。「等它」还是「补一句」由这一个 id 决定 |
+| 10 | `TurnGuard`（Drop 摘表 + 释放会话门） | 无论怎么退出都不泄漏 |
+| 11 | 任务心跳 `set_running` + `taskUpdated` | 任务卡显示「正在跑第几轮」靠它 |
+| 12 | 验收条件 `verify::parse`（每轮一次） | 验收每轮都跑，重复 parse 比它保护的 `stat` 还贵 |
+| 13 | **执行计划**（`JOY_PLAN`，有任务才做）：一次模型调用 → `task_steps(kind="plan")` + 文本附到消息 | 计划失败只打日志照常跑——任务不能因为计划画不出来就失败 |
+| 14 | 开 run（与 turn 同 id） | checkpoint 借此知道自己属于哪次尝试 |
+| 15 | `max_rounds`：任务声明 > `goal_max_rounds` | |
+| 16 | checkpoint 出口 | 恢复路径共用同一个出口，「续跑与首跑同账」靠构造保证 |
+| 17 | 工作目录：本轮指定 → **任务自己的** → 会话记的 | 任务说「这个目录归我」就要兑现——写入边界与验收根是**同一个**目录；不存在 = 没有可写范围（fail-closed，绝不退回进程 cwd） |
+| 18 | 发 `TurnStarted` | 客户端据此显示用户消息 |
+| 19 | SessionStart 钩子（首轮；`additionalContext` 前插，`block` 可拒） | 钩子的背景要说清「不是用户说的」 |
+| 20 | 计划文本附到消息末尾 | 离它描述的工作最近 |
+| 21 | retry sink（Retry 通知 + 计数进 `meta.retries`） | 模型调用可能发生在图或 loop 里的任何位置 |
 
-第 17 步的顺序在 `stdio` 之外也成立：`dispatch` 对 `turn/start` 返回
+### 执行段：图前门 or 完整 loop
+
+| # | 步骤 | 为什么在这个位置 |
+|---|---|---|
+| 22 | 前门 `graph_route`；返回 `None`（图关着/坏了）→ `full_turn` | 图只能省时间，不能减能力；`full_turn` 里先算**上下文预算**，溢出才触发「强制压缩 + 重试一次」 |
+| 23 | 失败 → `fail_turn`（checkpoint/task/run 台账诚实关闭）+ `StopFailure` 钩子 + 返回错误 | 烂尾的台账会骗过启动对账和任务卡 |
+| 24 | Stop 钩子循环（最多续 1 次，同一 run、step 序连续） | 「Stop 能拖住结尾」，但**不**用它造第二个循环——自动续轮属于目标循环 |
+| 25 | `observe` 每轮消息 → steps / artifacts / contradictions | 台账在轮次边界记，不在工具回调里记 |
+
+### 决策循环：事实先于判断
+
+| # | 步骤 | 为什么在这个位置 |
+|---|---|---|
+| 26 | `record_round` + `account_round`（steps/artifacts/花费 + 三条确定性验收） | 先记账再决策；**检查先于判断器**——验收没过就不叫 judge（省一次调用，也不给模型说服自己的机会） |
+| 27 | 0. 被打断 → `NeedsAttention` | 用户的「停」必须赢过循环的「再试一轮」——否则中断后循环还会烧轮次 |
+| 28 | 1. 预算（时长/Token/工具调用）超 → `NeedsAttention` + `budget` 事件 | 在任何东西花钱**之前**判；理由点名是哪一条超了 |
+| 29 | 2. 验收失败 → 轮次未尽：**此处是唯一允许改计划的时刻**（最多两版），纠正消息（实测结果 + 计划）再跑一轮；轮尽 → `NeedsAttention` | 喂回的是**测量**，不是判断器的意见，更不是「再努力」 |
+| 30 | 3. 矛盾（工具说写了、文件不在）→ `NeedsAttention` | 唯一能拦住「假完成」的信号；机器量到了就不该由它拍板 |
+| 31 | 4. 判断器（声明了 `goal_condition` 才调）：`ok` → done；`impossible` → failed；轮尽 → `round-limit` failed；**坏了 → blocked `NeedsAttention` 并保住目标**；否则理由当下一条消息续轮 | 它只能补充、不能覆盖事实；它故障不等于「目标不可能」——该人看 |
+
+### 收尾段：`finalize_turn`
+
+| # | 步骤 | 为什么在这个位置 |
+|---|---|---|
+| 32 | checkpoint 台账：正常 = `done`；`turn/interrupt` = `abandoned`（不自动续）；`task/suspend` = `suspended`（可续） | 「进程内走到头」之后，`open` 只能是「进程死在半路」——启动对账靠这条不变量 |
+| 33 | 任务台账按 `TaskDecision` 关闭（done / needs_attention / failed）+ 关 run + `taskUpdated` | needs_attention 是**非终态**：人还能继续或取消 |
+| 34 | `fold_tool_activity` 把「用过什么工具」折进回复文本 | 防「重复预订会议」这类复读 |
+| 35 | 组装 `TurnMeta`（gate/graph/iterations/usage/model/provider/latency/interrupted/guardHits/retries/routeReason/goalStatus/goalRounds） | meta 随对话落库，「你是什么模型」不会被自己答错 |
+| 36 | trace 与 usage 各写一行 | 观测不是可选项，但写失败只喊 stderr |
+| 37 | `chat_log` append（assistant 行带 meta） | |
+| 38 | `consolidate_if_due` → `ConsolidationCompleted`；`export_markdown` 刷 MEMORY.md 镜像 | 攒够了才提炼；「镜子」失败不让整轮报错 |
+| 39 | 发 `TurnCompleted`，**最后**才发 JSON-RPC 应答 | 保证客户端先收全通知再收应答 |
+
+最后一步的顺序在 `stdio` 之外也成立：`dispatch` 对 `turn/start` 返回
 `Outcome::SelfSent`，意思是「应答我已经自己发过了」，`handle` 就不再补发。
+恢复路径（`resume.rs`）走的是同一个 `finalize_turn`——「续跑与首跑同账」由此成立。
 
 ## 9.3 `fold_tool_activity`：防「重复预订会议」
 
@@ -259,7 +299,7 @@ calls.is_empty() → 原样返回 reply
 - 事件：`Started/NodeStarted/NodeEnded/Ended` 翻成通知；`Route` 落进 `meta.graph`；
   `Inner` **不再翻**（loop 层已经发过了，翻两次会重复）。
 
-## 9.5 `dispatch.rs`：13 个方法的实现
+## 9.5 `dispatch.rs`：39 个方法的实现
 
 ```rust
 enum Outcome { Value(Value), SelfSent }

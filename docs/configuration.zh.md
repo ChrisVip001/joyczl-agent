@@ -213,6 +213,7 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | `JOY_RETRIEVAL_TOP_K` | `4` | 检索门放行时拉回的 facts 条数 |
 | `JOY_GRAPH_WORKFLOWS` | `0` | 打开 triage 前门图（失败开放，只能更快不能更差） |
 | `JOY_APPLE_CALENDAR` | `0` | `create_event` 时经 AppleScript 同步 Calendar.app |
+| `JOY_GOOGLE_CALENDAR` | `0` | Google Calendar 的连接流程**还没实现**；设了它 `create_event` 会在回执里明说「这次没有同步」，而不是沉默 —— 诚实开关，不是同步开关 |
 | `JOY_SKILL_DIRS` | — | 冒号分隔的额外技能目录（`home/skills` 之外） |
 | `JOY_JUDGE_MODEL` | small model | `joy judge` 的裁判模型（裁判不是选手） |
 | `JOY_GH_REPO` | — | `joy gather` 的 github scan 仓库（owner/repo） |
@@ -281,7 +282,7 @@ HTTP 端点是 POST body。
 进程写的），新的内容**不会执行**，并在 stderr 说明。改掉一个正在生效的策略钩是
 「悄悄换了闸门」那种事，宁可停下来让人看见。
 
-`Stop` 的阻断会让这一轮**再跑一次**（上限 1 次）：它因此是目标循环（`goal/set`）的
+`Stop` 的阻断会让这一轮**再跑一次**（上限 1 次）：它因此是目标循环（`/goal`）的
 前身，但不像目标循环那样带轮次上限、判断器与人类授权边界。
 
 ## 轮内工具结果预算

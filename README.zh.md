@@ -42,7 +42,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
   飞书——见 [docs/gateways.zh.md](docs/gateways.zh.md)）
 - **记忆**：语义事实（FTS5、支持中文）、带日期的情景、过程 Skills——
   检索门保证只在相关时才翻记忆（[docs/architecture.zh.md](docs/architecture.zh.md)）
-- **行动**：21 个内置工具外加 MCP 服务器
+- **行动**：22 个内置工具外加 MCP 服务器
   （[docs/configuration.zh.md](docs/configuration.zh.md)）
 - **图式规划**：triage 前门让闲聊便宜地得到快答；gather 工作流写晨报
   （[docs/architecture.zh.md](docs/architecture.zh.md)）

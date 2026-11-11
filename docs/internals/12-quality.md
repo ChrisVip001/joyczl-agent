@@ -123,13 +123,16 @@
 的输出不稳定，用它当门是自欺欺人。历史战绩里它抓到过一次「声称已存但 `save_note`
 never ran」的虚报（0/10），这就是这一层的价值。
 
-## 12.4 四条冒烟：真进程
+## 12.4 七条冒烟：真进程
 
 | 脚本 | 起什么 | 证明什么 |
 |---|---|---|
 | `smoke.sh` | 真 `joy app-server` + 假 SSE 服务器（`fake_sse_server.py`） | 协议 + 传输 + state 这条链通；含图路径与失败开放 |
 | `smoke-gateway.sh` | 真 app-server + 四个网关的打桩链路 | 网关的会话/白名单/切分逻辑 |
 | `smoke-dashboard.sh` | 真 app-server + 真 HTTP/SSE | 驾驶舱那条 HTTP→JSON-RPC 翻译 |
+| `smoke-resume.sh` | 真 app-server + `kill -9` + 重启对账 | checkpoint 停在工具边界、不重放副作用 |
+| `smoke-connector.sh` | 真 app-server + 假 IMAP/SMTP/飞书 OAuth（`fake_imap_server.py` 等） | 连接器三道闸、token 续期 |
+| `smoke-business.sh` | 真 app-server + HTTP | 任务 API、webhook 签名、档位路由 |
 | `smoke-sdk-python.sh` | 真 app-server + 真 SDK | SDK 的子进程生命周期（起、说、退） |
 
 它们**必须用真二进制**，因为测的正是「进程边界」——eval 用进程内调用绕过了

@@ -64,7 +64,7 @@ pending 表都按**归一化字符串**做 key——同一份协议在两种语�
   渲染**；`POLL_MS = 15000` 定时刷新。
 - `api.ts` 的 `talk()` 是个**异步生成器**：手读 `fetch` 的 body，按 `\n\n` 切帧、
   取 `data:` 载荷逐条 yield 出去；`finally` 里 `reader.cancel()` 收尾。
-- `render.ts` 全是纯函数（`renderOverview` / `renderMemory` / `messageRow` /
+- `render.ts` 全是纯函数（`renderOverview` / `renderTaskCard` / `messageRow` /
   `metaChips` / `turnFooter`…），且**从不拼 HTML**：文字走 `textContent`，结构走
   `createElement`（防 XSS——模型回复和记忆内容都是外部输入，没有理由变成标记）。
 - `markdown.ts` 把模型的回复画成 Markdown：**自己写的解析器 + 直接建 DOM**，不引

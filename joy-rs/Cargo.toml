@@ -135,3 +135,14 @@ unused_must_use = "warn"
 [workspace.lints.clippy]
 # 协议是纯数据结构：枚举人类可读的名字比内存布局重要
 enum_variant_names = "allow"
+
+# ---- 构建体积 ----------------------------------------------------------------
+# 默认的 dev profile 会给 300 个依赖每个都带上完整 DWARF：一次干净的
+# `cargo build -p joyczl-cli` 就是 2.0G，`cargo test --workspace` 再叠一层。
+# 依赖的调试信息几乎从不用到（没人单步进 reqwest）；自己的 crate 保留行号表，
+# `RUST_BACKTRACE=1` 仍然能指到源码行 —— 实测干净构建从 2.0G 降到约 1.2G。
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

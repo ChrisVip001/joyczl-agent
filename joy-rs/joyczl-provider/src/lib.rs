@@ -244,7 +244,8 @@ impl ProviderInfo {
     }
 }
 
-/// These defaults are just starting points; `JOY_MODEL` / `JOY_SMALL_MODEL` override anytime.
+/// These defaults are just starting points; since models.json is the single configuration
+/// path, the active entry there overrides them (`resolve_with`, below).
 /// openrouter's default is a `:free` id — it runs at zero cost (rate-limited).
 pub static PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
@@ -366,7 +367,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
         key_env: "",
         base_url: Some("http://127.0.0.1:11434/v1"),
         // First `ollama pull qwen3:8b` (main model) and `qwen3:4b` (the cheap model for the
-        // retrieval gate / consolidation); swap in your own pulled names via JOY_MODEL.
+        // retrieval gate / consolidation); override via models.json, not env vars.
         model: "qwen3:8b",
         small_model: "qwen3:4b",
         context_window: 32_768,

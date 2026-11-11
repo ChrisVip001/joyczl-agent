@@ -16,17 +16,17 @@ use chrono::Local;
 use futures_util::stream::{self, Stream};
 use joyczl_protocol::{
     codes, methods, ApprovalLogResponse, ApprovalRespondParams, ApprovalRespondResponse,
-    ConfigReadResponse, ConnectorStatus, DashboardData, ErrorObject, GoalSetParams,
-    GoalSetResponse, InboxListView, InboxSummarizeParams, InboxSummarizeResponse,
-    MemoryListEpisodesResponse, MemoryListResponse, MessageRole, ModelProfilesResponse,
-    ModelRemoveParams, ModelRemoveResponse, ModelRoutesResponse, ModelRoutesSaveParams,
-    ModelSaveParams, ModelSaveResponse, RunResponse, ScheduleListResponse, ServerNotification,
-    SessionGetParams, SessionGetResponse, SessionListResponse, SessionMessagesParams,
-    SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionUpdateParams,
-    SessionUpdateResponse, TaskActionParams, TaskArtifactsResponse, TaskCreateParams, TaskEnvelope,
-    TaskListResponse, TaskViewResponse, TodoListView, TurnFollowUpParams, TurnFollowUpResponse,
-    TurnInterruptParams, TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams,
-    TurnStartResponse, TurnSteerParams, TurnSteerResponse, UsageSummaryResponse,
+    ConfigReadResponse, ConnectorStatus, DashboardData, ErrorObject, InboxListView,
+    InboxSummarizeParams, InboxSummarizeResponse, MemoryListEpisodesResponse, MemoryListResponse,
+    MessageRole, ModelProfilesResponse, ModelRemoveParams, ModelRemoveResponse,
+    ModelRoutesResponse, ModelRoutesSaveParams, ModelSaveParams, ModelSaveResponse, RunResponse,
+    ScheduleListResponse, ServerNotification, SessionGetParams, SessionGetResponse,
+    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
+    SessionNewResponse, SessionUpdateParams, SessionUpdateResponse, TaskActionParams,
+    TaskArtifactsResponse, TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse,
+    TodoListView, TurnFollowUpParams, TurnFollowUpResponse, TurnInterruptParams,
+    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams, TurnStartResponse,
+    TurnSteerParams, TurnSteerResponse, UsageSummaryResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -213,15 +213,13 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
     // Connectors: not part of the app-server protocol — the file is the truth and ops
     // sits on the same machine. A broken file is reported, never rendered as "none".
     let (connectors, connectors_error) = connector_status(app);
-    let (goal, todos, task, task_artifacts) = match session {
+    let (todos, task, task_artifacts) = match session {
         Some(id) => {
-            let goal: GoalSetResponse = app
-                .request(methods::GOAL_VIEW, json!({ "sessionId": id }))
-                .await?;
             let todos: Option<TodoListView> = app
                 .request(methods::TODO_VIEW, json!({ "sessionId": id }))
                 .await?;
-            // The long task behind that goal (0.11.0): status + round account + the pause switch.
+            // The session's task (0.11.0): status + round account + the pause switch. Since 0.17
+            // this is also where the goal lives — `goalCondition` is the condition `/goal` wrote.
             // Since 0.14 it also carries acceptance verdicts and spend, so the card can show
             // **why** it is not done instead of just that it is not.
             let task: TaskViewResponse = app
@@ -243,9 +241,9 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
                     }),
                 None => Vec::new(),
             };
-            (Some(goal), todos, task.task, task_artifacts)
+            (todos, task.task, task_artifacts)
         }
-        None => (None, None, None, Vec::new()),
+        None => (None, None, Vec::new()),
     };
 
     Ok(DashboardData {
@@ -254,7 +252,6 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
         sessions: sessions.data,
         facts: facts.data,
         episodes: episodes.data,
-        goal,
         todos,
         task,
         task_artifacts,
@@ -396,24 +393,6 @@ pub async fn follow_up(
 }
 
 /// `POST /api/approval` — answer one "should this run".
-/// `POST /api/goal` — set or clear a goal (missing/empty `condition` = clear).
-///
-/// Same path as turn: the app-server is a subprocess, `goal/set` one of its methods.
-/// **The dashboard is not the only entry point**: the terminal's `/goal` is the same thing.
-pub async fn goal(
-    Extension(app): Extension<Arc<AppServer>>,
-    Json(params): Json<GoalSetParams>,
-) -> Response {
-    let payload = serde_json::to_value(&params).expect("GoalSetParams 一定能序列化");
-    match app
-        .request::<GoalSetResponse>(methods::GOAL_SET, payload)
-        .await
-    {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => failed(StatusCode::OK, error),
-    }
-}
-
 /// What the connector panel shows: one row per configured connector, or the reason the
 /// file could not be read. The allowlist size is the visible width of the door.
 fn connector_status(app: &AppServer) -> (Vec<ConnectorStatus>, Option<String>) {
@@ -547,7 +526,7 @@ pub async fn task(
 /// the frontend knows its click went unheard instead of assuming the approval took effect.
 /// Configured model profiles + the current one (**no keys**, only a "where is the key" ptr).
 ///
-/// Same discipline as `/api/goal`: these are **human-only** settings — the model has no
+/// Same discipline as `/api/task`: these are **human-only** settings — the model has no
 /// `model/*` tools and cannot reach the keys.
 /// Usage ledger (migration 0010): per-model aggregates + totals. Bookkeeping, not enforcing.
 pub async fn usage(Extension(app): Extension<Arc<AppServer>>) -> Response {

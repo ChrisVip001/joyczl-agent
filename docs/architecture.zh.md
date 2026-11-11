@@ -97,7 +97,7 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
 
 ### 工具层（joyczl-tools）
 
-11 个内置工具 + MCP 外挂，统一进 `ToolRegistry`。契约：`execute`
+22 个内置工具 + MCP 外挂，统一进 `ToolRegistry`。契约：`execute`
 永不返回 Err——错误作为 `Error: …` 文本回给模型，loop 不崩。工具失败
 是模型可以纠正的信息，不是崩溃理由。
 

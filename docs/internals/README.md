@@ -29,18 +29,18 @@
 
 | # | 章 | 内容 |
 |---|---|---|
-| ① | [协议层](01-protocol.md) | 63 个类型的单一来源、代码生成管线、JSON-RPC 信封、noop 宏为什么存在 |
-| ② | [存储层](02-state.md) | state.db 的每一次 PRAGMA、5 个迁移、每张表的 SQL 契约、FTS5 trigram 与 LIKE 回退 |
+| ① | [协议层](01-protocol.md) | 130 个类型的单一来源、代码生成管线、JSON-RPC 信封、noop 宏为什么存在 |
+| ② | [存储层](02-state.md) | state.db 的每一次 PRAGMA、19 个迁移、每张表的 SQL 契约、FTS5 trigram 与 LIKE 回退 |
 | ③ | [配置层](03-config.md) | `Settings` 的只读一次模型、`SettingsPatch` 的三级叠加、`config/write` 的落盘顺序 |
 | ④ | [provider 层](04-provider.md) | 12 家厂商表、`resolve` 的优先级链、两种 wire format 的纯函数翻译、SSE 解析、embedding |
 | ⑤ | [agent 循环](05-loop.md) | `Turn` 的全部输入、双护栏、流式与非流式如何归一、打断的三个安全点 |
-| ⑥ | [工具层](06-tools.md) | `Tool`/`ToolRegistry` 契约、11 个内置工具逐个讲、`run_command` 的三道闸门与沙箱 |
+| ⑥ | [工具层](06-tools.md) | `Tool`/`ToolRegistry` 契约、22 个内置工具逐个讲、`run_command` 的三道闸门与沙箱 |
 | ⑦ | [记忆层](07-memory.md) | 检索门、consolidation、上下文压缩的水位线、RRF 混合检索、技能渐进披露、技能安装 |
 | ⑧ | [图引擎](08-graph.md) | 波次执行算法、写冲突检测、路由与 `on_error`、triage 前门、gather 晨报 |
-| ⑨ | [服务端](09-app-server.md) | `Server` 装配、`run_turn` 17 步流水线、dispatch 的 13 个方法、stdio 并发模型、trace |
-| ⑩ | [命令行](10-cli.md) | 8 个子命令、REPL 的流式渲染、`joy schedule` 的 cron、`joy gather` 的真实绑定 |
+| ⑨ | [服务端](09-app-server.md) | `Server` 装配、`run_turn` 全流程（会话门/任务/计划/验收）、dispatch 的 39 个方法、确定性内核 `joyczl-agent`、stdio 并发模型、trace |
+| ⑩ | [命令行](10-cli.md) | 12 个子命令、REPL 的流式渲染、`joy schedule` 的 cron、`joy gather` 的真实绑定 |
 | ⑪ | [前端与 SDK](11-frontends.md) | TS 客户端/驾驶舱/四平台网关、Python SDK 与分平台二进制包 |
-| ⑫ | [质量体系](12-quality.md) | eval 场景格式与断言、mock provider、judge、四条冒烟、CI 门 |
+| ⑫ | [质量体系](12-quality.md) | eval 场景格式与断言、mock provider、judge、长任务基准、七条冒烟、CI 门 |
 
 ## 10 分钟全链路：`joy` 里敲一句话，发生了什么
 
@@ -49,7 +49,7 @@
 1. **启动**（⑩）：`main` 看到没有子命令 → 读环境变量得到 `Settings`（③）→
    `joyczl_app_server::open` 把 `<home>/settings.json` 里的补丁叠上去 →
    `state.db` 建/开、WAL、迁移跑到最新（②）→ `resolve()` 拿 provider 客户端（④）→
-   `builtin_tools()` 组装工具表（内置 11 个 + 可能有的 exec + MCP）（⑥）→ 进 REPL。
+   `builtin_tools()` 组装工具表（内置 22 个 + 可能有的 exec + MCP）（⑥）→ 进 REPL。
 2. **你敲的这句话**进 `chat_turn`：起一个 `EventSink` 通道，`run_turn` 跑在另一个
    任务里，REPL 同时开始消费通知（⑩）。
 3. **`run_turn` 第一步**（⑨）：登记取消令牌（`turns[turn_id] = Interrupt`）并挂上
@@ -74,6 +74,11 @@
    发 `TurnCompleted` → **最后**才发 JSON-RPC 应答（保证客户端先收到全部通知）。
 9. **REPL 侧**（⑩）：`TextDelta` 逐个 `print!`，工具与门的小字插在中间，
    `TurnCompleted` 收尾打印「— 模型 · 轮数 · 耗时 · token」。
+
+以上是**纯聊天**的一轮。若这个会话挂着活跃任务，同一轮在 `run_turn` 里还会多出：
+开头的**会话门**认领（一个会话同时只许一轮）、任务心跳、（`JOY_PLAN` 开着时的）
+执行计划调用，以及每轮结束后的 **observe → verify → budget → judge** 决策循环；
+收尾也会关 run、把 `TaskDecision` 写进任务台账 —— 全流程见 ⑨ 的 9.2。
 
 再加一句要点的：**任何一层失败都不许让整轮对话崩**——门失败开放、图失败回退
 loop、摘要失败退化摘录、向量失败只用关键词、trace 写失败只喊 stderr、工具错误

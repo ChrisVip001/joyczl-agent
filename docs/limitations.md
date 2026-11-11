@@ -248,8 +248,8 @@ extraction use `run_command` + curl or an MCP fetching service.
   the goal met", and giving it more would just have it start doing the work. It
   follows that its verdict can be wrong — which is why it may only *continue a
   round*, never let anything past a permission check.
-* **Deliberate** — Goals are set, changed and cleared by humans only (`/goal` or
-  `goal/set`): the model has no path to them. After a terminal outcome (satisfied /
+* **Deliberate** — Goals are set, changed and cleared by humans only (`/goal`, which writes
+  `goalCondition` on the task row): the model has no path to them. After a terminal outcome (satisfied /
   impossible / round-limit / judge failure) the loop stops by itself and waits for a
   human.
 
@@ -472,7 +472,7 @@ no image library, no decode).
   `fileContains` / `toolsOk` are checked after every round, and a failing condition skips the
   judge entirely. Three kinds only — anything else ("the report is good") is not checkable and
   is not accepted as a condition. `FileContains` is a plain substring, never a regex.
-  → `joy-rs/joyczl-app-server/src/verify.rs`
+  → `joy-rs/joyczl-agent/src/verify.rs`
 * **Boundary** — A side effect interrupted mid-flight is **never replayed**: a step left
   `running` becomes `waiting` at boot and waits for a human. The engine would rather stop and
   ask than send the same write twice.

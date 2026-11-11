@@ -335,7 +335,7 @@ impl Tasks {
         Ok(())
     }
 
-    /// `goal/set`'s compatibility layer: change the condition on the live task.
+    /// The `/goal` door: change the condition on the live task (the only place a goal lives).
     pub async fn set_goal(&self, id: &str, condition: Option<&str>) -> Result<()> {
         sqlx::query(
             "UPDATE agent_tasks SET goal_condition = ?, updated_at = datetime('now') WHERE id = ?",

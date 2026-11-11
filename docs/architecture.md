@@ -109,7 +109,7 @@ interface and run the same tests.
 
 ### Tools (joyczl-tools)
 
-11 built-in tools + MCP, merged into one `ToolRegistry`. The contract:
+22 built-in tools + MCP, merged into one `ToolRegistry`. The contract:
 `execute` never returns Err — errors return to the model as `Error: …` text
 and the loop keeps going. A tool failure is information the model can correct,
 not a crash.

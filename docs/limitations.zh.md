@@ -195,7 +195,7 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   它要回答的是「这段对话说明目标达成了吗」，多看别的只会让它开始替模型干活。
   也正因为如此，它对「做完了吗」的判断可能不准 —— 所以它只能**续轮**，不能
   替人决定放行任何东西。
-* **刻意** —— 目标只能由人设/改/清（`/goal` 或 `goal/set`）：模型没有这条路径。
+* **刻意** —— 目标只能由人设/改/清（`/goal`，写进任务行的 `goalCondition`）：模型没有这条路径。
   到达终止态（达成/做不到/超轮次/判断器挂了）之后循环不会自己再跑，等下一句人的话。
 
 ## 并发
@@ -375,7 +375,7 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **边界** —— 「完成」由**事实决定，不由模型的结论决定**：每轮结束检查 `fileExists` /
   `fileContains` / `toolsOk`，有任一条不过就**不调判断器**。只有这三类算验收条件——"报告写得
   好"这种没法量的不收；`FileContains` 是纯子串，永远不当正则用。
-  → `joy-rs/joyczl-app-server/src/verify.rs`
+  → `joy-rs/joyczl-agent/src/verify.rs`
 * **边界** —— 中途断掉的副作用**绝不重放**：停在 `running` 的步骤在启动时转成 `waiting`，
   等人确认。宁可停下来问一句，也不把同一次写入发两遍。
   → `joy-rs/joyczl-state/src/steps.rs`（`settle_running`）、`joy-rs/joyczl-app-server/src/lib.rs`

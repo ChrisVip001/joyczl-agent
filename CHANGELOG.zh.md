@@ -4,6 +4,22 @@
 
 ## 未发布
 
+### 收口：目标不再是独立对象，只写在任务行上
+
+- 删掉协议方法 `goal/set` 与 `goal/view`、类型 `GoalSetParams` / `GoalSetResponse`、HTTP 路由
+  `POST /api/goal`，以及 `Server.goals` 这个「runner 的镜像」。真值一直在
+  `agent_tasks.goal_condition` 上（0.14 起），镜像只是启动时从行里恢复、再由几处代码手工
+  保持同步的第二份记录 —— 两个真相迟早会分叉。
+- 循环改读任务行：条件读 `task.goal_condition`，轮次就是 `round_no`（写在同一行），终止态由
+  `TaskStatus` 承担（`failed` + 理由），不再有第三份状态。`goal.rs` 只剩判断器。
+- 人的入口收成一个：`/goal <条件>`（没有任务就建一条、有就改它；`/goal clear` 只摘掉条件，
+  行留下当记录）。协议里因此**没有**设目标的入口 —— 程序侧要设就用 `task/create {goalCondition}`。
+- 驾驶舱的任务卡不再读 `DashboardData.goal`：它本来就在读 `data.task`（同一行），渲染里那段
+  「目标」是重复建模，一并删掉。
+- 测试：`a_goal_is_the_task_row_and_nothing_else` 直接断言行（设 / 改同一行 / 清掉条件 /
+  空会话不建行）；循环测试改为经 `set_task_goal` 起跑；超轮次的断言从「内存里还有目标」改成
+  「行还在、`status = failed`、条件没被清掉」。
+
 ### 清理：三个没人读的开关
 
 - `experimental`（`JOY_EXPERIMENTAL`）从 `Settings` / `SettingsView` / `SettingsPatch` 删除：

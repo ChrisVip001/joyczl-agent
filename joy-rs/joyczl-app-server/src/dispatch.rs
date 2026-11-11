@@ -7,18 +7,18 @@
 use joyczl_protocol::{
     codes, methods, ApprovalLogParams, ApprovalRespondParams, ApprovalRespondResponse,
     ConfigReadParams, ConfigReadResponse, ConfigWriteParams, ConfigWriteResponse, ErrorObject,
-    GoalSetParams, InboxSummarizeParams, JsonRpcError, JsonRpcMessage, JsonRpcRequest,
-    JsonRpcResponse, MemoryForgetParams, MemoryForgetResponse, MemoryListEpisodesParams,
-    MemoryListEpisodesResponse, MemoryListParams, MemoryListResponse, MemoryRememberParams,
-    MemoryRememberResponse, MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo,
-    ModelListParams, ModelListResponse, ModelProfilesParams, ModelRemoveParams,
-    ModelRoutesSaveParams, ModelSaveParams, RequestId, ScheduleListParams, ServerNotification,
-    SessionGetParams, SessionGetResponse, SessionListParams, SessionListResponse,
-    SessionMessagesParams, SessionMessagesResponse, SessionNewParams, SessionNewResponse,
-    SessionUpdateParams, SessionUpdateResponse, SessionViewParams, TaskActionParams,
-    TaskCreateParams, TaskGetParams, TurnFollowUpParams, TurnFollowUpResponse, TurnInterruptParams,
-    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams, TurnSteerParams,
-    TurnSteerResponse, TurnSteeredNotification, TurnView, UsageSummaryParams, JSONRPC_VERSION,
+    InboxSummarizeParams, JsonRpcError, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse,
+    MemoryForgetParams, MemoryForgetResponse, MemoryListEpisodesParams, MemoryListEpisodesResponse,
+    MemoryListParams, MemoryListResponse, MemoryRememberParams, MemoryRememberResponse,
+    MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo, ModelListParams,
+    ModelListResponse, ModelProfilesParams, ModelRemoveParams, ModelRoutesSaveParams,
+    ModelSaveParams, RequestId, ScheduleListParams, ServerNotification, SessionGetParams,
+    SessionGetResponse, SessionListParams, SessionListResponse, SessionMessagesParams,
+    SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionUpdateParams,
+    SessionUpdateResponse, SessionViewParams, TaskActionParams, TaskCreateParams, TaskGetParams,
+    TurnFollowUpParams, TurnFollowUpResponse, TurnInterruptParams, TurnInterruptResponse,
+    TurnListParams, TurnListResponse, TurnStartParams, TurnSteerParams, TurnSteerResponse,
+    TurnSteeredNotification, TurnView, UsageSummaryParams, JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -484,19 +484,6 @@ async fn dispatch(
                     data: None,
                 }),
             }
-        }
-
-        methods::GOAL_SET => {
-            let p: GoalSetParams = parse(params, method)?;
-            // Only a human can reach here: the model has no such tool, and no other method touches the goal table.
-            respond(server.goal_set(&p.session_id, p.condition.as_deref()).await)
-        }
-
-        methods::GOAL_VIEW => {
-            let p: SessionViewParams = parse(params, method)?;
-            // Read-only: the dashboard's task card asks what the loop is doing. The model
-            // has no path here either — its own goal view arrives via the prompt injection.
-            respond(server.goal_view(&p.session_id).await)
         }
 
         // ---- Long tasks: every branch is human-only (the model has no task tool) ----

@@ -10,7 +10,7 @@
 ```
 src/lib.rs          pub use protocol::v2::*;  pub use rpc::*;
 src/protocol/mod.rs pub mod v2;
-src/protocol/v2.rs  业务契约：13 个方法常量 + 63 个类型
+src/protocol/v2.rs  业务契约：39 个方法常量 + 130 个类型
 src/rpc.rs          JSON-RPC 2.0 信封（与业务无关的通用层）
 src/export.rs       生成器：TS / JSON Schema / 常量
 src/export_tests.rs 生成入口（标了 #[ignore]，只在需要时跑）
@@ -30,34 +30,42 @@ src/export_tests.rs 生成入口（标了 #[ignore]，只在需要时跑）
   `bigint`，而 `JSON.parse` 得到的是 `number`，写起来不报错、跑起来不符。
   存储层是 i64，跨层时用 `narrow()` 夹到 `i32`（`app-server/lib.rs`）。
 
-## 1.3 63 个类型都在哪
+## 1.3 130 个类型都在哪
 
-唯一清单是 `export.rs:34-110` 的 `protocol_types!` 宏（一个宏列出全部类型名，
+唯一清单是 `export.rs` 的 `protocol_types!` 宏（一个宏列出全部 130 个类型名，
 既做导出、也做 JSON Schema 平铺）。分类：
 
 | 类别 | 数量 | 例子 |
-|---|---|---|
+|---|---:|---|
 | JSON-RPC 信封（`rpc.rs`） | 7 | `RequestId`、`JsonRpcRequest`、`JsonRpcError`、`JsonRpcMessage` |
-| 通用 | 8 | `TokenUsage`、`GateDecision`、`GraphInfo`、`TurnMeta` |
+| 通用（回合/门/图/元数据） | 8 | `TokenUsage`、`GateDecision`、`GraphInfo`、`TurnMeta` |
 | 会话历史 | 2 | `MessageRole`、`Message` |
 | 记忆 | 2 | `Fact`、`Episode` |
 | 会话/模型/配置 | 4 | `SessionSummary`、`ModelInfo`、`SettingsView`、`SettingsPatch` |
-| 请求/应答对 | 26 | 13 组 `*Params` / `*Response` |
-| 驾驶舱 | 1 | `DashboardData` |
-| 通知 | 13 | 12 个 `*Notification` + `ServerNotification` 枚举 |
+| 请求/应答对 | 59 | `TurnStartParams/Response`、`TurnSteerParams/Response`、`TaskGetParams`… |
+| 长任务 | 16 | `AgentTaskView`、`AcceptanceView`、`BudgetView`、`RunView`、`ArtifactView` |
+| 收件箱 | 4 | `InboxListView`、`InboxSummarizeParams/Response` |
+| 驾驶舱 | 5 | `DashboardData`、`TodoListView`、`ConnectorStatus`、`SessionViewParams` |
+| 通知 | 23 | 21 个 `*Notification` + `ErrorNotification` + `ServerNotification` 枚举 |
 
-**13 个方法**（`v2.rs:23-37`，值形如 `<资源>/<动作>`）：
+**39 个方法**（常量集中在 `v2.rs` 的 `methods` 段，值形如 `<资源>/<动作>`）：
 
 ```
-turn/start  turn/interrupt
-session/list  session/new  session/messages
+turn/start  turn/interrupt  turn/steer  turn/follow-up  turn/list
+approval/respond  approval/log
+todo/view
+task/create  task/list  task/view  task/get  task/runs  task/artifacts
+task/suspend  task/resume  task/cancel
+inbox/list  inbox/summarize
+session/list  session/new  session/get  session/update  session/messages
 memory/search  memory/list  memory/list-episodes  memory/remember  memory/forget
 config/read  config/write
-model/list
+model/list  model/profiles  model/save  model/remove  model/routes  model/routes/save
+usage/summary  schedule/list
 ```
 
 `ServerNotification` 是 `#[serde(tag = "type", rename_all = "camelCase")]` 的枚举
-（12 个变体），所以线上一帧通知长这样：
+（21 个变体），所以线上一帧通知长这样：
 
 ```json
 {"jsonrpc":"2.0","method":"turn/notification",
@@ -73,8 +81,9 @@ model/list
   此处为 `null`。
 - `codes` 常量表分两段：标准段（`-32700` 解析、`-32600` 请求非法、`-32601` 方法
   不存在、`-32602` 参数非法、`-32603` 内部错）与 Joy 自定段
-  （`-32000` provider 错、`-32001` 工具错、`-32002` **还没实现**）。
-  最后这个刻意与 `METHOD_NOT_FOUND` 分开：「还没做」和「你拼错了」是两件事。
+  （`-32000` provider 错、`-32001` 工具错、`-32002` **还没实现**、
+  `-32003` **会话忙**：一个会话同时只许一轮，错误里带着占用者的 `turnId`）。
+  后两个都刻意与 `METHOD_NOT_FOUND` 分开：「还没做」「被占用」和「你拼错了」是三件事。
 
 ## 1.5 单一来源生成管线
 
@@ -108,7 +117,7 @@ pub struct TokenUsage { pub input_tokens: i32, pub output_tokens: i32 }
 
 | 路径 | 内容 |
 |---|---|
-| `typescript/v2/*.ts` | 63 个类型，一类型一文件 |
+| `typescript/v2/*.ts` | 130 个类型，一类型一文件 |
 | `typescript/v2/index.ts` | barrel：`export type * from "./X";` 由 `write_barrel` 自动生成 |
 | `typescript/v2/codes.mts`、`methods.mts` | 有运行时真值（`export const`），故用 `.mts` 标明 ESM |
 | `json/v2.json` | draft-07 schema，`definitions` 被**平铺到顶层**（好让 Python 生成平级模型而非嵌套） |

@@ -502,7 +502,7 @@ pub async fn run_turn(
     };
 
     // ---- Stop: this turn finished. If the hook demands continuation (exit 2 / decision: block), run one
-    // more turn, capped at 1. The generic "auto-continue" belongs to the goal loop (`goal/set`); here we
+    // more turn, capped at 1. The generic "auto-continue" belongs to the goal loop (`/goal`); here we
     // only honor "Stop can hold off the end", without building a second loop out of it.
     //
     // Stop continuations belong to the **same round**: same run, one continuous step order. The
@@ -578,15 +578,15 @@ pub async fn run_turn(
 
     // ---- The task loop: facts first, opinions second.
     //
-    // Only a human can set a goal (`goal/set`; the model does not even have that tool), so
+    // Only a human can set a goal (`/goal`; the model does not even have that tool), so
     // continuing here is not "the model assigning itself work" — it is the human having said
     // earlier "keep going until X". Every round is measured before it is judged: acceptance
     // conditions and the budget come from the ledger, and a failing condition **skips the judge
     // entirely** — a model must not be asked to confirm a fact that is already false.
-    let goal_condition = task
-        .as_ref()
-        .and_then(|row| row.goal_condition.clone())
-        .or_else(|| crate::goal::active(&server.goals, &session_id).map(|goal| goal.condition));
+    //
+    // The condition is read from the **task row** and nowhere else (0.17): there is no separate
+    // goal record left to disagree with it.
+    let goal_condition = task.as_ref().and_then(|row| row.goal_condition.clone());
     if let Some(condition) = &goal_condition {
         eprintln!("(joy) 目标循环开始：{condition}（上限 {max_rounds} 轮）");
     }
@@ -600,8 +600,8 @@ pub async fn run_turn(
     // the trace and the notifications say happened). Both are returned by `break`, so there is
     // no "maybe nothing was decided" state to test for afterwards.
     let (decision, goal_status) = loop {
-        // The mirror keeps the CLI's `/goal` in step; the row keeps the truth across restarts.
-        let goal_rounds = crate::goal::bump(&server.goals, &session_id).max(round_no);
+        // Rounds live on the row (written just below); the notification quotes the same number.
+        let goal_rounds = round_no;
         if let Some(id) = &task_id {
             if let Err(e) = server.tasks.record_round(id, round_no).await {
                 eprintln!("(joy) 轮次没记进任务台账：{e}");
@@ -795,7 +795,6 @@ pub async fn run_turn(
                 // The judge broke down: stop continuing, **keep the goal** (don't fake success).
                 notify_goal(sink, &turn_id, goal_rounds, max_rounds, "blocked", &why);
                 eprintln!("(joy) 目标循环停了：{why}");
-                crate::goal::finish(&server.goals, &session_id, "blocked");
                 server.notify_goal_finished(&session_id, "blocked", &why);
                 // A broken judge is not "the goal is impossible" — a human should look.
                 break (
@@ -814,7 +813,6 @@ pub async fn run_turn(
                 "satisfied",
                 &judgement.reason,
             );
-            crate::goal::finish(&server.goals, &session_id, "satisfied");
             server.notify_goal_finished(&session_id, "satisfied", &judgement.reason);
             break (TaskDecision::Done, Some("satisfied".to_string()));
         }
@@ -827,7 +825,6 @@ pub async fn run_turn(
                 "impossible",
                 &judgement.reason,
             );
-            crate::goal::finish(&server.goals, &session_id, "impossible");
             server.notify_goal_finished(&session_id, "impossible", &judgement.reason);
             break (
                 TaskDecision::Failed(judgement.reason),
@@ -845,7 +842,6 @@ pub async fn run_turn(
                 "round-limit",
                 &reason,
             );
-            crate::goal::finish(&server.goals, &session_id, "round-limit");
             server.notify_goal_finished(&session_id, "round-limit", &judgement.reason);
             break (
                 TaskDecision::Failed(reason),
@@ -2400,7 +2396,7 @@ fn notify_goal(
     }));
 }
 
-/// How many times a single turn may continue because of the Stop hook. The generic mechanism is the goal loop (`goal/set`).
+/// How many times a single turn may continue because of the Stop hook. The generic mechanism is the goal loop (`/goal`).
 const MAX_STOP_CONTINUATIONS: usize = 1;
 
 /// Take only the most recent N turns, plus a rolling summary.

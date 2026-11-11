@@ -173,37 +173,23 @@ async fn a_task_can_declare_its_tier_and_a_typo_is_refused() {
 }
 
 #[tokio::test]
-async fn goal_set_creates_the_task_and_clearing_keeps_the_row() {
+async fn setting_a_goal_creates_the_task_and_clearing_keeps_the_row() {
     let (server, _home) = boot(None).await;
-    let response = call(
-        &server,
-        joyczl_protocol::methods::GOAL_SET,
-        json!({ "sessionId": "default", "condition": "把测试跑绿" }),
-    )
-    .await
-    .expect("设目标该成功");
-    assert_eq!(response["active"], json!(true));
-    assert_eq!(response["condition"], json!("把测试跑绿"));
-
-    // The compatibility layer: the goal **is** a task row now.
-    let task = server
-        .tasks
-        .active("default")
+    let row = server
+        .set_task_goal("default", Some("把测试跑绿"))
         .await
-        .expect("查")
-        .expect("有任务");
-    assert_eq!(task.goal_condition.as_deref(), Some("把测试跑绿"));
-    assert_eq!(task.title, "把测试跑绿");
+        .expect("设目标该建任务");
+
+    // There is no separate goal record any more: the condition is a column on this row.
+    assert_eq!(row.goal_condition.as_deref(), Some("把测试跑绿"));
+    assert_eq!(row.title, "把测试跑绿");
 
     // Clearing the goal downgrades the task to a single-turn one — the row stays as record.
-    call(
-        &server,
-        joyczl_protocol::methods::GOAL_SET,
-        json!({ "sessionId": "default" }),
-    )
-    .await
-    .expect("清目标该成功");
-    let task = server.tasks.get(&task.id).await.expect("查").expect("还在");
+    server
+        .set_task_goal("default", None)
+        .await
+        .expect("清目标该成功");
+    let task = server.tasks.get(&row.id).await.expect("查").expect("还在");
     assert!(task.goal_condition.is_none(), "目标清掉了");
     assert_eq!(
         task.status,

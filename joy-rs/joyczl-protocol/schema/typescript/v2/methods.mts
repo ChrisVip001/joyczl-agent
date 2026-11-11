@@ -5,8 +5,6 @@ export const METHODS = {
   TURN_START: "turn/start",
   TURN_INTERRUPT: "turn/interrupt",
   APPROVAL_RESPOND: "approval/respond",
-  GOAL_SET: "goal/set",
-  GOAL_VIEW: "goal/view",
   TODO_VIEW: "todo/view",
   TASK_CREATE: "task/create",
   TASK_LIST: "task/list",

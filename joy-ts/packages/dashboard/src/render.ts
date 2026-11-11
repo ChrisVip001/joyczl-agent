@@ -11,9 +11,6 @@ import type {
   BudgetView,
   CheckView,
   DashboardData,
-  Episode,
-  Fact,
-  GoalSetResponse,
   Message,
   TodoListView,
   SessionSummary,
@@ -63,16 +60,10 @@ export function renderOverview(
 
   // The task card leads the overview when there is anything on it: what the loop is
   // chasing, what the model ticked off — the two answers to "what is it doing now".
-  if (data.goal !== undefined || data.todos !== undefined || data.task != null) {
+  if (data.todos !== undefined || data.task != null) {
     const emptyTodos: TodoListView = { revision: 0n, items: [] };
     fragment.append(
-      renderTaskCard(
-        data.goal ?? { active: false, condition: null, roundsUsed: 0, maxRounds: 0 },
-        data.todos ?? emptyTodos,
-        data.task,
-        data.taskArtifacts ?? [],
-        onTask,
-      ),
+      renderTaskCard(data.todos ?? emptyTodos, data.task, data.taskArtifacts ?? [], onTask),
     );
   }
 
@@ -216,12 +207,11 @@ function renderConnectors(data: DashboardData): HTMLElement {
 }
 
 /**
- * The task card: the goal loop's state plus the model's own todo sheet, as the human
- * sees them. Both come from `DashboardData` (goal/todos, filled only when the page
+ * The task card: the task (which is also where a goal lives) plus the model's own todo sheet,
+ * as the human sees them. Both come from `DashboardData` (task/todos, filled only when the page
  * names a session) — this is where "what is the agent actually working on" lives.
  */
 export function renderTaskCard(
-  goal: GoalSetResponse,
   todos: TodoListView,
   task: AgentTaskView | undefined,
   artifacts: ArtifactView[],
@@ -304,24 +294,6 @@ export function renderTaskCard(
               }),
             ]
           : []),
-      ),
-    );
-  }
-
-  // A goal set on an existing task has its own text; when it is just the title repeated,
-  // the task block above already says it.
-  const duplicated = task != null && task.goalCondition === task.title;
-  if (goal.active && goal.condition !== null && !duplicated) {
-    block.append(
-      el("h3", { text: "目标" }),
-      el(
-        "div",
-        { class: "task-goal" },
-        el("span", { class: "task-goal-text", text: goal.condition }),
-        // The task block above already carries the round account; don't say it twice.
-        task == null
-          ? el("span", { class: "tag", text: `第 ${goal.roundsUsed}/${goal.maxRounds} 轮` })
-          : document.createDocumentFragment(),
       ),
     );
   }
@@ -528,31 +500,6 @@ export function sessionList(
   fragment.append(
     el("ul", { class: "list" }, ...sessions.map((item) => sessionRow(item, current, onPick))),
   );
-  return fragment;
-}
-
-/** Memory panel: what it remembers. */
-export function renderMemory(data: DashboardData): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-
-  fragment.append(
-    section(
-      `事实 ${data.facts.length}`,
-      data.facts.length === 0
-        ? muted("还没有事实。跟它说「记住…」，或者等对话被提炼。")
-        : el("ul", { class: "list" }, ...data.facts.map(factRow)),
-    ),
-  );
-
-  fragment.append(
-    section(
-      `情景 ${data.episodes.length}`,
-      data.episodes.length === 0
-        ? muted("还没有情景。聊过的每一天会在这里留一行摘要。")
-        : el("ul", { class: "list" }, ...data.episodes.map(episodeRow)),
-    ),
-  );
-
   return fragment;
 }
 
@@ -775,29 +722,6 @@ function sessionRow(
   );
   button.addEventListener("click", () => onPick(item.id));
   return el("li", {}, button);
-}
-
-function factRow(fact: Fact): HTMLElement {
-  return el(
-    "li",
-    { class: "item" },
-    el(
-      "div",
-      { class: "title" },
-      el("span", { class: "subject", text: fact.subject }),
-      el("span", { class: `tag ${fact.source}`, text: fact.source === "user" ? "你说" : "提炼" }),
-    ),
-    el("div", { class: "body", text: fact.content }),
-  );
-}
-
-function episodeRow(episode: Episode): HTMLElement {
-  return el(
-    "li",
-    { class: "item" },
-    el("div", { class: "when", text: episode.happenedAt }),
-    el("div", { class: "body", text: episode.summary }),
-  );
 }
 
 // --- Formatting ---------------------------------------------------------------

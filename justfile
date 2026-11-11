@@ -29,6 +29,16 @@ fmt:
 fmt-check:
     cd {{ rust_dir }} && cargo fmt --all -- --check
 
+# Reclaim build debris without losing compiled dependencies: incremental sessions
+# (one directory per compilation unit per rebuild) and cross-target artefacts.
+# Keeps `target/debug/deps`, so the next build only redoes what actually changed.
+# `find -delete` rather than `rm -rf`: some environments wrap `rm` with a bulk-delete
+# confirmation that a Makefile-style recipe cannot answer.
+tidy:
+    @find {{ rust_dir }}/target/debug/incremental -depth -delete 2>/dev/null || true
+    @rm -rf {{ rust_dir }}/target/x86_64-* {{ rust_dir }}/target/aarch64-* 2>/dev/null || true
+    @du -sh {{ rust_dir }}/target 2>/dev/null || true
+
 clippy *args:
     cd {{ rust_dir }} && cargo clippy --workspace --all-targets {{args}}
 

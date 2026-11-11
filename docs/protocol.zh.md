@@ -4,7 +4,7 @@
 
 `joy app-server` 在 stdin/stdout 上说**换行分隔的 JSON-RPC 2.0**：一行一个
 请求，应答与通知混序写出（通知先于应答）。所有类型定义在
-`joyczl-protocol/src/protocol/v2.rs`（63 个类型），并生成 TypeScript
+`joyczl-protocol/src/protocol/v2.rs`（130 个类型，含 JSON-RPC 信封），并生成 TypeScript
 （`schema/typescript/v2/`）与 Python pydantic（`sdk/python/generated/`）。
 **改协议必须跑 `just write-app-server-schema`。**
 
@@ -19,8 +19,6 @@
 | `turn/list` | `TurnListParams` → `TurnListResponse` | 正在跑的回合，可按 `sessionId` 过滤 |
 | `approval/respond` | `ApprovalRespondParams` → `ApprovalRespondResponse` | 回答一次「要不要执行」；太晚送达时 `accepted: false` |
 | `approval/log` | `ApprovalLogParams` → `ApprovalLogResponse` | 审批审计（迁移 0011）：最近 100 条，四态 `approved` / `denied` / `timeout` / `voided` |
-| `goal/set` | `GoalSetParams` → `GoalSetResponse` | 设/清一个目标；只有人能调，模型没有这个工具 |
-| `goal/view` | `SessionViewParams` → `GoalSetResponse` | 这个会话的目标状态（轮次、出口、理由） |
 | `todo/view` | `SessionViewParams` → `TodoListView` | 当前的待办清单；模型没写过就不渲染 |
 | `task/create` | `TaskCreateParams` → `TaskEnvelope` | 建任务：会话可空，带验收条件、预算、工作目录 |
 | `task/list` | — → `TaskListResponse` | 全部任务，新的在前 |
@@ -61,12 +59,13 @@
 
 ### 目标循环的用法
 
-`goal/set`（设/清一个目标）+ 通知 `GoalRound`（每判一次发一条）：
+目标**不是一个独立对象**：它写在任务行的 `goalCondition` 上（0.17 起），所以协议里没有
+`goal/set` / `goal/view` —— 人要设目标就走 `/goal` 或 `task/create {goalCondition}`，
+循环读同一行。唯一的协议面是通知 `GoalRound`（每判一次发一条）：
 
 ```
 you>  /goal 让测试全绿
-       → goal/set  {sessionId, condition: "让测试全绿"}
-       ← {active: true, condition: "让测试全绿", roundsUsed: 0, maxRounds: 5}
+       → task/create  {sessionId: "…", title: "让测试全绿", goalCondition: "让测试全绿"}
 … 一轮跑完，判断器说不算达成 …
        ← GoalRound {turnId, round: 1, maxRounds: 5, status: "continuing", reason: "还有两条红"}
 … 又跑一轮 …
@@ -112,7 +111,7 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
 | -32700 / -32600 / -32601 / -32602 / -32603 | 标准 JSON-RPC：解析 / 请求 / 方法不存在 / 参数 / 内部错误 |
 | `-32000` PROVIDER_ERROR | 模型侧失败（缺 key、401、限流……），附「怎么办」 |
 | `-32001` TOOL_ERROR | 工具执行失败（错误同时作为文本回给模型，不中断 turn） |
-| `-32002` NOT_IMPLEMENTED | 协议定义了但尚未实现（当前 41 个方法已全部实现） |
+| `-32002` NOT_IMPLEMENTED | 协议定义了但尚未实现（当前 39 个方法已全部实现） |
 
 ## 客户端
 

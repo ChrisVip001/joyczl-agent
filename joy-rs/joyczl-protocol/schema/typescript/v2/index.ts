@@ -31,8 +31,6 @@ export type * from "./TurnInterruptParams";
 export type * from "./TurnInterruptResponse";
 export type * from "./ApprovalRespondParams";
 export type * from "./ApprovalRespondResponse";
-export type * from "./GoalSetParams";
-export type * from "./GoalSetResponse";
 export type * from "./ModelProfilesParams";
 export type * from "./ModelProfilesResponse";
 export type * from "./ModelProfileView";

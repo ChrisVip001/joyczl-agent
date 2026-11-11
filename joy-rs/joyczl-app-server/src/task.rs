@@ -213,11 +213,6 @@ pub(crate) async fn create(
         .await
         .map_err(|e| invalid(format!("任务没建成：{e}")))?;
 
-    // The goal loop reads its condition from the in-memory mirror; a task created with one
-    // starts driving rounds on the **next** turn of this session.
-    if let (Some(condition), Some(session)) = (goal, session) {
-        crate::goal::set(&server.goals, session, Some(condition));
-    }
     let row = reload(server, &id).await?;
     Ok(TaskEnvelope {
         task: view(server, &row).await,
@@ -418,10 +413,6 @@ pub(crate) async fn cancel(
                 .close(&run.id, joyczl_state::RunStatus::Cancelled, Some(reason))
                 .await;
         }
-    }
-    // The goal loop must stop too: the condition lived on this task.
-    if let Some(session) = &row.session_id {
-        crate::goal::set(&server.goals, session, None);
     }
     let row = reload(server, &row.id).await?;
     notify(sink, &row, Some(reason));

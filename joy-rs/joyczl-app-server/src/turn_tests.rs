@@ -1434,8 +1434,15 @@ async fn a_queued_message_becomes_its_own_turn_when_the_session_frees_up() {
     };
     assert!(id_of("第二件事") < id_of("第三件事"), "先进先出");
     assert_eq!(server.queue.count("test").await.expect("数"), 0, "都跑完了");
-    assert!(
-        server.active_turns(Some("test")).is_empty(),
-        "跑完就该把会话放回去"
-    );
+    // 消息进了历史 ≠ 最后一轮已经收尾：`finish_turn` 把会话放回去发生在落盘**之后**，
+    // 全量并行跑测试时这两步会被拉开。轮询等它，别赌顺序。
+    let mut released = false;
+    for _ in 0..200 {
+        if server.active_turns(Some("test")).is_empty() {
+            released = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(released, "跑完就该把会话放回去");
 }
