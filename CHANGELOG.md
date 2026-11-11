@@ -4,6 +4,40 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### Dashboard streams Markdown as it arrives (block-incremental paint)
+
+- The chat bubble no longer shows raw `**` during a turn and flips to rendered
+  text only when the stream ends. A new `StreamMarkdown` (in `markdown.ts`)
+  paints the reply **while it streams**, at block granularity: every animation
+  frame re-parses with the same `parseMarkdown` but repaints only the
+  still-growing last block — settled blocks keep their DOM nodes, so a
+  several-thousand-token reply never reflows per delta. Half-finished inline
+  markers (`**`, open fences) heal on the next frame.
+- The parser has no strict prefix stability for half-line prefixes (a stream
+  cut inside a `- ` marker parses the lone `-` as a paragraph until it merges
+  back into the list), so each repaint reconciles cached per-block signatures
+  and repaints from the first divergence — normally an all-equal O(reply)
+  comparison, same order as the parse itself.
+- `finish()` completes the last block; the truncated-turn branch no longer
+  repaints the whole bubble. The one full repaint left is `completed.reply` —
+  the authoritative result whose deltas may be missing. Node `--test` gains a
+  streaming-invariant test over whole-line prefixes (111 tests).
+
+### Provider catalog meets models.dev (`scripts/gen_catalog.py`)
+
+- The two halves of "add a provider without touching code" are now complete:
+  the runtime already had `<home>/models-catalog.json` (patch/append, merged
+  at boot); this round adds the generation side — `scripts/gen_catalog.py`
+  pulls model metadata from [models.dev](https://models.dev) (MIT, maintained
+  by the OpenCode team) and emits catalog-format rows: context window, vision
+  and tool-call come from upstream; wire and key_env come from joy's mapping
+  of the 12 built-ins (gemini→google, kimi→moonshotai, glm→zhipuai,
+  opencode_go→opencode-go, …). Stdlib only.
+- The script does not decide for you: the default model is "the
+  largest-context tool-call model", with candidates printed to stderr for a
+  human look; `--out` merges into the file (dedup by id), without it the row
+  goes to stdout. See "The model catalog" in docs/configuration.md.
+
 ### Windows keychain + the `SecretVault` seam
 
 - `joyczl-config` gains a Credential Manager backend on Windows (the `keyring`

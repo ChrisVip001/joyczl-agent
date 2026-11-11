@@ -4,6 +4,32 @@
 
 ## 未发布
 
+### 驾驶舱一边流式一边渲染 Markdown（块级增量绘制）
+
+- 对话气泡不再「流式期间摊着 `**`、传完才变成排版」：新增 `StreamMarkdown`
+  （`markdown.ts`）让回复**一边到一边就画成 Markdown**，粒度是块 —— 每个动画帧
+  用同一个 `parseMarkdown` 重新解析，但只重画仍在生长的最后一块；落定的块各留
+  一个 DOM 节点不动，几千 token 的回复也不会每个 delta 都整体重排。断在半截的
+  行内标记（`**`、未闭合围栏）下一帧自然长好。
+- 解析器对半行前缀没有严格的前缀稳定性（流断在 `- ` 标记中间时，孤立的 `-`
+  先被解析成段落，之后才并回列表），所以每帧对账落定块的序列化签名，从第一处
+  不一致起作废重画 —— 正常情况全等，一次 O(回复长度) 的比较，与解析同阶。
+- `finish()` 收尾画完最后一块；截断分支不再整体重绘。留下的唯一一次整体重绘是
+  `completed.reply` —— 那是权威结果，delta 可能缺失。`node --test` 新增整行前缀
+  的流式不变量测试（111 个测试）。
+
+### 供应商目录接入 models.dev（`scripts/gen_catalog.py`）
+
+- 加厂商不用改代码的两半凑齐了：运行时早有 `<home>/models-catalog.json`（补丁/
+  追加，启动合并），这轮补上生成侧 —— `scripts/gen_catalog.py` 从
+  [models.dev](https://models.dev)（MIT，OpenCode 团队维护）拉模型元数据，
+  生成符合目录格式的条目：context 上限、vision、tool-call 取自上游；wire 与
+  key_env 由内置 12 家的 joy 映射表决定（gemini→google、kimi→moonshotai、
+  glm→zhipuai、opencode_go→opencode-go 等）。只有标准库。
+- 脚本不替人拍板：默认模型取「支持工具调用里上下文最大的」，候选列表打在
+  stderr 上提醒确认；`--out` 合并写盘（同 id 去重），不带则打印到 stdout。
+  用法见 docs/configuration.md「模型目录」。
+
 ### Windows 钥匙串 + `SecretVault` 收口
 
 - `joyczl-config` 在 Windows 上新增 Credential Manager 后端（`keyring` crate，

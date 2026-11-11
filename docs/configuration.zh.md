@@ -386,6 +386,21 @@ Joy 的 home 和进程 cwd 都不在范围内 —— 有工作区的助手不应
 ——绝不拦启动。改完要重启进程。注意 embedding 端点（混合检索）目前仍只从
 内置表里选。
 
+不想手工拼这一行 JSON，可以用生成脚本（只有标准库，无第三方依赖）：
+
+```bash
+python3 scripts/gen_catalog.py --list        # 看看上游有哪些厂商
+python3 scripts/gen_catalog.py glm --model glm-5.2              # 内置 id → 补丁
+python3 scripts/gen_catalog.py zhipuai --model glm-5.2 \
+  --base-url https://open.bigmodel.cn/api/paas/v4 \
+  --out ~/.joy/models-catalog.json                              # 新 id → 新厂商，直接合并写盘
+```
+
+数据源是 [models.dev](https://models.dev)（MIT，OpenCode 团队维护的模型元数据库）：
+context 上限、是否看图、是否支持工具调用都从它取；wire 和 key_env 由脚本里的
+joy 映射表决定。脚本会挑「支持工具调用里上下文最大的」当默认模型 —— 那只是
+起点，主模型和小模型值得人工确认（候选列表会打在 stderr 上）。
+
 ## 把活交给子代理
 
 `JOY_DELEGATE=1` 会多出 `delegate_task`：把一件自成一体的活交给子代理，只把结论

@@ -460,6 +460,23 @@ stderr line and keeps the built-in table — it never blocks boot. Restart the
 process after editing. Note the embedding endpoint (hybrid retrieval) still
 selects from the built-in table only.
 
+To skip hand-writing the JSON row, use the generator script (stdlib only):
+
+```bash
+python3 scripts/gen_catalog.py --list        # what the upstream offers
+python3 scripts/gen_catalog.py glm --model glm-5.2              # built-in id → patch
+python3 scripts/gen_catalog.py zhipuai --model glm-5.2 \
+  --base-url https://open.bigmodel.cn/api/paas/v4 \
+  --out ~/.joy/models-catalog.json                              # new id → new provider, merged in place
+```
+
+The data source is [models.dev](https://models.dev) (MIT, maintained by the
+OpenCode team): context limits, vision and tool-call flags come from it; the
+wire and key_env come from joy's mapping table inside the script. The script
+picks "the largest-context tool-call model" as the default — that is a starting
+point only; the main and small models deserve a human look (candidates are
+printed to stderr).
+
 ## Delegating work to a subagent
 
 `JOY_DELEGATE=1` adds `delegate_task`, which hands one self-contained job to a
