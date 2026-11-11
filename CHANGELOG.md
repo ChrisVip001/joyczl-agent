@@ -4,6 +4,21 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### Windows keychain + the `SecretVault` seam
+
+- `joyczl-config` gains a Credential Manager backend on Windows (the `keyring`
+  crate, CredWrite/CredRead): keys no longer can only land in plaintext
+  `secrets.json`. The 5-second timeout, the fall-back-to-file and the
+  "report the real landing spot" discipline match macOS/Linux; the shipped
+  paths there (`security` / `secret-tool`) are untouched. The Windows branch is
+  compile-verified via `cargo check --target x86_64-pc-windows-msvc`.
+- New `SecretVault` trait (`put`/`get`/`remove`, with put required to report
+  where the secret really landed); `SecretStore` is the first implementation,
+  and `apply_profile` / `resolve_key` now take `&mut dyn SecretVault` — when
+  the server shape brings a KMS-envelope backend it slots in without touching
+  any caller. Connector and MCP token files are not migrated yet: their
+  rotation/lock semantics (0600 + temp-file-rename + cross-process lock)
+  deserve their own round, timed to when the server shape actually ships.
 ### Collapse: a goal is no longer an object — it lives on the task row
 
 - Removed the protocol methods `goal/set` and `goal/view`, the types `GoalSetParams` /

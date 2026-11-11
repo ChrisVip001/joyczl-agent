@@ -4,6 +4,18 @@
 
 ## 未发布
 
+### Windows 钥匙串 + `SecretVault` 收口
+
+- `joyczl-config` 在 Windows 上新增 Credential Manager 后端（`keyring` crate，
+  CredWrite/CredRead）：密钥不再只能落明文 `secrets.json`。5 秒超时与「失败回落
+  文件、如实报告落点」的纪律与 macOS/Linux 一致；两处的已上线路径（`security` /
+  `secret-tool`）一字未动。已用 `cargo check --target x86_64-pc-windows-msvc`
+  验证 Windows 分支可编译。
+- 新增 `SecretVault` trait（`put`/`get`/`remove`，put 必须如实回报落点），
+  `SecretStore` 是第一个实现；`apply_profile` / `resolve_key` 的签名改收
+  `&mut dyn SecretVault` —— 服务器形态的 KMS 信封后端出现时只加实现、不改调用方。
+  连接器与 MCP 的 token 文件暂未搬入：它们的轮换/锁语义（0600 + 临时文件改名 +
+  跨进程锁）值得单独一轮，搬的时机是产品真出服务器版。
 ### 收口：目标不再是独立对象，只写在任务行上
 
 - 删掉协议方法 `goal/set` 与 `goal/view`、类型 `GoalSetParams` / `GoalSetResponse`、HTTP 路由

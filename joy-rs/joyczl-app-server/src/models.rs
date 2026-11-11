@@ -39,7 +39,7 @@ pub(crate) fn apply_at_boot(settings: &mut joyczl_config::Settings, secrets: &Se
     let file = cfg::load_models(&settings.home);
     let home = settings.home.clone();
     let mut store = secrets.lock().expect("secrets 锁不该中毒");
-    cfg::apply_active(&file, &home, &mut store, settings);
+    cfg::apply_active(&file, &home, &mut *store, settings);
 }
 
 fn views(file: &cfg::ModelsFile) -> Vec<ModelProfileView> {
@@ -388,7 +388,7 @@ impl Server {
         {
             let home = settings.home.clone();
             let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
-            cfg::apply_active(file, &home, &mut store, &mut settings);
+            cfg::apply_active(file, &home, &mut *store, &mut settings);
         }
         let resolved = match joyczl_provider::resolve_with(&settings, &self.catalog) {
             Ok(resolved) => Some(resolved),

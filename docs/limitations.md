@@ -19,11 +19,15 @@ means "we would like this, nobody has built it".
   `JOY_PROVIDER` now means just "the fallback provider when nothing is
   configured". If you relied on environment variables, you are now unconfigured —
   run `/model add` once as the message says.
-- **No usable keychain on Windows**: its credential manager stores entries but
-  cannot read secrets back, so on Windows (and anywhere `security` /
-  `secret-tool` is missing) keys fall back to `<home>/secrets.json` —
-  **plaintext**, mode 0600 on Unix, which Windows has no notion of. `model/save`
-  reports `file` honestly and the UI repeats it verbatim.
+- **Windows keys live in the Credential Manager** (the `keyring` crate,
+  CredWrite/CredRead — both directions work; the old "stores but cannot read
+  back" verdict only held for the `cmdkey` CLI). If that call fails or times
+  out (5s cap, same as `security` / `secret-tool`), keys fall back to
+  `<home>/secrets.json` — **plaintext**, mode 0600 on Unix, which Windows has
+  no notion of. `model/save` reports the real landing spot (`keychain` /
+  `file`) honestly and the UI repeats it verbatim. Native Windows Joy is still
+  gated at the door (see below); this backend is what the coming desktop app
+  will stand on.
 - **Keychain commands time out after 5s**: `security` can prompt or hang in an
   unattended session; a timeout counts as failure and falls back to the file —
   one credential operation must never freeze the server.

@@ -15,6 +15,11 @@ joyczl-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# 只在 Windows 编译：钥匙串走 Credential Manager（keyring crate，CredWrite/CredRead）。
+# macOS/Linux 的命令行路径（security / secret-tool）已上过线，不换实现。
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

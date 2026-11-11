@@ -7,8 +7,8 @@
 //! Three things are discipline in this implementation, not optional optimizations:
 //!
 //! * **Credentials never default to plaintext on disk**: macOS uses the Keychain (`security`),
-//!   Linux uses `secret-tool`; only if both fail fall back to `<home>/secrets.json` (0600).
-//!   Windows' credential manager can store but not read back plaintext — noted in limitations.
+//!   Linux uses `secret-tool`, Windows uses the Credential Manager (`keyring` crate); only if
+//!   they all fail fall back to `<home>/secrets.json` (0600 on Unix).
 //! * **Tests never touch the real keychain**: `SecretStore::memory()` / `file_only()`
 //!   let unit tests run in a temp dir, without system auth prompts or keychain writes.
 //! * **A profile is just "config"**: whether it applies to the current session is decided
@@ -117,7 +117,7 @@ pub fn remove(models: &mut ModelsFile, id: &str) -> bool {
 pub fn apply_active(
     models: &ModelsFile,
     home: &Path,
-    store: &mut SecretStore,
+    store: &mut dyn SecretVault,
     settings: &mut crate::Settings,
 ) {
     let Some(profile) = active_profile(models) else {
@@ -131,7 +131,7 @@ pub fn apply_active(
 pub fn apply_profile(
     profile: &ModelProfile,
     home: &Path,
-    store: &mut SecretStore,
+    store: &mut dyn SecretVault,
     settings: &mut crate::Settings,
 ) {
     settings.provider = profile.provider.clone();
@@ -145,7 +145,11 @@ pub fn apply_profile(
 
 /// Fetch the real key per `key_source`. `env:` reads the env var directly (**never copied
 /// into files**); `keychain`/`file` go through `SecretStore`; absent = None (local models).
-pub fn resolve_key(profile: &ModelProfile, home: &Path, store: &mut SecretStore) -> Option<String> {
+pub fn resolve_key(
+    profile: &ModelProfile,
+    home: &Path,
+    store: &mut dyn SecretVault,
+) -> Option<String> {
     let source = profile.key_source.as_deref()?;
     match source.strip_prefix("env:") {
         Some(var) => std::env::var(var).ok().filter(|v| !v.trim().is_empty()),
@@ -214,7 +218,7 @@ impl SecretStore {
             }
             SecretBackend::File => write_file_secret(home, account, secret).map(|()| "file"),
             SecretBackend::Auto => {
-                if keychain_put(account, secret) {
+                if os_keychain_put(account, secret) {
                     Ok("keychain")
                 } else {
                     write_file_secret(home, account, secret).map(|()| "file")
@@ -228,7 +232,7 @@ impl SecretStore {
             SecretBackend::Memory => self.memory.get(account).cloned(),
             SecretBackend::File => read_file_secret(home, account),
             SecretBackend::Auto => {
-                keychain_get(account).or_else(|| read_file_secret(home, account))
+                os_keychain_get(account).or_else(|| read_file_secret(home, account))
             }
         }
     }
@@ -242,10 +246,42 @@ impl SecretStore {
                 let _ = remove_file_secret(home, account);
             }
             SecretBackend::Auto => {
-                keychain_remove(account);
+                os_keychain_remove(account);
                 let _ = remove_file_secret(home, account);
             }
         }
+    }
+}
+
+/// 秘密的唯一收口：LLM key、连接器 token、MCP token 迟早都从这条缝过。
+///
+/// 现在的实现是 [`SecretStore`]（钥匙串 / 0600 文件 / 内存）。留着这个 trait 是为了
+/// 「第二个后端」——服务器形态的 KMS 信封出现时只加实现，`apply_profile` 这些调用方
+/// 一行不改。连接器与 MCP 的 token 文件还没搬进来：它们的轮换/锁语义（0600 + 临时
+/// 文件改名 + 跨进程锁）值得单独一轮，搬的时机是产品真出服务器版。
+pub trait SecretVault {
+    /// 存一条秘密，返回**实际落点**（`keychain` / `file` / `memory`）—— UI 与日志必须
+    /// 说真话：绝不暗示在钥匙串其实是明文文件。
+    fn put(&mut self, home: &Path, account: &str, secret: &str) -> Result<&'static str, String>;
+
+    /// 取回。`None` = 没存过（比如这个档案/服务根本不需要 key）。
+    fn get(&mut self, home: &Path, account: &str) -> Option<String>;
+
+    /// 删掉（钥匙串条目与文件兜底一起清）。
+    fn remove(&mut self, home: &Path, account: &str);
+}
+
+impl SecretVault for SecretStore {
+    fn put(&mut self, home: &Path, account: &str, secret: &str) -> Result<&'static str, String> {
+        SecretStore::put(self, home, account, secret)
+    }
+
+    fn get(&mut self, home: &Path, account: &str) -> Option<String> {
+        SecretStore::get(self, home, account)
+    }
+
+    fn remove(&mut self, home: &Path, account: &str) {
+        SecretStore::remove(self, home, account);
     }
 }
 
@@ -344,9 +380,10 @@ fn run_limited(command: &mut std::process::Command, stdin_secret: Option<&str>) 
 /// Wait cap for keychain commands.
 const KEYCHAIN_TIMEOUT_SECS: u64 = 5;
 
-/// macOS: `security add-generic-password -U -s joyczl -a <account> -w <key>`.
-/// Linux: `secret-tool store` reads from stdin (**never argv** — argv is visible to all).
-fn keychain_put(account: &str, secret: &str) -> bool {
+/// 平台钥匙串的统一入口。macOS: `security add-generic-password -U -s joyczl -a <account>
+/// -w <key>`；Linux: `secret-tool store` reads from stdin (**never argv** — argv is visible
+/// to all)；Windows: Credential Manager（keyring crate，CredWrite/CredRead）。
+fn os_keychain_put(account: &str, secret: &str) -> bool {
     if cfg!(target_os = "macos") {
         return run_limited(
             std::process::Command::new("security").args([
@@ -379,11 +416,17 @@ fn keychain_put(account: &str, secret: &str) -> bool {
         )
         .is_some();
     }
-    // Windows' credential manager stores but cannot read back plaintext — use the file fallback.
+    #[cfg(target_os = "windows")]
+    {
+        if win::put(account, secret) {
+            return true;
+        }
+    }
+    // 钥匙串失败（或不可用）：回落 0600 文件，put 的返回值会如实说落点。
     false
 }
 
-fn keychain_get(account: &str) -> Option<String> {
+fn os_keychain_get(account: &str) -> Option<String> {
     if cfg!(target_os = "macos") {
         return run_limited(
             std::process::Command::new("security").args([
@@ -408,10 +451,15 @@ fn keychain_get(account: &str) -> Option<String> {
         .map(|out| out.trim().to_string())
         .filter(|s| !s.is_empty());
     }
+    #[cfg(target_os = "windows")]
+    {
+        return win::get(account);
+    }
+    #[cfg(not(target_os = "windows"))]
     None
 }
 
-fn keychain_remove(account: &str) {
+fn os_keychain_remove(account: &str) {
     if cfg!(target_os = "macos") {
         let _ = run_limited(
             std::process::Command::new("security").args([
@@ -431,6 +479,53 @@ fn keychain_remove(account: &str) {
             None,
         );
     }
+    #[cfg(target_os = "windows")]
+    {
+        win::remove(account);
+    }
+}
+
+// ---- Windows Credential Manager（keyring crate）----------------------------------------------
+
+/// 只在 Windows 编译。macOS 与 Linux 的命令行路径已上过线，不换实现；Windows 之前只有
+/// 「存得进、读不回」的命令行尴尬（见 limitations），keyring 走 CredWrite/CredRead，两边都通。
+#[cfg(target_os = "windows")]
+mod win {
+    use keyring::Entry;
+
+    /// keyring 的调用是阻塞系统调用，包一层 5 秒超时（与 `security`/`secret-tool` 同一条
+    /// 纪律）：凭据操作冻住 app-server 不可接受。超时 = 失败，回落文件。
+    fn limited<T>(
+        account: &str,
+        op: impl FnOnce(&Entry) -> Result<T, keyring::Error> + Send + 'static,
+    ) -> Option<T>
+    where
+        // 结果要穿过通道回到调用线程。
+        T: Send + 'static,
+    {
+        let entry = Entry::new(super::SERVICE, account).ok()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(op(&entry).ok());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(super::KEYCHAIN_TIMEOUT_SECS))
+            .ok()
+            .flatten()
+    }
+
+    pub fn put(account: &str, secret: &str) -> bool {
+        // 闭包必须 'static（要搬进线程），借用的 secret 先落为自有值。
+        let secret = secret.to_string();
+        limited(account, move |entry| entry.set_password(&secret)).is_some()
+    }
+
+    pub fn get(account: &str) -> Option<String> {
+        limited(account, |entry| entry.get_password())
+    }
+
+    pub fn remove(account: &str) -> bool {
+        limited(account, |entry| entry.delete_credential()).is_some()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +544,19 @@ mod models_tests {
             key_source: None,
             vision: None,
         }
+    }
+
+    /// Vault trait 是唯一接缝：通过 `&mut dyn SecretVault` 也能完成一整轮存取删 ——
+    /// 将来服务器 KMS 后端就从这个口接进来，调用方（apply_profile 一类）零改动。
+    #[test]
+    fn the_vault_trait_is_the_only_seam() {
+        let home = Path::new("/tmp/joyczl-vault-trait-test");
+        let mut vault: Box<dyn SecretVault> = Box::new(SecretStore::memory());
+        assert_eq!(vault.get(home, "llm:ds"), None);
+        assert_eq!(vault.put(home, "llm:ds", "sk-test").expect("存"), "memory");
+        assert_eq!(vault.get(home, "llm:ds").as_deref(), Some("sk-test"));
+        vault.remove(home, "llm:ds");
+        assert_eq!(vault.get(home, "llm:ds"), None);
     }
 
     /// Memory backend: **never touches the system keychain or disk** — CI must never see auth prompts.

@@ -16,10 +16,12 @@
   只能用 `model/*`（REPL 的 `/model`、驾驶舱面板）。`JOY_PROVIDER` 只剩「一套
   都没配时的兜底厂商」这一层意思。原来靠环境变量跑着的，升级后会变成「没配
   模型」，照提示 `/model add` 一次即可。
-- **Windows 上没有钥匙串可用**：凭据管理器存得进、读不回明文，所以 Windows
-  上（以及任何 `security` / `secret-tool` 不可用的环境）密钥会退回
+- **Windows 的密钥放凭据管理器**（`keyring` crate，走 CredWrite/CredRead，
+  存取都通；「存得进读不回」的老结论只对 `cmdkey` 命令行成立）。若调用失败或
+  超时（5 秒上限，与 `security` / `secret-tool` 相同），密钥退回
   `<home>/secrets.json` —— **明文**，Unix 上权限 0600，Windows 上没有这一说。
-  `model/save` 的应答会如实写 `file`，界面也照抄给用户看。
+  `model/save` 的应答会如实写 `keychain` 或 `file`，界面也照抄给用户看。
+  Windows 原生仍在门口拦着（见下），这个后端是为将来的桌面版铺的路。
 - **钥匙串命令有 5 秒超时**：`security` 在无人值守的会话里可能弹框或干等，
   超时即当失败并走文件兜底 —— 一次凭据操作不该冻住整个服务。
 - **切换只影响当前进程**：改的是进程内 Settings 并重解析 provider；配置本身
