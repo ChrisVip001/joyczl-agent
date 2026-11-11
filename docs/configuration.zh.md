@@ -214,7 +214,8 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | `JOY_GRAPH_WORKFLOWS` | `0` | 打开 triage 前门图（失败开放，只能更快不能更差） |
 | `JOY_APPLE_CALENDAR` | `0` | `create_event` 时经 AppleScript 同步 Calendar.app |
 | `JOY_GOOGLE_CALENDAR` | `0` | Google Calendar 的连接流程**还没实现**；设了它 `create_event` 会在回执里明说「这次没有同步」，而不是沉默 —— 诚实开关，不是同步开关 |
-| `JOY_SKILL_DIRS` | — | 冒号分隔的额外技能目录（`home/skills` 之外） |
+| `JOY_SKILL_DIRS` | — | 冒号分隔的额外技能目录（`home/skills` 之外）；里面的技能在能力中心里是内置项（置灰只读） |
+| `JOY_MCP_CONFIG` | — | 冒号分隔的额外 mcp.json 文件（`<home>/mcp.json` 之外）；里面的服务器在能力中心里是内置项（置灰只读），同名时用户的文件赢 |
 | `JOY_JUDGE_MODEL` | small model | `joy judge` 的裁判模型（裁判不是选手） |
 | `JOY_GH_REPO` | — | `joy gather` 的 github scan 仓库（owner/repo） |
 
@@ -637,6 +638,19 @@ CLI 自己的惰性路径。
 `command` 走 stdio、`url` 走 Streamable HTTP。`auth_env` 放环境变量**名字**
 （值作 Bearer）；`oauth: true` 走浏览器授权（`joy mcp login <名>`），token
 落 `mcp-auth/<名>.json`（0600）。连不上的服务器跳过并警告，Joy 照常启动。
+
+驾驶舱的「能力中心」就管理这个文件：加一个连接器（一个名字 + 恰好一种
+传输）、按名字替换、或删掉。改动落进 `<home>/mcp.json`，**重启 Joy 后
+生效**——连接发生在启动时。内置配置已经占用的名字会被拒绝而不是被悄悄
+遮蔽：运行时先到的赢，用户配置里再写一份也不会生效。
+
+### 内置 MCP 服务器（`JOY_MCP_CONFIG`）
+
+冒号分隔的额外配置文件，和 `JOY_SKILL_DIRS` 同一个分法：
+`<home>/mcp.json` 是用户的，额外的是运营方的（整机或随包分发）。用户的
+文件先读，**同名服务器用户赢**；坏掉的额外文件只是一行警告，不会让工具表
+变空。能力中心里这些行带「内置」标签并置灰——所有写操作一律拒绝：从一台
+机器的界面上删掉它，会让每一台共享它的机器一起失效。
 
 ## `settings.json`（config/write 的持久化）
 

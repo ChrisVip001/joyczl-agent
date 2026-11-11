@@ -63,6 +63,12 @@ joy dashboard                          # → http://<服务器>:7777（/api/* �
 远程服务器用 `"oauth": true` 时先 `joy mcp login <名>`；token 过期自动
 刷新，没有 refresh_token 时重跑 login。
 
+驾驶舱的「能力中心」是同一个文件的图形门：加 / 替换 / 删一个连接器，
+传输与鉴权规则和服务端同一套（`url` 与 `command` 二选一；`auth_env` 是
+变量名，不是密钥）。改动重启 Joy 后生效。要发整机共用的服务器，设
+`JOY_MCP_CONFIG`——那些行在能力中心里带「内置」标签置灰，所有写操作
+一律拒绝。
+
 运维侧的已知边界（没有日志轮转、不做 daemon 化、漏掉的定时执行不补跑等）见
 [limitations.zh.md](limitations.zh.md)。
 

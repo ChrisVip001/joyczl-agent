@@ -44,6 +44,9 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
   检索门保证只在相关时才翻记忆（[docs/architecture.zh.md](docs/architecture.zh.md)）
 - **行动**：22 个内置工具外加 MCP 服务器
   （[docs/configuration.zh.md](docs/configuration.zh.md)）
+- **长本事，但你说了算**：驾驶舱的「能力中心」把技能和 MCP 连接器并排摆着 ——
+  自己的可以加、可以删；随安装分发的内置项置灰只读
+  （[docs/skills.zh.md](docs/skills.zh.md)）
 - **图式规划**：triage 前门让闲聊便宜地得到快答；gather 工作流写晨报
   （[docs/architecture.zh.md](docs/architecture.zh.md)）
 - **被检验**：确定性 eval 把守每次发布；judge 给回答质量打分
@@ -72,7 +75,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 
 ### 模型与密钥
 
-**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切——而且不改代码也能扩：`<home>/models-catalog.json` 可以补丁内置默认值或新增一家（见 [docs/configuration.zh.md](docs/configuration.zh.md)）。`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。模型配置在终端的 `/model` 或 `models.json` 里，驾驶舱不再摆配置面板。密钥优先进系统钥匙串；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。
+**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切——而且不改代码也能扩：`<home>/models-catalog.json` 可以补丁内置默认值或新增一家，`scripts/gen_catalog.py` 还能从 [models.dev](https://models.dev) 直接生成这些行（context 上限、看图、工具调用都取自上游，joy 的 wire 与 key_env 映射已内置）。见 [docs/configuration.zh.md](docs/configuration.zh.md)。`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。模型配置在终端的 `/model` 或 `models.json` 里，驾驶舱不再摆配置面板。密钥优先进系统钥匙串（macOS 钥匙串、Linux `secret-tool`、**Windows Credential Manager**）；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。密钥写入走 `SecretVault` 接缝，服务器形态的 KMS 后端出现时只加实现、不改调用方。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。驾驶舱也能自托管：`JOY_OPS_HOST=0.0.0.0` 时启动强制要求 `JOY_OPS_TOKEN`，`/api/*` 走 Bearer 鉴权（见 [docs/operations.zh.md](docs/operations.zh.md)）。
 
 工具失败以文本回给模型——loop 绝不因一次工具失败而崩。
 
@@ -117,6 +120,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P16 ✅ | 任务实体版（0.14）：完成由事实决定 —— 验收三条确定性检查先于判断器、任务级预算、执行/步骤/事件/交付物五张表、幂等只拦不重放、长任务基准与中断恢复率、可选的执行计划（`JOY_PLAN`） |
 | P17 ✅ | 会话元数据（0.15）：`sessions` 表（迁移 0018）、`session/get` / `session/update` / `turn/list`、工作目录跟着会话走 |
 | P18 ✅ | 会话门（0.16）：一个会话同时只跑一轮（`SESSION_BUSY`）、`turn/steer` 运行中补充、`turn/follow-up` 排队下一轮（迁移 0019，重启不丢）、`turnSteered` 通知 |
+| P19 ✅ | 密钥与产品化：Windows Credential Manager + `SecretVault` 接缝、驾驶舱自托管安全（绑非回环强制 `JOY_OPS_TOKEN`）、models.dev 目录生成器（`scripts/gen_catalog.py`）、驾驶舱流式 Markdown 块级渲染、单行会话侧栏 + 可拖边界 + 悬停跑马灯 |
 
 ## 命名
 

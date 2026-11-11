@@ -251,6 +251,60 @@ body.resizing {
   color: var(--text-3);
 }
 
+/* 能力中心入口（侧栏）：会话列表下面两个安静的条目，右侧计数让人一眼看到
+   「有几个技能、几个连接器」，不用点进去。悬停才亮，选中态交给抽屉。 */
+.cap-block {
+  flex: 0 0 auto;
+}
+
+.cap-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--speed) ease,
+    color var(--speed) ease;
+}
+
+.cap-entry:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.cap-entry-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cap-count {
+  flex: 0 0 auto;
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.cap-entry:hover .cap-count {
+  color: var(--text-2);
+}
+
 .session-list {
   margin: 0;
   padding: 0 4px;
@@ -1345,6 +1399,33 @@ body.resizing {
   margin: 0;
 }
 
+/* 抽屉的三个页签：概览 / 技能 / MCP。安静的文字按钮，当前那一个着 accent。 */
+.drawer-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.drawer-tab {
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background var(--speed) ease,
+    color var(--speed) ease;
+}
+
+.drawer-tab:hover {
+  background: var(--surface);
+  color: var(--text-2);
+}
+
+.drawer-tab.active {
+  background: var(--surface);
+  color: var(--accent);
+}
+
 .panel {
   flex: 1;
   min-height: 0;
@@ -1613,6 +1694,159 @@ body.resizing {
   margin-bottom: 8px;
   font-size: 13px;
   color: var(--bad);
+}
+
+/* ---- 能力中心：技能 / MCP 连接器的行 ---------------------------------------- */
+
+/* 面板头：标题带计数在左，唯一的主操作（添加）在右。 */
+.cap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cap-head .approve {
+  padding: 4px 12px;
+  font-size: 13px;
+}
+
+/* 一行一个能力：名字 + 标签在首行，说明一行，小标签收尾。 */
+.cap-row {
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.cap-row + .cap-row {
+  margin-top: 6px;
+}
+
+/* 内置行：置灰 = 只读。没有删除按钮，悬停也不亮 —— 「不归你管」是视觉事实，
+   不是一句说明文字。 */
+.cap-row.builtin {
+  background: transparent;
+  border-style: dashed;
+  color: var(--text-3);
+}
+
+.cap-row.builtin .cap-name {
+  color: var(--text-3);
+}
+
+.cap-row.builtin .cap-desc {
+  color: var(--text-3);
+}
+
+.cap-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cap-name {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cap-del {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius);
+  color: var(--text-3);
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition:
+    opacity var(--speed) ease,
+    color var(--speed) ease,
+    background var(--speed) ease;
+}
+
+.cap-row:hover .cap-del {
+  opacity: 1;
+}
+
+.cap-del:hover {
+  background: var(--surface-hover);
+  color: var(--bad);
+}
+
+.cap-builtin-tag {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  border-color: var(--line);
+}
+
+.cap-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  /* 说明可以很长：两行封顶，完整内容在 tooltip（整行有 title）。 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.cap-target {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+  word-break: break-all;
+}
+
+.cap-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 4px;
+}
+
+.cap-meta-item {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.cap-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 添加表单：盖在页面上的那张卡片（和选目录同一个 overlay 壳）。 */
+.cap-form .hint {
+  margin: 0 0 10px;
+}
+
+.cap-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.cap-textarea {
+  width: 100%;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
 }
 
 /* 任务状态：只上颜色，不加装饰 —— 状态是事实，不是警报。 */
@@ -2040,6 +2274,23 @@ body.resizing {
   }
 
   .rail-block {
+    display: none;
+  }
+
+  /* 会话列表让位给顶栏，能力中心留着 —— 抽屉里还有两个面板要去。
+     同名特异性，后写的赢，所以这一行能覆盖上面的 display: none。 */
+  .cap-block {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .cap-block .rail-label {
+    display: none;
+  }
+
+  .cap-count {
     display: none;
   }
 

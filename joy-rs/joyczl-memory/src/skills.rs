@@ -469,7 +469,7 @@ pub fn is_slug(name: &str) -> bool {
 }
 
 /// The body of `joy skill install`: receives SKILL.md **text** (fetching is the
-/// CLI's job), validates frontmatter (same set as create_skill), and lands it at
+/// caller's job), validates frontmatter (same set as create_skill), and lands it at
 /// `<home>/skills/<name>/SKILL.md`. Name clashes are always rejected — never overwrite.
 pub fn install_from_text(home: &Path, text: &str) -> Result<String, String> {
     let skill = parse_skill_text(text).ok_or_else(|| {
@@ -497,4 +497,47 @@ pub fn install_from_text(home: &Path, text: &str) -> Result<String, String> {
         dest.display(),
         skill.description
     ))
+}
+
+/// `joy skill install <url>` in one call: fetch → validate → land. Shared by the CLI and
+/// the dashboard's capability center — three entrances into "install a skill" would
+/// otherwise drift on the fetch rules (which is exactly what the raw-URL rewrite is).
+pub async fn install_from_url(home: &Path, url: &str) -> Result<String, String> {
+    let text = fetch_text(url).await?;
+    install_from_text(home, &text)
+}
+
+/// Fetch a URL's body as text. GitHub blob and Gist pages are rewritten to their
+/// raw-content URLs first: what people copy is the browser address bar, and fetching
+/// that HTML would only ever produce "not a skill".
+pub async fn fetch_text(url: &str) -> Result<String, String> {
+    let raw = raw_url(url);
+    let response = reqwest::Client::new()
+        .get(&raw)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("拉不动 {raw}：{e}"))?;
+    let status = response.status().as_u16();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读不动 {raw} 的内容：{e}"))?;
+    if status >= 400 {
+        return Err(format!("{raw}：HTTP {status}"));
+    }
+    Ok(text)
+}
+
+/// GitHub blob and Gist pages → raw content URLs. Other URLs returned as-is.
+pub fn raw_url(url: &str) -> String {
+    if url.contains("github.com") && url.contains("/blob/") {
+        return url
+            .replace("github.com", "raw.githubusercontent.com")
+            .replace("/blob/", "/");
+    }
+    if url.contains("gist.github.com") && !url.ends_with("/raw") {
+        return format!("{}/raw", url.trim_end_matches('/'));
+    }
+    url.to_string()
 }

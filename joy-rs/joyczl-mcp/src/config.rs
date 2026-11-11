@@ -17,26 +17,35 @@
 //! value is sent as `Authorization: Bearer <value>`.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One server entry. All fields optional — "required" is judged by shape in [`resolve`],
 /// so the error reads "you wrote both", not serde's "missing field".
-#[derive(Debug, Clone, Default, Deserialize)]
+///
+/// `Serialize` is here for one reason: the dashboard's capability center rewrites
+/// mcp.json (add / remove / replace a server), and a config type that can only be read
+/// would force a second, hand-rolled writer. `skip_serializing_if` keeps the file as
+/// clean as a hand-written one — no `"url": null` noise.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ServerSpec {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub servers: Vec<ServerSpec>,
@@ -52,6 +61,23 @@ impl Config {
             std::fs::read_to_string(path).map_err(|e| format!("读不了 {}：{e}", path.display()))?;
         Config::parse(&text)
     }
+}
+
+/// Which config files to read: `<home>/mcp.json` (the user's own) plus the
+/// colon-separated `extra` paths (the operator's — machine-wide or bundled packs;
+/// `JOY_MCP_CONFIG` in production). Same split and same reason as
+/// `SkillLoader::dirs_for`: **the user's file is the only one the dashboard lets a
+/// human edit**; the extras show up greyed out, "built-in", because deleting them
+/// from one machine's UI would silently un-configure every machine that shares them.
+///
+/// `extra` is a parameter, not an env read inside, so this stays pure-function
+/// testable (same discipline as [`resolve`]).
+pub fn config_paths_for(home: &Path, extra: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
+    let mut paths = vec![home.join("mcp.json")];
+    if let Some(extra) = extra {
+        paths.extend(std::env::split_paths(extra));
+    }
+    paths
 }
 
 /// The connection decoded from one entry. The transport is decided by the config's **shape**,

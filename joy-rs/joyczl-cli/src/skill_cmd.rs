@@ -148,39 +148,19 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
 }
 
 async fn install(home: &Path, source: &str) -> Result<()> {
-    // GitHub page / Gist web URLs convert to raw content URLs — what people copy
-    // is mostly what sits in the browser address bar.
-    let text = if source.starts_with("http://") || source.starts_with("https://") {
-        let raw = raw_url(source);
-        println!("拉取 {raw}");
-        reqwest::Client::new()
-            .get(&raw)
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?
+    // 抓取、校验、落盘都在 joyczl_memory::skills 里（驾驶舱的能力中心走同一条路）——
+    // 三个入口各写一遍 fetch 规则，迟早对不上。
+    let outcome = if source.starts_with("http://") || source.starts_with("https://") {
+        println!("拉取 {source}");
+        skills::install_from_url(home, source).await
     } else {
-        std::fs::read_to_string(source)?
-    };
-    let outcome = skills::install_from_text(home, &text).map_err(anyhow::Error::msg)?;
+        let text = std::fs::read_to_string(source)?;
+        skills::install_from_text(home, &text)
+    }
+    .map_err(anyhow::Error::msg)?;
     println!("{outcome}");
     println!("下次启动即生效。技能是指令 —— 装之前先读一遍。");
     Ok(())
-}
-
-/// GitHub blob and Gist pages → raw content URLs. Other URLs returned as-is.
-fn raw_url(url: &str) -> String {
-    if url.contains("github.com") && url.contains("/blob/") {
-        return url
-            .replace("github.com", "raw.githubusercontent.com")
-            .replace("/blob/", "/");
-    }
-    if url.contains("gist.github.com") && !url.ends_with("/raw") {
-        return format!("{}/raw", url.trim_end_matches('/'));
-    }
-    url.to_string()
 }
 
 fn dirs_home() -> Result<PathBuf> {
@@ -199,7 +179,9 @@ async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
         .unwrap_or_else(|| default_index.display().to_string());
 
     let text = if is_http(&source) {
-        fetch(&source).await.map_err(anyhow::Error::msg)?
+        skills::fetch_text(&source)
+            .await
+            .map_err(anyhow::Error::msg)?
     } else {
         std::fs::read_to_string(&source).map_err(|e| anyhow::anyhow!("读不到索引 {source}：{e}"))?
     };
@@ -215,7 +197,7 @@ async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
 
     let outcomes = installer::update_all(home, &entries, |url: String| async move {
         if is_http(&url) {
-            fetch(&url).await
+            skills::fetch_text(&url).await
         } else {
             std::fs::read_to_string(&url).map_err(|e| e.to_string())
         }
@@ -237,22 +219,4 @@ async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
 
 fn is_http(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
-}
-
-/// Fetches one skill's content. Web URLs are converted to raw content URLs first
-/// (same rule as install: what people copy is the browser address bar URL).
-async fn fetch(url: &str) -> Result<String, String> {
-    let raw = raw_url(url);
-    let response = reqwest::Client::new()
-        .get(&raw)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = response.status().as_u16();
-    let body = response.text().await.map_err(|e| e.to_string())?;
-    if status >= 400 {
-        return Err(format!("{raw}：HTTP {status}"));
-    }
-    Ok(body)
 }

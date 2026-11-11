@@ -16,6 +16,7 @@
 
 mod api;
 mod auth;
+mod capabilities;
 mod client;
 mod freshness;
 pub mod hub;
@@ -24,6 +25,10 @@ mod webhooks;
 #[cfg(test)]
 #[path = "auth_tests.rs"]
 mod auth_tests;
+
+#[cfg(test)]
+#[path = "capabilities_tests.rs"]
+mod capabilities_tests;
 
 #[cfg(test)]
 #[path = "events_tests.rs"]
@@ -337,6 +342,15 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         // The routing table: fixed / auto, and which profile each task tier means.
         .route("/api/model/routes", get(api::model_routes))
         .route("/api/model/routes/save", post(api::model_routes_save))
+        // The capability center: skills and MCP connectors. Built-in rows (JOY_SKILL_DIRS /
+        // JOY_MCP_CONFIG) are listed but every write refuses them — the user's own files
+        // are the only ones a browser may touch.
+        .route("/api/skills", get(api::skills))
+        .route("/api/skills/install", post(api::skills_install))
+        .route("/api/skills/remove", post(api::skills_remove))
+        .route("/api/mcp", get(api::mcp))
+        .route("/api/mcp/save", post(api::mcp_save))
+        .route("/api/mcp/remove", post(api::mcp_remove))
         // The task API: one turn in, one JSON answer out (no SSE) — for programs, not people.
         .route("/api/run", post(api::run))
         // The token layer only covers the /api/* routes above (route_layer does not affect

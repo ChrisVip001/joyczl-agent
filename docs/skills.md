@@ -112,6 +112,20 @@ lowercase slug). On name collision the home directory wins over
 `JOY_SKILL_DIRS`. A skill may reference sibling files — disclosure tier
 three: read only when the model asks.
 
+## The dashboard's capability center
+
+The sidebar's 「能力中心」 lists every loaded skill with its version, policy
+flags and missing dependencies, and lets a human add or delete the ones in
+`<home>/skills/`. Two rules:
+
+- **Built-in skills are greyed out.** A skill from `JOY_SKILL_DIRS` ships with
+  the install or the machine; deleting it from one machine's UI would silently
+  unconfigure every machine that shares it. Those rows are read-only.
+- **Installs take effect on the next turn.** The loader rescans on directory
+  changes — no restart. Validation is the same gate `joy skill install` passes
+  (frontmatter, slug name, never overwrite), so a refusal is a sentence, not a
+  silent no-op.
+
 ## The create_skill tool
 
 After teaching Joy a reusable flow in conversation, say "save this as a

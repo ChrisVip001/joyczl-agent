@@ -1084,7 +1084,9 @@ async fn builtin_tools(
     // in docs/limitations.md). Unrelated to the exec switch — if the files are there, they get swept.
     joyczl_tools::exec::prune_spill(&settings.home, 7);
 
-    let mcp = joyczl_mcp::McpClient::connect(&settings.home.join("mcp.json")).await;
+    // The user's mcp.json plus JOY_MCP_CONFIG's extras (operator-level, see
+    // joyczl_mcp::config::config_paths_for) — the dashboard greys the extras out.
+    let mcp = joyczl_mcp::McpClient::connect_home(&settings.home).await;
     for warning in mcp.warnings() {
         // Same as above: stdout is the protocol channel; logs may only go to stderr.
         eprintln!("(joy) {warning}");

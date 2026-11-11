@@ -49,6 +49,10 @@ persisted with the conversation.
   relevant ([docs/architecture.md](docs/architecture.md))
 - **Act**: 22 built-in tools plus MCP servers
   ([docs/configuration.md](docs/configuration.md))
+- **Grow itself, on your say-so**: the dashboard's capability center lists Skills and
+  MCP connectors side by side — add your own, delete your own; the ones that ship
+  with the install are greyed out and read-only
+  ([docs/skills.md](docs/skills.md))
 - **Plan as a graph**: the triage front door answers small talk cheaply; the
   gather workflow writes a morning brief
   ([docs/architecture.md](docs/architecture.md))
@@ -78,7 +82,7 @@ persisted with the conversation.
 
 ### Providers and keys
 
-**Twelve LLM providers are pre-adapted in code** (`joyczl-provider`), switchable at will — and extendable without code: `<home>/models-catalog.json` patches built-in defaults or adds a provider (see [docs/configuration.md](docs/configuration.md)). `/model` lists configured profiles, `/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` adds one, `/model use ds` switches — no need to retype the key, effective immediately, no restart. Configuration lives in the REPL's `/model` and `models.json` — the dashboard carries no config panel. Keys go to the OS keychain first, falling back to `<home>/secrets.json` (0600, plaintext) when there is none — the save response says which one it was, honestly. **The old `JOY_API_KEY` / `JOY_BASE_URL` env vars are no longer read** — configuration has exactly one path: `models.json`.
+**Twelve LLM providers are pre-adapted in code** (`joyczl-provider`), switchable at will — and extendable without code: `<home>/models-catalog.json` patches built-in defaults or adds a provider, and `scripts/gen_catalog.py` generates those rows from [models.dev](https://models.dev) (context limits, vision, tool-call — joy's wire and key-env mappings included). See [docs/configuration.md](docs/configuration.md). `/model` lists configured profiles, `/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` adds one, `/model use ds` switches — no need to retype the key, effective immediately, no restart. Configuration lives in the REPL's `/model` and `models.json` — the dashboard carries no config panel. Keys go to the OS keychain first (macOS Keychain, Linux `secret-tool`, **Windows Credential Manager**), falling back to `<home>/secrets.json` (0600, plaintext) when there is none — the save response says which one it was, honestly. Key writes go through the `SecretVault` seam, so a server-side KMS backend can slot in without touching callers. **The old `JOY_API_KEY` / `JOY_BASE_URL` env vars are no longer read** — configuration has exactly one path: `models.json`. The dashboard also self-hosts: `JOY_OPS_HOST=0.0.0.0` demands `JOY_OPS_TOKEN` at startup, `/api/*` is Bearer-gated ([docs/operations.md](docs/operations.md)).
 
 Tool failures return to the model as text — the loop never crashes on one.
 
@@ -123,6 +127,7 @@ Tool failures return to the model as text — the loop never crashes on one.
 | P16 ✅ | task entities (0.14): done decided by facts — three deterministic acceptance checks before the judge, task-level budgets, runs / steps / events / artifacts, idempotency that blocks but never replays, long-task benchmarks with a recovery rate, an optional execution plan (`JOY_PLAN`) |
 | P17 ✅ | session metadata (0.15): the `sessions` table (migration 0018), `session/get` / `session/update` / `turn/list`, the working directory follows the session |
 | P18 ✅ | session gate (0.16): one turn per session at a time (`SESSION_BUSY`), `turn/steer` for a running turn, `turn/follow-up` to queue the next one (migration 0019, survives a restart), the `turnSteered` notification |
+| P19 ✅ | secrets & productization: Windows Credential Manager + the `SecretVault` seam, self-hosting security (non-loopback demands `JOY_OPS_TOKEN`), the models.dev catalog generator (`scripts/gen_catalog.py`), dashboard streams Markdown block-incrementally, a one-line session sidebar with a draggable edge and hover marquee |
 
 ## Naming
 

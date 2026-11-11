@@ -11,6 +11,7 @@ import type {
   TurnCompletedNotification,
   TurnView,
 } from "./protocol";
+import type { McpRow, McpServerSpec, McpView, Outcome, SkillRow, SkillsView } from "./api";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
@@ -19,14 +20,20 @@ import {
   createSession,
   fetchDashboard,
   fetchFs,
+  fetchMcp,
   fetchMessages,
   fetchRecents,
   fetchSessionMeta,
+  fetchSkills,
   fetchTurns,
   followUpTurn,
+  installSkill,
   interruptTurn,
   recordRecent,
+  removeMcpServer,
+  removeSkill,
   respondApproval,
+  saveMcpServer,
   steerTurn,
   summarizeInbox,
   talk,
@@ -46,7 +53,9 @@ import {
   formatStamp,
   messageRow,
   muted,
+  renderMcp,
   renderOverview,
+  renderSkills,
   sessionList,
   toolSummary,
   turnFooter,
@@ -92,6 +101,19 @@ const dom = {
   newSession: must<HTMLButtonElement>("new-session"),
   drawer: must("drawer"),
   drawerClose: must<HTMLButtonElement>("drawer-close"),
+  // 抽屉的三个面板 + 侧栏能力中心入口与计数。
+  tabOverview: must<HTMLButtonElement>("tab-overview"),
+  tabSkills: must<HTMLButtonElement>("tab-skills"),
+  tabMcp: must<HTMLButtonElement>("tab-mcp"),
+  panelOverview: must("panel-overview"),
+  panelSkills: must("panel-skills"),
+  panelMcp: must("panel-mcp"),
+  skillsBody: must("skills-body"),
+  mcpBody: must("mcp-body"),
+  capSkills: must<HTMLButtonElement>("cap-skills"),
+  capMcp: must<HTMLButtonElement>("cap-mcp"),
+  capSkillsCount: must<HTMLElement>("cap-skills-count"),
+  capMcpCount: must<HTMLElement>("cap-mcp-count"),
 };
 
 /**
@@ -201,15 +223,43 @@ function renderStaged(): void {
   dom.staged.replaceChildren(...nodes);
 }
 
-/** One panel remains: what is being worked on and what is remembered. Config lives in the CLI. */
-const TAB_IDS = ["overview"] as const;
+/**
+ * The drawer's three panels: the overview (what is being worked on, what is remembered)
+ * and the capability center's two halves. Skills and MCP connectors are here rather than
+ * in a settings page because they are things a human adds and removes, not config to
+ * stare at — same reason they get a sidebar entry.
+ */
+const TAB_IDS = ["overview", "skills", "mcp"] as const;
 type TabId = (typeof TAB_IDS)[number];
 
+/** Which panel is showing. Kept so the 进度 button can toggle instead of only opening. */
+let currentTab: TabId = "overview";
+
+/** Latest capability data, refreshed with the rest of the screen. */
+let skillsView: SkillsView = { skills: [], error: null };
+let mcpView: McpView = { servers: [], error: null };
+
 function switchTab(tab: TabId): void {
+  currentTab = tab;
   // `#overview` is still a bookmark: one URL opens the progress drawer on load.
   if (location.hash !== `#${tab}`) {
     history.replaceState(null, "", `#${tab}`);
   }
+  for (const [id, button] of [
+    ["overview", dom.tabOverview],
+    ["skills", dom.tabSkills],
+    ["mcp", dom.tabMcp],
+  ] as const) {
+    const active = id === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+  dom.panelOverview.hidden = tab !== "overview";
+  dom.panelSkills.hidden = tab !== "skills";
+  dom.panelMcp.hidden = tab !== "mcp";
+  // The capability panels paint on open: their data may predate the last refresh.
+  if (tab === "skills") paintSkills();
+  if (tab === "mcp") paintMcp();
   openDrawer();
 }
 
@@ -226,6 +276,42 @@ function openHashPanel(): void {
 
 function closeDrawer(): void {
   dom.drawer.hidden = true;
+}
+
+/** Paint the skill panel from the latest `skillsView`. */
+function paintSkills(): void {
+  const note = outcomeNote(dom.skillsBody);
+  dom.skillsBody.replaceChildren(
+    ...(note === null ? [] : [note]),
+    renderSkills(skillsView, () => void skillAddOverlay(), (skill) => void removeSkillAsk(skill)),
+  );
+}
+
+/** Paint the MCP panel from the latest `mcpView`. */
+function paintMcp(): void {
+  const note = outcomeNote(dom.mcpBody);
+  dom.mcpBody.replaceChildren(
+    ...(note === null ? [] : [note]),
+    renderMcp(mcpView, () => void mcpAddOverlay(), (server) => void removeMcpAsk(server)),
+  );
+}
+
+/**
+ * The last write's outcome on a panel, remembered so the 15s repaint cannot wipe it.
+ *
+ * A one-shot prepend would vanish on the next poll — "did the delete work?" answered
+ * by a line that disappears is worse than no line. Keyed by the panel element, so the
+ * two lists never borrow each other's receipt.
+ */
+const lastOutcome = new WeakMap<
+  HTMLElement,
+  { ok: true; message: string } | { ok: false; error: unknown }
+>();
+
+function outcomeNote(panel: HTMLElement): Node | null {
+  const outcome = lastOutcome.get(panel);
+  if (outcome === undefined) return null;
+  return outcome.ok ? chip(outcome.message, "note") : failureOf(outcome.error);
 }
 
 // --- Run state, three kinds -----------------------
@@ -379,11 +465,25 @@ async function boot(): Promise<void> {
     });
   }
 
-  // The only drawer: the overview. Same button closes it.
+  // The drawer's three doors: the 进度 button toggles the overview, the sidebar's
+  // capability entries open their own panel (and switch, not stack).
   dom.progress.addEventListener("click", () => {
-    if (dom.drawer.hidden) switchTab("overview");
+    if (dom.drawer.hidden || currentTab !== "overview") switchTab("overview");
     else closeDrawer();
   });
+  for (const [button, tab] of [
+    [dom.capSkills, "skills"],
+    [dom.capMcp, "mcp"],
+  ] as const) {
+    button.addEventListener("click", () => switchTab(tab));
+  }
+  for (const [button, tab] of [
+    [dom.tabOverview, "overview"],
+    [dom.tabSkills, "skills"],
+    [dom.tabMcp, "mcp"],
+  ] as const) {
+    button.addEventListener("click", () => switchTab(tab));
+  }
 
   dom.composer.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -517,6 +617,31 @@ async function refresh(): Promise<void> {
     // Failing to fetch data is normal (app-server just started, or the process died),
     // so show it as one thing instead of throwing into a console nobody sees.
     dom.overview.replaceChildren(failureOf(error));
+  }
+  await refreshCapabilities();
+}
+
+/**
+ * The capability center's two lists, in the same 15s pulse as everything else.
+ *
+ * Separate from `/api/data` on purpose: these are files on this machine, not protocol
+ * reads, and a failure here must not blank the overview — the sidebar counts simply
+ * keep their last value, and an open panel shows the error in place.
+ */
+async function refreshCapabilities(): Promise<void> {
+  const [skills, mcp] = await Promise.all([
+    fetchSkills().catch(() => null),
+    fetchMcp().catch(() => null),
+  ]);
+  if (skills !== null) {
+    skillsView = skills;
+    dom.capSkillsCount.textContent = String(skills.skills.length);
+    if (!dom.panelSkills.hidden) paintSkills();
+  }
+  if (mcp !== null) {
+    mcpView = mcp;
+    dom.capMcpCount.textContent = String(mcp.servers.length);
+    if (!dom.panelMcp.hidden) paintMcp();
   }
 }
 
@@ -667,6 +792,199 @@ async function cwdPicker(): Promise<void> {
 
   document.body.append(overlay);
   await show(current === "" ? null : current);
+}
+
+/**
+ * Run one capability write, then repaint and leave the outcome on the panel.
+ *
+ * The server's answer is a sentence a person can read (it refuses built-in rows with a
+ * reason), so it is shown as-is — a silent success after a delete is exactly the kind
+ * of "did that work?" this page avoids. Returns whether it succeeded, so a form knows
+ * whether to close itself.
+ */
+async function capabilityWrite(
+  action: () => Promise<Outcome>,
+  panel: HTMLElement,
+): Promise<boolean> {
+  try {
+    const outcome = await action();
+    lastOutcome.set(panel, { ok: true, message: outcome.message });
+    await refreshCapabilities();
+    return true;
+  } catch (error) {
+    lastOutcome.set(panel, { ok: false, error });
+    await refreshCapabilities();
+    return false;
+  }
+}
+
+/// Ask before deleting: a skill is instructions the next turn would have followed.
+/// The server refuses built-in names as well — this ask is the second fence, not the only one.
+function removeSkillAsk(skill: SkillRow): void {
+  const ok = window.confirm(
+    `删除技能「${skill.name}」？SKILL.md 会从 ${skill.folder} 移掉，下一轮起不再载入。`,
+  );
+  if (!ok) return;
+  void capabilityWrite(() => removeSkill(skill.name), dom.skillsBody);
+}
+
+/// Same for a connector: it stops connecting on the next start.
+function removeMcpAsk(server: McpRow): void {
+  const ok = window.confirm(`删除 MCP 连接器「${server.name}」？重启 Joy 后不再连接它。`);
+  if (!ok) return;
+  void capabilityWrite(() => removeMcpServer(server.name), dom.mcpBody);
+}
+
+/**
+ * Mount `panel` as a modal overlay: backdrop click and Esc both close it.
+ * Returns the close function (idempotent — removing twice is a no-op).
+ */
+function openOverlay(panel: HTMLElement): () => void {
+  const overlay = el("div", { class: "fsoverlay" });
+  overlay.append(panel);
+  document.body.append(overlay);
+  const close = (): void => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") close();
+  };
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener("keydown", onKey);
+  return close;
+}
+
+/** A minimal SKILL.md, shown as the paste box's placeholder — the format at a glance. */
+const SKILL_TEMPLATE = `---
+name: my-skill
+description: 什么时候用我 —— 触发词写在这里（英文，它会兼任触发器）
+---
+
+# 标题
+
+第一步……
+第二步……`;
+
+/**
+ * Add a skill: paste a SKILL.md, or give a URL (GitHub blob / Gist pages are rewritten
+ * to raw content server-side). Validation is the server's — the same gate
+ * `joy skill install` passes — so a refusal comes back as a sentence on the panel.
+ */
+async function skillAddOverlay(): Promise<void> {
+  const panel = el("div", {
+    class: "fspanel cap-form",
+    role: "dialog",
+    "aria-label": "添加技能",
+  });
+  const text = el("textarea", {
+    class: "cap-textarea",
+    rows: 10,
+    placeholder: SKILL_TEMPLATE,
+    "aria-label": "SKILL.md 内容",
+  });
+  const url = el("input", {
+    type: "url",
+    placeholder: "https://…/SKILL.md（和粘贴框二选一）",
+    "aria-label": "SKILL.md 网址",
+  });
+  const close = openOverlay(panel);
+
+  const install = el("button", { class: "approve", text: "安装", type: "button" });
+  install.addEventListener("click", () => {
+    install.disabled = true;
+    void capabilityWrite(
+      () => installSkill({ text: text.value, url: url.value.trim() }),
+      dom.skillsBody,
+    ).then((ok) => {
+      // A refusal keeps the form open: the sentence says what to fix.
+      if (ok) close();
+      else install.disabled = false;
+    });
+  });
+  const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+  cancel.addEventListener("click", close);
+
+  panel.append(
+    el("p", {
+      class: "hint",
+      text: "粘贴一份 SKILL.md，或填一个网址。名字必须是小写 slug（字母、数字、连字符）—— 它会变成目录名；重名拒绝安装。",
+    }),
+    text,
+    url,
+    el("div", { class: "row" }, install, cancel),
+  );
+  text.focus();
+}
+
+/**
+ * Add an MCP connector: one name plus **exactly one** transport (a remote url or a local
+ * command — the server refuses both). `auth_env` holds the name of an environment
+ * variable, never the key itself: mcp.json gets pasted into bug reports.
+ */
+async function mcpAddOverlay(): Promise<void> {
+  const panel = el("div", {
+    class: "fspanel cap-form",
+    role: "dialog",
+    "aria-label": "添加 MCP 连接器",
+  });
+  const close = openOverlay(panel);
+
+  const name = el("input", { placeholder: "名字，如 fs / notes", "aria-label": "名称" });
+  const url = el("input", {
+    type: "url",
+    placeholder: "https://host/mcp（远程 HTTP 服务器）",
+    "aria-label": "远程 URL",
+  });
+  const command = el("input", {
+    placeholder: "npx（本地 stdio 服务器）",
+    "aria-label": "本地命令",
+  });
+  const args = el("input", {
+    placeholder: "参数，空格分隔，如 -y @modelcontextprotocol/server-filesystem /tmp",
+    "aria-label": "命令参数",
+  });
+  const authEnv = el("input", {
+    placeholder: "鉴权环境变量名（可留空），如 NOTES_API_KEY",
+    "aria-label": "鉴权环境变量名",
+  });
+
+  const save = el("button", { class: "approve", text: "保存", type: "button" });
+  save.addEventListener("click", () => {
+    const spec: McpServerSpec = { name: name.value.trim() };
+    if (url.value.trim() !== "") {
+      spec.url = url.value.trim();
+    } else {
+      spec.command = command.value.trim();
+      const parts = args.value.trim().split(/\s+/).filter((part) => part !== "");
+      if (parts.length > 0) spec.args = parts;
+    }
+    if (authEnv.value.trim() !== "") spec.authEnv = authEnv.value.trim();
+    save.disabled = true;
+    void capabilityWrite(() => saveMcpServer(spec), dom.mcpBody).then((ok) => {
+      // A refusal keeps the form open: the sentence says what to fix.
+      if (ok) close();
+      else save.disabled = false;
+    });
+  });
+  const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+  cancel.addEventListener("click", close);
+
+  panel.append(
+    el("p", {
+      class: "hint",
+      text: "url 和 command 只能填一个。参数用空格分隔（路径里有空格就先编辑 mcp.json）。鉴权填环境变量的名字，不是密钥本身。保存后重启 Joy 生效 —— 连接发生在启动时。",
+    }),
+    el("label", { class: "cap-field" }, el("span", { text: "名称" }), name),
+    el("label", { class: "cap-field" }, el("span", { text: "远程 URL" }), url),
+    el("label", { class: "cap-field" }, el("span", { text: "本地命令" }), command),
+    el("label", { class: "cap-field" }, el("span", { text: "命令参数" }), args),
+    el("label", { class: "cap-field" }, el("span", { text: "鉴权环境变量名" }), authEnv),
+    el("div", { class: "row" }, save, cancel),
+  );
+  name.focus();
 }
 
 async function submit(): Promise<void> {
@@ -1272,8 +1590,64 @@ function must<T extends HTMLElement = HTMLElement>(id: string): T {
   const node = document.getElementById(id);
   // Blow up on the spot when not found. Silently doing nothing is far harder to debug —
   // and the only possible cause is index.html and this getting out of sync.
-  if (node === null) throw new Error(`页面里没有 #${id}`);
+  if (node === null) {
+    stalePage(id);
+    throw new Error(`页面里没有 #${id}`);
+  }
   return node as T;
+}
+
+/**
+ * The page and the bundle are not the same build — and that used to mean a blank screen.
+ *
+ * `index.html` is network-first while `main.js` is cache-first, so a service-worker cache
+ * can hand a *new* bundle an *old* page. The `must()` above then threw at module scope,
+ * which aborts the whole bundle: no session list, no chat, no error — just an empty page
+ * and one console line nobody opens. This is that failure given a face: what happened,
+ * and the single click that fixes it (drop the stale caches, refetch).
+ *
+ * Styling is inline on purpose: style.css may be the stale half too.
+ */
+function stalePage(id: string): void {
+  if (document.body === null) return;
+  const reload = el("button", {
+    type: "button",
+    text: "清掉旧缓存并重新加载",
+    style:
+      "margin-top:18px;padding:9px 18px;border:1px solid #6b6f78;border-radius:9px;" +
+      "background:transparent;color:inherit;cursor:pointer;font:inherit",
+  });
+  reload.addEventListener("click", () => {
+    void (async () => {
+      const regs = await navigator.serviceWorker?.getRegistrations?.() ?? [];
+      await Promise.all(regs.map((reg) => reg.unregister()));
+      if (typeof caches !== "undefined") {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+      }
+      location.reload();
+    })();
+  });
+  document.body.replaceChildren(
+    el(
+      "div",
+      {
+        style:
+          "max-width:560px;margin:16vh auto 0;padding:0 24px;color:#c9cbd1;" +
+          "font:15px/1.75 -apple-system,system-ui,'Segoe UI',sans-serif",
+      },
+      el("h1", { text: "页面和脚本不是同一版", style: "font-size:18px;margin:0 0 14px" }),
+      el("p", {
+        text: `这个页面缺了 #${id} —— 浏览器缓存了旧版脚本（service worker 缓存优先），新页面配上了旧 bundle。`,
+        style: "margin:0 0 6px",
+      }),
+      el("p", {
+        text: "点下面的按钮：会注销 service worker、清掉旧缓存，再取一份新版。",
+        style: "margin:0;color:#8d919a",
+      }),
+      reload,
+    ),
+  );
 }
 
 // PWA：静态资源交给 service worker（缓存优先、后台更新）；/api 一帧不缓存。

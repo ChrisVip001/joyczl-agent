@@ -12,7 +12,8 @@
   </head>
   <body>
     <div class="app">
-      <!-- 侧栏只有会话：记忆、用量、模型、定时、审批审计都是配置，不占人的注意力。 -->
+      <!-- 侧栏：会话 + 能力中心。记忆、用量、模型、定时、审批审计都是配置，不占人的注意力；
+           技能和 MCP 连接器不是配置旁观项 —— 是人要自己增删的东西，所以占一个入口。 -->
       <aside class="sidebar">
         <div class="brand">
           <span class="dot" aria-hidden="true"></span>
@@ -27,6 +28,30 @@
         <div class="rail-block">
           <p class="rail-label">会话</p>
           <ul class="session-list" id="sessions"></ul>
+        </div>
+
+        <!-- 能力中心：两个入口对应抽屉里的两个面板。随 Joy 内置分发的技能/连接器
+             在那里置灰（只读），用户自己的（<home>/skills、mcp.json）才能加和删。 -->
+        <div class="rail-block cap-block">
+          <p class="rail-label">能力中心</p>
+          <button
+            class="cap-entry"
+            id="cap-skills"
+            type="button"
+            title="技能：Joy 会的做法（SKILL.md）"
+          >
+            <span class="cap-entry-name">技能</span>
+            <span class="cap-count" id="cap-skills-count">0</span>
+          </button>
+          <button
+            class="cap-entry"
+            id="cap-mcp"
+            type="button"
+            title="MCP 连接器：接进来的外部工具"
+          >
+            <span class="cap-entry-name">MCP 连接器</span>
+            <span class="cap-count" id="cap-mcp-count">0</span>
+          </button>
         </div>
 
         <div class="sidebar-foot">
@@ -104,14 +129,49 @@
         </div>
       </main>
 
-      <!-- 唯一的抽屉：现在在做什么、记得什么。审批卡片在聊天窗口里，不在这里。 -->
+      <!-- 抽屉：三个面板（概览 / 技能 / MCP 连接器），聊天列永远不被挤压。
+           审批卡片在聊天窗口里，不在这里。 -->
       <aside class="panels" id="drawer" hidden>
         <div class="drawer-head">
-          <p class="hint">概览</p>
+          <div class="drawer-tabs" role="tablist" aria-label="面板">
+            <button
+              class="drawer-tab active"
+              id="tab-overview"
+              type="button"
+              role="tab"
+              aria-selected="true"
+            >
+              概览
+            </button>
+            <button
+              class="drawer-tab"
+              id="tab-skills"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              技能
+            </button>
+            <button
+              class="drawer-tab"
+              id="tab-mcp"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              MCP
+            </button>
+          </div>
           <button class="ghost" id="drawer-close" type="button" aria-label="收起">×</button>
         </div>
-        <section class="panel active">
+        <section class="panel" id="panel-overview" role="tabpanel">
           <div class="body" id="overview"></div>
+        </section>
+        <section class="panel" id="panel-skills" role="tabpanel" hidden>
+          <div class="body" id="skills-body"></div>
+        </section>
+        <section class="panel" id="panel-mcp" role="tabpanel" hidden>
+          <div class="body" id="mcp-body"></div>
         </section>
       </aside>
     </div>

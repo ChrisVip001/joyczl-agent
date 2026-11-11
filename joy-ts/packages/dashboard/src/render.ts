@@ -5,6 +5,12 @@
 
 import { renderMarkdown, stripToolFold } from "./markdown";
 import type {
+  McpRow,
+  McpView,
+  SkillRow,
+  SkillsView,
+} from "./api";
+import type {
   AgentTaskView,
   ArtifactView,
   AcceptanceView,
@@ -904,4 +910,178 @@ export function toolSummary(notification: ToolStartedNotification): string {
 /** The stopwatch text in a card. `start` is the moment this card was created. */
 export function elapsedSince(start: number): string {
   return formatMs(Date.now() - start);
+}
+
+// --- 能力中心：技能 / MCP 连接器 -----------------------------------------------
+//
+// 两个面板共用一套行样式：名字 + 一行说明 + 几个小标签。唯一的分别是「内置」行
+// 置灰且没有任何按钮 —— 它们随安装分发（JOY_SKILL_DIRS / JOY_MCP_CONFIG），
+// 从这一台机器的界面上删掉它，会让每一台共享它的机器一起失效。
+
+/** The skill list: what Joy knows how to do, and which rows belong to the human. */
+export function renderSkills(
+  view: SkillsView,
+  onAdd: () => void,
+  onRemove: (skill: SkillRow) => void,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  fragment.append(capHead(`技能 · ${view.skills.length} 个`, "＋ 添加技能", onAdd));
+
+  if (view.error !== null) {
+    fragment.append(el("div", { class: "failure", text: view.error }));
+  }
+  if (view.skills.length === 0) {
+    fragment.append(
+      muted(
+        "还没有技能。技能是一份 SKILL.md：写上名字、用途和做法，Joy 会在相关消息出现时载入它。",
+      ),
+    );
+  }
+
+  // A dependency that is not in the list cannot fire: say which one, same as the CLI.
+  const loaded = view.skills.map((skill) => skill.name);
+  for (const skill of view.skills) {
+    const missing = skill.dependencies.filter((dep) => !loaded.includes(dep));
+    const row = el(
+      "div",
+      {
+        class: `cap-row${skill.source === "builtin" ? " builtin" : ""}`,
+        title:
+          skill.source === "builtin"
+            ? `「${skill.name}」随 Joy 内置分发（JOY_SKILL_DIRS）—— 只能看，不能改`
+            : `「${skill.name}」 · ${skill.folder}`,
+      },
+      el(
+        "div",
+        { class: "cap-row-head" },
+        el("span", { class: "cap-name", text: skill.name }),
+        skill.version !== null
+          ? el("span", { class: "tag", text: `v${skill.version}` })
+          : document.createDocumentFragment(),
+        skill.source === "builtin"
+          ? el("span", { class: "tag cap-builtin-tag", text: "内置" })
+          : document.createDocumentFragment(),
+        skill.source === "user"
+          ? el("button", {
+              class: "cap-del",
+              type: "button",
+              text: "×",
+              title: `删除技能「${skill.name}」`,
+              onclick: () => onRemove(skill),
+            })
+          : document.createDocumentFragment(),
+      ),
+      el("p", { class: "cap-desc", text: skill.description }),
+      capMeta([
+        skill.allowModelInvocation ? null : "只走 $名字 显式引用",
+        skill.schedule !== null ? `定时 ${skill.schedule}` : null,
+        missing.length > 0 ? `依赖缺失：${missing.join(", ")}` : null,
+      ]),
+    );
+    fragment.append(row);
+  }
+
+  fragment.append(
+    el("p", {
+      class: "cap-note",
+      text: "内置技能只读；自己加在 <home>/skills/ 下，下一轮就生效，不用重启。",
+    }),
+  );
+  return fragment;
+}
+
+/** The MCP connector list: what Joy is wired to, and how each one authenticates. */
+export function renderMcp(
+  view: McpView,
+  onAdd: () => void,
+  onRemove: (server: McpRow) => void,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  fragment.append(capHead(`MCP 连接器 · ${view.servers.length} 个`, "＋ 添加连接器", onAdd));
+
+  if (view.error !== null) {
+    fragment.append(el("div", { class: "failure", text: view.error }));
+  }
+  if (view.servers.length === 0) {
+    fragment.append(
+      muted(
+        "还没有连接器。连上一个 MCP 服务器，它的工具就并进 Joy 的工具表（<服务器>_<工具>）。",
+      ),
+    );
+  }
+
+  for (const server of view.servers) {
+    const target =
+      server.kind === "url"
+        ? (server.url ?? "")
+        : [server.command ?? "", ...server.args].join(" ").trim();
+    const auth: Record<string, string> = {
+      none: "无鉴权",
+      auth_env: `鉴权：${server.authEnv ?? ""}（环境变量，值以 Bearer 发出）`,
+      oauth: "浏览器 OAuth（joy mcp login）",
+    };
+    fragment.append(
+      el(
+        "div",
+        {
+          class: `cap-row${server.source === "builtin" ? " builtin" : ""}`,
+          title:
+            server.source === "builtin"
+              ? `「${server.name}」由系统内置配置提供（JOY_MCP_CONFIG）—— 只能看，不能改`
+              : `「${server.name}」 · ${target}`,
+        },
+        el(
+          "div",
+          { class: "cap-row-head" },
+          el("span", { class: "cap-name", text: server.name }),
+          el("span", {
+            class: "tag",
+            text: server.kind === "url" ? "HTTP" : "stdio",
+          }),
+          server.source === "builtin"
+            ? el("span", { class: "tag cap-builtin-tag", text: "内置" })
+            : document.createDocumentFragment(),
+          server.source === "user"
+            ? el("button", {
+                class: "cap-del",
+                type: "button",
+                text: "×",
+                title: `删除连接器「${server.name}」`,
+                onclick: () => onRemove(server),
+              })
+            : document.createDocumentFragment(),
+        ),
+        el("code", { class: "cap-target", text: target }),
+        capMeta([auth[server.auth] ?? server.auth]),
+      ),
+    );
+  }
+
+  fragment.append(
+    el("p", {
+      class: "cap-note",
+      text: "内置配置只读；改动落在 <home>/mcp.json，重启 Joy 后生效 —— 连接发生在启动时。",
+    }),
+  );
+  return fragment;
+}
+
+/** Panel header: the title with a count, and the one primary action. */
+function capHead(title: string, action: string, onAdd: () => void): HTMLElement {
+  return el(
+    "div",
+    { class: "cap-head" },
+    el("p", { class: "hint", text: title }),
+    el("button", { class: "approve", type: "button", text: action, onclick: onAdd }),
+  );
+}
+
+/** The small tag row under a row's name. Null entries are dropped, not rendered empty. */
+function capMeta(items: (string | null)[]): HTMLElement {
+  const row = el("div", { class: "cap-meta" });
+  for (const item of items) {
+    if (item === null || item === "") continue;
+    row.append(el("span", { class: "cap-meta-item", text: item }));
+  }
+  return row;
 }

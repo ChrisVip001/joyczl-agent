@@ -521,3 +521,152 @@ export async function recordRecent(path: string): Promise<void> {
   }
 }
 
+// --- 能力中心（技能 / MCP 连接器）-----------------------------------------------
+//
+// Ops-local views, like /api/fs above: neither the SDK nor the terminal needs
+// "browse the skill folders", so these shapes live here rather than in the protocol.
+// `source` is the one field that matters: `user` rows can be managed, `builtin`
+// rows are greyed out (JOY_SKILL_DIRS / JOY_MCP_CONFIG ship with the install).
+
+/** One skill as the capability center shows it. */
+export interface SkillRow {
+  name: string;
+  description: string;
+  version: string | null;
+  /** Present = also a scheduled job (see `joy schedule`). */
+  schedule: string | null;
+  /** false = explicit `$name` references only, never keyword-triggered. */
+  allowModelInvocation: boolean;
+  dependencies: string[];
+  source: "user" | "builtin";
+  folder: string;
+}
+
+/** One MCP connector as the capability center shows it. */
+export interface McpRow {
+  name: string;
+  /** `url` (Streamable HTTP) or `command` (stdio) — the shape decides. */
+  kind: "url" | "command";
+  url: string | null;
+  command: string | null;
+  args: string[];
+  /** `none` / `auth_env` (a variable name) / `oauth` (browser login). */
+  auth: "none" | "auth_env" | "oauth";
+  authEnv: string | null;
+  source: "user" | "builtin";
+}
+
+export interface SkillsView {
+  skills: SkillRow[];
+  error: string | null;
+}
+
+export interface McpView {
+  servers: McpRow[];
+  error: string | null;
+}
+
+/** What every capability write answers: one line a person can read. */
+export interface Outcome {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * Turn one write response into an `Outcome`, or throw.
+ *
+ * A refusal answers **200** with the protocol's `ErrorObject` (the `/api/task`
+ * convention: a human action refused is an answer, not a transport fault). So the
+ * HTTP status cannot separate "done" from "refused" — `ok` is the only honest
+ * discriminator, and checking it here keeps that rule in one place instead of
+ * four call sites guessing.
+ */
+async function outcomeOf(response: Response): Promise<Outcome> {
+  const body = (await response.json()) as Partial<Outcome> & Partial<ErrorObject>;
+  if (body.ok !== true) {
+    throw new ApiError({
+      code: typeof body.code === "number" ? body.code : response.status,
+      message: body.message ?? `HTTP ${response.status} ${response.statusText}`,
+    });
+  }
+  return body as Outcome;
+}
+
+/** The skills Joy has loaded, user ones first, plus a read error if the folder is unreadable. */
+export async function fetchSkills(): Promise<SkillsView> {
+  const response = await apiFetch("/api/skills", {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as SkillsView;
+}
+
+/**
+ * Install a skill: paste SKILL.md text, or give a URL (GitHub blob / Gist pages are
+ * rewritten to raw content server-side). Validation is the same gate
+ * `joy skill install` passes — the page cannot install what the CLI would refuse.
+ */
+export async function installSkill(body: {
+  text?: string;
+  url?: string;
+}): Promise<Outcome> {
+  const response = await apiFetch("/api/skills/install", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return outcomeOf(response);
+}
+
+/** Delete a user skill (the server refuses built-in ones). */
+export async function removeSkill(name: string): Promise<Outcome> {
+  const response = await apiFetch("/api/skills/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return outcomeOf(response);
+}
+
+/** The configured MCP connectors, user file first (first wins — the runtime's merge). */
+export async function fetchMcp(): Promise<McpView> {
+  const response = await apiFetch("/api/mcp", {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as McpView;
+}
+
+/** One server stanza for `POST /api/mcp/save` — the same shape mcp.json holds. */
+export interface McpServerSpec {
+  name: string;
+  url?: string;
+  command?: string;
+  args?: string[];
+  authEnv?: string;
+}
+
+/** Add or replace one connector in `<home>/mcp.json` (takes effect on next start). */
+export async function saveMcpServer(spec: McpServerSpec): Promise<Outcome> {
+  const response = await apiFetch("/api/mcp/save", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(spec),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return outcomeOf(response);
+}
+
+/** Delete a user connector (the server refuses built-in ones). */
+export async function removeMcpServer(name: string): Promise<Outcome> {
+  const response = await apiFetch("/api/mcp/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return outcomeOf(response);
+}
+

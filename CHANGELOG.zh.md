@@ -4,6 +4,39 @@
 
 ## 未发布
 
+### 能力中心：侧栏里的技能与 MCP 连接器管理
+
+- 驾驶舱侧栏新增「能力中心」：两个入口（技能 / MCP 连接器），各开右侧抽屉里
+  的一个面板（抽屉现在是三个页签：概览 / 技能 / MCP）。计数就挂在入口上，
+  「有几个」不用点进去就知道；聊天列照旧不被挤压，移动端顶栏也留着这两个入口。
+- 技能：每个已装载技能一行（名字、版本、策略字段、缺失的依赖）。MCP 连接器：
+  一行一个，带传输方式（HTTP / stdio）、目标和鉴权方式（`auth_env` 变量名 /
+  浏览器 OAuth / 无）。
+- **内置行置灰只读。** 来自 `JOY_SKILL_DIRS` 的技能、或来自新增的
+  `JOY_MCP_CONFIG`（冒号分隔的额外 mcp.json 文件，与 `JOY_SKILL_DIRS`
+  同一分法）的服务器，是随安装或机器分发的 —— 从一台机器的界面上删掉它，
+  会让每一台共享它的机器一起失效。所有写操作一律拒绝并说明原因；用户自己的
+  `<home>/skills/` 与 `<home>/mcp.json` 是唯一可写的地方。
+- 人可以自己加：粘贴一份 SKILL.md 或给一个网址（校验和 `joy skill install`
+  同一道门；技能下一轮即生效，不用重启）；加一个 MCP 连接器（一个名字 +
+  恰好一种传输；`auth_env` 放变量名而不是密钥；落盘是原子的，重启后生效 ——
+  连接发生在启动时）。内置包已占用的名字会被拒绝而不是被悄悄遮蔽：运行时
+  先到的赢，用户配置里再写一份也不会生效。
+- 新的 ops 端点（`/api/skills`、`/api/skills/install`、`/api/skills/remove`、
+  `/api/mcp`、`/api/mcp/save`、`/api/mcp/remove`），和 `/api/fs` 一样是
+  ops 本地视图 —— 协议本身没动。技能安装/抓取的逻辑收进 `joyczl-memory`
+  （`install_from_url`、`fetch_text`、`raw_url`），CLI 与驾驶舱共用一道门；
+  `joyczl-mcp` 的配置类型补了 `Serialize`（原子重写用）与 `config_paths_for`
+  （两层分法）。
+- **页面和 bundle 再也不会不是同一版了。** `index.html` 是网络优先、
+  `main.js` 是缓存优先，service worker 的缓存可能把新页面配给旧 bundle；随后
+  `must()` 在模块顶层抛错，整屏白掉 —— 连会话列表一起，只在控制台留一行
+  没人看的报错。现在两道保险：构建给脚本 URL 打版本戳
+  （`main.js?v=<build>`），缓存键每次构建都变，两半只能来自同一次构建；
+  万一错配真的进了浏览器，`must()` 会画出可读的恢复页（「页面和脚本不是同一
+  版」），按钮注销 service worker、清旧缓存再重载。冒烟脚本把版本戳钉住了。
+- Service worker `VERSION` 升到 `joy-v17`。
+
 ### 历史展示剥掉模型专用的工具折叠
 
 - 落库的助手回复带着 `\n[tools used: …]` 尾巴 —— `fold_tool_activity` 写给

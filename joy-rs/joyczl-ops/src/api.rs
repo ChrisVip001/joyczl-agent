@@ -1,8 +1,10 @@
-//! The three dashboard endpoints.
+//! The dashboard's HTTP endpoints.
 //!
-//! Only three, because that is all a dashboard does: **see the picture**, **dig history**,
-//! **talk**. Everything is translated from app-server reads and `turn/start`; no business
-//! logic is added here — new business belongs on the protocol side.
+//! Only a handful, because that is all a dashboard does: **see the picture**, **dig
+//! history**, **talk**, and **manage what the human owns** (the capability center's
+//! skills and MCP connectors). Everything is translated from app-server reads and
+//! `turn/start`; no business logic is added here — new business belongs on the
+//! protocol side, and the capability center's domain lives in `capabilities.rs`.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -14,6 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::Local;
 use futures_util::stream::{self, Stream};
+use joyczl_mcp::config::ServerSpec;
 use joyczl_protocol::{
     codes, methods, ApprovalLogResponse, ApprovalRespondParams, ApprovalRespondResponse,
     ConfigReadResponse, ConnectorStatus, DashboardData, ErrorObject, InboxListView,
@@ -31,7 +34,7 @@ use joyczl_protocol::{
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
 
-use crate::{webhooks, AppServer};
+use crate::{capabilities, webhooks, AppServer};
 
 /// The first screen fetches only this many recent entries: the dashboard must show "the
 /// state right now" at a glance; paging is another matter (the protocol cursor is for that).
@@ -1358,8 +1361,124 @@ fn bytes_stream(
 /// The status code is not 200: on the `fetch` side "this trip failed" is obvious at a
 /// glance, while the body is still the familiar `{code, message}` — the page can just show
 /// the message; what app-server wrote was meant for users in the first place.
-fn failed(status: StatusCode, error: ErrorObject) -> Response {
+pub(crate) fn failed(status: StatusCode, error: ErrorObject) -> Response {
     (status, Json(error)).into_response()
+}
+
+// ---- 能力中心：技能 / MCP 连接器 ------------------------------------------------
+//
+// The domain (rows, fences, validation) lives in `capabilities.rs`; this is the HTTP
+// face, same as everything above. Built-in rows are refused by the write paths, so the
+// handlers only translate: the server's sentence goes to the page verbatim.
+
+/// A refusal the page can show verbatim: 200 + the protocol's `ErrorObject`, the same
+/// convention as `/api/task` — a human action refused is an answer, not a fault.
+fn refusal(message: String) -> Response {
+    failed(
+        StatusCode::OK,
+        ErrorObject {
+            code: codes::INVALID_PARAMS,
+            message,
+            data: None,
+        },
+    )
+}
+
+fn outcome(ok: bool, message: String) -> Response {
+    Json(capabilities::Outcome { ok, message }).into_response()
+}
+
+/// `GET /api/skills` — what Joy can do procedurally, and which rows are built-in.
+pub async fn skills(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    let (skills, error) = capabilities::skill_rows(app.home());
+    Json(capabilities::SkillsView { skills, error }).into_response()
+}
+
+/// `POST /api/skills/install` — paste a SKILL.md or give a URL.
+///
+/// Validation lives in `joyczl-memory` (the same gate `joy skill install` passes), so
+/// the page cannot install something the CLI would refuse. Skills take effect on the
+/// next turn (the loader rescans on directory changes — no restart needed).
+pub async fn skills_install(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(body): Json<capabilities::SkillInstallBody>,
+) -> Response {
+    let home = app.home().to_path_buf();
+    let result = if !body.url.trim().is_empty() {
+        joyczl_memory::skills::install_from_url(&home, body.url.trim()).await
+    } else if !body.text.trim().is_empty() {
+        joyczl_memory::skills::install_from_text(&home, &body.text)
+    } else {
+        Err("粘贴 SKILL.md 内容，或填一个网址 —— 两样都空着没法装".to_string())
+    };
+    match result {
+        Ok(message) => {
+            eprintln!("(joy) 能力中心：{message}");
+            outcome(true, message)
+        }
+        Err(message) => refusal(message),
+    }
+}
+
+/// `POST /api/skills/remove` — delete a user skill (built-in ones are refused).
+pub async fn skills_remove(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(body): Json<capabilities::NameBody>,
+) -> Response {
+    match capabilities::remove_skill(app.home(), body.name.trim()) {
+        Ok(message) => {
+            eprintln!("(joy) 能力中心：{message}");
+            outcome(true, message)
+        }
+        Err(message) => refusal(message),
+    }
+}
+
+/// `GET /api/mcp` — the configured connectors and how each one authenticates.
+pub async fn mcp(Extension(app): Extension<Arc<AppServer>>) -> Response {
+    let (servers, error) = capabilities::mcp_rows(app.home());
+    Json(capabilities::McpView { servers, error }).into_response()
+}
+
+/// `POST /api/mcp/save` — add or replace one connector in `<home>/mcp.json`.
+///
+/// The body is `joyczl-mcp`'s `ServerSpec` (**no second shape**); a bad one is
+/// translated into a sentence here rather than axum's default 400 wall.
+pub async fn mcp_save(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let spec: ServerSpec = match serde_json::from_value(body) {
+        Ok(spec) => spec,
+        Err(why) => return refusal(format!("连接器参数不对：{why}")),
+    };
+    match capabilities::save_server(app.home(), &spec) {
+        Ok(message) => {
+            eprintln!("(joy) 能力中心：{message}");
+            outcome(
+                true,
+                format!("{message}\n重启 Joy 后生效 —— 连接发生在启动时"),
+            )
+        }
+        Err(message) => refusal(message),
+    }
+}
+
+/// `POST /api/mcp/remove` — delete a user connector (built-in ones are refused).
+pub async fn mcp_remove(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(body): Json<capabilities::NameBody>,
+) -> Response {
+    match capabilities::remove_server(app.home(), body.name.trim()) {
+        Ok(message) => {
+            eprintln!("(joy) 能力中心：{message}");
+            outcome(
+                true,
+                format!("{message}\n重启 Joy 后生效 —— 连接发生在启动时"),
+            )
+        }
+        Err(message) => refusal(message),
+    }
 }
 
 #[cfg(test)]

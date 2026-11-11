@@ -25,7 +25,7 @@ pub mod oauth;
 pub mod server;
 pub mod transport;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use joyczl_tools::{Tool, ToolCtx};
@@ -204,6 +204,35 @@ impl McpClient {
             client
                 .connect_one(config_path.parent().unwrap_or(Path::new(".")), spec)
                 .await;
+        }
+        client
+    }
+
+    /// Connect `<home>/mcp.json` **plus** every `JOY_MCP_CONFIG` file (see
+    /// [`config::config_paths_for`]). The user's file is read first and **wins on a
+    /// same-named server** — local beats shared, the same rule skills use; a second
+    /// copy under the same name is skipped, not double-registered.
+    ///
+    /// One broken extra file must not take the others down: its error is collected as a
+    /// warning and the rest still connect (same fail-open discipline as one dead server).
+    pub async fn connect_home(home: &Path) -> McpClient {
+        let extra = std::env::var_os("JOY_MCP_CONFIG");
+        Self::connect_paths(&config::config_paths_for(home, extra.as_deref())).await
+    }
+
+    /// Connect every config file in `paths`, in order; a same-named server in an
+    /// earlier file wins (first wins, not last — the user's file comes first).
+    async fn connect_paths(paths: &[PathBuf]) -> McpClient {
+        let mut client = McpClient::default();
+        for path in paths {
+            let mut one = McpClient::connect(path).await;
+            client.warnings.append(&mut one.warnings);
+            for server in one.servers {
+                if client.servers.iter().any(|s| s.name == server.name) {
+                    continue;
+                }
+                client.servers.push(server);
+            }
         }
         client
     }

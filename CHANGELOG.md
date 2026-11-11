@@ -4,6 +4,48 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### The capability center: skills and MCP connectors in the sidebar
+
+- The dashboard's sidebar gains a **能力中心** section with two entries —
+  技能 and MCP 连接器 — each opening its own panel in the right drawer
+  (which now has three tabs: 概览 / 技能 / MCP). Counts ride the entries, so
+  "how many" is answered without clicking. The drawer keeps the chat column
+  unsqueezed; on mobile the capability entries survive in the top bar.
+- Skills: every loaded skill as one row (name, version, policy flags, missing
+  dependencies). MCP connectors: one row each with transport (HTTP / stdio),
+  target, and how it authenticates (`auth_env` name / browser OAuth / none).
+- **Built-in rows are greyed out and read-only.** A skill from
+  `JOY_SKILL_DIRS` or a server from the new `JOY_MCP_CONFIG`
+  (colon-separated extra mcp.json files, same split as `JOY_SKILL_DIRS`)
+  ships with the install or the machine — deleting one from a single
+  machine's UI would silently unconfigure every machine that shares it.
+  Every write refuses them, with the reason; the user's own
+  `<home>/skills/` and `<home>/mcp.json` are the only writable ones.
+- A human can add: paste a SKILL.md or give a URL (validation is the same
+  gate `joy skill install` passes; a skill takes effect next turn, no
+  restart), and add an MCP connector (one name plus exactly one transport;
+  `auth_env` holds a variable name, never a key; the write is atomic, and
+  it takes effect on the next start because connecting happens at startup).
+  A name already owned by a built-in pack is refused rather than shadowed —
+  the runtime's first-wins would make the edit do nothing.
+- New ops endpoints (`/api/skills`, `/api/skills/install`,
+  `/api/skills/remove`, `/api/mcp`, `/api/mcp/save`, `/api/mcp/remove`),
+  ops-local views like `/api/fs` — the protocol is unchanged. The skill
+  install/URL logic moved into `joyczl-memory` (`install_from_url`,
+  `fetch_text`, `raw_url`) so the CLI and the dashboard share one gate;
+  `joyczl-mcp`'s config gained `Serialize` for the atomic rewrite and
+  `config_paths_for` for the two-layer split.
+- **The page and the bundle can no longer be different builds.** `index.html` is
+  network-first while `main.js` is cache-first, so a service-worker cache could
+  pair a new page with an old bundle; `must()` then threw at module scope and
+  the screen went blank — session list included, one console line, no reason.
+  Two belts now: the build stamps the script URL (`main.js?v=<build>`), so the
+  cache key changes every build and the pair can only come from one build; and
+  if a mismatch still reaches a browser, `must()` paints a readable recovery
+  screen ("页面和脚本不是同一版") whose button unregisters the service worker,
+  drops the stale caches and reloads. `smoke-dashboard.sh` pins the stamp.
+- Service worker `VERSION` bumps to `joy-v17`.
+
 ### History display strips the model-only tool fold
 
 - Stored assistant replies carry a `\n[tools used: …]` trailer — written by

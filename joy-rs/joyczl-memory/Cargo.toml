@@ -15,6 +15,9 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 joyczl-provider = { workspace = true }
 joyczl-state = { workspace = true }
+# `joy skill install <url>` 抓 SKILL.md 原文；reqwest 早已在依赖树里（provider 就在用），
+# 不是新编译物。
+reqwest = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

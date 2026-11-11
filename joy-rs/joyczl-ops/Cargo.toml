@@ -17,6 +17,8 @@ chrono = { workspace = true }
 futures-util = { workspace = true }
 joyczl-config = { workspace = true }
 joyczl-connector = { workspace = true }
+joyczl-mcp = { workspace = true }
+joyczl-memory = { workspace = true }
 joyczl-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

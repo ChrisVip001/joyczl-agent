@@ -60,12 +60,36 @@ cat > "$WORK/.joy/connectors.json" <<'EOF_CONNECTOR'
   "live": false
 }}
 EOF_CONNECTOR
+
+# 能力中心的夹具：一个用户技能 + 一个内置技能包（JOY_SKILL_DIRS）+ 一个内置 MCP
+# 配置（JOY_MCP_CONFIG）。内置的在页面上置灰 —— 服务端的栅栏是「写操作一律拒绝」，
+# 下面逐条验。内置包里那个服务器连不上不要紧：启动只警告，Joy 照起（容错契约）。
+mkdir -p "$WORK/.joy/skills/my-skill" "$WORK/pack/skills/builtin-skill"
+cat > "$WORK/.joy/skills/my-skill/SKILL.md" <<'EOF_SKILL'
+---
+name: my-skill
+description: a skill the human installed themselves
+---
+body
+EOF_SKILL
+cat > "$WORK/pack/skills/builtin-skill/SKILL.md" <<'EOF_SKILL'
+---
+name: builtin-skill
+description: ships with the install, read-only in the UI
+---
+body
+EOF_SKILL
+cat > "$WORK/pack/mcp.json" <<'EOF_MCP'
+{"servers": [{"name": "pack-server", "url": "https://pack.example/mcp"}]}
+EOF_MCP
 cat > "$WORK/.joy/models.json" <<EOF
 {"active":"smoke","profiles":[{"id":"smoke","provider":"anthropic","base_url":"http://127.0.0.1:$MODEL_PORT","key_source":"env:JOY_API_KEY"}]}
 EOF
 
 JOY_PORT="$PORT" \
 JOY_HOME="$WORK/.joy" \
+JOY_SKILL_DIRS="$WORK/pack/skills" \
+JOY_MCP_CONFIG="$WORK/pack/mcp.json" \
 JOY_PROVIDER=anthropic JOY_API_KEY=test JOY_BASE_URL="http://127.0.0.1:$MODEL_PORT" \
   "$BIN" dashboard >"$WORK/dash.log" 2>&1 &
 DASH_PID=$!
@@ -92,6 +116,16 @@ grep -q 'main.js' "$WORK/index.html"  || fail "首页没引到 main.js"
 # it (they live in api.ts, proving the module was actually bundled, not an empty shell).
 curl -sS -o "$WORK/main.js" -w '%{http_code}' "$BASE/main.js" | grep -q '^200$' \
   || fail "main.js 拿不到"
+
+# The page names its bundle with a build stamp. index.html is network-first and main.js is
+# cache-first, so without the stamp a service-worker cache pairs a new page with an old bundle —
+# the page then misses ids the bundle grabs and goes blank (it happened: the whole screen, session
+# list included, disappeared). The stamp changes the cache key every build, so the pair can only
+# come from the same one.
+BUNDLE="$(grep -oE 'main\.js\?v=[a-z0-9]+' "$WORK/index.html" | head -1)"
+[[ -n "$BUNDLE" ]] || fail "首页没给 main.js 打版本戳 —— 旧缓存会把旧 bundle 配给新页面"
+curl -sS -o /dev/null -w '%{http_code}' "$BASE/$BUNDLE" | grep -q '^200$' \
+  || fail "带版本戳的 $BUNDLE 拿不到（构建没打戳，或者静态服务不认 query）"
 grep -q '"/api/data"' "$WORK/main.js" || fail "main.js 里没有 /api/data"
 # This one matches by path only: a template string with interpolation — backticks after bundling.
 grep -q '/api/session' "$WORK/main.js" || fail "main.js 里没有 /api/session"
@@ -100,6 +134,13 @@ grep -q '/api/session/meta' "$WORK/main.js" || fail "main.js 里没有 /api/sess
 grep -q '/api/turn/steer' "$WORK/main.js" || fail "main.js 里没有 /api/turn/steer"
 grep -q '/api/turn/follow-up' "$WORK/main.js" || fail "main.js 里没有 /api/turn/follow-up"
 grep -q '"/api/turn"' "$WORK/main.js" || fail "main.js 里没有 /api/turn"
+# 能力中心的六个端点同样要在包里（少一个 = 那个按钮点了没反应）
+grep -q '"/api/skills"' "$WORK/main.js" || fail "main.js 里没有 /api/skills"
+grep -q '"/api/skills/install"' "$WORK/main.js" || fail "main.js 里没有 /api/skills/install"
+grep -q '"/api/skills/remove"' "$WORK/main.js" || fail "main.js 里没有 /api/skills/remove"
+grep -q '"/api/mcp"' "$WORK/main.js" || fail "main.js 里没有 /api/mcp"
+grep -q '"/api/mcp/save"' "$WORK/main.js" || fail "main.js 里没有 /api/mcp/save"
+grep -q '"/api/mcp/remove"' "$WORK/main.js" || fail "main.js 里没有 /api/mcp/remove"
 
 # Every id the JS grabs must exist in the page — one missing means a blank screen. That error only
 # shows in the browser console, invisible to curl, so pin it here. (`must("x")` is the helper in
@@ -268,6 +309,102 @@ curl -sS "$BASE/api/data?sessionId=default" >"$WORK/data4.json"
 grep -q '"connectors":\[{"id":"email","live":false,"allowRecipients":2}\]' "$WORK/data4.json" \
   || fail "连接器面板数据不对：$(python3 -c "import json,sys; print(json.load(open('$WORK/data4.json')).get('connectors'))")"
 echo "  ✓ 连接器：草稿模式 + 白名单 2 个，窗口如实显示"
+
+# ---- 能力中心：技能 / MCP 连接器 -------------------------------------------------
+# Built-in rows are greyed out in the page; the fence that matters is the server's:
+# every write refuses them — the user's own files are the only writable ones.
+curl -sS "$BASE/api/skills" >"$WORK/skills.json"
+python3 - "$WORK/skills.json" <<'PY' || fail "技能列表不对：$(cat "$WORK/skills.json")"
+import json, sys
+rows = json.load(open(sys.argv[1]))["skills"]
+by_name = {row["name"]: row for row in rows}
+assert set(by_name) == {"my-skill", "builtin-skill"}, rows
+assert by_name["my-skill"]["source"] == "user", rows
+assert by_name["builtin-skill"]["source"] == "builtin", rows
+assert by_name["my-skill"]["allowModelInvocation"] is True, rows
+assert by_name["my-skill"]["folder"].endswith("skills/my-skill"), rows
+PY
+
+# 安装：粘贴一份 SKILL.md（和 joy skill install 同一道校验门）
+curl -sS -X POST "$BASE/api/skills/install" -H 'content-type: application/json' \
+  -d '{"text":"---\nname: pasted-skill\ndescription: pasted from the dashboard\n---\n\nbody\n"}' \
+  >"$WORK/skill-install.json"
+grep -q '"ok":true' "$WORK/skill-install.json" \
+  || fail "粘贴安装没成功：$(cat "$WORK/skill-install.json")"
+curl -sS "$BASE/api/skills" | grep -q '"name":"pasted-skill"' \
+  || fail "装上的技能没出现在列表里"
+# 重名拒绝（从不覆盖 —— 技能是指令，装之前要先读）
+curl -sS -X POST "$BASE/api/skills/install" -H 'content-type: application/json' \
+  -d '{"text":"---\nname: pasted-skill\ndescription: another one\n---\n\nbody\n"}' \
+  | grep -q '已有一个' || fail "重名技能该被拒绝"
+# 不是 SKILL.md 的拒绝
+curl -sS -X POST "$BASE/api/skills/install" -H 'content-type: application/json' \
+  -d '{"text":"just some text"}' | grep -q '不是合法的技能' || fail "非法内容该被拒绝"
+# 内置技能删不得；用户技能删得掉
+curl -sS -X POST "$BASE/api/skills/remove" -H 'content-type: application/json' \
+  -d '{"name":"builtin-skill"}' | grep -q '内置' || fail "内置技能该被拒绝删除"
+curl -sS -X POST "$BASE/api/skills/remove" -H 'content-type: application/json' \
+  -d '{"name":"pasted-skill"}' >"$WORK/skill-remove.json"
+grep -q '"ok":true' "$WORK/skill-remove.json" || fail "用户技能删不掉：$(cat "$WORK/skill-remove.json")"
+curl -sS "$BASE/api/skills" | grep -q '"name":"pasted-skill"' && fail "删掉的技能还在列表里"
+
+curl -sS "$BASE/api/mcp" >"$WORK/mcp.json"
+python3 - "$WORK/mcp.json" <<'PY' || fail "MCP 列表不对：$(cat "$WORK/mcp.json")"
+import json, sys
+rows = json.load(open(sys.argv[1]))["servers"]
+assert len(rows) == 1, rows
+assert rows[0]["name"] == "pack-server", rows
+assert rows[0]["source"] == "builtin", rows
+assert rows[0]["kind"] == "url", rows
+assert rows[0]["auth"] == "none", rows
+PY
+
+# 添加：落进 <home>/mcp.json；两种传输都填的拒绝（和服务端 resolve 同一道门）
+curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
+  -d '{"name":"notes","url":"https://notes.example/mcp","authEnv":"NOTES_API_KEY"}' \
+  >"$WORK/mcp-save.json"
+grep -q '"ok":true' "$WORK/mcp-save.json" || fail "加连接器没成功：$(cat "$WORK/mcp-save.json")"
+grep -q '重启 Joy 后生效' "$WORK/mcp-save.json" || fail "该说明重启后生效：$(cat "$WORK/mcp-save.json")"
+python3 -c "import json;d=json.load(open('$WORK/.joy/mcp.json'));assert [s['name'] for s in d['servers']]==['notes'],d" \
+  || fail "mcp.json 没落盘或内容不对"
+curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
+  -d '{"name":"both","url":"https://h/mcp","command":"npx"}' | grep -q '只能填一个' \
+  || fail "两种传输都填该被拒绝"
+curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
+  -d '{"name":"my server","url":"https://h/mcp"}' | grep -q '前缀' \
+  || fail "带空格的名字该被拒绝"
+# 和内置包重名的拒绝：运行时先到的赢，用户配置里再写一份也不会生效
+curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
+  -d '{"name":"pack-server","url":"https://mine.example/mcp"}' | grep -q '系统内置' \
+  || fail "和内置包重名的连接器该被拒绝"
+# 同名是替换不是新增；stdio 的参数照写
+curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
+  -d '{"name":"notes","url":"https://moved.example/mcp"}' | grep -q '"ok":true' \
+  || fail "同名保存没成功"
+curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
+  -d '{"name":"fs","command":"npx","args":["-y","server"]}' | grep -q '"ok":true' \
+  || fail "stdio 连接器没加上"
+python3 -c "import json;d=json.load(open('$WORK/.joy/mcp.json'));names=[s['name'] for s in d['servers']];assert names==['notes','fs'],names" \
+  || fail "同名该替换而不是新增"
+curl -sS "$BASE/api/mcp" >"$WORK/mcp2.json"
+python3 - "$WORK/mcp2.json" <<'PY' || fail "保存后的 MCP 列表不对：$(cat "$WORK/mcp2.json")"
+import json, sys
+rows = {row["name"]: row for row in json.load(open(sys.argv[1]))["servers"]}
+assert set(rows) == {"pack-server", "notes", "fs"}, rows
+assert rows["pack-server"]["source"] == "builtin", rows
+assert rows["notes"]["source"] == "user", rows
+assert rows["notes"]["url"] == "https://moved.example/mcp", rows
+assert rows["fs"]["kind"] == "command", rows
+assert rows["fs"]["args"] == ["-y", "server"], rows
+PY
+# 用户连接器删得掉；内置配置里的删不到，也不该删
+curl -sS -X POST "$BASE/api/mcp/remove" -H 'content-type: application/json' \
+  -d '{"name":"notes"}' | grep -q '"ok":true' || fail "用户连接器删不掉"
+curl -sS -X POST "$BASE/api/mcp/remove" -H 'content-type: application/json' \
+  -d '{"name":"pack-server"}' | grep -q '内置' || fail "内置连接器该被拒绝删除"
+curl -sS "$BASE/api/mcp" | grep -q '"name":"notes"' && fail "删掉的连接器还在列表里"
+curl -sS "$BASE/api/mcp" | grep -q '"name":"pack-server"' || fail "内置连接器该还在"
+echo "  ✓ 能力中心：内置置灰拒写，用户技能/连接器可增可删，重名与非法输入都有说法"
 
 # Sessions are hard boundaries: paging an untouched session must yield an empty page, never default's.
 curl -sS "$BASE/api/session?sessionId=nobody" | grep -q '"data":\[\]' \

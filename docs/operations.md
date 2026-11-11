@@ -69,6 +69,13 @@ Write `<home>/mcp.json` (stdio or HTTP servers); their tools merge into the
 tool registry. For `"oauth": true` remote servers run `joy mcp login <name>`
 first; expired tokens auto-refresh, and without a refresh_token rerun login.
 
+The dashboard's capability center is the graphical door to the same file:
+add / replace / delete a connector, with the transport and credential rules
+enforced the same way (`url` **xor** `command`; `auth_env` is a variable
+name, never a key). Changes take effect on the next start. Set
+`JOY_MCP_CONFIG` for machine-wide servers — those rows show up greyed out
+under a 「内置」 tag and every dashboard write refuses them.
+
 Known operational limits (no log rotation, no daemonisation, missed schedule
 runs are not backfilled, and more) are listed in
 [limitations.md](limitations.md).

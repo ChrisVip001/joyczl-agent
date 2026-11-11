@@ -272,7 +272,8 @@ nothing", which is the default.
 | `JOY_GRAPH_WORKFLOWS` | `0` | enable the triage front-door graph (fail-open, costs time only) |
 | `JOY_APPLE_CALENDAR` | `0` | sync `create_event` to Calendar.app via AppleScript |
 | `JOY_GOOGLE_CALENDAR` | `0` | the Google Calendar connection is **not implemented**; setting this makes `create_event` say so honestly in its receipt instead of staying silent — an honesty switch, not a sync switch |
-| `JOY_SKILL_DIRS` | — | colon-separated extra skill directories (besides `home/skills`) |
+| `JOY_SKILL_DIRS` | — | colon-separated extra skill directories (besides `home/skills`); their skills are built-in in the dashboard's capability center (greyed out, read-only) |
+| `JOY_MCP_CONFIG` | — | colon-separated extra mcp.json files (besides `<home>/mcp.json`); their servers are built-in in the capability center (greyed out, read-only) — the user's file wins on a same-named server |
 | `JOY_JUDGE_MODEL` | small model | referee model for `joy judge` (the referee is not a contestant) |
 | `JOY_GH_REPO` | — | repository for gather's GitHub scan (owner/repo) |
 
@@ -741,6 +742,23 @@ environment variable **name** (its value is sent as Bearer); `oauth: true`
 uses browser authorization (`joy mcp login <name>`) with the token in
 `mcp-auth/<name>.json` (0600). Unreachable servers are skipped with a warning;
 Joy still starts.
+
+The dashboard's capability center manages this file: add a connector (one
+name plus exactly one transport), replace one by name, or delete one. Changes
+land in `<home>/mcp.json` and take effect on the next start — the connection
+happens at startup. A name already provided by a built-in config is refused
+rather than shadowed, because the runtime's first-wins would make the edit do
+nothing.
+
+### Built-in MCP servers (`JOY_MCP_CONFIG`)
+
+A colon-separated list of extra config files, the same split as
+`JOY_SKILL_DIRS`: `<home>/mcp.json` is the user's, the extras are the
+operator's (machine-wide or bundled packs). The user's file is read first and
+**wins on a same-named server**; a broken extra file is a warning, never a
+blank tool list. In the capability center these rows carry a 「内置」 tag and
+are greyed out — every write refuses them, because deleting one from a single
+machine's UI would silently unconfigure every machine that shares it.
 
 ## `settings.json` (config/write persistence)
 

@@ -198,6 +198,92 @@ async fn a_broken_config_file_says_so() {
     assert!(client.warnings()[0].contains("mcp.json"));
 }
 
+/// `config_paths_for`: the user's file first, then the extras (colon-separated on
+/// unix, semicolon on Windows — hence `join_paths` instead of a literal ":").
+/// The extras are what makes "built-in" real: the dashboard greys them out.
+#[test]
+fn config_paths_put_the_users_file_first() {
+    let home = std::path::Path::new("/home/u/.joy");
+    assert_eq!(
+        config::config_paths_for(home, None),
+        vec![std::path::PathBuf::from("/home/u/.joy/mcp.json")],
+        "没给额外目录就只读用户那一份"
+    );
+
+    let extra =
+        std::env::join_paths(["/etc/joy/mcp.json", "/opt/pack/mcp.json"]).expect("拼得起来");
+    assert_eq!(
+        config::config_paths_for(home, Some(&extra)),
+        vec![
+            std::path::PathBuf::from("/home/u/.joy/mcp.json"),
+            std::path::PathBuf::from("/etc/joy/mcp.json"),
+            std::path::PathBuf::from("/opt/pack/mcp.json"),
+        ],
+        "用户的排第一 —— 先读到它，同名才赢得下来"
+    );
+}
+
+/// A shared pack re-declaring a server the user already has must not replace it:
+/// first file wins, and the loser is skipped rather than double-registered.
+/// (The extras' own broken entries still warn — one bad pack takes nothing down.)
+#[tokio::test]
+async fn the_users_config_file_wins_over_the_extras() {
+    let fake = fake_http(vec![
+        // Handshake
+        Reply {
+            status: 200,
+            content_type: "application/json",
+            body: r#"{"jsonrpc":"2.0","id":@id,"result":{"protocolVersion":"2025-06-18"}}"#
+                .to_string(),
+        },
+        // The handshake's second leg: the 202 of `notifications/initialized`
+        Reply {
+            status: 202,
+            content_type: "application/json",
+            body: String::new(),
+        },
+        // tools/list
+        Reply {
+            status: 200,
+            content_type: "application/json",
+            body: r#"{"jsonrpc":"2.0","id":@id,"result":{"tools":[{"name":"reverse"}]}}"#
+                .to_string(),
+        },
+    ])
+    .await;
+
+    let dir = tempfile::tempdir().expect("临时目录");
+    let user = dir.path().join("mcp.json");
+    std::fs::write(
+        &user,
+        json!({"servers": [{"name": "demo", "url": fake.url}]}).to_string(),
+    )
+    .expect("写用户配置");
+    let extra = dir.path().join("pack.json");
+    std::fs::write(
+        &extra,
+        json!({"servers": [
+            {"name": "demo", "command": "definitely-not-a-command-xyz"},
+            {"name": "other", "command": "definitely-not-a-command-xyz"}
+        ]})
+        .to_string(),
+    )
+    .expect("写额外配置");
+
+    let client = McpClient::connect_paths(&[user, extra]).await;
+    assert_eq!(
+        client.servers(),
+        vec!["demo"],
+        "本地那一个活着；额外文件里重名的条目被跳过，没顶掉它"
+    );
+    assert_eq!(
+        client.warnings().len(),
+        2,
+        "额外文件里的两个幽灵各自留了一行警告：{:?}",
+        client.warnings()
+    );
+}
+
 // ---- 2. Wire framings ------------------------------------------------------
 
 /// A stdio peer that only answers per script, running on in-memory pipes.
