@@ -22,6 +22,7 @@ class Codes(IntEnum):
     NOT_IMPLEMENTED = -32002
     PARSE_ERROR = -32700
     PROVIDER_ERROR = -32000
+    SESSION_BUSY = -32003
     TOOL_ERROR = -32001
 
 
@@ -52,9 +53,11 @@ class Methods(str, Enum):
     MODEL_ROUTES_SAVE = "model/routes/save"
     MODEL_SAVE = "model/save"
     SCHEDULE_LIST = "schedule/list"
+    SESSION_GET = "session/get"
     SESSION_LIST = "session/list"
     SESSION_MESSAGES = "session/messages"
     SESSION_NEW = "session/new"
+    SESSION_UPDATE = "session/update"
     TASK_ARTIFACTS = "task/artifacts"
     TASK_CANCEL = "task/cancel"
     TASK_CREATE = "task/create"
@@ -65,6 +68,9 @@ class Methods(str, Enum):
     TASK_SUSPEND = "task/suspend"
     TASK_VIEW = "task/view"
     TODO_VIEW = "todo/view"
+    TURN_FOLLOW_UP = "turn/follow-up"
     TURN_INTERRUPT = "turn/interrupt"
+    TURN_LIST = "turn/list"
     TURN_START = "turn/start"
+    TURN_STEER = "turn/steer"
     USAGE_SUMMARY = "usage/summary"

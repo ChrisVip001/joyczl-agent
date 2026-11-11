@@ -1,6 +1,6 @@
 [package]
 name = "joy-desktop"
-version = "0.9.0"
+version = "0.16.0"
 description = "Joy 桌面壳：驾驶舱前端 + 任意 Joy 服务器的客户端"
 edition = "2021"
 

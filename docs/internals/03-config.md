@@ -43,7 +43,7 @@ env_int(name, default) -> env(name).and_then(|v| v.parse().ok()).unwrap_or(defau
 | `history_turns` | `JOY_HISTORY_TURNS` | `12` |
 | `consolidate_every` | `JOY_CONSOLIDATE_EVERY` | `6` |
 | `retrieval_top_k` | `JOY_RETRIEVAL_TOP_K` | `4` |
-| `apple_calendar` / `google_calendar` / `experimental` / `graph_workflows` | 同名 `JOY_*` | `false` |
+| `graph_workflows` | `JOY_GRAPH_WORKFLOWS` | `false` |
 | `embeddings_enabled` / `embed_model` | `JOY_EMBEDDINGS` / `JOY_EMBED_MODEL` | `false` / 无 |
 | `exec_enabled` / `exec_allow` / `exec_timeout_secs` | `JOY_EXEC` / `JOY_EXEC_ALLOW` / `JOY_EXEC_TIMEOUT` | `false` / 空表 / `30` |
 

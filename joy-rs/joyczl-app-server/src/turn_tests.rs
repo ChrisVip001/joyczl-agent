@@ -481,7 +481,7 @@ async fn interrupt_hits_a_running_turn_and_misses_a_finished_one() {
     }
 
     // A running turn: the response says it hit, and the token really flipped.
-    let interrupt = server.register_turn("t_live");
+    let (interrupt, _) = server.begin_turn("t_live", "default").expect("会话空闲");
     let response = call(
         &server,
         request(2, "turn/interrupt", json!({"turnId": "t_live"})),
@@ -1238,4 +1238,204 @@ async fn a_symlinked_attachment_outside_home_is_refused() {
     let error = ran.error.as_ref().expect("越界路径必须被拒");
     assert!(error.message.contains("home 之外"), "{}", error.message);
     assert!(ran.requests.is_empty());
+}
+
+/// 0.15：`turn/start` 不带 cwd 时，用**会话自己记住**的那个目录 —— "工作目录跟着会话走"
+/// 的全部实现就在这一个分支上，所以它值得一条自己的测试。
+#[tokio::test]
+async fn the_session_working_directory_is_used_when_the_turn_names_none() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+    server
+        .chat
+        .create_session("s1", None, Some("/tmp"))
+        .await
+        .expect("建会话");
+
+    assert_eq!(
+        crate::turn::session_cwd(&server, "s1").await.as_deref(),
+        Some(std::path::Path::new("/tmp")),
+        "会话记着的目录就是这一轮的可写范围根"
+    );
+    assert_eq!(
+        crate::turn::session_cwd(&server, "s2").await,
+        None,
+        "没有这个会话时不该编一个目录出来"
+    );
+    assert_eq!(
+        crate::turn::session_cwd(&server, "default").await,
+        None,
+        "没选过目录的会话就是没有目录（写入会被拒，而不是落到进程 cwd）"
+    );
+}
+
+/// 目录在选中之后被删掉了：不能悄悄退回进程 cwd，那会让写入落在没人预期的地方。
+#[tokio::test]
+async fn a_vanished_session_directory_is_not_silently_replaced() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+    let work = tempfile::tempdir().expect("临时目录");
+    let path = work.path().to_string_lossy().to_string();
+    server
+        .chat
+        .create_session("s1", None, Some(&path))
+        .await
+        .expect("建会话");
+    assert!(crate::turn::session_cwd(&server, "s1").await.is_some());
+
+    drop(work);
+    assert_eq!(
+        crate::turn::session_cwd(&server, "s1").await,
+        None,
+        "目录不在了就是没有可写范围，不该拿别的目录顶上"
+    );
+}
+
+/// `turn/list` 只报还在跑的：结束的那一轮必须消失，别人的会话不该被算进来。
+#[tokio::test]
+async fn turn_list_reports_only_what_is_still_running() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+    let _token = server.begin_turn("t1", "s1").expect("会话空闲");
+
+    let all = server.active_turns(None);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].0, "t1");
+    assert_eq!(all[0].1, "s1");
+    assert!(server.active_turns(Some("s2")).is_empty(), "别的会话不串");
+    assert_eq!(server.active_turns(Some("s1")).len(), 1);
+
+    server.finish_turn("t1");
+    assert!(server.active_turns(None).is_empty(), "跑完了就该消失");
+}
+
+/// 0.16 的第一半：**一个会话一次只跑一轮**。
+///
+/// 这条不变量以前不存在：两个 `turn/start` 会并行跑，写段交错、各自只看见一半历史。
+#[tokio::test]
+async fn one_turn_at_a_time_per_session() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+
+    let (_interrupt, _steering) = server.begin_turn("t1", "s1").expect("第一个该拿到会话");
+    let holder = server
+        .begin_turn("t2", "s1")
+        .expect_err("同会话第二个必须被拒");
+    assert_eq!(holder, "t1", "拒绝里要带住占用者的回合 id");
+
+    assert!(server.begin_turn("t3", "s2").is_ok(), "别的会话不该被牵连");
+
+    server.finish_turn("t1");
+    assert!(server.begin_turn("t4", "s1").is_ok(), "上一轮结束后该放行");
+}
+
+/// 0.16 的第二半：补一句进的是**在跑的那一轮**；没有在跑的回合就明说，不静默变成新一轮。
+#[tokio::test]
+async fn steering_needs_a_running_turn_and_keeps_arrival_order() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+
+    assert!(
+        server.steer("s1", "随便补一句").is_err(),
+        "没有在跑的回合就该说不 —— 静默开新一轮是撒谎"
+    );
+
+    let (_interrupt, steering) = server.begin_turn("t1", "s1").expect("会话空闲");
+    let (turn_id, queued) = server.steer("s1", "顺便看下 README").expect("有回合在跑");
+    assert_eq!(turn_id, "t1");
+    assert_eq!(queued, 1);
+    let (_, queued) = server
+        .steer("s1", "再看一眼 CHANGELOG")
+        .expect("有回合在跑");
+    assert_eq!(queued, 2);
+
+    let mut channel = steering.lock().expect("锁");
+    assert_eq!(
+        channel.drain_pending(),
+        vec![
+            "顺便看下 README".to_string(),
+            "再看一眼 CHANGELOG".to_string()
+        ],
+        "按到达顺序交给模型"
+    );
+    assert!(channel.drain_pending().is_empty(), "取过的不再重复");
+    assert_eq!(channel.all().len(), 2, "转录仍然看得到全部");
+}
+
+/// 0.16 follow-up：只有**有回合在跑**时，「等这轮结束」才有对象。
+#[tokio::test]
+async fn follow_up_needs_a_turn_in_flight_and_counts_the_line() {
+    let server = server(Arc::new(Mock::new(vec![])), false).await;
+
+    assert!(
+        matches!(
+            server.follow_up("test", "等会儿做").await,
+            crate::FollowUp::Idle
+        ),
+        "空闲时说「等这轮结束」没有对象 —— 应该让调用方直接 turn/start"
+    );
+
+    let (_interrupt, _steering) = server.begin_turn("t1", "test").expect("会话空闲");
+    assert!(matches!(
+        server.follow_up("test", "第二件事").await,
+        crate::FollowUp::Queued(1)
+    ));
+    assert!(matches!(
+        server.follow_up("test", "第三件事").await,
+        crate::FollowUp::Queued(2)
+    ));
+    assert_eq!(server.queue.count("test").await.expect("数"), 2);
+    assert!(
+        matches!(
+            server.follow_up("other", "无关").await,
+            crate::FollowUp::Idle
+        ),
+        "别的会话没在跑，跟它无关"
+    );
+}
+
+/// 0.16 follow-up 的承诺：排队的消息**自己变成一个回合**，会话空了就接着跑，先进先出。
+///
+/// 每一轮两次模型调用（检索门 + 回复），所以两条排队消息要备四份脚本。
+#[tokio::test]
+async fn a_queued_message_becomes_its_own_turn_when_the_session_frees_up() {
+    let mock = Mock::new(vec![
+        Mock::text(r#"{"retrieve": false, "query": "", "reason": "小事"}"#),
+        Mock::text("第二件事做完了。"),
+        Mock::text(r#"{"retrieve": false, "query": "", "reason": "小事"}"#),
+        Mock::text("第三件事做完了。"),
+    ]);
+    let server = server(Arc::new(mock), false).await;
+
+    let (_interrupt, _steering) = server.begin_turn("t1", "test").expect("会话空闲");
+    server.follow_up("test", "第二件事").await;
+    server.follow_up("test", "第三件事").await;
+
+    // 一轮结束：守卫被丢掉的等价物（Drop 里就是 finish + drain）。
+    server.finish_turn("t1");
+    crate::turn::drain_queue(&server, "test").await;
+
+    // 两条各自成回合、各自收尾（后一条由前一条的守卫在结束时排空）。
+    let mut rows = Vec::new();
+    for _ in 0..200 {
+        rows = server
+            .chat
+            .messages("test", None, 50)
+            .await
+            .expect("读对话");
+        let has_both = rows.iter().any(|row| row.content == "第二件事")
+            && rows.iter().any(|row| row.content == "第三件事");
+        if has_both && rows.len() >= 4 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let id_of = |text: &str| {
+        rows.iter()
+            .find(|row| row.content == text)
+            .map(|row| row.id)
+            .unwrap_or_else(|| panic!("排队的消息没进对话：{text}"))
+    };
+    assert!(id_of("第二件事") < id_of("第三件事"), "先进先出");
+    assert_eq!(server.queue.count("test").await.expect("数"), 0, "都跑完了");
+    assert!(
+        server.active_turns(Some("test")).is_empty(),
+        "跑完就该把会话放回去"
+    );
 }

@@ -316,11 +316,67 @@ async fn sessions_are_just_labels_on_the_chat_log() {
         .unwrap();
 
     let sessions = chat.sessions().await.unwrap();
-    assert_eq!(sessions.len(), 2);
-    // s2 has more messages, sorts first by last_at (same-second inserts; messages breaks the tie)
+    assert_eq!(sessions.len(), 2, "写消息就会把会话行建出来，不用先 new");
     let s2 = sessions.iter().find(|s| s.id == "s2").expect("s2 存在");
     assert_eq!(s2.messages, 4, "s2 有 2 轮 = 4 行");
     assert_eq!(s2.title, "second topic", "标题应当是该会话第一条用户消息");
+}
+
+/// 0018：空会话也是会话 —— 它必须出现在列表里，带着自己的名字和工作目录。
+#[tokio::test]
+async fn an_empty_session_is_listed_with_its_name_and_working_directory() {
+    let pool = temp_db("sessions_empty.db").await;
+    let chat = Chat::new(pool);
+    chat.create_session("s1", Some("发版检查"), Some("/tmp/joy-work"))
+        .await
+        .expect("建会话");
+
+    let all = chat.sessions().await.expect("列表");
+    assert_eq!(all.len(), 1, "一条消息都没有，但它存在");
+    assert_eq!(all[0].title, "发版检查");
+    assert_eq!(all[0].messages, 0);
+    assert_eq!(all[0].cwd.as_deref(), Some("/tmp/joy-work"));
+}
+
+/// 改名与清空：`Some("")` 是「清掉」，标题回退第一条用户消息，工作目录回退「没选」。
+#[tokio::test]
+async fn update_renames_and_clears_back_to_the_first_message() {
+    let pool = temp_db("sessions_update.db").await;
+    let chat = Chat::new(pool);
+    chat.append_exchange("第一句", "答", "s1", "cli", None)
+        .await
+        .expect("写一轮");
+
+    chat.update_session("s1", Some("重新起的名字"), Some("/tmp/w"))
+        .await
+        .expect("改名");
+    let row = chat.session("s1").await.expect("查").expect("该有一条");
+    assert_eq!(row.title, "重新起的名字");
+    assert_eq!(row.cwd.as_deref(), Some("/tmp/w"));
+
+    chat.update_session("s1", Some(""), Some(""))
+        .await
+        .expect("清空");
+    let row = chat.session("s1").await.expect("查").expect("该有一条");
+    assert_eq!(row.title, "第一句", "清空后回退首条用户消息");
+    assert_eq!(row.cwd, None, "清空后就是没选目录");
+}
+
+/// `session/new` 是幂等的：同一个 id 再叫一次，不能把人起的名字改掉。
+#[tokio::test]
+async fn creating_twice_keeps_the_name_that_is_already_there() {
+    let pool = temp_db("sessions_idem.db").await;
+    let chat = Chat::new(pool);
+    chat.create_session("s1", Some("原名"), None)
+        .await
+        .expect("建");
+    chat.create_session("s1", Some("另一个名字"), Some("/tmp/x"))
+        .await
+        .expect("再建一次");
+
+    let row = chat.session("s1").await.expect("查").expect("该有一条");
+    assert_eq!(row.title, "原名");
+    assert_eq!(row.cwd.as_deref(), Some("/tmp/x"), "空字段被补上");
 }
 
 #[tokio::test]
@@ -507,4 +563,35 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
     let rows = checkpoints.open_rows().await.unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].turn_id, "t3", "先来先续");
+}
+
+/// 0.16 follow-up：队列是**按会话**的先进先出，取走即消失（claim-then-run）。
+#[tokio::test]
+async fn the_follow_up_queue_is_fifo_per_session_and_pops_once() {
+    let pool = temp_db("session_queue").await;
+    let queue = crate::Queue::new(pool);
+
+    assert_eq!(queue.push("s1", "第一句").await.expect("排"), 1);
+    assert_eq!(queue.push("s1", "第二句").await.expect("排"), 2);
+    assert_eq!(
+        queue.push("s2", "别的会话").await.expect("排"),
+        1,
+        "按会话各算各的"
+    );
+
+    let first = queue.pop("s1").await.expect("取").expect("该有一条");
+    assert_eq!(first.message, "第一句", "先进先出");
+    let second = queue.pop("s1").await.expect("取").expect("该有一条");
+    assert_eq!(second.message, "第二句");
+    assert!(
+        queue.pop("s1").await.expect("取").is_none(),
+        "取走就不再来一次"
+    );
+
+    assert_eq!(queue.count("s2").await.expect("数"), 1, "别的会话不受影响");
+    assert_eq!(
+        queue.sessions_with_pending().await.expect("列"),
+        vec!["s2".to_string()],
+        "启动对账要知道还欠谁一条"
+    );
 }

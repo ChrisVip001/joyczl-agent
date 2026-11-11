@@ -120,11 +120,22 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
         reason: "reconcile: crash recovery".to_string(),
     }));
 
-    // Same table as a fresh turn: turn/interrupt can stop a resumed one too.
-    let interrupt = server.register_turn(&turn_id);
+    // Same table as a fresh turn: turn/interrupt can stop a resumed one too. The session gate
+    // applies here as well — two checkpoints of one session must not resume side by side.
+    // Losing the race leaves this checkpoint `open`; the next boot picks it up again.
+    let (interrupt, steering) = match server.begin_turn(&turn_id, &session_id) {
+        Ok(pair) => pair,
+        Err(holder) => {
+            eprintln!(
+                "(joy) 会话 {session_id} 里已经有 {holder} 在跑，checkpoint {turn_id} 留到下次启动"
+            );
+            return;
+        }
+    };
     let _guard = TurnGuard {
         server,
         turn_id: turn_id.clone(),
+        session_id: session_id.clone(),
     };
 
     // The run comes back with the checkpoint: this is the **same attempt** continuing, not a
@@ -173,6 +184,9 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
             &row.user_message,
             run_id.as_deref(),
         )),
+        // A resumed turn is steerable too: whatever the human adds while the crash recovery
+        // runs lands in the same transcript.
+        steering: Some(steering),
     };
 
     match full_turn(

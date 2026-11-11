@@ -2,6 +2,99 @@
 
 [English](CHANGELOG.md) | 简体中文
 
+## 未发布
+
+### 清理：三个没人读的开关
+
+- `experimental`（`JOY_EXPERIMENTAL`）从 `Settings` / `SettingsView` / `SettingsPatch` 删除：
+  它自始至终没有任何消费者，却在驾驶舱概览里显示成「实验 · experimental」。
+- `apple_calendar` / `google_calendar` 两个 settings 字段同样删除：日程工具一直直接读
+  `JOY_APPLE_CALENDAR` / `JOY_GOOGLE_CALENDAR`（`tools/src/calendar.rs`），settings 那份是
+  `config/write` 能改、改了不生效的死字段。**协议变更**：`SettingsView` / `SettingsPatch`
+  各少三个字段（TS / JSON Schema / Python SDK 生成物已重算）。
+- 驾驶舱概览里的「实验」一行随之消失 —— 它显示的三位都不起作用。
+
+### 清理：驾驶舱里没有页面的绘制代码
+
+- 删 `renderUsage` / `renderApprovals` / `renderSchedules`，以及 `api.ts` 的
+  `fetchUsage` / `fetchApprovals` / `fetchSchedules` / `fetchTasks` / `fetchModelProfiles` /
+  `fetchModelRoutes` / `saveModel` / `saveModelRoutes` / `removeModel`：配置面板撤出驾驶舱之后
+  它们没有调用者，只是被 esbuild tree-shake 掉的死源码。HTTP 端点本身保留（CLI / hub 仍在用）。
+
+### 文档
+
+- `joy --help` 补上 `joy bench`：它早就在（长任务基准，记录成功率与中断续跑率，不拦发版），
+  只是从没写进用法。
+
+## 0.16.0 — 一个会话一次只跑一轮（会话门 + 运行中补充）
+
+### 会话门
+
+- `turn/start` 先认领会话：同一 `session_id` 已经有回合在跑，就返回 `SESSION_BUSY`（-32003），
+  错误里带着占用者的 `turnId` —— 「等它」还是「补一句」，都由这一个 id 决定。
+- 认领发生在**任何副作用之前**：被拒的回合不会把任务翻成 `running`，也不会留下 checkpoint。
+- 续跑同样过门：同一会话的两个 checkpoint 不会并肩恢复；抢不到的那个保持 `open`，留到下次启动。
+- 会话门没有独立的数据结构 —— 它是 `turns` 表（`turn_id → 回合`）上的一条不变量，没有第二份状态可以漂移。
+
+### 运行中补充（steering）
+
+- 新方法 `turn/steer { sessionId, message }`：把一句补进**正在跑的**那一轮，在下一个轮次边界进入工作记忆。
+  已经跑完的工具不重跑 —— 这正是它和「取消重来」的分界线。
+- 三种情况都明说：会话空闲 → `INVALID_PARAMS` 并指向 `turn/start`（**不**静默开新一轮）；
+  同一轮补第二句 → `queued: 2`；补的那句一定落库。
+- `chat_log`：被补进来的句子是**独立的 user 行**（`meta.steer`），转录按发生的位置显示；
+  `session_history` 把连续的 user 行合回一个问题，模型看到的仍是一问一答。
+- 新通知 `turnSteered`：同一回合的其它客户端（第二台设备、REPL）当场知道有人补了一句。
+- 驾驶舱：回合在跑时按发送 = 补一句；带附件的发送会明说「附件留到下一轮」（那一次的请求已经发出去了）。
+
+### 排队下一轮（follow-up）
+
+- 新方法 `turn/follow-up { sessionId, message }`：回合还在跑时排一句「这轮结束再做」。和 `steer`
+  的分界线是**归属**：steer 属于这一轮，follow-up 属于下一轮。
+- 队列是**一张表**（migration 0019 `session_queue`），不是进程里的 Vec：排进去的句子是给人的承诺，
+  重启不该悄悄消失。没有状态列 —— 行存在 = 还没交给回合（claim-then-run），跑过之后记录在 `chat_log`。
+- 一次只放一条：回合结束时取队头，会话门因此不会被队列自己撞上。
+- 会话空闲时调用 → `INVALID_PARAMS` 并指向 `turn/start`，「等这轮结束」不该被解释成「现在就开一轮」；
+  排队成功回 `queued`（你在第几位），写库失败明说没排上。
+
+### 已知
+
+- 会话门是**进程内**的：两个进程各开一个 app-server 时仍然互不知情（`turn/steer` 也只能找到本进程的回合）。
+- follow-up 的通知仍然跟着「一条 SSE 流 = 一轮」：排队的句子要等下一轮开始才在流里出现。
+
+## 0.15.0 — 会话有了自己的一行（会话元数据）
+
+### 会话不再是标签
+
+- migration 0018：新增 `sessions`（`id` / `title` / `cwd` / `created_at` / `last_at`），
+  旧会话由 `chat_log` 反填。**只加表、只加列**，不动任何现有数据。
+- `session/new` 真的落库：空会话立刻进列表，可以带名字、可以绑工作目录。`title` 留空时
+  读取侧仍然回退「第一条用户消息」，与 0.14 之前看到的完全一样。
+- 新方法 `session/get`、`session/update`（改名 / 改目录；`null` = 不动，`""` = 清空）。
+  两个都和 `task/*` 一样**只给人调**：模型没有给自己会话改名或换目录的权力。
+- 新方法 `turn/list`：现在在跑哪几轮（可按会话过滤）。`turns` 每条多了 `session_id` 与
+  开始时间 —— 只按 `turn_id` 记的表回答不了「这个会话正在跑吗」。
+- 写消息就会把会话行建出来，所以 REPL / 网关 / 定时任务产生的会话也都在列表里，
+  不会再有「有对话、却没人列得出来」。
+
+### 工作目录跟着会话走
+
+- `turn/start` 不带 `cwd` 时取 `sessions.cwd`（优先级：本轮指定 → 任务自己的工作目录 →
+  会话记着的）。目录后来被删掉，就当作「没有可写范围」并打一行提示，**绝不悄悄退回进程 cwd**。
+- 可写范围仍然是这条目录本身：`JOY_EXEC_WRITABLE_ROOTS` 是额外根，home 不算。
+
+### 修好的
+
+- `just check` 的 eval 配方：用例按相对路径加载，之前 `cd joy-rs` 之后再跑必然
+  `No such file or directory`。
+- Python SDK 补齐 0.14 漏掉的任务类型导出，以及本次三个新方法的响应配对。
+
+### 已知
+
+- 工作会话 / 团队共享空间（成员、角色、接管、个人会话迁入）**挂起**，设计留在
+  `docs/planning/user-center.zh.md`；本轮没有任何多用户代码。
+- 同一会话的两个并发 turn 仍然没有串行保护（0.16 的会话门）。
+
 ## 0.14.0 — 完成是量出来的（任务实体版本）
 
 ### 任务自己站着

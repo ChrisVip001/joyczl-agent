@@ -42,7 +42,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
   飞书——见 [docs/gateways.zh.md](docs/gateways.zh.md)）
 - **记忆**：语义事实（FTS5、支持中文）、带日期的情景、过程 Skills——
   检索门保证只在相关时才翻记忆（[docs/architecture.zh.md](docs/architecture.zh.md)）
-- **行动**：11 个内置工具外加 MCP 服务器
+- **行动**：21 个内置工具外加 MCP 服务器
   （[docs/configuration.zh.md](docs/configuration.zh.md)）
 - **图式规划**：triage 前门让闲聊便宜地得到快答；gather 工作流写晨报
   （[docs/architecture.zh.md](docs/architecture.zh.md)）
@@ -66,7 +66,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `job_output` / `job_list` / `job_kill` | 读写后台作业（`run_command` 的 `background=true` 起的那些） |
 | `todo_write` | 维护一张每轮重新注入的待办清单（整表替换；同时只能一项 `in_progress`） |
 | `current_time` | 本地时间（含星期与时区） |
-| `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——终端与 hub 默认关，驾驶舱默认开且每次写入在对话里问一次；可写范围 = **本轮选的工作目录** + `JOY_EXEC_WRITABLE_ROOTS`，没选目录一处也写不了 |
+| `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——终端与 hub 默认关，驾驶舱默认开且每次写入在对话里问一次；可写范围 = **会话绑定的工作目录** + `JOY_EXEC_WRITABLE_ROOTS`（会话没选目录时可在这一轮临时指定），没有目录一处也写不了 |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)）；`background=true` 丢到后台跑 |
 | `delegate_task` | 把一件自成一体的活交给子代理——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生；可给 `result_schema` 要结构化结论（不合规重试一次后回落散文） |
 
@@ -81,7 +81,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | 文档 | 内容 |
 |---|---|
 | [docs/architecture.zh.md](docs/architecture.zh.md) | 技术架构：原则、crate 依赖图、turn 数据流、关键机制、设计决策 |
-| [docs/protocol.zh.md](docs/protocol.zh.md) | 协议参考：13 个方法、通知序列、错误码、客户端 |
+| [docs/protocol.zh.md](docs/protocol.zh.md) | 协议参考：41 个方法、通知序列、错误码、客户端 |
 | [docs/configuration.zh.md](docs/configuration.zh.md) | 配置参考：全部 `JOY_*` 变量、网关变量、mcp.json、settings.json |
 | [docs/gateways.zh.md](docs/gateways.zh.md) | Telegram / Discord / 微信 / 飞书的接法、平台怪癖与安全提示 |
 | [docs/testing.zh.md](docs/testing.zh.md) | 四层质量体系与最新测试报告 |
@@ -114,6 +114,9 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P13 ✅ | 长任务实体（`agent_tasks`）：任务 → 目标循环执行器、一会话一活跃、创建/暂停/继续/取消、暂停保留断点（继续即续跑）、重启对账标挂起、dashboard 任务卡开关 |
 | P14 ✅ | 连接器（M4）：email（SMTP）与飞书（应用身份）——白名单硬边界、默认草稿、每次实发一问；`joy connector` 人类入口；驾驶舱只读面板 |
 | P15 ✅ | 业务形态（M5）：任务 API（`POST /api/run`，一轮进、一段 JSON 出）、入站 webhook（`webhooks.json` + `X-Joy-Secret`，没配置就没这扇门）、档位路由（任务/接口声明 `tier`，fixed 模式下也生效；档位表在 `model-routes.json` / REPL `/route`） |
+| P16 ✅ | 任务实体版（0.14）：完成由事实决定 —— 验收三条确定性检查先于判断器、任务级预算、执行/步骤/事件/交付物五张表、幂等只拦不重放、长任务基准与中断恢复率、可选的执行计划（`JOY_PLAN`） |
+| P17 ✅ | 会话元数据（0.15）：`sessions` 表（迁移 0018）、`session/get` / `session/update` / `turn/list`、工作目录跟着会话走 |
+| P18 ✅ | 会话门（0.16）：一个会话同时只跑一轮（`SESSION_BUSY`）、`turn/steer` 运行中补充、`turn/follow-up` 排队下一轮（迁移 0019，重启不丢）、`turnSteered` 通知 |
 
 ## 命名
 

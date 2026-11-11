@@ -82,6 +82,44 @@ impl Interrupt {
     }
 }
 
+/// Words the human added **while this turn was already running**.
+///
+/// The loop folds them into the working memory at the next iteration boundary, so tools that
+/// already ran stay run and their results stay valid — that is the whole difference between
+/// steering and "cancel and start over". One list, two readers: the loop consumes what it has
+/// not seen yet (`drain_pending`), app-server reads `all` afterwards to write the transcript,
+/// so a message accepted right before the turn ended is still recorded rather than lost.
+#[derive(Debug, Default)]
+pub struct Steering {
+    messages: Vec<String>,
+    /// How many of `messages` the loop has already folded in. A counter, not `remove(0)`:
+    /// app-server must still see the earlier ones when it writes the log.
+    consumed: usize,
+}
+
+impl Steering {
+    pub fn new() -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self::default()))
+    }
+
+    /// Accept one addition. Called from another task (`turn/steer`), hence `&mut`.
+    pub fn push(&mut self, text: impl Into<String>) {
+        self.messages.push(text.into());
+    }
+
+    /// Everything not yet folded into the working memory, in arrival order.
+    pub fn drain_pending(&mut self) -> Vec<String> {
+        let pending = self.messages[self.consumed..].to_vec();
+        self.consumed = self.messages.len();
+        pending
+    }
+
+    /// Everything ever accepted for this turn — the transcript writes all of it.
+    pub fn all(&self) -> Vec<String> {
+        self.messages.clone()
+    }
+}
+
 /// Events the loop sends out. The gateway renders them, trace persists them —
 /// neither needs to be wired into the loop's logic.
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +243,8 @@ pub struct Turn<'a> {
     pub interrupt: Option<Arc<Interrupt>>,
     /// Called at each tool-results boundary — the durable "how far did this turn get".
     pub checkpoint: Option<CheckpointSink>,
+    /// Adds words to this turn mid-flight (`turn/steer`). `None` = no steering channel.
+    pub steering: Option<Arc<Mutex<Steering>>>,
     /// Resume instead of starting fresh: `user_message`, `history` and `user_images` are
     /// ignored, the loop continues from the checkpointed working memory.
     pub resume: Option<Resume>,
@@ -272,6 +312,22 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 estimated_input_tokens: last_estimate,
                 observed_input_tokens: last_observed,
             }));
+        }
+
+        // ---- Steering: words added while this turn was running. They join the working memory
+        // as ordinary user messages — at this boundary, so the model sees them on the next call
+        // while every tool result already in `messages` stays untouched.
+        if let Some(steering) = &turn.steering {
+            let pending = steering
+                .lock()
+                .expect("steering 锁不该中毒")
+                .drain_pending();
+            for text in pending {
+                messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Text { text }],
+                });
+            }
         }
 
         // ---- Intra-turn tool-result budget: stub oversized results before assembling the request.

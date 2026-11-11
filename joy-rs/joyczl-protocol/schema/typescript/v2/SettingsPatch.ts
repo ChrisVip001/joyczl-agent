@@ -9,9 +9,6 @@ export type SettingsPatch = {
   historyTurns?: number | null;
   consolidateEvery?: number | null;
   retrievalTopK?: number | null;
-  appleCalendar?: boolean | null;
-  googleCalendar?: boolean | null;
-  experimental?: boolean | null;
   graphWorkflows?: boolean | null;
   /**
    * Whole-table replacement of the allowlist (`JOY_EXEC_ALLOW`) — what "remember this command" writes.

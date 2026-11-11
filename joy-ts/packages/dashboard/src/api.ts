@@ -8,28 +8,25 @@ import type {
   ApprovalRespondParams,
   ApprovalRespondResponse,
   DashboardData,
-  GoalSetParams,
-  GoalSetResponse,
   ErrorObject,
-  ModelProfilesResponse,
-  ModelRemoveParams,
-  ModelRemoveResponse,
-  ModelRoutesResponse,
-  ModelRoutesSaveParams,
-  ModelSaveParams,
-  ModelSaveResponse,
-  ApprovalLogResponse,
-  ScheduleListResponse,
   ServerNotification,
-  UsageSummaryResponse,
   InboxSummarizeResponse,
   SessionMessagesResponse,
+  SessionGetResponse,
+  SessionNewParams,
+  SessionNewResponse,
+  SessionUpdateParams,
+  SessionUpdateResponse,
   TaskCreateParams,
   TaskEnvelope,
-  TaskListResponse,
   TurnInterruptParams,
   TurnInterruptResponse,
   TurnStartParams,
+  TurnSteerParams,
+  TurnSteerResponse,
+  TurnFollowUpParams,
+  TurnFollowUpResponse,
+  TurnListResponse,
 } from "./protocol";
 
 /** One page of the `/api/fs` directory listing (ops's local view, not in the protocol). */
@@ -170,6 +167,102 @@ export async function fetchMessages(
 }
 
 /**
+ * Create a session that exists **before** its first message (0.15).
+ *
+ * The id comes back from the server: an id generated in the browser can collide with another
+ * tab (or another device), and two conversations sharing one row is not a recoverable state.
+ * A name and a working directory can be given right away, so the empty session is already
+ * meaningful in the list instead of a placeholder the page invents locally.
+ */
+export async function createSession(params: SessionNewParams): Promise<SessionNewResponse> {
+  const response = await apiFetch("/api/session/new", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as SessionNewResponse;
+}
+
+/** One session's record — used on switch, because the list is capped and may not contain it. */
+export async function fetchSessionMeta(sessionId: string): Promise<SessionGetResponse> {
+  const query = new URLSearchParams({ sessionId });
+  const response = await apiFetch(`/api/session/meta?${query.toString()}`, {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as SessionGetResponse;
+}
+
+/**
+ * Rename a session or rebind its working directory.
+ *
+ * `null`/absent leaves a field alone; `""` clears it. Those are two intents, not one.
+ */
+export async function updateSession(params: SessionUpdateParams): Promise<SessionUpdateResponse> {
+  const response = await apiFetch("/api/session/update", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as SessionUpdateResponse;
+}
+
+/**
+ * Add a sentence to the turn that is already running (0.16).
+ *
+ * Distinct from `talk` on purpose: starting a second turn would be refused (`SESSION_BUSY`) and
+ * cancelling first would throw away tool work that already happened. `queued` counts everything
+ * this turn has accepted, so the UI can say "the third one" instead of pretending it is first.
+ */
+export async function steerTurn(params: TurnSteerParams): Promise<TurnSteerResponse> {
+  const response = await apiFetch("/api/turn/steer", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as TurnSteerResponse;
+}
+
+/**
+ * Queue a message to run **after** the turn in flight (0.16).
+ *
+ * `steer` and this differ in what the person meant: "and also, while you are at it" versus
+ * "when you are done". This one becomes its own turn, so it keeps its own rounds and budget —
+ * and it runs even after this page is closed.
+ */
+export async function followUpTurn(
+  params: TurnFollowUpParams,
+): Promise<TurnFollowUpResponse> {
+  const response = await apiFetch("/api/turn/follow-up", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as TurnFollowUpResponse;
+}
+
+/**
+ * Turns running right now (all of them when `sessionId` is omitted).
+ *
+ * The page's own `busy` flag cannot answer this: another device (or a queued follow-up) may be
+ * the one running the turn, and a reloaded tab has no memory of it.
+ */
+export async function fetchTurns(sessionId?: string): Promise<TurnListResponse> {
+  const query = new URLSearchParams();
+  if (sessionId !== undefined) query.set("sessionId", sessionId);
+  const suffix = query.toString();
+  const response = await apiFetch(suffix === "" ? "/api/turns" : `/api/turns?${suffix}`, {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as TurnListResponse;
+}
+
+/**
  * Say one thing, streaming out this turn's notifications one by one.
  *
  * Uses `fetch` + reading the body manually instead of `EventSource`: EventSource can only send
@@ -242,22 +335,6 @@ export async function* followEvents(): AsyncGenerator<EventPing> {
 }
 
 /**
- * Set or clear a goal. Empty `condition` = clear.
- *
- * A goal is **only human-settable**: the model has no such path, so "the model assigning
- * itself work" isn't forbidden here — it simply doesn't exist.
- */
-export async function setGoal(params: GoalSetParams): Promise<GoalSetResponse> {
-  const response = await apiFetch("/api/goal", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as GoalSetResponse;
-}
-
-/**
  * The long-task switches: create / suspend / resume / cancel.
  *
  * One door (`/api/task`) with an action field — the protocol keeps four methods, ops only
@@ -291,13 +368,6 @@ export async function summarizeInbox(sessionId?: string): Promise<InboxSummarize
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as InboxSummarizeResponse;
-}
-
-/** Every task, newest first — the panel's list (the card uses `data.task` instead). */
-export async function fetchTasks(): Promise<TaskListResponse> {
-  const response = await apiFetch("/api/tasks", { headers: { accept: "application/json" } });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as TaskListResponse;
 }
 
 /**
@@ -361,70 +431,6 @@ async function errorOf(response: Response): Promise<ErrorObject> {
 }
 
 /**
- * The configured model profiles + the current one.
- *
- * **No keys in the response**, only a pointer to "where the key is stored" — not for browsers.
- */
-export async function fetchModelProfiles(): Promise<ModelProfilesResponse> {
-  const response = await apiFetch("/api/model/profiles", {
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as ModelProfilesResponse;
-}
-
-/**
- * Add/change a profile and make it current; only `id` + `makeActive` = **switch** (no key sent).
- *
- * `keyStoredIn` says where the key landed (keychain / file / env:VAR); the page relays it.
- */
-export async function saveModel(params: ModelSaveParams): Promise<ModelSaveResponse> {
-  const response = await apiFetch("/api/model/save", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as ModelSaveResponse;
-}
-
-/**
- * The routing table: `fixed` (the active profile wins) or `auto` (pick by task tier),
- * plus which profile each tier means. Always three rows, in tier order.
- */
-export async function fetchModelRoutes(): Promise<ModelRoutesResponse> {
-  const response = await apiFetch("/api/model/routes", {
-    headers: { accept: "application/json" },
-  });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as ModelRoutesResponse;
-}
-
-/** Replace the whole table. The server validates both the tier names and the profile ids. */
-export async function saveModelRoutes(
-  params: ModelRoutesSaveParams,
-): Promise<ModelRoutesResponse> {
-  const response = await apiFetch("/api/model/routes/save", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as ModelRoutesResponse;
-}
-
-/** Delete a profile, along with its credentials. */
-export async function removeModel(params: ModelRemoveParams): Promise<ModelRemoveResponse> {
-  const response = await apiFetch("/api/model/remove", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as ModelRemoveResponse;
-}
-
-/**
  * Stop a running turn. `interrupted: false` = arrived too late (it had already finished) —
  * the UI says so instead of pretending something was stopped.
  */
@@ -436,20 +442,6 @@ export async function interruptTurn(params: TurnInterruptParams): Promise<TurnIn
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as TurnInterruptResponse;
-}
-
-/** Usage ledger (migration 0010): per-model aggregation + totals. Bookkeeping only. */
-export async function fetchUsage(): Promise<UsageSummaryResponse> {
-  const response = await apiFetch("/api/usage", { headers: { accept: "application/json" } });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as UsageSummaryResponse;
-}
-
-/** Approval audit (migration 0011): the latest 100 "asked-before-run" entries, newest first. */
-export async function fetchApprovals(): Promise<ApprovalLogResponse> {
-  const response = await apiFetch("/api/approvals", { headers: { accept: "application/json" } });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as ApprovalLogResponse;
 }
 
 /**
@@ -529,9 +521,3 @@ export async function recordRecent(path: string): Promise<void> {
   }
 }
 
-/** Scheduling state snapshot (migration 0012): per-job last_fired/claimed/catch_up/delivery. */
-export async function fetchSchedules(): Promise<ScheduleListResponse> {
-  const response = await apiFetch("/api/schedules", { headers: { accept: "application/json" } });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as ScheduleListResponse;
-}

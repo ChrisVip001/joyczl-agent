@@ -114,4 +114,7 @@ pub mod codes {
     /// The method exists in the protocol but is not implemented yet. Deliberately
     /// distinct from METHOD_NOT_FOUND: "not built yet" and "you typo'd it" differ completely.
     pub const NOT_IMPLEMENTED: i32 = -32002;
+    /// One turn per session at a time (0.16). The message carries the turn that holds the
+    /// session, because that is the only part of the answer the caller can act on.
+    pub const SESSION_BUSY: i32 = -32003;
 }

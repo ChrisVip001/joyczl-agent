@@ -31,6 +31,7 @@ Joy — 本地优先的个人助手
     joy skill …        技能：list / export --to claude,codex / install <url>
     joy eval [路径]    确定性评测（离线 0/1，必须 100% 通过 = release gate）
     joy judge [路径]   真模型答一轮 + 裁判打分（需要 key，出分不拦发版）
+    joy bench [路径]   长任务基准：成功率与中断续跑率（只记录，不拦发版）
     joy dashboard      起网页驾驶舱（http://localhost:7777）
     joy app-server     启动 JSON-RPC 服务端（stdin/stdout，换行分隔 JSON）
     joy hub            多用户模式：--root <目录>，users.json 里每人一枚 token，

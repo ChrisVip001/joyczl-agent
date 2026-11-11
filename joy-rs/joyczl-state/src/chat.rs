@@ -1,7 +1,9 @@
-//! The raw conversation log, and the lightweight concept of a "session".
+//! The raw conversation log, and the metadata row that names a session (migration 0018).
 //!
-//! A session is not a table, just a `session_id` tag on chat_log. So "creating a session"
-//! creates nothing — switching tags is enough; consolidation still reads un-distilled rows.
+//! Before 0018 a session was only a tag on chat_log: no name, no working directory, and an
+//! empty session did not exist anywhere. Now `sessions` holds exactly those two things a tag
+//! cannot carry, while chat_log stays the body of the conversation. A session is created by
+//! `session/new` (empty, named) or implicitly by the first message written into it.
 
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
@@ -25,11 +27,14 @@ pub struct MessageRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRow {
     pub id: String,
-    /// Title = the session's first user message.
+    /// The name a human gave it, or — when there is none — the first user message.
     pub title: String,
     pub messages: i64,
     pub started_at: Option<String>,
     pub last_at: Option<String>,
+    /// The working directory this session works in: the root of what it may write. `None` = not
+    /// chosen yet, which means write tools refuse every write (see `joyczl_tools::fs_write`).
+    pub cwd: Option<String>,
 }
 
 #[derive(Clone)]
@@ -67,6 +72,29 @@ impl Chat {
         meta: Option<&str>,
         task_id: Option<&str>,
     ) -> Result<()> {
+        self.append_turn_for(user, &[], assistant, session_id, source, meta, task_id)
+            .await
+    }
+
+    /// One turn written the way it happened: the ask, every **steering** message accepted while
+    /// it ran, then the reply.
+    ///
+    /// Steers get their own rows rather than being glued onto the ask, because the transcript
+    /// must show them where they happened. `session_history` folds consecutive user rows back
+    /// into one ask, so the model still sees a (question, answer) pair.
+    // Eight arguments, all distinct columns of one INSERT — a builder would add a type without
+    // removing a question.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn append_turn_for(
+        &self,
+        user: &str,
+        steers: &[String],
+        assistant: &str,
+        session_id: &str,
+        source: &str,
+        meta: Option<&str>,
+        task_id: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO chat_log (role, content, session_id, source, task_id)
              VALUES ('user', ?, ?, ?, ?)",
@@ -77,6 +105,18 @@ impl Chat {
         .bind(task_id)
         .execute(&self.pool)
         .await?;
+        for steer in steers {
+            sqlx::query(
+                "INSERT INTO chat_log (role, content, session_id, source, meta, task_id)
+                 VALUES ('user', ?, ?, ?, '{\"steer\":true}', ?)",
+            )
+            .bind(steer)
+            .bind(session_id)
+            .bind(source)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await?;
+        }
         sqlx::query(
             "INSERT INTO chat_log (role, content, session_id, source, meta, task_id)
              VALUES ('assistant', ?, ?, ?, ?, ?)",
@@ -86,6 +126,22 @@ impl Chat {
         .bind(source)
         .bind(meta)
         .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        // A session exists as soon as something is said in it — REPL, gateway and schedule turns
+        // never call `session/new`, and they must not produce a conversation nobody can list.
+        self.touch_session(session_id).await?;
+        Ok(())
+    }
+
+    /// Make sure the session row exists and mark it active now. One statement: the list sorts by
+    /// `last_at`, and two conversations from the same second must still be ordered by real use.
+    pub async fn touch_session(&self, session_id: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sessions (id, last_at) VALUES (?, datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET last_at = excluded.last_at",
+        )
+        .bind(session_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -178,14 +234,16 @@ impl Chat {
         .await?;
 
         let mut pairs = Vec::new();
-        let mut pending: Option<String> = None;
+        // Several user rows in a row are **one ask** — a turn's original message plus whatever was
+        // steered into it while it ran. Joined in order, the model sees the same single question
+        // it saw live; kept as "last one wins", the original ask would silently vanish.
+        let mut pending: Vec<String> = Vec::new();
         for (role, content) in rows {
             match role.as_str() {
-                "user" => pending = Some(content),
-                "assistant" => {
-                    if let Some(u) = pending.take() {
-                        pairs.push((u, content));
-                    }
+                "user" => pending.push(content),
+                "assistant" if !pending.is_empty() => {
+                    pairs.push((pending.join("\n\n"), content));
+                    pending.clear();
                 }
                 _ => {}
             }
@@ -320,41 +378,119 @@ impl Chat {
         .map_err(Into::into)
     }
 
-    /// All sessions, the most recently messaged first.
+    /// All sessions, the most recently active first. Empty ones (created but never spoken in)
+    /// belong in the list exactly like the rest — that is what the table is for.
     pub async fn sessions(&self) -> Result<Vec<SessionRow>> {
-        #[derive(sqlx::FromRow)]
-        struct Raw {
-            session_id: String,
-            title: Option<String>,
-            messages: i64,
-            started_at: Option<String>,
-            last_at: Option<String>,
-        }
-
-        let rows = sqlx::query_as::<_, Raw>(
-            "SELECT session_id,
-                    COUNT(*) AS messages,
-                    MIN(created_at) AS started_at,
-                    MAX(created_at) AS last_at,
-                    (SELECT c.content FROM chat_log c
-                      WHERE c.session_id = s.session_id AND c.role = 'user'
-                      ORDER BY c.id LIMIT 1) AS title
-             FROM chat_log s
-             GROUP BY session_id
-             ORDER BY last_at DESC",
-        )
+        let rows = sqlx::query_as::<_, RawSession>(&format!(
+            "{SESSION_COLUMNS} ORDER BY COALESCE(s.last_at, s.created_at) DESC"
+        ))
         .fetch_all(&self.pool)
         .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| SessionRow {
-                id: r.session_id,
-                title: r.title.unwrap_or_else(|| "(空会话)".to_string()),
-                messages: r.messages,
-                started_at: r.started_at,
-                last_at: r.last_at,
-            })
-            .collect())
+        Ok(rows.into_iter().map(SessionRow::from).collect())
     }
+
+    /// One session's metadata. `None` = no such session (never created, or the id is a typo).
+    pub async fn session(&self, id: &str) -> Result<Option<SessionRow>> {
+        let row = sqlx::query_as::<_, RawSession>(&format!("{SESSION_COLUMNS} WHERE s.id = ?"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(SessionRow::from))
+    }
+
+    /// Create a session row. Idempotent: an existing row is **kept**, and only its empty fields
+    /// are filled in — `session/new` called twice with the same id must not rename anything.
+    /// `last_at` is set so a brand-new empty session sorts as "just now".
+    pub async fn create_session(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        cwd: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sessions (id, title, cwd, last_at) VALUES (?, ?, ?, datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET
+                 title = COALESCE(NULLIF(sessions.title, ''), excluded.title),
+                 cwd   = COALESCE(sessions.cwd, excluded.cwd)",
+        )
+        .bind(id)
+        .bind(blank_to_null(title))
+        .bind(blank_to_null(cwd))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Rename / rebind the working directory. `None` = leave that field alone; `Some("")`
+    /// = clear it (title then falls back to the first user message, cwd back to "not chosen").
+    pub async fn update_session(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        cwd: Option<&str>,
+    ) -> Result<()> {
+        let mut sets: Vec<&str> = Vec::new();
+        if title.is_some() {
+            sets.push("title = ?");
+        }
+        if cwd.is_some() {
+            sets.push("cwd = ?");
+        }
+        if sets.is_empty() {
+            return Ok(());
+        }
+        let sql = format!("UPDATE sessions SET {} WHERE id = ?", sets.join(", "));
+        let mut query = sqlx::query(&sql);
+        if let Some(t) = title {
+            query = query.bind(blank_to_null(Some(t)));
+        }
+        if let Some(c) = cwd {
+            query = query.bind(blank_to_null(Some(c)));
+        }
+        query.bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+}
+
+/// One expression for a session's readable fields, shared by the list and the single read, so
+/// "the title is the first user message" cannot drift into two different implementations.
+const SESSION_COLUMNS: &str = "
+    SELECT s.id AS id,
+           COALESCE(NULLIF(s.title, ''), (
+               SELECT c.content FROM chat_log c
+                WHERE c.session_id = s.id AND c.role = 'user'
+                ORDER BY c.id LIMIT 1)) AS title,
+           (SELECT COUNT(*) FROM chat_log c WHERE c.session_id = s.id) AS messages,
+           (SELECT MIN(c.created_at) FROM chat_log c WHERE c.session_id = s.id) AS started_at,
+           s.last_at AS last_at,
+           s.cwd AS cwd
+      FROM sessions s";
+
+#[derive(sqlx::FromRow)]
+struct RawSession {
+    id: String,
+    title: Option<String>,
+    messages: i64,
+    started_at: Option<String>,
+    last_at: Option<String>,
+    cwd: Option<String>,
+}
+
+impl From<RawSession> for SessionRow {
+    fn from(row: RawSession) -> Self {
+        SessionRow {
+            id: row.id,
+            title: row.title.unwrap_or_else(|| "(空会话)".to_string()),
+            messages: row.messages,
+            started_at: row.started_at,
+            last_at: row.last_at,
+            cwd: row.cwd,
+        }
+    }
+}
+
+/// Empty / whitespace-only text means "no value": the DB stores NULL, never `""` — otherwise
+/// "cleared" and "set to empty" become two states that render differently but mean the same.
+fn blank_to_null(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|t| !t.is_empty())
 }

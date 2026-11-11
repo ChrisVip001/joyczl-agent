@@ -78,7 +78,8 @@ user message
 ### State (joyczl-state)
 
 One `state.db`: `facts` / `episodes` (each with an FTS5 trigram index and
-sync triggers), `chat_log` (a session is a label column), `calendar_events`
+sync triggers), `chat_log` + `sessions` (0018: a session has a row of its own — name and
+working directory; the body is still `chat_log`), `calendar_events`
 ((title, start) unique index provides SQL-level idempotence). Migrations are
 embedded at compile time via `sqlx::migrate!` — the binary carries its own
 schema. Chinese search works through trigram + a LIKE fallback. The memory

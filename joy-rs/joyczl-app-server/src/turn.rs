@@ -24,7 +24,7 @@ use joyczl_graph::workflows::triage::{
 use joyczl_graph::{
     run_graph, GraphEvent, NodeCtx, NodeWrites, Observer, State, DEFAULT_MAX_STEPS,
 };
-use joyczl_loop::{LoopEvent, LoopResult};
+use joyczl_loop::{LoopEvent, LoopResult, Steering};
 use joyczl_protocol::{
     codes, ConsolidationCompletedNotification, ErrorObject, GateDecidedNotification, GateDecision,
     GateDecisionKind, GoalRoundNotification, GraphEndedNotification, GraphInfo,
@@ -230,6 +230,26 @@ pub async fn run_turn(
 
     let turn_id = new_turn_id();
 
+    // ---- One driver per session (0.16), claimed **before any side effect**: a turn refused
+    // here must not flip a task to `running` or leave a checkpoint behind. The holder's id goes
+    // into the error because it is the only thing the caller can act on.
+    let (interrupt, steering) =
+        server
+            .begin_turn(&turn_id, &session_id)
+            .map_err(|holder| ErrorObject {
+                code: codes::SESSION_BUSY,
+                message: format!(
+                    "这个会话里已经有一轮在跑（{holder}）—— 等它结束，或者用 turn/steer 补一句，\
+                     它会在这轮的下一轮次看见。"
+                ),
+                data: None,
+            })?;
+    let _guard = TurnGuard {
+        server,
+        turn_id: turn_id.clone(),
+        session_id: session_id.clone(),
+    };
+
     if let Some(task) = &task {
         match server.tasks.set_running(&task.id, &turn_id).await {
             Ok(()) => {
@@ -282,14 +302,6 @@ pub async fn run_turn(
         }
     }
 
-    // Register the cancellation token: turn/interrupt finds it by turn_id. However this turn
-    // exits (success, error, interrupted), the guard's Drop removes it from the table.
-    let interrupt = server.register_turn(&turn_id);
-    let _guard = TurnGuard {
-        server,
-        turn_id: turn_id.clone(),
-    };
-
     // ---- The run: one execution of the task, which **is** this turn (a run and the turn that
     // carries it share an id, so a checkpoint inside it always knows which attempt it belongs
     // to). No task, no run — an ordinary chat turn has nothing to account for.
@@ -320,9 +332,13 @@ pub async fn run_turn(
     // Working directory for this turn: validate when provided (fail-closed). Reject before the
     // turn starts, leaving no half-turn behind.
     //
-    // A task's own directory wins when the turn names none: "this task owns this folder" would
-    // be a lie if the tools writing inside it were bounded by something else.
-    let turn_cwd = resolve_turn_cwd(&params.cwd)?.or_else(|| task_root.clone());
+    // Precedence: what **this turn** names → the task's own folder → what the **session**
+    // remembers. A task's directory wins over the session's, because "this task owns this
+    // folder" would be a lie if the tools writing inside it were bounded by something else.
+    let mut turn_cwd = resolve_turn_cwd(&params.cwd)?.or_else(|| task_root.clone());
+    if turn_cwd.is_none() {
+        turn_cwd = session_cwd(server, &session_id).await;
+    }
     // The boundary acceptance checks resolve paths against — same rule, one directory.
     let verify_root = turn_cwd.clone();
     // Only actually-used directories enter "recently used" (workspaces.json) — quick entries for the cockpit picker.
@@ -420,6 +436,7 @@ pub async fn run_turn(
                     interrupt: Some(interrupt.clone()),
                     turn_cwd: turn_cwd.clone(),
                     route_reason: turn_route.clone(),
+                    steering: Some(steering.clone()),
                     resume: None,
                     checkpoint: Some(checkpoint.clone()),
                 },
@@ -441,6 +458,7 @@ pub async fn run_turn(
                             interrupt: Some(interrupt.clone()),
                             turn_cwd: turn_cwd.clone(),
                             route_reason: turn_route.clone(),
+                            steering: Some(steering.clone()),
                             resume: None,
                             checkpoint: Some(checkpoint.clone()),
                         },
@@ -525,6 +543,7 @@ pub async fn run_turn(
                 interrupt: Some(interrupt.clone()),
                 turn_cwd: turn_cwd.clone(),
                 route_reason: turn_route.clone(),
+                steering: Some(steering.clone()),
                 resume: None,
                 checkpoint: Some(checkpoint.clone()),
             },
@@ -709,6 +728,7 @@ pub async fn run_turn(
                     interrupt: Some(interrupt.clone()),
                     turn_cwd: turn_cwd.clone(),
                     route_reason: turn_route.clone(),
+                    steering: Some(steering.clone()),
                     resume: None,
                     checkpoint: Some(checkpoint.clone()),
                 },
@@ -860,6 +880,7 @@ pub async fn run_turn(
                 interrupt: Some(interrupt.clone()),
                 turn_cwd: turn_cwd.clone(),
                 route_reason: turn_route.clone(),
+                steering: Some(steering.clone()),
                 resume: None,
                 checkpoint: Some(checkpoint.clone()),
             },
@@ -1211,10 +1232,18 @@ pub(crate) async fn finalize_turn(
     let session_write_lock = server.session_write_lock(&session_id);
     let write_guard = session_write_lock.lock().await;
 
+    // Everything steered into this turn, in arrival order — including anything accepted after
+    // the loop's last boundary: it is written down even if no model call could see it, so the
+    // next turn's history carries it instead of it vanishing.
+    let steers = server
+        .steering_of(&turn_id)
+        .map(|steering| steering.lock().expect("steering 锁不该中毒").all())
+        .unwrap_or_default();
     server
         .chat
-        .append_exchange_for(
+        .append_turn_for(
             user_message,
+            &steers,
             &reply,
             &session_id,
             "app-server",
@@ -1357,12 +1386,71 @@ pub(crate) fn checkpoint_outlet(
 pub(crate) struct TurnGuard<'a> {
     pub(crate) server: &'a Server,
     pub(crate) turn_id: String,
+    pub(crate) session_id: String,
 }
 
 impl Drop for TurnGuard<'_> {
     fn drop(&mut self) {
         self.server.finish_turn(&self.turn_id);
+        // The session is free again: whatever was queued behind this turn gets a turn of its
+        // own now. Spawned because `Drop` cannot await, and safe because `finish_turn` above
+        // already released the gate — the drain's turn claims it like any other caller.
+        let server = self.server.clone();
+        let session_id = self.session_id.clone();
+        tokio::spawn(async move { drain_queue(&server, &session_id).await });
     }
+}
+
+/// Hand the next queued message to a turn of its own, if there is one.
+///
+/// Called when a turn ends (`TurnGuard::drop`) and once at boot. One message per call: the turn
+/// it starts ends and calls back in, so the queue advances one at a time without any loop here.
+pub(crate) async fn drain_queue(server: &Server, session_id: &str) {
+    let Ok(Some(row)) = server.queue.pop(session_id).await else {
+        return;
+    };
+    spawn_queued_turn(server.clone(), session_id.to_string(), row.message);
+}
+
+/// Run one queued message as its own turn, with **no client attached**.
+///
+/// `EventSink` already tolerates that ("a send failure has only one possible cause: the writer
+/// is gone"), so the notifications simply expire. What must never be silent is a **failure**: a
+/// queued turn runs while the human is away, so the error has to land in the transcript.
+fn spawn_queued_turn(server: Server, session_id: String, message: String) {
+    tokio::spawn(async move {
+        let (sink, receiver) = EventSink::channel();
+        drop(receiver); // nobody is listening; frames expire on send
+
+        let params = TurnStartParams {
+            session_id: Some(session_id.clone()),
+            message: message.clone(),
+            ..TurnStartParams::default()
+        };
+        let Err(error) = run_turn(&server, params, RequestId::Number(0), &sink).await else {
+            return;
+        };
+
+        // Losing the session to another client is not a failure of *this message*: put it back in
+        // line (it drains when that turn ends) instead of inventing an error the person never
+        // caused.
+        if error.code == codes::SESSION_BUSY {
+            if let Err(e) = server.queue.push(&session_id, &message).await {
+                eprintln!("(joy) 排队的消息没放回队列：{e}");
+            }
+            return;
+        }
+
+        // run_turn writes nothing when it fails, so this pair of rows is the whole record.
+        let note = format!("（这条排队消息没跑起来：{}）", error.message);
+        if let Err(e) = server
+            .chat
+            .append_exchange_for(&message, &note, &session_id, "app-server", None, None)
+            .await
+        {
+            eprintln!("(joy) 排队消息的失败记录也没写进去：{e}");
+        }
+    });
 }
 
 // ---- Task rounds ---------------------------------------------------------------------------
@@ -1640,6 +1728,24 @@ pub(crate) struct TurnFrame<'a> {
     pub(crate) resume: Option<joyczl_loop::Resume>,
     /// The checkpoint outlet: every tool-results boundary lands here (None = no checkpointing).
     pub(crate) checkpoint: Option<joyczl_loop::CheckpointSink>,
+    /// Additions accepted while this turn runs (`turn/steer`). Same channel for every round of
+    /// the turn, including stop-hook continuations — a message added during round 2 is still
+    /// "about this turn".
+    pub(crate) steering: Option<Arc<Mutex<Steering>>>,
+}
+
+/// The working directory the session remembers (migration 0018). `None` = it never chose one, or
+/// it chose one that has since disappeared — a vanished directory must not silently become "the
+/// process cwd": that would turn a missing workspace into writes landing somewhere unexpected.
+pub(crate) async fn session_cwd(server: &Server, session_id: &str) -> Option<std::path::PathBuf> {
+    let row = server.chat.session(session_id).await.ok().flatten()?;
+    let cwd = row.cwd?;
+    let path = std::path::PathBuf::from(&cwd);
+    if !path.is_dir() {
+        eprintln!("(joy) 会话 {session_id} 记着的工作目录 {cwd} 已经不在，这一轮没有可写范围");
+        return None;
+    }
+    Some(path)
 }
 
 /// Admission check for this turn's working directory (fail-closed): when given, it must be an existing
@@ -1686,6 +1792,7 @@ pub(crate) async fn full_turn(
         // route_reason is not used here: TurnMeta is assembled by run_turn (which holds turn_route).
         resume,
         checkpoint,
+        steering,
         ..
     } = frame;
     let settings = server.settings();
@@ -1888,6 +1995,7 @@ pub(crate) async fn full_turn(
             on_text: Some(on_text.clone()),
             interrupt: interrupt.clone(),
             checkpoint: checkpoint.clone(),
+            steering: steering.clone(),
             resume: resume.clone(),
         })
         .await;
@@ -1963,6 +2071,7 @@ async fn graph_route(
         // resume slot never reaches here.
         resume: _,
         checkpoint,
+        steering,
     } = frame;
     if !server.settings().graph_workflows {
         return Ok(None);
@@ -2030,6 +2139,7 @@ async fn graph_route(
             let (server, resolved, sink) = (server.clone(), resolved.clone(), sink.clone());
             let (turn_id, session_id, slot) = (turn_id.clone(), session_id.clone(), slot.clone());
             let interrupt = interrupt.clone();
+            let steering = steering.clone();
             Box::pin(async move {
                 // Whatever the user said this turn is on the whiteboard — the initial state run_graph receives.
                 let message = ctx.state.str("message").unwrap_or_default().to_string();
@@ -2051,6 +2161,7 @@ async fn graph_route(
                         route_reason,
                         resume: None,
                         checkpoint,
+                        steering,
                     },
                     inner,
                 )

@@ -299,7 +299,18 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         // "something happened", pull the details themselves.
         .route("/api/events", get(api::events))
         .route("/api/session", get(api::session))
+        // A session exists before its first message (0.15): create it with a name + working dir.
+        .route("/api/session/meta", get(api::session_meta))
+        .route("/api/session/new", post(api::session_new))
+        .route("/api/session/update", post(api::session_update))
+        // What is running right now — the page cannot know this from its own `busy` flag,
+        // because another device may be the one running the turn.
+        .route("/api/turns", get(api::turns))
         .route("/api/turn", post(api::turn))
+        // Add to the turn in flight instead of starting a second one (0.16).
+        .route("/api/turn/steer", post(api::steer))
+        // "When you're done": queued as its own turn, drained when the current one ends.
+        .route("/api/turn/follow-up", post(api::follow_up))
         .route("/api/approval", post(api::approval))
         .route("/api/interrupt", post(api::interrupt))
         .route("/api/goal", post(api::goal))

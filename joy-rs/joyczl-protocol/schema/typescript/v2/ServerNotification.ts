@@ -18,6 +18,7 @@ import type { TurnCheckpointedNotification } from "./TurnCheckpointedNotificatio
 import type { TurnCompletedNotification } from "./TurnCompletedNotification";
 import type { TurnResumedNotification } from "./TurnResumedNotification";
 import type { TurnStartedNotification } from "./TurnStartedNotification";
+import type { TurnSteeredNotification } from "./TurnSteeredNotification";
 import type { TurnSuspendedNotification } from "./TurnSuspendedNotification";
 
 /**
@@ -41,6 +42,7 @@ export type ServerNotification =
   | ({ type: "graphNodeEnded" } & GraphNodeEndedNotification)
   | ({ type: "graphEnded" } & GraphEndedNotification)
   | ({ type: "turnCheckpointed" } & TurnCheckpointedNotification)
+  | ({ type: "turnSteered" } & TurnSteeredNotification)
   | ({ type: "turnResumed" } & TurnResumedNotification)
   | ({ type: "turnSuspended" } & TurnSuspendedNotification)
   | ({ type: "taskUpdated" } & TaskUpdatedNotification)

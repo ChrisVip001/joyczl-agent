@@ -376,16 +376,6 @@ textarea::placeholder {
   color: var(--text-3);
 }
 
-.bar.goal {
-  border-bottom: 1px solid var(--line-soft);
-  padding-bottom: 10px;
-}
-
-.bar.goal input:first-child {
-  flex: 1;
-  min-width: 0;
-}
-
 /* 消息流 */
 
 .messages {
@@ -1149,6 +1139,25 @@ textarea::placeholder {
 
 .composer.busy {
   opacity: 0.7;
+}
+
+/* 这一轮在别处跑（另一台设备 / 排队的 follow-up）：输入区仍然可用 —— 发送等于补充，
+   不是新起一轮。所以只是一道安静的强调边，不做变暗那种"锁住"的暗示。 */
+.composer.elsewhere {
+  border-color: var(--accent-deep);
+}
+
+/* 「跑完再说」：只在有轮次可跟的时候出现 —— 空闲时它没有意义，出现即噪音。
+   按下 = 这句话落成**下一轮**（自己跑，带自己的预算），不是补充这一轮。 */
+.queue-toggle {
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.queue-toggle.on {
+  color: var(--accent-hover);
+  border-color: var(--accent-deep);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .composer textarea {
@@ -1961,10 +1970,6 @@ textarea::placeholder {
 
   .chat {
     padding: 10px 14px 0;
-  }
-
-  .bar.goal {
-    flex-wrap: wrap;
   }
 
   .panels {

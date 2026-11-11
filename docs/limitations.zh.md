@@ -200,11 +200,12 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 
 ## 并发
 
-* **刻意** —— 同一会话的两个并发 turn **没有串行保护**（`turn/start` 是并发
-  处理的，这是为了 `turn/interrupt` 能进来）。后果都收在下面几条里，没有一条
-  会损坏数据：提炼是**原子认领**（输的那个不调模型）、滚动摘要有**单调守卫**
-  （只接受覆盖更多轮次的那份）、记忆写入有**去重闸**。剩下的只是「多等一会儿」。
-  → `joy-rs/joyczl-memory/src/consolidation.rs`、`joyczl-state/src/chat.rs`
+* **已修（0.16）** —— 同一会话的两个 turn 不再并行：`turn/start` 先认领会话，
+  第二个拿到 `SESSION_BUSY`。这道门是**进程内**的 —— 跨进程（REPL 与 hub 里的
+  另一个 app-server）仍然互不知情，那要等共享空间的接管。`turn/interrupt` 照旧
+  能进来，因为它不占用会话。写段锁与 SQLite 三守卫继续留着：它们防的是
+  「跨进程双写」与「读写交错」。
+  → `joy-rs/joyczl-app-server/src/lib.rs`（`begin_turn`）、`joyczl-state/src/chat.rs`
 * **刻意** —— SQLite 的等锁上限是 **10 秒**（挂在连接选项上，每个连接都带上）。
   多进程同时写（REPL、dashboard、`joy mcp serve`、`joy schedule`）时排队而非
   直接失败；10 秒还不够就只能减小并发面，而不是把超时调得更长。
@@ -321,6 +322,24 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 
 ## 轮次与协议
 
+* **边界** —— 会话元数据（0.15）里只有**名字**与**工作目录**：没有归属、没有可见性、
+  没有 `status`。0018 之前建的会话 `cwd` 为空，打开时目录选择器会**清空**（这是诚实的
+  渲染：那条会话确实没选过目录），再选一次才会记住。
+  → `joy-rs/joyczl-state/src/chat.rs`、`migrations/0018_sessions.sql`
+* **刻意** —— `turn/list` 报的是**本进程内存里**在跑的轮次：另一个进程（REPL、hub 里的
+  另一个 app-server）跑的那一轮不在里面。跨进程的「谁在跑」要等共享空间的接管机制。
+  → `joy-rs/joyczl-app-server/src/lib.rs`（`active_turns`）
+* **刻意** —— 运行中补充（0.16）的 `steer` 在**轮次边界**进入工作记忆，所以
+  「这一轮最后一次模型调用已经发出」之后再补，要等下一次调用或下一轮才生效；回合收尾前
+  一刻补的话仍会写进 `chat_log`（`meta.steer`），不会丢。要「这轮结束后再做」用
+  `turn/follow-up`（migration 0019 `session_queue`，重启不丢、一次只放一条）。
+  → `joy-rs/joyczl-loop/src/lib.rs`（`Steering`）、`joyczl-state/src/queue.rs`
+* **刻意** —— follow-up 排队的句子要等**下一轮开始**才出现在 SSE 流里：一条流仍然只覆盖
+  一轮，排队本身不发通知。
+  → `joy-rs/joyczl-app-server/src/lib.rs`（`follow_up`）
+* **刻意** —— `turn/steer` 也只找**本进程**在跑的回合。另一个进程里的那一轮，它看不见，
+  也不会转发过去（会在你问的时候说「没有在跑的回合」）。
+  → `joy-rs/joyczl-app-server/src/lib.rs`（`steer`）
 * **刻意** —— `turn/interrupt` 取消的是 loop 的模型调用与正在跑的工具；它**不**
   取消 loop 之前的检索门与压缩调用。在那些阶段打断，要到 loop 开始时才生效。
   要让它们也可取消，得把令牌一路传进那几个调用。

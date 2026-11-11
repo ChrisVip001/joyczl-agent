@@ -255,14 +255,13 @@ extraction use `run_command` + curl or an MCP fetching service.
 
 ## Concurrency
 
-* **Deliberate** — Two concurrent turns on the **same session are not serialised**
-  (`turn/start` is handled concurrently so `turn/interrupt` can get in). The
-  consequences are contained by three guards, none of which can corrupt data:
-  consolidation is an **atomic claim** (the loser never calls the model), the
-  rolling summary has a **monotonic guard** (only a summary covering more turns
-  is accepted), and memory writes have a **de-duplication gate**. What is left is
-  "waits a bit longer".
-  → `joy-rs/joyczl-memory/src/consolidation.rs`, `joyczl-state/src/chat.rs`
+* **Fixed in 0.16** — Two turns on the **same session** no longer run side by side:
+  `turn/start` claims the session first, and the second caller gets `SESSION_BUSY`. The gate is
+  **per process** — a REPL and another app-server in the hub still know nothing about each
+  other; that waits for the shared-space takeover. `turn/interrupt` still gets in, because it
+  holds no session. The write-section lock and SQLite's three guards stay: they stop
+  cross-process double-writes and read/write interleaving.
+  → `joy-rs/joyczl-app-server/src/lib.rs` (`begin_turn`), `joyczl-state/src/chat.rs`
 * **Deliberate** — SQLite waits **10 seconds** for a lock, set on the connect
   options so every connection carries it. Multiple processes writing at once
   (REPL, dashboard, `joy mcp serve`, `joy schedule`) queue instead of failing;
@@ -408,6 +407,28 @@ no image library, no decode).
 
 ## Turns and protocols
 
+* **Boundary** — session metadata (0.15) holds only a **name** and a **working
+  directory**: no owner, no visibility, no `status`. Conversations created before 0018 have
+  an empty `cwd`, so opening one *clears* the folder picker — the honest rendering, since
+  that conversation never chose one. It is remembered once chosen again.
+  → `joy-rs/joyczl-state/src/chat.rs`, `migrations/0018_sessions.sql`
+* **Deliberate** — `turn/list` reports turns running **in this process**: a turn in another
+  process (REPL, another app-server in the hub) is not in it. Cross-process "who is running"
+  waits for the shared-space takeover design.
+  → `joy-rs/joyczl-app-server/src/lib.rs` (`active_turns`)
+* **Deliberate** — `steer` (0.16) lands at an **iteration boundary**: a sentence added after this
+  turn's last model call takes effect on the next call or the next turn. One added just before the
+  turn ends is still written to `chat_log` (`meta.steer`), so it is never lost. "Do this once you
+  are done" is `turn/follow-up` instead (migration 0019 `session_queue`: survives a restart, one
+  message at a time).
+  → `joy-rs/joyczl-loop/src/lib.rs` (`Steering`), `joyczl-state/src/queue.rs`
+* **Deliberate** — a queued follow-up only shows up in an SSE stream once the **next turn
+  starts**: one stream still covers exactly one turn, and queueing sends no notification.
+  → `joy-rs/joyczl-app-server/src/lib.rs` (`follow_up`)
+* **Deliberate** — `turn/steer` also only finds turns in **this process**. A turn running in
+  another process is invisible to it, and it is not forwarded — the caller is told there is
+  nothing running rather than being lied to.
+  → `joy-rs/joyczl-app-server/src/lib.rs` (`steer`)
 * **Deliberate** — `turn/interrupt` cancels the loop's model call and running
   tools; it does *not* cancel the retrieval gate or the compaction call that
   happen before the loop. An interrupt during those takes effect when the loop

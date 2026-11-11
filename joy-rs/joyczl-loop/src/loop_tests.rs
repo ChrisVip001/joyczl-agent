@@ -57,10 +57,74 @@ async fn turn<'a>(
         on_text: None,
         interrupt: None,
         checkpoint: None,
+        steering: None,
         resume: None,
     })
     .await
     .expect("loop 跑完")
+}
+
+/// 0.16：运行中补的那一句，进的是**下一次**模型调用，已经跑完的工具不重跑。
+///
+/// 这就是 steering 与 "取消重来" 的分界线：不是重放这一轮，而是往工作记忆末尾接一句话。
+#[tokio::test]
+async fn words_added_mid_turn_join_the_next_model_call_and_do_not_rerun_tools() {
+    let steering = crate::Steering::new();
+    let mock = Mock::new(vec![
+        Mock::tool_use("call-1", "list_dir", json!({ "path": "." })),
+        Mock::text("看完了。"),
+    ]);
+    let tools = handlers::build_default();
+
+    // 从 observer 里推：正是 turn/steer 的真实时序 —— 第一次模型调用之后被接受、第二次看得见。
+    let observer: Option<crate::Observer> = {
+        let steering = steering.clone();
+        Some(Arc::new(move |event: LoopEvent| {
+            if let LoopEvent::Llm { iteration: 1, .. } = event {
+                steering.lock().expect("锁").push("顺便看下 README");
+            }
+        }))
+    };
+
+    let result = run(Turn {
+        client: &mock,
+        model: "test-model",
+        system: "你是 Joy".to_string(),
+        history: vec![],
+        user_message: "看看目录".to_string(),
+        user_images: vec![],
+        tools: &tools,
+        ctx: ctx().await,
+        max_iterations: 5,
+        max_tokens: 1024,
+        tool_result_budget: Default::default(),
+        observer,
+        on_text: None,
+        interrupt: None,
+        checkpoint: None,
+        steering: Some(steering.clone()),
+        resume: None,
+    })
+    .await
+    .expect("loop 跑完");
+
+    assert_eq!(result.tool_calls.len(), 1, "工具只该跑一次");
+    let received = mock.received.lock().expect("锁");
+    assert_eq!(received.len(), 2, "两句话 = 两次模型调用");
+    let last = received[1].messages.last().expect("第二次调用非空");
+    assert!(matches!(last.role, Role::User));
+    assert!(
+        last.content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text } if text == "顺便看下 README")),
+        "{:?}",
+        last.content
+    );
+    // 全部记录都留着 —— 转录要能看见那句补充（哪怕它是在收尾前一刻被接受的）。
+    assert_eq!(
+        steering.lock().expect("锁").all(),
+        vec!["顺便看下 README".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -183,6 +247,7 @@ async fn iteration_limit_stops_the_loop() {
         on_text: None,
         interrupt: None,
         checkpoint: None,
+        steering: None,
         resume: None,
     })
     .await
@@ -282,6 +347,7 @@ async fn streaming_emits_text_deltas_in_order() {
         on_text: Some(on_text),
         interrupt: None,
         checkpoint: None,
+        steering: None,
         resume: None,
     })
     .await
@@ -345,6 +411,7 @@ async fn streaming_works_across_tool_rounds() {
         on_text: Some(on_text),
         interrupt: None,
         checkpoint: None,
+        steering: None,
         resume: None,
     })
     .await
@@ -385,6 +452,7 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
         on_text: None,
         interrupt: Some(interrupt),
         checkpoint: None,
+        steering: None,
         resume: None,
     })
     .await
@@ -439,6 +507,7 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
         on_text: None,
         interrupt: Some(interrupt),
         checkpoint: None,
+        steering: None,
         resume: None,
     })
     .await
@@ -556,6 +625,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         on_text: None,
         interrupt: None,
         checkpoint: None,
+        steering: None,
         resume: None,
     })
     .await
@@ -633,6 +703,7 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
         on_text: None,
         interrupt: None,
         checkpoint: Some(sink),
+        steering: None,
         resume: None,
     })
     .await
@@ -699,6 +770,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
         on_text: None,
         interrupt: None,
         checkpoint: None,
+        steering: None,
         resume: Some(crate::Resume {
             messages,
             completed_iterations: 3,

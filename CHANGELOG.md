@@ -2,6 +2,121 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## Unreleased
+
+### Cleanup: three switches nobody read
+
+- `experimental` (`JOY_EXPERIMENTAL`) is gone from `Settings` / `SettingsView` / `SettingsPatch`:
+  it never had a consumer, yet the dashboard's overview showed it as "实验 · experimental".
+- The `apple_calendar` / `google_calendar` settings fields are gone too: the calendar tool has always
+  read `JOY_APPLE_CALENDAR` / `JOY_GOOGLE_CALENDAR` directly (`tools/src/calendar.rs`), so the
+  settings copies were `config/write`-able and inert. **Protocol change**: `SettingsView` /
+  `SettingsPatch` each lose three fields (TS / JSON Schema / Python SDK artifacts regenerated).
+- The dashboard's "实验" row disappears with them — all three bits it printed did nothing.
+
+### Cleanup: dashboard painters with no page
+
+- Removed `renderUsage` / `renderApprovals` / `renderSchedules`, and from `api.ts`
+  `fetchUsage` / `fetchApprovals` / `fetchSchedules` / `fetchTasks` / `fetchModelProfiles` /
+  `fetchModelRoutes` / `saveModel` / `saveModelRoutes` / `removeModel`: after the config panels left
+  the dashboard these had no callers and were dead source that esbuild tree-shook anyway. The HTTP
+  endpoints stay (the CLI and hub still use them).
+
+### Docs
+
+- `joy --help` now lists `joy bench`: it has been there all along (long-task benchmark; records
+  success and recovery rates, never blocks a release), it had just never been in the usage text.
+
+## 0.16.0 — One turn per session at a time (session gate + steering)
+
+### The session gate
+
+- `turn/start` claims the session first: if a turn is already running on that `session_id`, it returns
+  `SESSION_BUSY` (-32003) with the holder's `turnId` in the message — that one id decides whether you
+  wait or steer.
+- The claim happens **before any side effect**: a refused turn does not flip a task to `running` and
+  leaves no checkpoint behind.
+- Resume goes through the same gate: two checkpoints of one session never recover side by side; the
+  one that loses the race stays `open` for the next boot.
+- The gate has no storage of its own — it is an invariant on the `turns` table, so there is no second
+  copy of the truth to drift.
+
+### Steering
+
+- New `turn/steer { sessionId, message }`: adds a sentence to the turn that is **already running**;
+  it enters the working memory at the next iteration boundary. Tools that already ran are not
+  re-executed — that is the whole difference from cancel-and-retry.
+- All three outcomes are stated: idle session → `INVALID_PARAMS` pointing at `turn/start` (it does
+  **not** quietly start a new turn); a second addition → `queued: 2`; the sentence is always persisted.
+- `chat_log`: an addition is its own `user` row (`meta.steer`), shown where it happened;
+  `session_history` folds consecutive user rows back into one ask, so the model still sees a
+  question/answer pair.
+- New `turnSteered` notification: every other client of that turn (second device, REPL) learns about
+  the addition immediately.
+- Dashboard: pressing send while a turn runs now steers; sending with attachments says "they wait for
+  the next turn" out loud (that request has already gone out).
+
+### Queuing the next turn (follow-up)
+
+- New method `turn/follow-up { sessionId, message }`: while a turn is still running, queue a line
+  for "do this once you're done". The line between it and `steer` is **ownership**: steer belongs
+  to this turn, follow-up belongs to the next one.
+- The queue is **a table** (migration 0019 `session_queue`), not a Vec in the server: a queued
+  instruction is a promise to the person who typed it, and a restart must not quietly drop it.
+  No status column — a row exists exactly while it has not been handed to a turn
+  (claim-then-run); once it runs, chat_log is the record.
+- One at a time: the head is taken when a turn ends, so the queue never fights the session gate.
+- Called on an idle session → `INVALID_PARAMS` pointing at `turn/start` ("wait for this turn"
+  must not be reinterpreted as "start one now"); success returns `queued` (your position), and a
+  write failure says it was not queued.
+
+### Known
+
+- The gate is **per process**: two app-servers on the same home still know nothing about each other
+  (and `turn/steer` only finds turns in its own process).
+- follow-up notifications still follow "one SSE stream = one turn": a queued line only appears in
+  a stream once the next turn starts.
+
+## 0.15.0 — A session has a row of its own (session metadata)
+
+### A session is no longer just a label
+
+- Migration 0018 adds `sessions` (`id` / `title` / `cwd` / `created_at` / `last_at`); existing
+  conversations are backfilled from `chat_log`. Additive only — no existing row is touched.
+- `session/new` now really writes: an empty session shows up in the list immediately, with a
+  name and a bound working directory. A blank `title` still falls back to the first user
+  message on the read side, exactly as before 0.14.
+- New `session/get` and `session/update` (rename / rebind the directory; `null` = leave alone,
+  `""` = clear). Both are **human-only**, like `task/*`: the model may not rename its own
+  conversation or move its own workspace.
+- New `turn/list`: which turns are running, optionally for one session. Each `turns` entry
+  carries `session_id` and a start time — a table keyed only by `turn_id` cannot answer "is this
+  conversation running right now".
+- Writing a message creates the session row, so REPL / gateway / scheduled conversations are
+  listable too: there is no longer such a thing as "a conversation nobody can find".
+
+### The working directory travels with the session
+
+- `turn/start` without `cwd` uses `sessions.cwd` (precedence: this turn → the task's own
+  directory → what the session remembers). If that directory has since been deleted the turn
+  runs with **no** writable root and says so — it never quietly falls back to the process cwd.
+- The writable boundary is still that directory itself: `JOY_EXEC_WRITABLE_ROOTS` are extra
+  roots, home is not one.
+
+### Fixed
+
+- The `eval` recipe in `just check`: cases load by relative path, so `cd joy-rs` first always
+  died with `No such file or directory`.
+- The Python SDK now exports the task types 0.14 had left out, plus response pairings for the
+  three new methods.
+
+### Known
+
+- Work sessions / shared team spaces (members, roles, handover, promoting a personal session)
+  are **suspended**; the design is in `docs/planning/user-center.zh.md`. No multi-user code has
+  landed.
+- Two concurrent turns in one session still have no serialization guard (that is 0.16).
+
 ## 0.14.0 — Done means measured (the task-entity version)
 
 ### Tasks stand on their own

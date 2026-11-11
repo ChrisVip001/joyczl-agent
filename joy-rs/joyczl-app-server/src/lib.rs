@@ -80,7 +80,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
 use joyczl_config::Settings;
-use joyczl_loop::Interrupt;
+use joyczl_loop::{Interrupt, Steering};
 use joyczl_protocol::{JsonRpcMessage, ServerNotification, SettingsPatch, SettingsView};
 use joyczl_provider::Resolved;
 use joyczl_state::{Calendar, Chat, Episodes, Facts};
@@ -130,6 +130,26 @@ impl EventSink {
     }
 }
 
+/// Outcome of `turn/follow-up`: queued (with its position), nothing to wait for, or a storage
+/// failure. Three different things to tell a person; one enum instead of a bare `Result`.
+pub(crate) enum FollowUp {
+    Queued(i32),
+    Idle,
+    Failed(String),
+}
+
+/// A turn that is in flight: the cancellation token plus the two facts `turn/list` answers with.
+/// One record instead of a second side table — two maps keyed by turn_id would eventually disagree.
+pub(crate) struct ActiveTurn {
+    pub(crate) interrupt: Arc<Interrupt>,
+    pub(crate) session_id: String,
+    /// RFC 3339 with offset, captured at registration.
+    pub(crate) started_at: String,
+    /// Sentences added while this turn runs (`turn/steer`). The loop folds them in at the next
+    /// iteration boundary; the transcript reads them all afterwards.
+    pub(crate) steering: Arc<Mutex<Steering>>,
+}
+
 /// Everything the server holds.
 ///
 /// `resolved` is an `Option`: it must be able to start without a configured key. Memory and sessions
@@ -140,7 +160,9 @@ impl EventSink {
 /// microseconds of read-modify-write; there is no await inside.
 ///
 /// `turns` is the cancellation-token table of running turns: `turn/interrupt` finds one by turn_id
-/// and flips the switch. A finished turn (success or failure) is removed.
+/// and flips the switch. A finished turn (success or failure) is removed. Each entry also carries
+/// the session it belongs to, because `turn/list` is asked **by session** — a table keyed only by
+/// turn_id cannot answer "is this conversation running right now".
 ///
 /// `Clone`: every field is a handle (Arc / connection pool / config); copying one does not copy state.
 /// The full_agent node in the graph is a 'static closure and can only hold what it owns —
@@ -163,7 +185,7 @@ pub struct Server {
     pub(crate) settings: Arc<RwLock<Settings>>,
     pub(crate) resolved: Arc<RwLock<Option<Resolved>>>,
     pub(crate) tools: Arc<ToolRegistry>,
-    pub(crate) turns: Arc<Mutex<HashMap<String, Arc<Interrupt>>>>,
+    pub(crate) turns: Arc<Mutex<HashMap<String, ActiveTurn>>>,
     /// Approval requests waiting for a human: `approval/respond` finds one by turn_id + request_id
     /// and delivers the answer back. Same lifecycle discipline as `turns` (the whole bucket is dropped when a turn ends).
     pub(crate) approvals: approval::Pending,
@@ -193,6 +215,8 @@ pub struct Server {
     pub(crate) events: joyczl_state::Events,
     /// The deliverable list: files that really exist after a round.
     pub(crate) artifacts: joyczl_state::Artifacts,
+    /// Messages queued to run **after** the turn in flight (0.16 follow-up, migration 0019).
+    pub(crate) queue: joyczl_state::Queue,
     /// Turns a human just asked to suspend (`task/suspend`): at finalize time the checkpoint is
     /// kept as `suspended` instead of `abandoned` — pausing is not stopping.
     pub(crate) suspending: Arc<Mutex<HashSet<String>>>,
@@ -412,6 +436,7 @@ impl Server {
             todo,
             jobs: jobs_handle,
             goals: goal::store(),
+            queue: joyczl_state::Queue::new(pool.clone()),
             tasks: joyczl_state::Tasks::new(pool.clone()),
             runs: joyczl_state::Runs::new(pool.clone()),
             steps: joyczl_state::Steps::new(pool.clone()),
@@ -492,6 +517,19 @@ impl Server {
                 }
             }
             Err(e) => eprintln!("(joy) 活跃任务读不出来（目标不会自动恢复）：{e}"),
+        }
+
+        // A queued follow-up is a promise made before the restart: "do this when you are done".
+        // Handing it back to a turn is the difference between a queue and a note to self.
+        match self.queue.sessions_with_pending().await {
+            Ok(sessions) => {
+                for session in sessions {
+                    eprintln!("(joy) 对账：会话 {session} 还有排队消息，接着跑");
+                    let server = self.clone();
+                    tokio::spawn(async move { crate::turn::drain_queue(&server, &session).await });
+                }
+            }
+            Err(e) => eprintln!("(joy) 排队消息读不了库（不挡启动）：{e}"),
         }
     }
 
@@ -711,14 +749,87 @@ impl Server {
         self.set_resolved(Some(resolved));
     }
 
-    /// Register a running turn and hand out its cancellation token. `finish_turn` must be called when the turn ends.
-    pub(crate) fn register_turn(&self, turn_id: &str) -> Arc<Interrupt> {
+    /// Claim a session for one turn, handing out its cancellation token and steering channel.
+    ///
+    /// **One driver per session.** Two turns on one session would interleave their write
+    /// sections and each would see half the other's history — before 0.16 nothing stopped it.
+    /// `Err` carries the turn that holds the session: the only part of the answer the caller
+    /// can act on ("wait for it, or steer it").
+    pub(crate) fn begin_turn(
+        &self,
+        turn_id: &str,
+        session_id: &str,
+    ) -> Result<(Arc<Interrupt>, Arc<Mutex<Steering>>), String> {
+        let mut turns = self.turns.lock().expect("turns 锁不该中毒");
+        if let Some((holder, _)) = turns.iter().find(|(_, turn)| turn.session_id == session_id) {
+            return Err(holder.clone());
+        }
         let interrupt = Interrupt::new();
+        let steering = Steering::new();
+        turns.insert(
+            turn_id.to_string(),
+            ActiveTurn {
+                interrupt: interrupt.clone(),
+                session_id: session_id.to_string(),
+                started_at: chrono::Local::now().to_rfc3339(),
+                steering: steering.clone(),
+            },
+        );
+        Ok((interrupt, steering))
+    }
+
+    /// The steering channel of a running turn — what `turn/start` hands to the loop and what the
+    /// transcript reads afterwards (a message accepted just before the end must still be logged).
+    pub(crate) fn steering_of(&self, turn_id: &str) -> Option<Arc<Mutex<Steering>>> {
         self.turns
             .lock()
             .expect("turns 锁不该中毒")
-            .insert(turn_id.to_string(), interrupt.clone());
-        interrupt
+            .get(turn_id)
+            .map(|turn| turn.steering.clone())
+    }
+
+    /// Add one sentence to the turn running in this session.
+    ///
+    /// `Err` = nothing is running (the caller should `turn/start` instead — falling through to a
+    /// new turn silently would be a lie about what happened). `Ok` carries the turn id and how
+    /// many additions it has accepted, this one included.
+    pub(crate) fn steer(&self, session_id: &str, message: &str) -> Result<(String, i32), ()> {
+        let turns = self.turns.lock().expect("turns 锁不该中毒");
+        let Some((turn_id, turn)) = turns.iter().find(|(_, turn)| turn.session_id == session_id)
+        else {
+            return Err(());
+        };
+        let mut steering = turn.steering.lock().expect("steering 锁不该中毒");
+        steering.push(message);
+        Ok((turn_id.clone(), steering.all().len() as i32))
+    }
+
+    /// Queue a message to run **after** the turn in flight (0.16 follow-up).
+    ///
+    /// Refused when nothing is running: "when you are done" with nothing to be done is just
+    /// "now", and the caller should `turn/start` and watch its stream instead of queueing into
+    /// an idle session that would never drain.
+    pub(crate) async fn follow_up(&self, session_id: &str, message: &str) -> FollowUp {
+        if self.active_turns(Some(session_id)).is_empty() {
+            return FollowUp::Idle;
+        }
+        match self.queue.push(session_id, message).await {
+            Ok(position) => FollowUp::Queued(position as i32),
+            Err(e) => FollowUp::Failed(e.to_string()),
+        }
+    }
+
+    /// The turns running right now (optionally for one session), oldest first — a list that
+    /// reshuffles between two polls reads as "something changed" when nothing did.
+    pub(crate) fn active_turns(&self, session: Option<&str>) -> Vec<(String, String, String)> {
+        let turns = self.turns.lock().expect("turns 锁不该中毒");
+        let mut rows: Vec<(String, String, String)> = turns
+            .iter()
+            .filter(|(_, turn)| session.is_none_or(|id| turn.session_id == id))
+            .map(|(id, turn)| (id.clone(), turn.session_id.clone(), turn.started_at.clone()))
+            .collect();
+        rows.sort_by(|a, b| a.2.cmp(&b.2));
+        rows
     }
 
     /// Remove a turn. Once finished, there is nothing left to interrupt.
@@ -742,7 +853,7 @@ impl Server {
             .lock()
             .expect("turns 锁不该中毒")
             .get(turn_id)
-            .cloned();
+            .map(|turn| turn.interrupt.clone());
         let Some(interrupt) = interrupt else {
             return false;
         };
@@ -770,7 +881,7 @@ impl Server {
             .lock()
             .expect("turns 锁不该中毒")
             .get(turn_id)
-            .cloned();
+            .map(|turn| turn.interrupt.clone());
         match found {
             Some(interrupt) => {
                 interrupt.cancel();

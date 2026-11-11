@@ -72,7 +72,8 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
 ### 状态层（joyczl-state）
 
 单个 `state.db`：`facts` / `episodes`（各带 FTS5 trigram 索引与同步触发
-器）、`chat_log`（会话只是标签列）、`calendar_events`（(title, start)
+器）、`chat_log` + `sessions`（0018：会话有了自己的一行——名字与工作目录，
+正文仍在 `chat_log`）、`calendar_events`（(title, start)
 唯一索引提供 SQL 层幂等）。迁移由 `sqlx::migrate!` 编译期内嵌，二进制
 自带 schema。中文检索靠 trigram + LIKE 兜底。记忆后端契约见
 `store.rs`：`SemanticStore` / `EpisodicStore` 两个 trait +

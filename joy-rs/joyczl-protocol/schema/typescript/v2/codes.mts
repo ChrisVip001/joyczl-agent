@@ -10,4 +10,5 @@ export const CODES = {
   PROVIDER_ERROR: -32000,
   TOOL_ERROR: -32001,
   NOT_IMPLEMENTED: -32002,
+  SESSION_BUSY: -32003,
 } as const;

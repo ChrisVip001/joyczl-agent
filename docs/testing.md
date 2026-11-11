@@ -9,7 +9,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Layer | Location | Shape | Latest full run |
 |---|---|---|---|
-| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 591 passed / 0 failed |
+| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 603 passed / 0 failed |
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
 | Frontend | joy-ts (node --test + tsc) | 110 passed / 0 failed | |
@@ -17,7 +17,7 @@ passing 100% is the release gate** — one failure blocks the release.
 | End-to-end smokes | scripts/smoke*.sh | real app-server / gateways / dashboard / SDK | 4/4 pass |
 | Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 53/53 pass, gate exit 0 |
 | Long-task benchmarks | evals/long/*.jsonl | same harness, asks "did autonomous work get better" | 11/11 reached (one with the planner on), interrupt recovery 3/3; **never blocks** |
-| Judge | evals/judge/*.jsonl | real model answers, referee grades (0-10) | scores reported, not blocking |
+| Judge | evals/judge/*.jsonl | real model answers, referee grades (0-10) | 10 cases; scores reported, not blocking |
 
 ## Unit test distribution (per crate)
 
@@ -31,7 +31,7 @@ passing 100% is the release gate** — one failure blocks the release.
 | joyczl-mcp | 33 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
 | joyczl-memory | 41 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
 | joyczl-agent | 13 | the deterministic core: the three acceptance checks (exists / substring / successful-call count), tool claims versus filesystem facts (contradictions included), plan storage and its failure fallback, path containment (outside the workspace or no workspace at all = refuse) |
-| joyczl-app-server | 97 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths; and the task engine: tasks with no session, a false done needing a human, acceptance passing only on a real file, over-budget stopping before the spend, one run per attempt, restart reconciliation without replay, unique step keys across rounds, and interrupt ending the task loop immediately |
+| joyczl-app-server | 104 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths; and the task engine: tasks with no session, a false done needing a human, acceptance passing only on a real file, over-budget stopping before the spend, one run per attempt, restart reconciliation without replay, unique step keys across rounds, and interrupt ending the task loop immediately; plus the session gate: a second turn in the same session is refused with `SESSION_BUSY` before any side effect, `steer` lands at a round boundary, `follow-up` survives a restart, and an idle call says there is nothing to wait for |
 | joyczl-config | 27 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear (**no model or key fields left**); multi-profile storage, secret backends (memory/file — never the real keychain), switching and removal |
 | joyczl-cli | 7 | cron semantics, once-per-minute firing, job loading from both sources, and one firing that lands in the outbox |
 | joyczl-protocol | 7 | RPC envelope serialization (the export test runs on demand) |

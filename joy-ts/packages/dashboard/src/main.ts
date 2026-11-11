@@ -5,23 +5,33 @@
 // viewed" and "whether a turn is streaming"; a refresh returns to defaults. In other words, if the
 // browser crashes or the tab closes, nothing is lost — that's the most valuable part of this layering.
 
-import type { AgentTaskView, TurnAttachment, TurnCompletedNotification } from "./protocol";
+import type {
+  AgentTaskView,
+  TurnAttachment,
+  TurnCompletedNotification,
+  TurnView,
+} from "./protocol";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
 import {
   createFolder,
+  createSession,
   fetchDashboard,
   fetchFs,
   fetchMessages,
   fetchRecents,
+  fetchSessionMeta,
+  fetchTurns,
+  followUpTurn,
   interruptTurn,
   recordRecent,
   respondApproval,
-  setGoal,
+  steerTurn,
   summarizeInbox,
   talk,
   taskAction,
+  updateSession,
   uploadFile,
 } from "./api";
 import { renderMarkdown } from "./markdown";
@@ -62,11 +72,9 @@ const dom = {
   messages: must("messages"),
   composer: must<HTMLFormElement>("composer"),
   input: must<HTMLTextAreaElement>("input"),
-  goal: must<HTMLInputElement>("goal"),
-  goalSet: must<HTMLButtonElement>("goal-set"),
-  goalClear: must<HTMLButtonElement>("goal-clear"),
-  goalState: must<HTMLElement>("goal-state"),
   send: must<HTMLButtonElement>("send"),
+  /** 只在有轮次可跟时出现：按下 = 发送落成下一轮，而不是补充这一轮。 */
+  queueToggle: must<HTMLButtonElement>("queue-toggle"),
   refresh: must<HTMLButtonElement>("refresh"),
   older: must<HTMLButtonElement>("older"),
   overview: must("overview"),
@@ -112,6 +120,20 @@ function setWorkspace(path: string | null): void {
 }
 
 let busy = false;
+
+/**
+ * A turn running on **this session, but not on this page** — another tab, the terminal,
+ * or a follow-up queued by an earlier turn. `busy` cannot see it: no stream lives here.
+ * So the page asks `turn/list`, on open and on every pulse. Its value is that turn's
+ * `startedAt`, which lets the statusline say "running for 3 minutes" instead of "running".
+ *
+ * Sending while this is set still means **steer**: there is a turn to attach to, and
+ * asking for a second one would be refused (`SESSION_BUSY`).
+ */
+let otherTurn: string | null = null;
+
+/** 这一句是「跑完再说」：有轮次在跑时，发送落成**下一轮**而不是补充当前这轮。 */
+let queuedMode = false;
 
 /**
  * Staging area ("reference first"): files wait here, uploaded on send with absolute paths
@@ -179,7 +201,7 @@ function renderStaged(): void {
   dom.staged.replaceChildren(...nodes);
 }
 
-/** One panel remains: the goal's progress. Config surfaces belong to the CLI, not the chat. */
+/** One panel remains: what is being worked on and what is remembered. Config lives in the CLI. */
 const TAB_IDS = ["overview"] as const;
 type TabId = (typeof TAB_IDS)[number];
 
@@ -301,7 +323,7 @@ async function boot(): Promise<void> {
     });
   }
 
-  // The only drawer: goal progress. Same button closes it.
+  // The only drawer: the overview. Same button closes it.
   dom.progress.addEventListener("click", () => {
     if (dom.drawer.hidden) switchTab("overview");
     else closeDrawer();
@@ -326,10 +348,18 @@ async function boot(): Promise<void> {
     dom.input.style.height = `${Math.min(dom.input.scrollHeight, 180)}px`;
   });
 
+  // 「跑完再说」：不是另一个输入框，而是这一个发送按钮的另一种意思。
+  dom.queueToggle.addEventListener("click", () => {
+    queuedMode = !queuedMode;
+    paintComposerMode();
+    dom.input.focus();
+  });
+
   setInterval(() => {
     // Don't refresh while streaming: panel numbers would jump, but the bubble's words matter more.
     if (!busy) {
       void refresh();
+      void syncTurns();
     }
   }, POLL_MS);
 
@@ -363,32 +393,6 @@ async function boot(): Promise<void> {
   await open(current);
   // A bookmarked `#overview` opens the progress drawer; without a hash it stays shut.
   openHashPanel();
-  // Goal bar: set/clear both go through the same place (`goal/set`) — same as `/goal` in the terminal.
-  const applyGoal = (condition: string | null) => {
-    void setGoal({ sessionId: current, condition })
-      .then((response) => {
-        dom.goalState.textContent = response.active
-          ? `进行中（最多 ${response.maxRounds} 轮）`
-          : "没有目标";
-        if (!response.active) dom.goal.value = "";
-      })
-      .catch((error: unknown) => {
-        dom.goalState.textContent = `没设上：${String(error)}`;
-      });
-  };
-  dom.goalSet.addEventListener("click", () => {
-    const condition = dom.goal.value.trim();
-    if (condition !== "") applyGoal(condition);
-  });
-  dom.goalClear.addEventListener("click", () => applyGoal(null));
-  dom.goal.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const condition = dom.goal.value.trim();
-      if (condition !== "") applyGoal(condition);
-    }
-  });
-
   // Working directory: a folder chip. Clicking opens the server-side folder browser —
   // no path is ever typed by hand, and the choice survives a reload.
   setWorkspace(workspace);
@@ -576,6 +580,11 @@ async function cwdPicker(): Promise<void> {
     const pick = el("button", { class: "approve", text: "选这个目录", type: "button" });
     pick.addEventListener("click", () => {
       setWorkspace(listing.path);
+      // Onto the session as well: the folder belongs to this conversation, so it must survive
+      // a reload or another device opening the same conversation.
+      void updateSession({ sessionId: current, cwd: listing.path }).catch((error: unknown) => {
+        console.warn("工作目录没记到会话上（这一轮仍然用它）", error);
+      });
       // Recorded into "Recents" — right at the top next time the overlay opens.
       void recordRecent(listing.path).then(() => {
         recents = [listing.path, ...recents.filter((p) => p !== listing.path)].slice(0, 8);
@@ -606,7 +615,22 @@ async function cwdPicker(): Promise<void> {
 
 async function submit(): Promise<void> {
   const text = dom.input.value.trim();
-  if ((text === "" && staged.length === 0) || busy) return;
+  if (text === "" && staged.length === 0) return;
+
+  // While a turn is running, "send" means **steer** (0.16): the sentence joins the round in
+  // flight instead of starting a second one (which the server refuses with SESSION_BUSY).
+  // Attachments cannot ride it — that request was already built — so they wait, out loud.
+  if (busy || otherTurn !== null) {
+    if (staged.length > 0) {
+      showStatus("thinking", "这一轮还在跑 —— 附件留到下一轮");
+      return;
+    }
+    if (text === "") return;
+    // Two intents, one button: "and also, while you are at it" versus "when you are done".
+    if (queuedMode) await followUp(text);
+    else await steer(text);
+    return;
+  }
 
   // Upload attachments first. Images ride as real attachments (the turn embeds the bytes —
   // the model sees pixels); other files keep the "path in text" route (the model opens them
@@ -648,6 +672,62 @@ async function submit(): Promise<void> {
   staged.length = 0;
   renderStaged();
   await send(full, attachments, snapshot);
+}
+
+/**
+ * Add a sentence to the turn that is already running (0.16).
+ *
+ * The bubble is painted right away because the message **is** accepted — it lands in the
+ * transcript either way. Whether the model saw it before the turn ended is not something this
+ * page can promise, so it does not claim it: "下一轮次生效" is the honest wording.
+ */
+async function steer(text: string): Promise<void> {
+  dom.input.value = "";
+  dom.input.style.height = "auto";
+  dom.messages.append(el("div", { class: "msg me" }, el("div", { class: "bubble", text })));
+  scrollToEnd(true);
+
+  try {
+    const { queued } = await steerTurn({ sessionId: current, message: text });
+    // `queued` counts everything this turn accepted: 1 = it will be seen on the next model
+    // call, more = it queues behind the earlier ones.
+    showStatus("thinking", queued > 1 ? `已补充（本轮第 ${queued} 句，排队）` : "已补充，下一轮次生效");
+  } catch (error: unknown) {
+    dom.messages.append(failureOf(error));
+    scrollToEnd(true);
+  }
+}
+
+/**
+ * Queue this sentence to run **after** the turn in flight (0.16).
+ *
+ * The person's wording is what makes this method exist: `steer` means "and also, while you are
+ * at it", this means "when you are done". So it becomes its own turn with its own rounds and
+ * budget, and it runs even if this page closes — the queue outlives the browser.
+ *
+ * The bubble is painted now because the sentence **is** accepted now; the statusline carries
+ * the part that differs: it runs later, behind whatever is already waiting.
+ */
+async function followUp(text: string): Promise<void> {
+  dom.input.value = "";
+  dom.input.style.height = "auto";
+  dom.messages.append(el("div", { class: "msg me" }, el("div", { class: "bubble", text })));
+  scrollToEnd(true);
+
+  try {
+    // `queued` is everything waiting in this session, this sentence included.
+    const { queued } = await followUpTurn({ sessionId: current, message: text });
+    showStatus(
+      "thinking",
+      queued > 1 ? `已排队 —— 前面还有 ${queued - 1} 条` : "已排队 —— 这一轮跑完就轮到它",
+    );
+  } catch (error: unknown) {
+    // The usual cause is the turn ending between the click and the request; the probe below
+    // brings `otherTurn` back in line so the next send is not addressed to a finished turn.
+    dom.messages.append(failureOf(error));
+    scrollToEnd(true);
+    void syncTurns();
+  }
 }
 
 /** Say one thing, painting the course of this turn. */
@@ -783,7 +863,6 @@ async function send(
           timeline.goal(
             `目标 · 第 ${notification.round}/${notification.maxRounds} 轮 · ${notification.status} — ${notification.reason}`,
           );
-          dom.goalState.textContent = `${notification.status}（第 ${notification.round}/${notification.maxRounds} 轮）`;
           break;
 
         case "retry":
@@ -897,24 +976,33 @@ function paintReply(bubble: HTMLElement, markdown: string): void {
 /**
  * Start a new line. A session is only a label on chat_log — there is nothing to create on the
  * server; the first turn writes it into existence. So "new" means: pick an unused id, clear
- * every piece of the previous session's state (draft, attachments, goal, status line) and
+ * every piece of the previous session's state (draft, attachments, status line) and
  * paint the empty welcome screen. The old session stays in the list, one click away.
  */
 async function newSession(): Promise<void> {
   if (busy) return;
-  const id = `s-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 4)}`;
+  // The server allocates the id (0.15): two tabs generating ids here is how conversations end
+  // up sharing a row. A failure falls back to a local id rather than blocking the composer —
+  // the first message creates the row anyway, the only cost is that it has no name yet.
+  const id = await createSession({ cwd: workspace }).then(
+    (response) => response.sessionId,
+    (error: unknown) => {
+      console.warn("会话没建到服务端（首条消息会补上）", error);
+      return `s-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 4)}`;
+    },
+  );
   current = id;
   olderCursor = null;
   activeTurnId = null;
   dom.session.textContent = id;
-  dom.goal.value = "";
-  dom.goalState.textContent = "没有目标";
   dom.input.value = "";
   dom.input.style.height = "auto";
   staged.length = 0;
   renderStaged();
   dom.messages.replaceChildren(welcome());
   dom.older.hidden = true;
+  queuedMode = false;
+  setOtherTurn(null);
   hideStatus();
   // Refresh paints the session list with a "新会话" placeholder for this id (see render.ts).
   await refresh();
@@ -926,8 +1014,22 @@ async function open(sessionId: string): Promise<void> {
   if (busy) return;
 
   current = sessionId;
+  queuedMode = false; // a new conversation: the previous one's 「跑完再说」 is not its own
   dom.session.textContent = sessionId;
   dom.older.hidden = true;
+
+  // The working directory travels with the session (0.15), not with the browser: switching
+  // conversations must switch the folder too, or the next write lands in the previous project.
+  // `null` on the server means this conversation never chose one — clearing the picker is the
+  // honest rendering, not "keep whatever the last session had".
+  void fetchSessionMeta(sessionId)
+    .then((meta) => {
+      if (current !== sessionId) return; // switched again while this was in flight
+      setWorkspace(meta.session.cwd ?? null);
+    })
+    .catch((error: unknown) => {
+      console.warn("会话的元数据没读到（工作目录沿用当前）", error);
+    });
 
   try {
     await loadHistory(sessionId, null);
@@ -936,6 +1038,9 @@ async function open(sessionId: string): Promise<void> {
     return;
   }
   scrollToEnd();
+  // A turn may already be running here (another device, a queued follow-up): the reloaded
+  // page has no way to know from its own state, so it asks.
+  void syncTurns();
 
   // The task card belongs to the session too, not to the history page: without this, a switch
   // keeps showing the previous session's card until the next 15s poll — and "the task that
@@ -985,12 +1090,84 @@ async function older(): Promise<void> {
   }
 }
 
+/**
+ * Ask `turn/list`: is anything running on this session right now?
+ *
+ * Skipped while this page streams its own turn — `busy` already answers, and a probe would
+ * race with that turn's start and end. A failed probe keeps the previous answer: app-server
+ * may be restarting, and flickering between "running" and "nothing" is worse than going
+ * quiet for one poll.
+ */
+async function syncTurns(): Promise<void> {
+  if (busy) return;
+  const sessionId = current;
+  try {
+    const { turns } = await fetchTurns(sessionId);
+    if (current !== sessionId) return; // switched while the probe was in flight
+    setOtherTurn(turns[0] ?? null);
+  } catch {
+    // Next poll answers; silence beats a wrong claim about someone else's turn.
+  }
+}
+
+/**
+ * Record that a turn runs elsewhere, and say so on the statusline — the one place this page
+ * already talks about the current turn. Re-asserted on every poll so the elapsed time stays
+ * current (and so a steer confirmation, which paints the same line, cannot outlive it).
+ *
+ * Stopping it from here is legitimate too: `turn/interrupt` works by id alone, so the stop
+ * button gets that id — "it is stuck over there" is still the human's problem to solve.
+ */
+function setOtherTurn(turn: TurnView | null): void {
+  const wasRunning = otherTurn !== null;
+  otherTurn = turn?.startedAt ?? null;
+  dom.composer.classList.toggle("elsewhere", turn !== null);
+  paintComposerMode();
+
+  if (turn === null) {
+    if (wasRunning && !busy) hideStatus();
+    return;
+  }
+  if (busy) return;
+  const since = Date.parse(turn.startedAt);
+  showStatus(
+    "working",
+    Number.isNaN(since)
+      ? "这一轮在别处跑 —— 可以补充它，也可以跑完再说"
+      : `这一轮在别处跑了 ${elapsedSince(since)} —— 可以补充它，也可以跑完再说`,
+  );
+  activeTurnId = turn.turnId;
+  addStopButton();
+}
+
+/**
+ * Say what pressing send will actually do right now.
+ *
+ * One button, three meanings — a fresh turn (idle), adding to the turn in flight (steer), or
+ * queueing behind it (follow-up) — so the label changes with the moment instead of leaving the
+ * person to guess. The toggle itself only exists while there is a turn to follow.
+ */
+function paintComposerMode(): void {
+  const inFlight = busy || otherTurn !== null;
+  const queuedNow = inFlight && queuedMode;
+  dom.queueToggle.hidden = !inFlight;
+  dom.queueToggle.classList.toggle("on", queuedNow);
+  dom.queueToggle.setAttribute("aria-pressed", String(queuedNow));
+  dom.send.textContent = !inFlight ? "发送" : queuedNow ? "排队" : "补充";
+}
+
 function setBusy(value: boolean): void {
   busy = value;
+  // A turn of our own is the answer now: whatever ran elsewhere is superseded by this stream.
+  if (value) {
+    queuedMode = false; // a mode chosen for the last turn does not carry into this one
+    setOtherTurn(null);
+  }
   dom.send.disabled = value;
   // Switching sessions mid-stream would pour that turn's bytes into another session.
   dom.newSession.disabled = value;
   dom.composer.classList.toggle("busy", value);
+  paintComposerMode();
 }
 
 /**

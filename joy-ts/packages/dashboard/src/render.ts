@@ -6,7 +6,6 @@
 import { renderMarkdown } from "./markdown";
 import type {
   AgentTaskView,
-  ApprovalLogEntry,
   ArtifactView,
   AcceptanceView,
   BudgetView,
@@ -16,15 +15,12 @@ import type {
   Fact,
   GoalSetResponse,
   Message,
-  ScheduleStateRow,
   TodoListView,
   SessionSummary,
   TokenUsage,
   ToolStartedNotification,
   TurnCompletedNotification,
   TurnMeta,
-  UsageSummaryResponse,
-  UsageByModel,
 } from "./protocol";
 
 type Attrs = Record<string, string | number | boolean | undefined | (() => void)>;
@@ -106,17 +102,6 @@ export function renderOverview(
         ...row("提炼频率", `每 ${config.consolidateEvery} 轮`),
         ...row("检索条数", String(config.retrievalTopK)),
         ...row("最多迭代", String(config.maxIterations)),
-        ...row(
-          "实验",
-          [
-            config.experimental ? "experimental" : null,
-            config.graphWorkflows ? "graph" : null,
-            config.appleCalendar ? "apple" : null,
-            config.googleCalendar ? "google" : null,
-          ]
-            .filter((flag) => flag !== null)
-            .join(" · ") || "关",
-        ),
       ),
     ),
   );
@@ -846,152 +831,6 @@ function formatUsage(usage: TokenUsage): string {
 
 function clock(at: Date): string {
   return at.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-}
-
-// --- New panels (usage / approvals / schedules) and tool cards ---------------------------------
-
-/** Usage panel: totals + per-model aggregation. Bookkeeping only — a ledger, not a quota. */
-export function renderUsage(data: UsageSummaryResponse): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-  // In generated types i64 is bigint — the display layer always falls back to number via Number().
-  fragment.append(
-    numbers([
-      ["轮次", Number(data.turns)],
-      ["输入 token", Number(data.inputTokens)],
-      ["输出 token", Number(data.outputTokens)],
-    ]),
-  );
-
-  fragment.append(
-    section(
-      "按模型",
-      data.byModel.length === 0
-        ? muted("还没有用量。聊一轮就有了。")
-        : el(
-            "ul",
-            { class: "list" },
-            // Denominator for relative bar widths: the largest input across all models.
-            ...data.byModel.map((row) => usageRow(row, maxInput(data.byModel))),
-          ),
-    ),
-  );
-  return fragment;
-}
-
-/** Denominator for relative bar widths: the largest input across models (at least 1, no div0). */
-function maxInput(rows: UsageByModel[]): number {
-  return Math.max(...rows.map((row) => Number(row.inputTokens)), 1);
-}
-
-function usageRow(row: UsageByModel, maxInput: number): HTMLElement {
-  // Bar length follows "that model's input vs the largest" — no total scale, only relative size,
-  // which is what the eye wants: who's eating tokens is visible at a glance.
-  return el(
-    "li",
-    { class: "item" },
-    el(
-      "div",
-      { class: "title" },
-      el("span", { class: "subject", text: `${row.provider}/${row.model}` }),
-      el("span", { class: "tag", text: `${Number(row.turns)} 轮` }),
-    ),
-    el(
-      "div",
-      { class: "meter", role: "img", "aria-label": `${row.inputTokens} 输入 token` },
-      el("div", {
-        class: "meter-fill",
-        style: `width:${Math.min(100, Math.round((Number(row.inputTokens) / maxInput) * 100))}%`,
-      }),
-    ),
-    el("div", {
-      class: "sub",
-      text: `输入 ${Number(row.inputTokens).toLocaleString()} · 输出 ${Number(row.outputTokens).toLocaleString()}`,
-    }),
-  );
-}
-
-const OUTCOME_LABEL: Record<string, string> = {
-  approved: "已允许",
-  denied: "已拒绝",
-  timeout: "没人答",
-  voided: "已作废",
-};
-
-const OUTCOME_KIND: Record<string, string> = {
-  approved: "good",
-  denied: "bad",
-  timeout: "",
-  voided: "",
-};
-
-/** Approval log panel: who asked, what happened. For a hub admin answering "who approved rm -rf". */
-export function renderApprovals(entries: ApprovalLogEntry[]): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-  fragment.append(
-    section(
-      "最近 100 条",
-      entries.length === 0
-        ? muted("还没有「问了才跑」的记录。开启审批后，每次询问都会留一行。")
-        : el("ul", { class: "list" }, ...entries.map(approvalRow)),
-    ),
-  );
-  return fragment;
-}
-
-function approvalRow(entry: ApprovalLogEntry): HTMLElement {
-  const kind = OUTCOME_KIND[entry.outcome] ?? "";
-  return el(
-    "li",
-    { class: "item" },
-    el(
-      "div",
-      { class: "title" },
-      el("span", { class: "subject", text: entry.tool }),
-      el("span", { class: `tag ${kind}`, text: OUTCOME_LABEL[entry.outcome] ?? entry.outcome }),
-    ),
-    el("code", { class: "cmd", text: entry.argsPreview }),
-    el("div", { class: "sub", text: `${formatWhen(entry.decidedAt)} · ${entry.reason || "—"}` }),
-  );
-}
-
-/** Schedules panel: each job's policy, last trigger, and any interrupted unsettled claim. */
-export function renderSchedules(jobs: ScheduleStateRow[]): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-  fragment.append(
-    section(
-      "登记的任务",
-      jobs.length === 0
-        ? muted("没有定时任务。给 SKILL.md 加 schedule: 或在 schedules.json 里写 jobs。")
-        : el("ul", { class: "list" }, ...jobs.map(scheduleRow)),
-    ),
-  );
-  return fragment;
-}
-
-function scheduleRow(job: ScheduleStateRow): HTMLElement {
-  const children: (Node | string)[] = [
-    el(
-      "div",
-      { class: "title" },
-      el("span", { class: "subject", text: job.name }),
-      el("span", { class: "tag", text: job.delivery }),
-      el("span", { class: "tag", text: job.catchUp ? "补跑" : "放弃" }),
-    ),
-    el("div", {
-      class: "sub",
-      text: `上次触发：${job.lastFiredMinute ?? "还没跑过"}`,
-    }),
-  ];
-  // An unsettled claim = the last run was interrupted — the line this panel must highlight.
-  if (job.claimedMinute !== null && job.claimedMinute !== undefined) {
-    children.push(
-      el("div", {
-        class: "warn",
-        text: `中断于 ${job.claimedMinute}，等调度器按「${job.catchUp ? "补跑" : "放弃"}」接管`,
-      }),
-    );
-  }
-  return el("li", { class: "item" }, ...children);
 }
 
 // --- Tool card registry ----------------------

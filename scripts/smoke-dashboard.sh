@@ -31,8 +31,9 @@ fail() { echo "✗ $1" >&2; exit 1; }
 [[ -f "$ASSETS/index.html" ]] || fail "前端还没构建，先跑：just dashboard-build"
 
 # Fake SSE endpoint: completes the "SSE → full reply" chain without a real key.
-# It exits after serving one streaming reply, so only one question is asked below.
-python3 "$REPO/scripts/fake_sse_server.py" >"$WORK/fake_port" &
+# It serves this many streaming replies, then exits — two questions are asked below (the
+# first screen's turn, and one in a freshly created session).
+python3 "$REPO/scripts/fake_sse_server.py" 2 >"$WORK/fake_port" &
 FAKE_PID=$!
 for _ in $(seq 1 50); do
   [[ -s "$WORK/fake_port" ]] && break
@@ -94,6 +95,10 @@ curl -sS -o "$WORK/main.js" -w '%{http_code}' "$BASE/main.js" | grep -q '^200$' 
 grep -q '"/api/data"' "$WORK/main.js" || fail "main.js 里没有 /api/data"
 # This one matches by path only: a template string with interpolation — backticks after bundling.
 grep -q '/api/session' "$WORK/main.js" || fail "main.js 里没有 /api/session"
+grep -q '"/api/session/new"' "$WORK/main.js" || fail "main.js 里没有 /api/session/new"
+grep -q '/api/session/meta' "$WORK/main.js" || fail "main.js 里没有 /api/session/meta"
+grep -q '/api/turn/steer' "$WORK/main.js" || fail "main.js 里没有 /api/turn/steer"
+grep -q '/api/turn/follow-up' "$WORK/main.js" || fail "main.js 里没有 /api/turn/follow-up"
 grep -q '"/api/turn"' "$WORK/main.js" || fail "main.js 里没有 /api/turn"
 
 # Every id the JS grabs must exist in the page — one missing means a blank screen. That error only
@@ -140,6 +145,53 @@ echo "  ✓ turn/start → SSE 帧（浏览器解析的就是这几行）"
 curl -sS "$BASE/api/data" >"$WORK/data2.json"
 grep -q '"sessions":\[\]' "$WORK/data2.json" && fail "说完一句，会话列表还是空的"
 echo "  ✓ 说过的那一句出现在首屏里"
+
+# ---- 0.15: a session is a row — named, with its own working directory ---------------------
+# Before 0018 "new session" created nothing: an empty conversation could not be listed, named,
+# or bound to a folder. These four assertions are exactly that sentence.
+CREATE_JSON="$(curl -sS -X POST "$BASE/api/session/new" -H 'content-type: application/json' \
+  -d "{\"title\":\"发版检查\",\"cwd\":\"$WORK\"}")" || fail "session/new 没通"
+SID="$(sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p' <<<"$CREATE_JSON" | head -n1)"
+[[ -n "$SID" ]] || fail "session/new 没给出会话 id：$CREATE_JSON"
+
+curl -sS "$BASE/api/data" >"$WORK/data-meta.json"
+python3 - "$WORK/data-meta.json" "$SID" "$WORK" <<'PY' || fail "空会话没有带着名字和目录出现在列表里"
+import json, sys
+data = json.load(open(sys.argv[1]))
+row = next((s for s in data["sessions"] if s["id"] == sys.argv[2]), None)
+assert row is not None, "一句话没说，但它必须已经存在"
+assert row["title"] == "发版检查", row
+assert row["cwd"] == sys.argv[3], row
+assert row["messages"] == 0, row
+PY
+
+# Rename, then clear: "" means "no name", and the read side falls back to the first message.
+curl -sS -X POST "$BASE/api/session/update" -H 'content-type: application/json' \
+  -d "{\"sessionId\":\"$SID\",\"title\":\"改名了\"}" | grep -q '"title":"改名了"' \
+  || fail "改名没生效"
+curl -sS -X POST "$BASE/api/session/update" -H 'content-type: application/json' \
+  -d "{\"sessionId\":\"$SID\",\"title\":\"\"}" | grep -q '"title":"(空会话)"' \
+  || fail "清空标题后该回退「(空会话)」"
+curl -sS "$BASE/api/session/meta?sessionId=$SID" | grep -q "\"cwd\":\"$WORK\"" \
+  || fail "改名把工作目录弄丢了"
+
+# A turn in that session needs no `cwd`: the session already knows it. The reply lands there,
+# and with the title cleared the list falls back to this first message — both in one shot.
+curl -sS -N -X POST "$BASE/api/turn" -H 'content-type: application/json' \
+  -d "{\"sessionId\":\"$SID\",\"message\":\"你好\",\"stream\":false}" --max-time 20 \
+  >"$WORK/turn2.sse" || fail "没有 cwd 的一轮没跑通（会话目录该兜底）"
+grep -q '"type":"turnCompleted"' "$WORK/turn2.sse" || fail "第二轮没有结束 —— 前端会一直等"
+
+curl -sS "$BASE/api/data" >"$WORK/data-meta2.json"
+python3 - "$WORK/data-meta2.json" "$SID" <<'PY' || fail "清空标题的会话没有回退到首条用户消息"
+import json, sys
+data = json.load(open(sys.argv[1]))
+row = next((s for s in data["sessions"] if s["id"] == sys.argv[2]), None)
+assert row is not None, row
+assert row["title"] == "你好", row
+assert row["messages"] == 2, row
+PY
+echo "  ✓ 会话元数据：空会话可命名/可挂目录 → 改名 → 清空回退 → 一轮不带 cwd 也落在自己的目录"
 
 # ---- Spoken messages must read back ------------------------------------------------------
 # That's why `/api/session` exists: after a refresh the conversation is still there, and after
@@ -221,5 +273,29 @@ echo "  ✓ 连接器：草稿模式 + 白名单 2 个，窗口如实显示"
 curl -sS "$BASE/api/session?sessionId=nobody" | grep -q '"data":\[\]' \
   || fail "空会话不该看见别人的话"
 echo "  ✓ 会话之间不串"
+
+# ---- Nothing is running now ---------------------------------------------------------------
+# turn/list answers "what is happening" from the live turn table; idle must be an empty array,
+# not an error and not a guess. (The non-empty side is covered in app-server's own tests.)
+curl -sS "$BASE/api/turns" | grep -q '"turns":\[\]' || fail "空闲时 turn/list 该是空数组"
+curl -sS "$BASE/api/turns?sessionId=default" | grep -q '"turns":\[\]' \
+  || fail "按会话过滤不该出错"
+echo "  ✓ turn/list：空闲时是空数组"
+
+# ---- 0.16: steering needs a turn that is actually running --------------------------------
+# With nothing in flight this must fail **and say why** — silently starting a new turn would
+# turn "add to what you're doing" into "start something else" without telling anyone.
+STEER_ERR="$(curl -sS -X POST "$BASE/api/turn/steer" -H 'content-type: application/json' \
+  -d '{"sessionId":"default","message":"顺便看下 README"}')"
+grep -q '没有在跑的回合' <<<"$STEER_ERR" || fail "空闲时 turn/steer 该明说没有在跑的回合：$STEER_ERR"
+echo "  ✓ turn/steer：没有在跑的回合就说没有，不静默开新一轮"
+
+# 「跑完再说」也需要一个能等的回合：空闲时排队等于把一句话挂在已经结束的轮次后面，
+# 那比拒绝更糟 —— 人会以为它终究会跑。
+FOLLOW_ERR="$(curl -sS -X POST "$BASE/api/turn/follow-up" -H 'content-type: application/json' \
+  -d '{"sessionId":"default","message":"把 CHANGELOG 补上"}')"
+grep -q '没有在跑的回合' <<<"$FOLLOW_ERR" \
+  || fail "空闲时 turn/follow-up 该明说没有在跑的回合：$FOLLOW_ERR"
+echo "  ✓ turn/follow-up：没有在跑的回合就不假装排上队"
 
 echo "✓ 驾驶舱冒烟测试通过"

@@ -3,10 +3,15 @@
 export type SessionSummary = {
   id: string;
   /**
-   * Session title = the first 60 characters of the first user message.
+   * The name a human gave it (migration 0018); when there is none, the first user message.
    */
   title: string;
   messages: number;
   startedAt: string | null;
   lastAt: string | null;
+  /**
+   * The session's working directory: the **root of everything it may write** (tools refuse
+   * writes outside it). Absent = not chosen; the dashboard shows "选择工作目录".
+   */
+  cwd?: string;
 };

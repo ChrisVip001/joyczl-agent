@@ -575,6 +575,12 @@ async fn chat_turn(
                     resumed.from_iterations
                 );
             }
+            // Another window (or the dashboard) added a sentence to this turn. The terminal
+            // cannot type mid-turn itself, but it must not look like the reply ignored it.
+            ServerNotification::TurnSteered(steered) => {
+                end_streamed_line(&mut streamed);
+                println!("…补了一句（下一轮次生效）：{}", steered.message);
+            }
             ServerNotification::TurnSuspended(suspended) => {
                 end_streamed_line(&mut streamed);
                 println!("…这个回合已暂停（{}），不会自动续跑", suspended.reason);

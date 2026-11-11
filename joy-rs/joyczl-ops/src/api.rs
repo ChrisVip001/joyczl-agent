@@ -21,10 +21,12 @@ use joyczl_protocol::{
     MemoryListEpisodesResponse, MemoryListResponse, MessageRole, ModelProfilesResponse,
     ModelRemoveParams, ModelRemoveResponse, ModelRoutesResponse, ModelRoutesSaveParams,
     ModelSaveParams, ModelSaveResponse, RunResponse, ScheduleListResponse, ServerNotification,
-    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, TaskActionParams,
-    TaskArtifactsResponse, TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse,
-    TodoListView, TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
-    UsageSummaryResponse,
+    SessionGetParams, SessionGetResponse, SessionListResponse, SessionMessagesParams,
+    SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionUpdateParams,
+    SessionUpdateResponse, TaskActionParams, TaskArtifactsResponse, TaskCreateParams, TaskEnvelope,
+    TaskListResponse, TaskViewResponse, TodoListView, TurnFollowUpParams, TurnFollowUpResponse,
+    TurnInterruptParams, TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams,
+    TurnStartResponse, TurnSteerParams, TurnSteerResponse, UsageSummaryResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -282,6 +284,114 @@ pub async fn session(
     {
         Ok(page) => Json(page).into_response(),
         Err(error) => failed(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+/// `GET /api/session/meta?sessionId=` — one session's record (name, working directory, count).
+///
+/// Separate from `/api/session` on purpose: that one pages *messages*, and answering "which
+/// folder does this conversation write into" must not drag a conversation out of the database.
+pub async fn session_meta(
+    Extension(app): Extension<Arc<AppServer>>,
+    Query(params): Query<SessionGetParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("SessionGetParams 一定能序列化");
+    match app
+        .request::<SessionGetResponse>(methods::SESSION_GET, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `POST /api/session/new` — create a session that exists before its first message (0.15).
+///
+/// The id is allocated by app-server, not by the browser: two tabs (or two devices) generating
+/// ids locally is how conversations end up sharing a row. A name and a working directory can be
+/// given at creation, so an empty session is already meaningful in the list.
+pub async fn session_new(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<SessionNewParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("SessionNewParams 一定能序列化");
+    match app
+        .request::<SessionNewResponse>(methods::SESSION_NEW, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `POST /api/session/update` — rename, or rebind the working directory ("" clears).
+pub async fn session_update(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<SessionUpdateParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("SessionUpdateParams 一定能序列化");
+    match app
+        .request::<SessionUpdateResponse>(methods::SESSION_UPDATE, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `GET /api/turns?sessionId=…` — which turns are running right now.
+///
+/// The page cannot answer this from `busy` alone: another device may be the one running the
+/// turn, and after a reload the tab has no memory of it. Absent `sessionId` = the whole home.
+pub async fn turns(
+    Extension(app): Extension<Arc<AppServer>>,
+    Query(params): Query<TurnListParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("TurnListParams 一定能序列化");
+    match app
+        .request::<TurnListResponse>(methods::TURN_LIST, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+/// `POST /api/turn/steer` — add a sentence to the turn already running in this conversation.
+///
+/// Not a second `turn/start`: that one is refused while a turn runs, and cancelling first would
+/// throw away tool work that already happened. The addition is accepted now and folded in at the
+/// loop's next iteration boundary.
+pub async fn steer(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<TurnSteerParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("TurnSteerParams 一定能序列化");
+    match app
+        .request::<TurnSteerResponse>(methods::TURN_STEER, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `POST /api/turn/follow-up` — queue a message for **after** the turn in flight.
+///
+/// The difference from `steer` is what the person meant: steer is "and also, while you are at
+/// it"; this is "when you are done". It becomes its own turn, so it keeps its own rounds and
+/// budget, and it runs even if this page is closed.
+pub async fn follow_up(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<TurnFollowUpParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("TurnFollowUpParams 一定能序列化");
+    match app
+        .request::<TurnFollowUpResponse>(methods::TURN_FOLLOW_UP, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
     }
 }
 
@@ -1236,6 +1346,7 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
         N::TurnCompleted(n) => Some(&n.turn_id),
         N::TurnCheckpointed(n) => Some(&n.turn_id),
         N::TurnResumed(n) => Some(&n.turn_id),
+        N::TurnSteered(n) => Some(&n.turn_id),
         N::TurnSuspended(n) => Some(&n.turn_id),
         N::TaskUpdated(_)
         | N::InboxReceived(_)

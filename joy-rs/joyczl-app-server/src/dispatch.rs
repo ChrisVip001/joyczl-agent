@@ -12,11 +12,13 @@ use joyczl_protocol::{
     MemoryListEpisodesResponse, MemoryListParams, MemoryListResponse, MemoryRememberParams,
     MemoryRememberResponse, MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo,
     ModelListParams, ModelListResponse, ModelProfilesParams, ModelRemoveParams,
-    ModelRoutesSaveParams, ModelSaveParams, RequestId, ScheduleListParams, SessionListParams,
-    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
-    SessionNewResponse, SessionViewParams, TaskActionParams, TaskCreateParams, TaskGetParams,
-    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, UsageSummaryParams,
-    JSONRPC_VERSION,
+    ModelRoutesSaveParams, ModelSaveParams, RequestId, ScheduleListParams, ServerNotification,
+    SessionGetParams, SessionGetResponse, SessionListParams, SessionListResponse,
+    SessionMessagesParams, SessionMessagesResponse, SessionNewParams, SessionNewResponse,
+    SessionUpdateParams, SessionUpdateResponse, SessionViewParams, TaskActionParams,
+    TaskCreateParams, TaskGetParams, TurnFollowUpParams, TurnFollowUpResponse, TurnInterruptParams,
+    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams, TurnSteerParams,
+    TurnSteerResponse, TurnSteeredNotification, TurnView, UsageSummaryParams, JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -158,13 +160,66 @@ async fn dispatch(
 
         methods::SESSION_NEW => {
             let p: SessionNewParams = parse(params, method)?;
-            // A session is just a label on chat_log, so "new" creates nothing,
-            // it only issues a new label. It truly exists once the first message is written into it.
+            // Since 0018 a session is a real row: "new" writes it, so an empty conversation is
+            // listable and can carry a name + a working directory before the first message.
             let session_id = p
                 .session_id
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(new_session_id);
+            let cwd = checked_cwd(p.cwd.as_deref())?;
+            server
+                .chat
+                .create_session(&session_id, p.title.as_deref(), cwd.as_deref())
+                .await
+                .map_err(internal)?;
             respond(SessionNewResponse { session_id })
+        }
+
+        methods::SESSION_GET => {
+            let p: SessionGetParams = parse(params, method)?;
+            let row = server.chat.session(&p.session_id).await.map_err(internal)?;
+            match row {
+                Some(row) => respond(SessionGetResponse {
+                    session: to_session(row),
+                }),
+                None => Err(no_such_session(&p.session_id)),
+            }
+        }
+
+        methods::SESSION_UPDATE => {
+            let p: SessionUpdateParams = parse(params, method)?;
+            // Three intents, three values: absent = leave alone, `""` = clear, a path = validate
+            // with the same fail-closed rule as turn/start.
+            let cwd = match p.cwd.as_deref() {
+                None => None,
+                Some(text) if text.trim().is_empty() => Some(String::new()),
+                Some(text) => checked_cwd(Some(text))?,
+            };
+            server
+                .chat
+                .update_session(&p.session_id, p.title.as_deref(), cwd.as_deref())
+                .await
+                .map_err(internal)?;
+            match server.chat.session(&p.session_id).await.map_err(internal)? {
+                Some(row) => respond(SessionUpdateResponse {
+                    session: to_session(row),
+                }),
+                None => Err(no_such_session(&p.session_id)),
+            }
+        }
+
+        methods::TURN_LIST => {
+            let p: TurnListParams = parse(params, method)?;
+            let turns = server
+                .active_turns(p.session_id.as_deref())
+                .into_iter()
+                .map(|(turn_id, session_id, started_at)| TurnView {
+                    turn_id,
+                    session_id,
+                    started_at,
+                })
+                .collect();
+            respond(TurnListResponse { turns })
         }
 
         methods::SESSION_MESSAGES => {
@@ -356,6 +411,81 @@ async fn dispatch(
             respond(TurnInterruptResponse { interrupted })
         }
 
+        methods::TURN_STEER => {
+            let p: TurnSteerParams = parse(params, method)?;
+            let message = p.message.trim();
+            if message.is_empty() {
+                return Err(ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: "要补的那一句是空的 —— 空话不该占掉一个轮次的下一次模型调用。"
+                        .to_string(),
+                    data: None,
+                });
+            }
+            let session_id = match p.session_id.trim() {
+                "" => "default".to_string(),
+                id => id.to_string(),
+            };
+            match server.steer(&session_id, message) {
+                Ok((turn_id, queued)) => {
+                    // Every client of this turn learns about it now, not on its next reload —
+                    // a second device must not look like it is showing a different conversation.
+                    sink.notification(ServerNotification::TurnSteered(TurnSteeredNotification {
+                        turn_id: turn_id.clone(),
+                        session_id,
+                        message: message.to_string(),
+                        ts: chrono::Local::now().to_rfc3339(),
+                    }));
+                    respond(TurnSteerResponse { turn_id, queued })
+                }
+                // No turn to steer: say so and point at the method that does work. Turning this
+                // into a fresh `turn/start` would silently change "add to what you're doing" into
+                // "start something new".
+                Err(()) => Err(ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: format!(
+                        "会话 {session_id} 现在没有在跑的回合 —— 直接 turn/start 就行，不用 steer。"
+                    ),
+                    data: None,
+                }),
+            }
+        }
+
+        methods::TURN_FOLLOW_UP => {
+            let p: TurnFollowUpParams = parse(params, method)?;
+            let message = p.message.trim();
+            if message.is_empty() {
+                return Err(ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: "要排的那一句是空的 —— 空话不该占掉一个回合。".to_string(),
+                    data: None,
+                });
+            }
+            let session_id = match p.session_id.trim() {
+                "" => "default".to_string(),
+                id => id.to_string(),
+            };
+            match server.follow_up(&session_id, message).await {
+                crate::FollowUp::Queued(queued) => {
+                    respond(TurnFollowUpResponse { session_id, queued })
+                }
+                // Nothing to wait for: "when you are done" pointed at an idle session. Say so and
+                // point at the method that actually answers, instead of queueing into a dead end.
+                crate::FollowUp::Idle => Err(ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: format!(
+                        "会话 {session_id} 现在没有在跑的回合 ——「等这轮结束」没有对象，直接 turn/start 就行。"
+                    ),
+                    data: None,
+                }),
+                crate::FollowUp::Failed(why) => Err(ErrorObject {
+                    code: codes::INTERNAL_ERROR,
+                    message: format!("排队没写进库：{why}"),
+                    data: None,
+                }),
+            }
+        }
+
         methods::GOAL_SET => {
             let p: GoalSetParams = parse(params, method)?;
             // Only a human can reach here: the model has no such tool, and no other method touches the goal table.
@@ -490,6 +620,29 @@ fn internal(e: impl std::fmt::Display) -> ErrorObject {
     }
 }
 
+/// A session id that names nothing: a typo, or a row that was never created. The id goes into
+/// the message because "which one" is the only thing the caller can act on.
+fn no_such_session(id: &str) -> ErrorObject {
+    ErrorObject {
+        code: codes::INVALID_PARAMS,
+        message: format!("没有这个会话：{id}（先 session/new，或确认 id 没打错）"),
+        data: None,
+    }
+}
+
+/// Working-directory admission shared by `session/new` / `session/update`: absolute + exists,
+/// the same fail-closed rule as `turn/start`. A session must never be bound to a path the tools
+/// would then refuse to write into — that would look like "writes are broken" instead of
+/// "this folder is not the workspace".
+fn checked_cwd(cwd: Option<&str>) -> Result<Option<String>, ErrorObject> {
+    let Some(text) = cwd.map(str::trim).filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
+    let owned = Some(text.to_string());
+    turn::resolve_turn_cwd(&owned)?;
+    Ok(owned)
+}
+
 fn new_session_id() -> String {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -527,6 +680,7 @@ fn to_session(row: joyczl_state::SessionRow) -> joyczl_protocol::SessionSummary 
         messages: narrow(row.messages),
         started_at: iso_opt(row.started_at),
         last_at: iso_opt(row.last_at),
+        cwd: row.cwd,
     }
 }
 

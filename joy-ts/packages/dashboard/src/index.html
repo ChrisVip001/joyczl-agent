@@ -37,19 +37,9 @@
         </div>
       </aside>
 
-      <!-- 主对话区：目标在最上，工作目录是点一下就能选的文件夹，交付结果就落在消息流里。 -->
+      <!-- 主对话区：工作目录是点一下就能选的文件夹，交付结果就落在消息流里。
+           没有单独的目标栏 —— 目标就是你说的话，何必再说一遍。 -->
       <main class="chat">
-        <div class="bar goal">
-          <input
-            id="goal"
-            type="text"
-            placeholder="给一个目标，比如「把登录页的测试全绿」，剩下的交给我"
-            aria-label="目标"
-          />
-          <button class="ghost" id="goal-set" type="button">设目标</button>
-          <button class="ghost" id="goal-clear" type="button">撤掉</button>
-          <span class="hint" id="goal-state"></span>
-        </div>
         <div class="bar">
           <p class="hint">
             会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
@@ -89,15 +79,25 @@
               placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
               aria-label="消息"
             ></textarea>
+            <button
+              class="ghost queue-toggle"
+              id="queue-toggle"
+              type="button"
+              title="这一轮跑完，再把这句话当成新的一轮发出去"
+              aria-pressed="false"
+              hidden
+            >
+              跑完再说
+            </button>
             <button id="send" type="submit">发送</button>
           </form>
         </div>
       </main>
 
-      <!-- 唯一的抽屉：这一轮的目标与进度。审批卡片在聊天窗口里，不在这里。 -->
+      <!-- 唯一的抽屉：现在在做什么、记得什么。审批卡片在聊天窗口里，不在这里。 -->
       <aside class="panels" id="drawer" hidden>
         <div class="drawer-head">
-          <p class="hint">目标进度</p>
+          <p class="hint">概览</p>
           <button class="ghost" id="drawer-close" type="button" aria-label="收起">×</button>
         </div>
         <section class="panel active" id="panel-overview">

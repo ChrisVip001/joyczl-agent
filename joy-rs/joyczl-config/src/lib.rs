@@ -233,9 +233,6 @@ pub struct Settings {
     pub ops_token: Option<String>,
 
     // ---- Switches
-    pub apple_calendar: bool,
-    pub google_calendar: bool,
-    pub experimental: bool,
     pub graph_workflows: bool,
 
     // ---- Hybrid retrieval (the vector leg; see embed.rs in joyczl-provider)
@@ -337,9 +334,6 @@ impl Default for Settings {
             ops_host: "127.0.0.1".to_string(),
             ops_token: None,
             notify_enabled: false,
-            apple_calendar: false,
-            google_calendar: false,
-            experimental: false,
             graph_workflows: false,
             embeddings_enabled: false,
             embed_model: None,
@@ -396,9 +390,6 @@ impl Settings {
             ops_host: env("JOY_OPS_HOST").unwrap_or(d.ops_host),
             ops_token: env("JOY_OPS_TOKEN"),
             notify_enabled: env_bool("JOY_NOTIFY"),
-            apple_calendar: env_bool("JOY_APPLE_CALENDAR"),
-            google_calendar: env_bool("JOY_GOOGLE_CALENDAR"),
-            experimental: env_bool("JOY_EXPERIMENTAL"),
             graph_workflows: env_bool("JOY_GRAPH_WORKFLOWS"),
             embeddings_enabled: env_bool("JOY_EMBEDDINGS"),
             embed_model: env("JOY_EMBED_MODEL"),
@@ -536,9 +527,6 @@ impl Settings {
             history_turns: self.history_turns,
             consolidate_every: self.consolidate_every,
             retrieval_top_k: self.retrieval_top_k,
-            apple_calendar: self.apple_calendar,
-            google_calendar: self.google_calendar,
-            experimental: self.experimental,
             graph_workflows: self.graph_workflows,
             home: self.home.display().to_string(),
         }
@@ -656,15 +644,6 @@ pub fn apply_patch(patch: &joyczl_protocol::SettingsPatch, settings: &mut Settin
     }
     if let Some(v) = p.retrieval_top_k {
         settings.retrieval_top_k = v;
-    }
-    if let Some(v) = p.apple_calendar {
-        settings.apple_calendar = v;
-    }
-    if let Some(v) = p.google_calendar {
-        settings.google_calendar = v;
-    }
-    if let Some(v) = p.experimental {
-        settings.experimental = v;
     }
     if let Some(v) = p.graph_workflows {
         settings.graph_workflows = v;

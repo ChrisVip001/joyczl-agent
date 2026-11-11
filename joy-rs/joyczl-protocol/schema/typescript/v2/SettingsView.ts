@@ -15,9 +15,6 @@ export type SettingsView = {
   historyTurns: number;
   consolidateEvery: number;
   retrievalTopK: number;
-  appleCalendar: boolean;
-  googleCalendar: boolean;
-  experimental: boolean;
   graphWorkflows: boolean;
   home: string;
 };

@@ -54,7 +54,8 @@ smoke: build
 # Deterministic eval: scripted models + assertions, offline 0/1. **Must pass 100%** —
 # this is the release gate: exit 0 = releasable. Cases live in evals/deterministic/.
 eval: build
-    cd {{ rust_dir }} && cargo run -q --bin joy -- eval
+    # 用例按相对路径 `evals/…` 加载，所以必须从仓库根跑（不是 joy-rs）。
+    cd {{ justfile_directory() }} && cargo run -q --manifest-path {{ rust_dir }}/Cargo.toml --bin joy -- eval
 
 # Long-task benchmarks: same scripted harness, asks "did autonomous task work get better or
 # worse". **Records, never blocks** — exit 0 even when cases fail. Cases live in evals/long/.

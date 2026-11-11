@@ -47,7 +47,7 @@ persisted with the conversation.
 - **Remember**: semantic facts (FTS5, CJK-capable), dated episodes, and
   procedural Skills — with a retrieval gate so memory is consulted only when
   relevant ([docs/architecture.md](docs/architecture.md))
-- **Act**: 11 built-in tools plus MCP servers
+- **Act**: 21 built-in tools plus MCP servers
   ([docs/configuration.md](docs/configuration.md))
 - **Plan as a graph**: the triage front door answers small talk cheaply; the
   gather workflow writes a morning brief
@@ -72,7 +72,7 @@ persisted with the conversation.
 | `job_output` / `job_list` / `job_kill` | read, list and stop background jobs (started with `run_command`'s `background=true`) |
 | `todo_write` | keep a per-session todo list, re-injected every turn (whole-table replace; one `in_progress` at a time) |
 | `current_time` | local time with weekday and timezone |
-| `write_file` / `edit` | write a text file / one exact-match replacement with a change hunk — off unless `JOY_WRITE=1`; writable boundary = workdir + home + `JOY_EXEC_WRITABLE_ROOTS` |
+| `write_file` / `edit` | write a text file / one exact-match replacement with a change hunk — off unless `JOY_WRITE=1`; writable boundary = the working directory **bound to the session** (or named for this turn when the session has none) + `JOY_EXEC_WRITABLE_ROOTS` |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
 | `delegate_task` | hand one self-contained job to a subagent — off unless `JOY_DELEGATE=1`, cannot delegate again; pass `result_schema` for a structured answer (retried once, then prose) |
 
@@ -87,7 +87,7 @@ Tool failures return to the model as text — the loop never crashes on one.
 | Document | Content |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | principles, crate dependency graph, one turn's data flow, key mechanisms, design decisions |
-| [docs/protocol.md](docs/protocol.md) | the 13 JSON-RPC methods, notification sequence, error codes, clients |
+| [docs/protocol.md](docs/protocol.md) | the 41 JSON-RPC methods, notification sequence, error codes, clients |
 | [docs/configuration.md](docs/configuration.md) | every `JOY_*` variable, gateway variables, mcp.json, settings.json |
 | [docs/gateways.md](docs/gateways.md) | Telegram / Discord / WeChat / Lark setup, quirks, and security notes |
 | [docs/testing.md](docs/testing.md) | the four-layer quality system and the latest test report |
@@ -120,6 +120,9 @@ Tool failures return to the model as text — the loop never crashes on one.
 | P13 ✅ | long tasks as entities (`agent_tasks`): the goal loop becomes their engine, one active task per session, create/pause/resume/cancel, a pause keeps the checkpoint (resume continues it), boot reconcile marks suspended, dashboard task-card switches |
 | P14 ✅ | connectors (M4): email (SMTP) and Feishu (app identity) — allowlist hard boundary, drafts by default, one approval per live send; `joy connector` for humans; read-only dashboard panel |
 | P15 ✅ | business form (M5): task API (`POST /api/run`, one turn in, one JSON answer out), inbound webhooks (`webhooks.json` + `X-Joy-Secret`, no config = no door), tier routing (a task or a caller declares `tier` and it wins even in fixed mode; the table lives in `model-routes.json` / REPL `/route`) |
+| P16 ✅ | task entities (0.14): done decided by facts — three deterministic acceptance checks before the judge, task-level budgets, runs / steps / events / artifacts, idempotency that blocks but never replays, long-task benchmarks with a recovery rate, an optional execution plan (`JOY_PLAN`) |
+| P17 ✅ | session metadata (0.15): the `sessions` table (migration 0018), `session/get` / `session/update` / `turn/list`, the working directory follows the session |
+| P18 ✅ | session gate (0.16): one turn per session at a time (`SESSION_BUSY`), `turn/steer` for a running turn, `turn/follow-up` to queue the next one (migration 0019, survives a restart), the `turnSteered` notification |
 
 ## Naming
 
