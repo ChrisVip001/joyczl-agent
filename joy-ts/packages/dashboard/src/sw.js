@@ -6,7 +6,9 @@
 //    布局修复尤其明显。网络拿不到才回落缓存，离线照样能开。
 // 3. 其余静态资源缓存优先、后台更新；版本号一变，旧缓存整体作废。
 // Bump on every shipped frontend change: a stale cache means a stale layout.
-const VERSION = "joy-v3";
+// Bump on every shipped change: a stale cache keeping the old main.js alive is the one bug
+// the version string exists to prevent (it has happened once).
+const VERSION = "joy-v6";
 const CORE = ["./", "./index.html", "./style.css", "./main.js", "./icon.svg", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

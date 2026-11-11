@@ -17,6 +17,7 @@ tempfile = { workspace = true }
 base64 = "0.22"
 anyhow = { workspace = true }
 chrono = { workspace = true }
+joyczl-agent = { workspace = true }
 joyczl-config = { workspace = true }
 joyczl-graph = { workspace = true }
 joyczl-loop = { workspace = true }

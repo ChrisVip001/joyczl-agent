@@ -2,6 +2,6 @@
 import type { AgentTaskView } from "./AgentTaskView";
 
 /**
- * Newest first; `active` is the session's one non-terminal task, when there is one.
+ * Newest first; `active` is the session's newest non-terminal task, when there is one.
  */
 export type TaskListResponse = { tasks: Array<AgentTaskView> };

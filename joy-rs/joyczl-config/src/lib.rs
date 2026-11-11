@@ -190,6 +190,10 @@ pub struct Settings {
     /// `JOY_GOAL_MAX_ROUNDS`: max auto-continuation rounds per goal (default 5). Beyond
     /// that, honestly set `round-limit` — no faking completion, no clearing the goal.
     pub goal_max_rounds: i32,
+    /// `JOY_PLAN`: only when enabled does a task ask the model for an execution plan before
+    /// its first round, and re-plan after a failed round. Off by default: it is one more model
+    /// call per task and it changes the prompt — a capability pressed by hand, like every other.
+    pub plan_enabled: bool,
     /// `JOY_LLM_RETRIES`: max backoff retries on rate limits / transient faults (default
     /// 2, cap 5, 0 = off). Only retries errors where "try again" makes sense, and
     /// **always sends a notification per retry** — see retry.rs in joyczl-provider.
@@ -320,6 +324,7 @@ impl Default for Settings {
             vision: None,
             home: PathBuf::from(".joy"),
             goal_max_rounds: 5,
+            plan_enabled: false,
             llm_retries: 2,
             llm_timeout_secs: 120,
             max_iterations: 10,
@@ -378,6 +383,7 @@ impl Settings {
             vision: None,
             home: env("JOY_HOME").map(PathBuf::from).unwrap_or(d.home),
             goal_max_rounds: env_int("JOY_GOAL_MAX_ROUNDS", d.goal_max_rounds),
+            plan_enabled: env_bool("JOY_PLAN"),
             llm_retries: env_int("JOY_LLM_RETRIES", d.llm_retries),
             llm_timeout_secs: env_int("JOY_LLM_TIMEOUT", d.llm_timeout_secs as i32) as i64,
             max_iterations: env_int("JOY_MAX_ITERATIONS", d.max_iterations),

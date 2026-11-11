@@ -24,6 +24,7 @@ import {
   taskAction,
   uploadFile,
 } from "./api";
+import { renderMarkdown } from "./markdown";
 import {
   attachmentStrip,
   chip,
@@ -858,9 +859,11 @@ async function send(
     if (completed !== null) {
       // Overwrite the streamed accumulation with `reply`: deltas may be missing (backpressure,
       // disconnection), while reply is the authoritative result from app-server.
-      bubble.textContent = completed.reply === "" ? "（这一轮没有回复）" : completed.reply;
+      paintReply(bubble, completed.reply === "" ? "（这一轮没有回复）" : completed.reply);
       foot.textContent = turnFooter(completed);
     } else if (streamed !== "") {
+      // Truncated mid-way: show what did arrive, still as Markdown.
+      paintReply(bubble, streamed);
       foot.textContent = "这一轮没有收到结尾 —— 上面的回复可能被截断了";
     } else {
       bubble.textContent = "（这一轮没有回复）";
@@ -873,6 +876,17 @@ async function send(
     trimMessages();
     dom.input.focus();
   }
+}
+
+/**
+ * Swap the plain streamed text for the rendered Markdown, exactly once.
+ *
+ * Streaming stays plain on purpose: appending one text node per delta costs nothing, while
+ * re-parsing thousands of tokens on every chunk would reflow the whole bubble.
+ */
+function paintReply(bubble: HTMLElement, markdown: string): void {
+  bubble.classList.add("md");
+  bubble.replaceChildren(renderMarkdown(markdown));
 }
 
 /**
@@ -922,6 +936,11 @@ async function open(sessionId: string): Promise<void> {
     return;
   }
   scrollToEnd();
+
+  // The task card belongs to the session too, not to the history page: without this, a switch
+  // keeps showing the previous session's card until the next 15s poll — and "the task that
+  // just finished" is often exactly why the person switched over.
+  void refresh();
 }
 
 /**

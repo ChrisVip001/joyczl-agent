@@ -126,7 +126,9 @@ HUB_TOKEN=$(printf '%s\n' "$HUB_OUT" | grep -E '^[0-9a-f]{64}$' | head -1)
 [[ "$(printf '%s' "$HUB_TOKEN" | wc -c)" -le 64 ]] || true
 grep -q '"alice"' "$HUB/users.json" || fail "users.json 里没有 alice"
 
-HUB_PORT=7801
+# A free port every run: a hardcoded one turns "an old process is still listening" into a red
+# hub section that has nothing to do with this build.
+HUB_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 JOY_HUB_ROOT="$HUB" JOY_PORT="$HUB_PORT" "$BIN" hub >/dev/null 2>&1 &
 HUB_PID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do

@@ -253,12 +253,17 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 `ContentBlock::Image` 块进消息——服务端读字节、base64 编码，并在回合开始前按
 厂商的 `vision` 能力闸门把关（各厂商开关见 configuration）。附件的一切检查都
 在回合开始前完成：`<home>` 包含性、存在性、按扩展名嗅探的媒体类型、单图
-20 MiB 上限。
+20 MiB 上限、**单边 4096 像素上限**（只读文件头量宽高，零依赖）。
 
 * **未做** —— 附件**不随会话恢复重放**：`chat_log` 存的是消息文本（里面提到
   上传路径），历史重建走文本——恢复后的会话是「描述」那张图，而不是重新
   展示它。要补就得持久化字节（或恢复时做一次引用解析）。
   → `joy-rs/joyczl-app-server/src/turn.rs`（`resolve_attachments`、`load_history`）
+* **刻意** —— 单边超过 4096 像素的图在本地直接拒，不在本地缩放：长截图
+  （1120×11100 这种）字节数只有 2 MB 出头，远端却只回一句 `unsupported image`；
+  而把它缩到 4096 高只会把字压糊，正确做法是分段发。自动切段要先解码再重编码，
+  等于引入一个图像库，暂不做。
+  → `joyczl-app-server/src/image_meta.rs`（`MAX_EDGE`、`size`）
 * **刻意** —— `vision` 描述的是**这套配置的模型**，默认跟随厂商目录行，且宁可
   写 `false`：错标 `false` 只少一个能力；错标 `true` 要多跑一趟远端、换一个
   看不懂的 400。但这套模型自己声明了就听它的 —— 同一家既有看图模型也有纯文本
@@ -344,9 +349,20 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   人的下一句话（或已有的回合）驱动。让任务自启动等于让模型给自己派活，不在这个
   方案里。
   → `joy-rs/joyczl-app-server/src/task.rs`（`create`）
-* **刻意** —— 一会话一活跃任务。第二个 `task/create` 被拒并点名已有的那个；没有
-  任务队列、没有并行调度器——同一会话的回合本来就串行。
-  → `joy-rs/joyczl-state/migrations/0014_agent_tasks.sql`（部分唯一索引）
+* **刻意** —— 没有任务队列、没有并行调度器：同一会话可以有多个未结束的任务（0.14 去掉了
+  「一会话一活跃任务」，任务成了独立实体，甚至可以不属于任何会话），但卡片只显示最新的那个，
+  同一会话的回合本来就串行。
+  → `joy-rs/joyczl-state/src/tasks.rs`（`create`）、`joy-rs/joyczl-app-server/src/task.rs`（`view_of`）
+* **边界** —— 「完成」由**事实决定，不由模型的结论决定**：每轮结束检查 `fileExists` /
+  `fileContains` / `toolsOk`，有任一条不过就**不调判断器**。只有这三类算验收条件——"报告写得
+  好"这种没法量的不收；`FileContains` 是纯子串，永远不当正则用。
+  → `joy-rs/joyczl-app-server/src/verify.rs`
+* **边界** —— 中途断掉的副作用**绝不重放**：停在 `running` 的步骤在启动时转成 `waiting`，
+  等人确认。宁可停下来问一句，也不把同一次写入发两遍。
+  → `joy-rs/joyczl-state/src/steps.rs`（`settle_running`）、`joy-rs/joyczl-app-server/src/lib.rs`
+* **边界** —— 预算**每轮检查一次**，在下一次模型调用之前。单轮可能冲过上限（一次很长的模型
+  调用），台账会如实报出超了多少，而不是假装在中途硬切。
+  → `joy-rs/joyczl-app-server/src/turn.rs`（`budget_overrun`）
 * **边界** —— 后台作业（jobs）**不**挂任务台账：作业是工具层的事实，任务是意图；
   任务的一轮里可以起作业，但两者不互相记账。要"任务的作业清单"得先发明这层关系。
   → `joy-rs/joyczl-state/src/jobs.rs`、`joy-rs/joyczl-app-server/src/task.rs`

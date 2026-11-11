@@ -1077,7 +1077,16 @@ fn png_attachment(path: &str) -> Option<Vec<joyczl_protocol::TurnAttachment>> {
 
 #[tokio::test]
 async fn an_attachment_reaches_the_provider_as_an_image_block() {
-    let png = [0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4];
+    // 真 PNG 头（1×1）：本地要读得出宽高才放行 —— 12 字节的假签名会被判「读不出」。
+    let png = {
+        let mut bytes = vec![0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        bytes.extend_from_slice(&13u32.to_be_bytes()); // IHDR 数据长
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+        bytes
+    };
     let ran = run_with_attachments(
         Mock::new(vec![
             // 检索门控先烧一条（small model）。
@@ -1090,7 +1099,7 @@ async fn an_attachment_reaches_the_provider_as_an_image_block() {
         |home| {
             let dir = home.join("uploads");
             std::fs::create_dir_all(&dir).expect("建上传目录");
-            std::fs::write(dir.join("px.png"), png).expect("装置图片");
+            std::fs::write(dir.join("px.png"), png.clone()).expect("装置图片");
         },
     )
     .await;
@@ -1126,6 +1135,42 @@ async fn an_attachment_reaches_the_provider_as_an_image_block() {
         .filter(|m| matches!(m.role, joyczl_provider::Role::User))
         .any(|m| m.text().contains("这张图是什么？"));
     assert!(with_text, "用户正文文本随图片一起进请求");
+}
+
+/// 长截图（1120×11100）字节数只有 2 MB 出头，旧的「20 MiB」闸门会放行，远端才拒 ——
+/// 现在必须在发请求前拦下，并把真实尺寸说出来（远端只回一句 unsupported image）。
+#[tokio::test]
+async fn an_oversized_image_is_refused_with_its_real_dimensions() {
+    let ran = run_with_attachments(
+        Mock::new(vec![]),
+        true,
+        "看看这张长图",
+        png_attachment("uploads/long.png"),
+        |home| {
+            let mut bytes = vec![0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+            bytes.extend_from_slice(&13u32.to_be_bytes());
+            bytes.extend_from_slice(b"IHDR");
+            bytes.extend_from_slice(&1120u32.to_be_bytes());
+            bytes.extend_from_slice(&11_100u32.to_be_bytes());
+            bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
+            let dir = home.join("uploads");
+            std::fs::create_dir_all(&dir).expect("建上传目录");
+            std::fs::write(dir.join("long.png"), bytes).expect("装置图片");
+        },
+    )
+    .await;
+    let error = ran.error.as_ref().expect("超过单边上限必须在门口拦下");
+    assert!(
+        error.message.contains("1120×11100"),
+        "报错要给出真实尺寸：{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("分段"),
+        "报错要给出可执行的下一步：{}",
+        error.message
+    );
+    assert!(ran.requests.is_empty(), "失败不该烧掉任何模型调用");
 }
 
 #[tokio::test]

@@ -436,6 +436,147 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
+/* Markdown 回复：模型写的是 md，页面就该画成 md，而不是把 `**` 和 `- ` 原样摊开。
+   只作用于 `.md` 容器 —— 用户自己说的话保持纯文本，不被重新解释。
+   间距统一走 em，跟着气泡字号走；颜色只引用 token。 */
+
+.bubble.md {
+  white-space: normal;
+}
+
+.md > :first-child {
+  margin-top: 0;
+}
+
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p {
+  margin: 0 0 0.65em;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 1.1em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.md h1 {
+  font-size: 1.3em;
+}
+
+.md h2 {
+  font-size: 1.18em;
+}
+
+.md h3 {
+  font-size: 1.07em;
+}
+
+.md h4,
+.md h5,
+.md h6 {
+  font-size: 1em;
+  color: var(--text-2);
+}
+
+.md ul,
+.md ol {
+  margin: 0 0 0.65em;
+  padding-left: 1.4em;
+}
+
+.md li {
+  margin: 0.22em 0;
+}
+
+.md li > ul,
+.md li > ol {
+  margin: 0.22em 0 0;
+}
+
+.md code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 0.1em 0.34em;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+}
+
+.md pre {
+  margin: 0 0 0.7em;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 0.86em;
+  line-height: 1.55;
+}
+
+.md blockquote {
+  margin: 0 0 0.7em;
+  padding: 0.1em 0 0.1em 0.9em;
+  border-left: 2px solid var(--line);
+  color: var(--text-2);
+}
+
+.md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.md hr {
+  margin: 1.1em 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+.md a {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md a:hover {
+  color: var(--accent);
+}
+
+.md-table {
+  margin: 0 0 0.7em;
+  overflow-x: auto;
+}
+
+.md table {
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.md th,
+.md td {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md th {
+  background: var(--surface);
+  font-weight: 600;
+}
+
 .bubble.streaming::after {
   content: "";
   display: inline-block;
@@ -1377,8 +1518,17 @@ textarea::placeholder {
 }
 
 .task-state.st-suspended {
+  color: var(--text-2);
+  border-color: var(--line);
+}
+
+/* 「需要你确认」：机器量到了不该由它拍板的事实。
+ * 描边 + 浅底，和「已暂停」的灰度拉开距离 —— 这是唯一一个等人按的灯。 */
+.task-state.st-needs_attention {
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  transition: background var(--speed) ease;
 }
 
 .task-state.st-done {
@@ -1475,6 +1625,156 @@ textarea::placeholder {
 .st-cancelled .task-text {
   color: var(--text-3);
   text-decoration: line-through;
+}
+
+/* ---- 任务卡：验收清单 / 交付物 / 预算 / 脚注 ------------------------------------
+ *
+ * 三块信息一个目的：让「为什么没完成」不用问人。全部只用既有 token，无新视觉语言；
+ * 行间 1px 分隔线而不是卡片套卡片 —— 信息密度优先。 */
+
+.task-checks,
+.task-artifacts {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.task-check:first-child {
+  border-top: none;
+}
+
+.task-check .task-glyph::before {
+  font-size: 12px;
+}
+
+.task-check.ok .task-glyph::before {
+  content: "✓";
+  color: var(--ok);
+}
+
+.task-check.bad .task-glyph::before {
+  content: "✕";
+  color: var(--bad);
+}
+
+.task-check-label {
+  color: var(--text-2);
+  min-width: 0;
+}
+
+/* 实测结果：等宽、次要。通过说证据，未通过说量到了什么。 */
+.task-check-detail {
+  margin-left: auto;
+  padding-left: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.task-artifact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.task-artifact:first-child {
+  border-top: none;
+}
+
+.task-artifact-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-artifact-size {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.task-more {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.task-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.task-budget-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.task-budget-num {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.task-budget .meter {
+  margin-top: 4px;
+}
+
+/* 80% 转警告色，100% 转危险色 —— 与验收的勾/叉同一套语义。 */
+.meter.is-warn .meter-fill {
+  background: var(--warn);
+}
+
+.meter.is-over .meter-fill {
+  background: var(--bad);
+}
+
+.task-foot {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 窄屏：实测结果换行缩进，别和一长条路径抢同一行。 */
+@media (max-width: 720px) {
+  .task-check {
+    flex-wrap: wrap;
+  }
+
+  .task-check-detail {
+    margin-left: 20px;
+    padding-left: 0;
+    text-align: left;
+  }
+
+  .task-budget {
+    gap: 10px;
+  }
 }
 
 .row {

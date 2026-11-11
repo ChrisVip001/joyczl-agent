@@ -86,6 +86,7 @@ async fn an_open_checkpoint_resumes_and_gets_full_accounting() {
             &crashed_working_memory(),
             2,
             r#"{"input_tokens":100,"output_tokens":20}"#,
+            None,
         )
         .await
         .expect("写 checkpoint");
@@ -155,7 +156,7 @@ async fn without_a_model_the_checkpoint_stays_open_for_later() {
     let server = server(None).await;
     server
         .checkpoints
-        .save("t-wait", "test", "长任务", "[]", 1, "{}")
+        .save("t-wait", "test", "长任务", "[]", 1, "{}", None)
         .await
         .expect("写 checkpoint");
 
@@ -176,7 +177,15 @@ async fn unreadable_working_memory_is_abandoned_not_resumed() {
     let server = server(Some(mock)).await;
     server
         .checkpoints
-        .save("t-broken", "test", "长任务", "not json at all", 1, "{}")
+        .save(
+            "t-broken",
+            "test",
+            "长任务",
+            "not json at all",
+            1,
+            "{}",
+            None,
+        )
         .await
         .expect("写 checkpoint");
 
@@ -210,7 +219,7 @@ async fn a_turn_error_marks_its_checkpoint_abandoned() {
     let server = server(Some(mock)).await;
     server
         .checkpoints
-        .save("t-doomed", "test", "必败的任务", "[]", 1, "{}")
+        .save("t-doomed", "test", "必败的任务", "[]", 1, "{}", None)
         .await
         .expect("写 checkpoint");
 

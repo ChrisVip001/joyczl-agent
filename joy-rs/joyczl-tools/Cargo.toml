@@ -13,6 +13,7 @@ doctest = false
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+joyczl-agent = { workspace = true }
 joyczl-config = { workspace = true }
 joyczl-memory = { workspace = true }
 jsonschema = { workspace = true }

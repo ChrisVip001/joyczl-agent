@@ -74,13 +74,30 @@ con.execute(
      json.dumps(messages, ensure_ascii=False), 2,
      json.dumps({"input_tokens": 100, "output_tokens": 20})),
 )
+# 0.15: the same crash leaves a task mid-flight, an open run and one step that was **sent but
+# never landed**. The step must come back as `waiting` — a write that may already have happened
+# is never replayed.
+con.execute(
+    "INSERT INTO agent_tasks (id, session_id, title, acceptance_json, status, current_turn_id)"
+    " VALUES ('task-smoke', 'default', '写文件', '[]', 'running', 't-crash')"
+)
+con.execute(
+    "INSERT INTO task_runs (id, task_id, session_id, turn_id, status)"
+    " VALUES ('t-crash', 'task-smoke', 'default', 't-crash', 'running')"
+)
+con.execute(
+    "INSERT INTO task_steps"
+    " (task_id, run_id, seq, kind, tool, input_json, status, idempotency_key)"
+    " VALUES ('task-smoke', 't-crash', 1, 'tool', 'write_file',"
+    " '{\"path\":\"/tmp/half-written.md\"}', 'running', 't-crash:1')"
+)
 con.commit()
 status = con.execute(
     "SELECT status FROM turn_checkpoints WHERE turn_id = 't-crash'"
 ).fetchone()[0]
 assert status == "open", status
 EOF
-echo "  ✓ 崩溃残留：t-crash 挂在 open（已完成 2 轮）"
+echo "  ✓ 崩溃残留：t-crash 挂在 open（已完成 2 轮）+ 一个「已发未落盘」的执行步骤"
 
 # ---- Fresh process: startup reconcile resumes the turn ----------------------------
 mkfifo "$WORK/in"
@@ -127,7 +144,24 @@ reply = con.execute(
     "SELECT content FROM chat_log WHERE role = 'assistant' ORDER BY id DESC LIMIT 1"
 ).fetchone()[0]
 assert "你好，世界" in reply, reply
+
+# ---- 0.15 的任务台账：断在半路的副作用只拦不重放 --------------------------------
+(step_status, step_note) = con.execute(
+    "SELECT status, note FROM task_steps WHERE idempotency_key = 't-crash:1'"
+).fetchone()
+assert step_status == "waiting", f"已发未落盘的步骤该转 waiting（不重放）：{step_status}"
+assert "不重放" in (step_note or "") or step_note, f"要说清为什么停：{step_note}"
+run_status = con.execute(
+    "SELECT status FROM task_runs WHERE id = 't-crash'"
+).fetchone()[0]
+assert run_status in ("waiting", "completed"), f"执行记录该收尾：{run_status}"
+# 这次续跑接手的任务：没有验收条件 → 回合结束即完成（重启不该留下一个永远 running 的任务）
+task_status = con.execute(
+    "SELECT status FROM agent_tasks WHERE id = 'task-smoke'"
+).fetchone()[0]
+assert task_status == "done", f"续跑收尾后任务该是 done：{task_status}"
 EOF
 echo "  ✓ 台账闭环：checkpoint=done（停在崩溃前的边界），回复落在对话日志里"
+echo "  ✓ 任务台账：未落盘的步骤转 waiting（不重放），任务被这次续跑收尾成 done"
 
 echo "✓ 续跑冒烟测试通过"

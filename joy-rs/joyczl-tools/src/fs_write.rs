@@ -78,21 +78,9 @@ fn writable_roots(ctx: &ToolCtx, policy: &WritePolicy) -> Vec<PathBuf> {
     roots
 }
 
-/// Canonicalize the deepest existing ancestor of `path` — the file itself may not exist yet
-/// (a create is not an escape), but every symlink in its real prefix must resolve inside.
-fn existing_ancestor(path: &Path) -> PathBuf {
-    let mut cur = path.to_path_buf();
-    loop {
-        match cur.canonicalize() {
-            Ok(real) => return real,
-            Err(_) => {
-                if !cur.pop() {
-                    return path.to_path_buf(); // nowhere to anchor; containment below refuses
-                }
-            }
-        }
-    }
-}
+/// **The single containment rule** — see `joyczl_agent::paths`. Re-exported here so the write
+/// tools and the task verifier cannot drift into two different definitions of "inside".
+pub use joyczl_agent::paths::inside_workspace;
 
 /// The hard gate: `path` (after symlink resolution) must land inside one of `roots`.
 /// Not configurable, not negotiable — approval is never consulted for an outside path.
@@ -102,12 +90,9 @@ fn contained(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
             "还没有选择工作目录：先在驾驶舱选一个文件夹，工作目录就是唯一的可写范围。".to_string(),
         );
     }
-    let real = existing_ancestor(path);
     for root in roots {
-        if let Ok(root_real) = root.canonicalize() {
-            if real.starts_with(&root_real) {
-                return Ok(());
-            }
+        if inside_workspace(path, root).is_ok() {
+            return Ok(());
         }
     }
     let listed = roots

@@ -22,8 +22,8 @@ use joyczl_protocol::{
     ModelRemoveParams, ModelRemoveResponse, ModelRoutesResponse, ModelRoutesSaveParams,
     ModelSaveParams, ModelSaveResponse, RunResponse, ScheduleListResponse, ServerNotification,
     SessionListResponse, SessionMessagesParams, SessionMessagesResponse, TaskActionParams,
-    TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse, TodoListView,
-    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
+    TaskArtifactsResponse, TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse,
+    TodoListView, TurnInterruptParams, TurnInterruptResponse, TurnStartParams, TurnStartResponse,
     UsageSummaryResponse,
 };
 use serde_json::json;
@@ -107,11 +107,12 @@ impl EventPing {
                 session_id: Some(n.session_id.clone()),
             },
             // A long task changed state: created / running / paused / done. Same knock — the
-            // receiver pulls the details (the task card is one /api/data away).
+            // receiver pulls the details (the task card is one /api/data away). A task with no
+            // session carries no session in the ping (0.14: tasks stand on their own).
             ServerNotification::TaskUpdated(n) => EventPing {
                 kind: "task",
                 turn_id: None,
-                session_id: Some(n.session_id.clone()),
+                session_id: n.session_id.clone(),
             },
             // Inbound: new mail waiting for a human. Not tied to a session — it is the
             // inbox's news, and the panel lives on the overview.
@@ -210,7 +211,7 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
     // Connectors: not part of the app-server protocol — the file is the truth and ops
     // sits on the same machine. A broken file is reported, never rendered as "none".
     let (connectors, connectors_error) = connector_status(app);
-    let (goal, todos, task) = match session {
+    let (goal, todos, task, task_artifacts) = match session {
         Some(id) => {
             let goal: GoalSetResponse = app
                 .request(methods::GOAL_VIEW, json!({ "sessionId": id }))
@@ -219,12 +220,30 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
                 .request(methods::TODO_VIEW, json!({ "sessionId": id }))
                 .await?;
             // The long task behind that goal (0.11.0): status + round account + the pause switch.
+            // Since 0.14 it also carries acceptance verdicts and spend, so the card can show
+            // **why** it is not done instead of just that it is not.
             let task: TaskViewResponse = app
                 .request(methods::TASK_VIEW, json!({ "sessionId": id }))
                 .await?;
-            (Some(goal), todos, task.task)
+            // Deliverables are a second read: the list can be long, and the card shows the top
+            // few. A failure here is "no files shown", never "no files exist".
+            let task_artifacts = match &task.task {
+                Some(row) => app
+                    .request::<TaskArtifactsResponse>(
+                        methods::TASK_ARTIFACTS,
+                        json!({ "taskId": row.id }),
+                    )
+                    .await
+                    .map(|response| response.artifacts)
+                    .unwrap_or_else(|error| {
+                        eprintln!("(joy) 任务的交付物读不了（面板显示空）：{}", error.message);
+                        Vec::new()
+                    }),
+                None => Vec::new(),
+            };
+            (Some(goal), todos, task.task, task_artifacts)
         }
-        None => (None, None, None),
+        None => (None, None, None, Vec::new()),
     };
 
     Ok(DashboardData {
@@ -236,6 +255,7 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
         goal,
         todos,
         task,
+        task_artifacts,
         inbox,
         connectors,
         connectors_error,

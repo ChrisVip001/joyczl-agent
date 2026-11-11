@@ -326,7 +326,9 @@ injected into the message; the model reads it with `read_file` if it decides to.
 the server reads the bytes, base64s them, and gates on the provider's `vision`
 capability up front (see configuration.md for the per-provider flag). Everything
 about the attachment is checked before the turn starts: containment inside
-`<home>`, existence, media type by extension, 20 MiB per image.
+`<home>`, existence, media type by extension, 20 MiB per image, and a
+**4096-pixel per-side cap** (width/height read straight from the file header —
+no image library, no decode).
 
 * **Gap** — Attachments are **not replayed on session restore**: `chat_log`
   stores the message text (which mentions the upload path), and history
@@ -334,6 +336,12 @@ about the attachment is checked before the turn starts: containment inside
   re-showing it. Persisting the bytes (or a reference resolution pass on
   restore) would close this.
   → `joy-rs/joyczl-app-server/src/turn.rs` (`resolve_attachments`, `load_history`)
+* **Deliberate** — Images wider or taller than 4096 px are refused locally rather
+  than downscaled: a long screenshot (1120×11100 is 2.4 MB) earns nothing but
+  "unsupported image" from the remote, and shrinking it to 4096 would smear the
+  text — the right move is to send it in pieces. Auto-slicing needs a decode +
+  re-encode pass, i.e. an image crate; not taken on.
+  → `joyczl-app-server/src/image_meta.rs` (`MAX_EDGE`, `size`)
 * **Deliberate** — `vision` describes **this profile's model**: it follows the
   vendor's catalog row by default and errs toward `false` (a wrong `false`
   costs one capability; a wrong `true` costs a round trip and a cryptic remote
@@ -435,10 +443,23 @@ about the attachment is checked before the turn starts: containment inside
   and a ledger row; progress still comes from the human's next message (or an existing
   turn). Self-starting tasks would mean the model assigning itself work — out of scope.
   → `joy-rs/joyczl-app-server/src/task.rs` (`create`)
-* **Deliberate** — One active task per session. A second `task/create` is refused with
-  the existing one named; there is no task queue and no parallel scheduler — turns in
-  one session are serial by nature.
-  → `joy-rs/joyczl-state/migrations/0014_agent_tasks.sql` (partial unique index)
+* **Deliberate** — No task queue and no parallel scheduler: several tasks may be open in one
+  session (0.14 removed the one-active rule — a task is its own entity and may even have no
+  session), but the card shows the newest and turns in one session stay serial by nature.
+  → `joy-rs/joyczl-state/src/tasks.rs` (`create`), `joy-rs/joyczl-app-server/src/task.rs` (`view_of`)
+* **Boundary** — "Done" is decided by **facts, not by the model's verdict**: `fileExists` /
+  `fileContains` / `toolsOk` are checked after every round, and a failing condition skips the
+  judge entirely. Three kinds only — anything else ("the report is good") is not checkable and
+  is not accepted as a condition. `FileContains` is a plain substring, never a regex.
+  → `joy-rs/joyczl-app-server/src/verify.rs`
+* **Boundary** — A side effect interrupted mid-flight is **never replayed**: a step left
+  `running` becomes `waiting` at boot and waits for a human. The engine would rather stop and
+  ask than send the same write twice.
+  → `joy-rs/joyczl-state/src/steps.rs` (`settle_running`), `joy-rs/joyczl-app-server/src/lib.rs`
+* **Boundary** — Budgets are checked **once per round**, before the next model call. A single
+  round can overshoot a cap (one very long model call); the ledger reports the overshoot instead
+  of pretending a hard cut happened mid-call.
+  → `joy-rs/joyczl-app-server/src/turn.rs` (`budget_overrun`)
 * **Boundary** — Background jobs are **not** attached to the task ledger: a job is a
   fact at the tool layer, a task is intent; a task's turn may start jobs, but neither
   keeps books on the other. A "jobs of this task" list would have to invent that link.

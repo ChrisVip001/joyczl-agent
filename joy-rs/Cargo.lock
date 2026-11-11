@@ -1037,12 +1037,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "joyczl-agent"
+version = "0.13.0"
+dependencies = [
+ "joyczl-memory",
+ "joyczl-protocol",
+ "joyczl-provider",
+ "joyczl-state",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "joyczl-app-server"
 version = "0.13.0"
 dependencies = [
  "anyhow",
  "base64",
  "chrono",
+ "joyczl-agent",
  "joyczl-config",
  "joyczl-connector",
  "joyczl-graph",
@@ -1258,6 +1272,7 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "joyczl-agent",
  "joyczl-config",
  "joyczl-memory",
  "joyczl-provider",

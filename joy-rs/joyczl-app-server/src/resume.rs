@@ -127,6 +127,31 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
         turn_id: turn_id.clone(),
     };
 
+    // The run comes back with the checkpoint: this is the **same attempt** continuing, not a
+    // new one. Its steps left `running` were already settled to `waiting` at boot — nothing is
+    // replayed, and unfinished side effects wait for a human.
+    let run_id = row.run_id.clone();
+    if let Some(run_id) = &run_id {
+        match server.runs.get(run_id).await {
+            Ok(Some(run)) => {
+                if let Err(e) = server
+                    .runs
+                    .start(
+                        &run.id,
+                        &run.task_id,
+                        run.session_id.as_deref(),
+                        Some(&turn_id),
+                    )
+                    .await
+                {
+                    eprintln!("(joy) 续跑时执行记录没恢复成 running：{e}");
+                }
+            }
+            Ok(None) => eprintln!("(joy) 续跑：checkpoint 指的 run {run_id} 已经不在台账里"),
+            Err(e) => eprintln!("(joy) 续跑：读不到 run {run_id}（{e}）"),
+        }
+    }
+
     let frame = TurnFrame {
         session_id: &session_id,
         turn_id: &turn_id,
@@ -146,6 +171,7 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
             &turn_id,
             &session_id,
             &row.user_message,
+            run_id.as_deref(),
         )),
     };
 
@@ -176,6 +202,10 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
                     goal_status: None,
                     goal_rounds: 0,
                     started: std::time::Instant::now(),
+                    run_id,
+                    // A resumed turn decides nothing about acceptance: the next human turn
+                    // measures again with fresh facts.
+                    decision: None,
                 },
             )
             .await;
@@ -185,6 +215,12 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
         }
         Err(e) => {
             let _ = server.checkpoints.finish(&turn_id, "abandoned").await;
+            if let Some(run_id) = &run_id {
+                let _ = server
+                    .runs
+                    .close(run_id, joyczl_state::RunStatus::Failed, Some(&e.message))
+                    .await;
+            }
             eprintln!("(joy) 续跑失败，checkpoint 已标 abandoned：{}", e.message);
         }
     }

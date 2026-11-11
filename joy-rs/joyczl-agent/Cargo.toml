@@ -1,0 +1,25 @@
+[package]
+name = "joyczl-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Joy 的确定性内核：验收事实、工具观察、执行计划。不碰协议、不碰网络。"
+
+[lib]
+name = "joyczl_agent"
+path = "src/lib.rs"
+doctest = false
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[dependencies]
+joyczl-memory = { workspace = true }
+joyczl-provider = { workspace = true }
+joyczl-protocol = { workspace = true }
+joyczl-state = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

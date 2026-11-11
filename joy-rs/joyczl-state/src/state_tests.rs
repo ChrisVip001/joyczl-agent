@@ -3,7 +3,62 @@
 
 use sqlx::sqlite::SqlitePool;
 
-use crate::{Chat, Episodes, Facts};
+use crate::{Chat, Episodes, Facts, NewTask, TaskStatus, Tasks};
+
+/// 任务卡的取值：开着的那条优先，但**完成后也要看得见** —— 验收结论与交付物正是
+/// 那时候才值得读，用 `active` 会让它在变得有用的同一刻消失。
+#[tokio::test]
+async fn latest_task_prefers_open_but_never_hides_a_finished_one() {
+    let pool = temp_db("task_latest").await;
+    let tasks = Tasks::new(pool);
+
+    tasks
+        .create(bare_task("old-done", "s1", "做完了"))
+        .await
+        .expect("建任务");
+    tasks
+        .finish("old-done", TaskStatus::Done)
+        .await
+        .expect("收尾");
+    tasks
+        .create(bare_task("new-open", "s1", "还在跑"))
+        .await
+        .expect("建任务");
+
+    let latest = tasks.latest("s1").await.expect("查").expect("该有一条");
+    assert_eq!(latest.id, "new-open", "开着的那条优先");
+
+    tasks
+        .finish("new-open", TaskStatus::Done)
+        .await
+        .expect("收尾");
+    let latest = tasks
+        .latest("s1")
+        .await
+        .expect("查")
+        .expect("完成态也要读得到");
+    assert_eq!(latest.id, "new-open", "做完的任务不该从卡片上消失");
+    assert_eq!(latest.status, TaskStatus::Done);
+
+    assert!(
+        tasks.latest("s2").await.expect("查").is_none(),
+        "别的会话看不到"
+    );
+}
+
+fn bare_task<'a>(id: &'a str, session: &'a str, title: &'a str) -> NewTask<'a> {
+    NewTask {
+        id,
+        session_id: Some(session),
+        title,
+        goal_condition: None,
+        acceptance_json: "[]",
+        budget_json: "{}",
+        cwd: None,
+        max_rounds: 3,
+        tier: None,
+    }
+}
 
 async fn temp_db(name: &str) -> SqlitePool {
     let dir = tempfile::tempdir().expect("临时目录");
@@ -402,6 +457,7 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
             r#"[{"m":1}]"#,
             2,
             r#"{"input_tokens":100}"#,
+            Some("turn-t1"),
         )
         .await
         .unwrap();
@@ -413,6 +469,7 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
             r#"[{"m":2}]"#,
             5,
             r#"{"input_tokens":300}"#,
+            Some("turn-t1"),
         )
         .await
         .unwrap();
@@ -432,7 +489,7 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
 
     // An abandoned one (human interrupt) is not resumed either.
     checkpoints
-        .save("t2", "s", "长任务", "[]", 1, "{}")
+        .save("t2", "s", "长任务", "[]", 1, "{}", None)
         .await
         .unwrap();
     checkpoints.finish("t2", "abandoned").await.unwrap();
@@ -440,11 +497,11 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
 
     // Two open checkpoints from two turns: reconciliation sees both, oldest first.
     checkpoints
-        .save("t3", "s", "先来的", "[]", 1, "{}")
+        .save("t3", "s", "先来的", "[]", 1, "{}", None)
         .await
         .unwrap();
     checkpoints
-        .save("t4", "s", "后来的", "[]", 1, "{}")
+        .save("t4", "s", "后来的", "[]", 1, "{}", None)
         .await
         .unwrap();
     let rows = checkpoints.open_rows().await.unwrap();

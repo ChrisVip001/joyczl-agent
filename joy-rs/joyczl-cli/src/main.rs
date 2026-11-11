@@ -99,6 +99,18 @@ async fn main() -> Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             skill_cmd::run(&home, &args).await
         }
+        // Long-task benchmarks: same scripted harness as `eval`, different question — "is the
+        // autonomous task work getting better or worse". Records success + recovery rates and
+        // never blocks a release (exit 0). Cases live in evals/long/.
+        Some("bench") => {
+            let mut args: Vec<String> = std::env::args().skip(2).collect();
+            if args.is_empty() {
+                args.push("evals/long".to_string());
+            }
+            let paths: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
+            let code = joyczl_eval::run_long(&paths, &home()).await?;
+            std::process::exit(code);
+        }
         Some("eval") | Some("judge") => {
             let mut args: Vec<String> = std::env::args().skip(2).collect();
             // No path given: fall back to repo convention evals/deterministic/ and evals/judge/.

@@ -43,6 +43,40 @@ pub struct Scenario {
     /// Skip this case when a prerequisite is missing ("python3" / "sh" / "sandbox"). A skip is not a failure.
     #[serde(default)]
     pub prereq: Option<String>,
+    /// A long task created **before** the first turn (0.14): the turn then carries it, and the
+    /// assertions read the real row back. This is what makes "the model claims done, the file is
+    /// not there" a deterministic, offline case.
+    #[serde(default)]
+    pub task: Option<ScenarioTask>,
+    /// This case measures **interrupt recovery** (P1 long benchmarks): a turn is cut short, the
+    /// server restarts, and a later turn must finish the task. Only the long suite reads this
+    /// flag — it splits "did the task succeed" from "did it recover from an interruption".
+    #[serde(default)]
+    pub recovery: bool,
+    /// The planner's scripted reply (`JOY_PLAN`). The plan call happens **before** the first
+    /// round, so it sits before that round's gate in the mock queue — this field is the only
+    /// way to say that in call order.
+    #[serde(default)]
+    pub plan: Option<String>,
+}
+
+/// The task a case creates up front. Mirrors `task/create`'s params (minus the noise).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScenarioTask {
+    pub title: String,
+    #[serde(default)]
+    pub goal_condition: Option<String>,
+    /// Which session carries it; unset = "eval" (the default session of a case's turns).
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Each condition is `{"kind":"fileExists","path":"report.md"}` etc. — the wire shape.
+    #[serde(default)]
+    pub acceptance: Vec<joyczl_protocol::AcceptanceView>,
+    #[serde(default)]
+    pub budget: Option<joyczl_protocol::BudgetView>,
+    /// Round cap; unset = the settings' `goal_max_rounds`.
+    #[serde(default)]
+    pub max_rounds: Option<i32>,
 }
 
 /// The script for one turn of a multi-turn case.
@@ -66,6 +100,11 @@ pub struct TurnScript {
     /// The workspace this turn picked (see `Scenario::cwd`).
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Start this turn on a **fresh server process** pointed at the same home (P1 recovery
+    /// benchmarks): the previous process is dropped, a new one boots and reconciles the ledger,
+    /// then the turn runs. This is what makes "restart, then continue" honest rather than assumed.
+    #[serde(default)]
+    pub restart: bool,
 }
 
 /// Case-level overrides of Settings knobs.
@@ -97,6 +136,9 @@ pub struct SettingsOverrides {
     /// Subagents (`JOY_DELEGATE`).
     #[serde(default)]
     pub delegate_enabled: Option<bool>,
+    /// The P1 planner (`JOY_PLAN`): one plan call before the first round.
+    #[serde(default)]
+    pub plan_enabled: Option<bool>,
     #[serde(default)]
     pub exec_allow: Option<Vec<String>>,
     /// Lifecycle hooks (`JOY_HOOKS`).
@@ -123,6 +165,7 @@ impl Scenario {
             apply_patch: None,
             interrupt_after_deltas: self.interrupt_after_deltas,
             cwd: self.cwd.clone(),
+            restart: false,
         }]
     }
 
@@ -134,6 +177,9 @@ impl Scenario {
     /// the loop's reply (the default semantics: "no gate written → fail-open tested").
     pub fn build_mock(&self, home: &std::path::Path) -> Mock {
         let mut responses: Vec<CreateResponse> = Vec::new();
+        if let Some(plan) = &self.plan {
+            responses.push(Mock::text(plan));
+        }
         for turn in self.effective_turns() {
             let gate = match &turn.gate {
                 Some(gate) => serde_json::to_string(gate).expect("gate 序列化"),
@@ -141,19 +187,32 @@ impl Scenario {
             };
             responses.push(Mock::text(&gate));
             for (index, response) in turn.responses.iter().enumerate() {
-                responses.push(response.to_create_response(index, home));
+                match response {
+                    // An inline gate script: the round boundary is a real model call, and
+                    // this is how the case says "the next round's gate answers this".
+                    ScriptedResponse::Gate(gate) => responses.push(Mock::text(
+                        &serde_json::to_string(gate).expect("gate 序列化"),
+                    )),
+                    other => responses.push(other.to_create_response(index, home)),
+                }
             }
         }
         Mock::streaming(responses)
     }
 }
 
-/// The model's next move: either plain text or one tool call.
+/// The model's next move: plain text, one tool call, or a retrieval-gate script.
+///
+/// A long task runs several **rounds inside one turn**, and every round re-asks the gate
+/// (`full_turn` starts fresh each round). So a multi-round case has to say where each gate
+/// script goes — writing them inline, in call order, is the least surprising way:
+/// `[工具调用, 文本, {"gate": …}, 工具调用, 文本]`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptedResponse {
     Text(String),
     ToolUse { name: String, args: Value },
+    Gate(Value),
 }
 
 impl ScriptedResponse {
@@ -164,6 +223,9 @@ impl ScriptedResponse {
     ) -> CreateResponse {
         match self {
             ScriptedResponse::Text(text) => Mock::text(text),
+            ScriptedResponse::Gate(gate) => {
+                Mock::text(&serde_json::to_string(gate).expect("gate 序列化"))
+            }
             ScriptedResponse::ToolUse { name, args } => {
                 // {{home}} in tool arguments becomes the case's own home — file fixtures
                 // (scenario.files) live in home, and the script must be able to point at
@@ -220,6 +282,16 @@ pub struct Expectations {
     /// Did not appear in the last model request.
     #[serde(default)]
     pub last_prompt_not_contains: Vec<String>,
+    // ---- task assertions (only meaningful when the case created one) ----
+    /// The task's final status: `done` / `needs_attention` / `failed` / `suspended` …
+    #[serde(default)]
+    pub task_status: Option<String>,
+    /// Every acceptance condition passed (`true`) or at least one failed (`false`).
+    #[serde(default)]
+    pub task_checks_passed: Option<bool>,
+    /// How many deliverables the task recorded.
+    #[serde(default)]
+    pub task_artifacts: Option<usize>,
 }
 
 /// A judge case: a real model answers one turn, the referee scores by criteria. No

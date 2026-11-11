@@ -422,6 +422,18 @@ chat window (allow / allow and remember / deny; no answer times out as denial).
 The config panels were removed from the page — approvals stay where a human can
 answer them.
 
+## Task execution plans (`JOY_PLAN`)
+
+With `JOY_PLAN=1`, a long task spends **one extra model call before its first round** asking
+for a plan: 3–6 short, actionable steps whose completion can be seen. The plan is stored as
+`task_steps` rows (`kind = "plan"`, empty `run_id` — a plan outlives the execution that drew
+it) and appended to that round's message as plain text. A failed round may revise the plan
+**once** (two versions max: rewriting after every failure is thrash, not progress).
+
+**Off by default**: it is one more model call and it changes the prompt — a switch pressed by
+hand. A plan never carries acceptance conditions: those are the human's facts, and a model must
+not be able to soften them by re-planning.
+
 ## The model catalog (`models-catalog.json`)
 
 Twelve providers ship in the binary (`joyczl-provider`). To add one — or to

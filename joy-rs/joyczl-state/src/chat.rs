@@ -52,22 +52,40 @@ impl Chat {
         source: &str,
         meta: Option<&str>,
     ) -> Result<()> {
+        self.append_exchange_for(user, assistant, session_id, source, meta, None)
+            .await
+    }
+
+    /// Same, plus the task this exchange belongs to (migration 0017). A task-less turn passes
+    /// `None` — the delegation above keeps every older caller exactly as it was.
+    pub async fn append_exchange_for(
+        &self,
+        user: &str,
+        assistant: &str,
+        session_id: &str,
+        source: &str,
+        meta: Option<&str>,
+        task_id: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO chat_log (role, content, session_id, source) VALUES ('user', ?, ?, ?)",
+            "INSERT INTO chat_log (role, content, session_id, source, task_id)
+             VALUES ('user', ?, ?, ?, ?)",
         )
         .bind(user)
         .bind(session_id)
         .bind(source)
+        .bind(task_id)
         .execute(&self.pool)
         .await?;
         sqlx::query(
-            "INSERT INTO chat_log (role, content, session_id, source, meta)
-             VALUES ('assistant', ?, ?, ?, ?)",
+            "INSERT INTO chat_log (role, content, session_id, source, meta, task_id)
+             VALUES ('assistant', ?, ?, ?, ?, ?)",
         )
         .bind(assistant)
         .bind(session_id)
         .bind(source)
         .bind(meta)
+        .bind(task_id)
         .execute(&self.pool)
         .await?;
         Ok(())

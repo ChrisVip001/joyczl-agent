@@ -65,8 +65,13 @@ pending 表都按**归一化字符串**做 key——同一份协议在两种语�
 - `api.ts` 的 `talk()` 是个**异步生成器**：手读 `fetch` 的 body，按 `\n\n` 切帧、
   取 `data:` 载荷逐条 yield 出去；`finally` 里 `reader.cancel()` 收尾。
 - `render.ts` 全是纯函数（`renderOverview` / `renderMemory` / `messageRow` /
-  `metaChips` / `turnFooter`…），且**文本一律 `textContent`**（防 XSS——记忆里的
-  内容是用户数据，不能当 HTML）。
+  `metaChips` / `turnFooter`…），且**从不拼 HTML**：文字走 `textContent`，结构走
+  `createElement`（防 XSS——模型回复和记忆内容都是外部输入，没有理由变成标记）。
+- `markdown.ts` 把模型的回复画成 Markdown：**自己写的解析器 + 直接建 DOM**，不引
+  第三方 parser，`innerHTML` 一次都不用（原始 HTML 按文本显示，图片不渲染，链接只
+  放行 http/https/mailto 与站内路径）。流式期间保持纯文本——每帧追加一个文本节点，
+  几千 token 的回复不会因为重排而抖动——一轮结束后一次性换成渲染结构。只作用于模型
+  的 `.bubble.md`；用户自己说的话保持纯文本，不被重新解释。
 
 Rust 侧（`joyczl-ops`）做的是「HTTP ↔ JSON-RPC 的翻译」：
 

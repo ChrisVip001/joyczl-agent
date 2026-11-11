@@ -56,6 +56,11 @@ smoke: build
 eval: build
     cd {{ rust_dir }} && cargo run -q --bin joy -- eval
 
+# Long-task benchmarks: same scripted harness, asks "did autonomous task work get better or
+# worse". **Records, never blocks** — exit 0 even when cases fail. Cases live in evals/long/.
+bench: build
+    cd {{ justfile_directory() }} && {{ rust_dir }}/target/debug/joy bench
+
 # judge: a real model answers one turn; a small judge model scores 0-10 by rubric. Needs a key;
 # the score doesn't block releases — it answers "how good", not "can we ship".
 judge: build

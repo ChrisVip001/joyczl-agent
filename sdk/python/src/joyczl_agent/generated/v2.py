@@ -13,34 +13,35 @@ class JoyProtocolV2(RootModel[Any]):
     root: Annotated[Any, Field(title='JoyProtocolV2')]
 
 
-class AgentTaskView(BaseModel):
-    createdAt: str
-    currentTurnId: Annotated[
+class AcceptanceView(BaseModel):
+    kind: Annotated[
+        str, Field(description='`fileExists` / `fileContains` / `toolsOk`.')
+    ]
+    label: Annotated[
         str | None,
         Field(
-            description='The turn currently carrying this task (a heartbeat; absent when idle).'
+            description="The human's own wording, when they gave one. Absent = derived from the fields above."
         ),
     ] = None
-    finishedAt: str | None = None
-    goalCondition: Annotated[
+    min: Annotated[
+        int | None,
+        Field(
+            description='Occurrences required (`fileContains`) / successful calls required (`toolsOk`).'
+        ),
+    ] = None
+    path: Annotated[
         str | None,
         Field(
-            description="The goal loop's condition. Absent = a single-turn task: done when the turn is."
+            description="Path, relative to the task's working directory (an absolute path must land inside it)."
         ),
     ] = None
-    id: str
-    maxRounds: int
-    roundsUsed: int
-    sessionId: str
-    status: str
-    suspendReason: str | None = None
-    tier: Annotated[
+    pattern: Annotated[
         str | None,
         Field(
-            description='The declared model tier (`fast` / `chat` / `reasoning`); absent = per-turn decision.'
+            description='Plain substring for `fileContains` — **not** a regex: a badly written pattern must not be able to stall a whole round.'
         ),
     ] = None
-    title: str
+    tool: Annotated[str | None, Field(description='Tool name for `toolsOk`.')] = None
 
 
 class ApprovalLogEntry(BaseModel):
@@ -114,6 +115,34 @@ class ApprovalRespondResponse(BaseModel):
             description='Is this request still awaiting an answer? False when the reply arrives too late (timed out, or the turn already ended) — the client learns nobody heard its answer.'
         ),
     ]
+
+
+class ArtifactView(BaseModel):
+    at: str
+    bytes: int
+    path: str
+
+
+class BudgetView(BaseModel):
+    tokens: int | None = None
+    tools: int | None = None
+    wallMs: int | None = None
+
+
+class CheckView(BaseModel):
+    detail: Annotated[
+        str,
+        Field(
+            description='Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md 不存在").'
+        ),
+    ]
+    label: Annotated[
+        str,
+        Field(
+            description='The condition in the human\'s words ("report.md 里至少有 3 处结论").'
+        ),
+    ]
+    passed: bool
 
 
 class ConfigReadParams(BaseModel):
@@ -405,6 +434,12 @@ class ModelProfileView(BaseModel):
         str, Field(description='The provider id in `joyczl-provider` terms.')
     ]
     smallModel: str | None = None
+    vision: Annotated[
+        bool | None,
+        Field(
+            description="Whether this profile's model accepts images. `null` = follow the vendor's default model (the catalog row)."
+        ),
+    ] = None
 
 
 class ModelProfilesParams(RootModel[None]):
@@ -463,6 +498,12 @@ class ModelSaveParams(BaseModel):
     model: str | None = None
     provider: str | None = None
     smallModel: str | None = None
+    vision: Annotated[
+        bool | None,
+        Field(
+            description='Whether this model accepts images. Absent = keep the vendor\'s default (patch semantics, same as `model`); `true` is how "this vendor\'s default is text-only, but *this* model sees" gets declared at the moment the profile is created.'
+        ),
+    ] = None
 
 
 class ModelSaveResponse(BaseModel):
@@ -520,6 +561,24 @@ class RunResponse(BaseModel):
         ),
     ] = None
     turnId: str
+
+
+class RunView(BaseModel):
+    endedAt: str | None = None
+    id: str
+    rounds: int
+    startedAt: str
+    status: Annotated[
+        str,
+        Field(
+            description='running / waiting / suspended / completed / failed / cancelled.'
+        ),
+    ]
+    stopReason: str | None = None
+    tokensIn: int
+    tokensOut: int
+    toolsFailed: int
+    toolsOk: int
 
 
 class ScheduleListParams(RootModel[None]):
@@ -726,7 +785,9 @@ class ServerNotification16(BaseModel):
 class ServerNotification17(BaseModel):
     reason: str | None = None
     roundsUsed: int
-    sessionId: str
+    sessionId: Annotated[
+        str | None, Field(description='Absent for a task that belongs to no session.')
+    ] = None
     status: str
     taskId: str
     type: Literal['taskUpdated']
@@ -829,12 +890,41 @@ class SettingsView(BaseModel):
     smallModel: str
 
 
+class SpentView(BaseModel):
+    tokens: int
+    tools: int
+    wallMs: int
+
+
 class TaskActionParams(BaseModel):
     reason: str | None = None
     taskId: str
 
 
+class TaskArtifactsResponse(BaseModel):
+    artifacts: list[ArtifactView]
+
+
 class TaskCreateParams(BaseModel):
+    acceptance: Annotated[
+        list[AcceptanceView] | None,
+        Field(
+            description='How "done" is measured. Empty = the goal/judge decides, as before.',
+            validate_default=True,
+        ),
+    ] = []
+    budget: Annotated[
+        BudgetView | None,
+        Field(
+            description="Caps on the whole task's spend. Absent dimensions are uncapped."
+        ),
+    ] = None
+    cwd: Annotated[
+        str | None,
+        Field(
+            description="The working directory this task owns. Absent = the turn's own cwd decides."
+        ),
+    ] = None
     goalCondition: Annotated[
         str | None,
         Field(
@@ -845,7 +935,12 @@ class TaskCreateParams(BaseModel):
         int | None,
         Field(description='Per-task round cap; absent = `JOY_GOAL_MAX_ROUNDS`.'),
     ] = None
-    sessionId: str
+    sessionId: Annotated[
+        str | None,
+        Field(
+            description='Absent = the task belongs to no session: it can be created and inspected on its own.'
+        ),
+    ] = None
     tier: Annotated[
         str | None,
         Field(
@@ -860,28 +955,26 @@ class TaskCreateParams(BaseModel):
     ]
 
 
-class TaskEnvelope(BaseModel):
-    task: AgentTaskView
+class TaskGetParams(BaseModel):
+    taskId: str
 
 
 class TaskListParams(RootModel[None]):
     root: Annotated[None, Field(title='TaskListParams')]
 
 
-class TaskListResponse(BaseModel):
-    tasks: list[AgentTaskView]
+class TaskRunsResponse(BaseModel):
+    runs: list[RunView]
 
 
 class TaskUpdatedNotification(BaseModel):
     reason: str | None = None
     roundsUsed: int
-    sessionId: str
+    sessionId: Annotated[
+        str | None, Field(description='Absent for a task that belongs to no session.')
+    ] = None
     status: str
     taskId: str
-
-
-class TaskViewResponse(BaseModel):
-    task: AgentTaskView | None = None
 
 
 class TextDeltaNotification(BaseModel):
@@ -1048,6 +1141,71 @@ class UsageSummaryResponse(BaseModel):
     turns: int
 
 
+class AgentTaskView(BaseModel):
+    acceptance: Annotated[
+        list[AcceptanceView] | None,
+        Field(
+            description='What must be measurably true. Empty = no objective conditions (single-turn task).',
+            validate_default=True,
+        ),
+    ] = []
+    budget: BudgetView | None = None
+    checks: Annotated[
+        list[CheckView] | None,
+        Field(
+            description='The latest verdict per condition, same order as `acceptance`.',
+            validate_default=True,
+        ),
+    ] = []
+    createdAt: str
+    currentTurnId: Annotated[
+        str | None,
+        Field(
+            description='The turn currently carrying this task (a heartbeat; absent when idle).'
+        ),
+    ] = None
+    cwd: Annotated[
+        str | None,
+        Field(
+            description="The task's own working directory (the boundary for verification and writes)."
+        ),
+    ] = None
+    finishedAt: str | None = None
+    goalCondition: Annotated[
+        str | None,
+        Field(
+            description="The goal loop's condition. Absent = a single-turn task: done when the turn is."
+        ),
+    ] = None
+    id: str
+    lastStopReason: Annotated[
+        str | None,
+        Field(
+            description="Why it stopped last time — the card's footnote, never guessed from the status."
+        ),
+    ] = None
+    maxRounds: int
+    roundsUsed: int
+    runCount: Annotated[
+        int | None,
+        Field(description='How many times this task has been executed ("执行 3 次").'),
+    ] = 0
+    sessionId: Annotated[
+        str | None,
+        Field(description='Absent = a task that belongs to no conversation.'),
+    ] = None
+    spent: SpentView
+    status: str
+    suspendReason: str | None = None
+    tier: Annotated[
+        str | None,
+        Field(
+            description='The declared model tier (`fast` / `chat` / `reasoning`); absent = per-turn decision.'
+        ),
+    ] = None
+    title: str
+
+
 class ConfigReadResponse(BaseModel):
     config: SettingsView
 
@@ -1107,6 +1265,13 @@ class DashboardData(BaseModel):
             description="The viewed session's current task (goal upgraded to a persisted entity), when asked for."
         ),
     ] = None
+    taskArtifacts: Annotated[
+        list[ArtifactView] | None,
+        Field(
+            description='What that task actually produced: files that exist, with their sizes (0.15). Always present (empty when there is no task), so the card needs no branch to render it.',
+            validate_default=True,
+        ),
+    ] = []
     todos: Annotated[
         TodoListView | None,
         Field(
@@ -1222,6 +1387,18 @@ class ServerNotification8(BaseModel):
 class SessionListResponse(BaseModel):
     data: list[SessionSummary]
     nextCursor: str | None = None
+
+
+class TaskEnvelope(BaseModel):
+    task: AgentTaskView
+
+
+class TaskListResponse(BaseModel):
+    tasks: list[AgentTaskView]
+
+
+class TaskViewResponse(BaseModel):
+    task: AgentTaskView | None = None
 
 
 class ToolCallRecord(BaseModel):

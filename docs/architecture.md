@@ -39,6 +39,9 @@ structure that makes that possible; running and configuring it live in
                 │
          joyczl-state ────────── SQLite + FTS5(trigram), sqlx migrations
                 │
+        joyczl-agent ────────── the deterministic core: acceptance checks, tool observation,
+                │               execution plans, the one path-containment rule
+                │
         joyczl-app-server ──── JSON-RPC over stdio, the only holder of state.db
           │         │
      joyczl-cli  joyczl-ops (dashboard: axum + SSE)

@@ -5,7 +5,10 @@
  */
 export type TaskUpdatedNotification = {
   taskId: string;
-  sessionId: string;
+  /**
+   * Absent for a task that belongs to no session.
+   */
+  sessionId: string | null;
   status: string;
   roundsUsed: number;
   reason: string | null;

@@ -12,6 +12,7 @@ members = [
     "joyczl-mcp",
     "joyczl-memory",
     "joyczl-state",
+    "joyczl-agent",
     "joyczl-eval",
     "joyczl-app-server",
     "joyczl-ops",
@@ -67,6 +68,7 @@ joyczl-loop = { path = "joyczl-loop" }
 joyczl-graph = { path = "joyczl-graph" }
 joyczl-mcp = { path = "joyczl-mcp" }
 joyczl-memory = { path = "joyczl-memory" }
+joyczl-agent = { path = "joyczl-agent" }
 joyczl-eval = { path = "joyczl-eval" }
 joyczl-app-server = { path = "joyczl-app-server" }
 joyczl-ops = { path = "joyczl-ops" }

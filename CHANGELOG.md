@@ -2,6 +2,86 @@
 
 English | [简体中文](CHANGELOG.zh.md)
 
+## 0.14.0 — Done means measured (the task-entity version)
+
+### Tasks stand on their own
+
+- Migration 0017 rebuilds `agent_tasks`: `session_id` is nullable (a task may belong to no
+  conversation at all), the "one active task per session" partial unique index is gone, and the
+  row grows acceptance conditions, a budget, what has been spent, its own working directory and
+  the reason it last stopped. A destructive migration on purpose — old rows are not converted.
+- Four new tables around it, each with one job: `task_runs` (one row per execution — "executed
+  3 times" is a count, not a guess), `task_steps` (one row per tool call, with an idempotency
+  key `<turn_id>:<seq>`), `task_events` (the readable timeline), `task_artifacts` (the files
+  that really exist). `turn_checkpoints` gains `run_id`, `chat_log` gains `task_id`.
+- `task/get`, `task/runs`, `task/artifacts` join the human-only task methods.
+
+### "Done" is decided by facts
+
+- `verify.rs`: three deterministic checks — `fileExists`, `fileContains` (a plain substring,
+  never a regex: a broken pattern must not stall a round), `toolsOk` (counted from the step
+  ledger, not from the model's summary). Every round is measured before the judge is asked, and
+  **a failing condition skips the judge entirely** — a model must not be asked to confirm a
+  fact that is already false.
+- `observe.rs`: the tool's claim is paired with the filesystem. "Said it wrote, the file is not
+  there" becomes a contradiction, the one signal that stops a task from reaching `done` on a
+  lie. Path containment reuses the write tools' rule (`inside_workspace` is now public and
+  `contained` delegates to it) — one implementation, no second opinion; no workspace means no
+  path check at all, never a fallback to home.
+- New state `needs_attention`: non-terminal on purpose — a machine measured something it must
+  not overrule, so a human looks (continue or cancel). Budget overruns land there too, naming
+  the dimension that ran out.
+- Task-level budgets (wall clock / tokens / tool calls) are checked once per round, before the
+  next model call can spend more.
+- Crash safety: a step left `running` means "sent, the result never landed". Boot turns it into
+  `waiting` — **never replayed**; a write that may already have happened is a human's call.
+
+### Dashboard
+
+- The task card grows three blocks: the acceptance checklist (tick / cross per condition, with
+  the measured result beside a failure), the deliverables (files with real sizes), and three
+  usage bars (only dimensions with a cap get a bar; 80% turns amber, 100% red). A footnote says
+  "executed N times · last stopped at …". `needs_attention` gets its own warning pill.
+  `sw.js` goes to `joy-v5`.
+
+### Evals and gates
+
+- `evals/deterministic/task-acceptance.jsonl`: a false "done", an over-budget stop, and a real
+  file passing — all offline and reproducible. The eval harness can now create a task before a
+  case's turns and assert its final status, verdicts and artifact count.
+- `smoke-resume.sh` plants a task + run + a "sent but never landed" step and asserts the fresh
+  process turns the step into `waiting` and closes the task honestly.
+- `smoke-dashboard.sh` checks the new fields end to end (and that a second task in one session
+  is now created instead of refused); `smoke.sh`'s hub section picks a free port instead of
+  hardcoding 7801.
+- `joy bench` + `evals/long/tasks.jsonl`: 10 long-task benchmarks (multi-round writes, cross-round
+  `toolsOk`, write-then-exact-edit, nested folders, and 3 interrupt recoveries), reporting **task
+  success rate** and **interrupt recovery rate** separately (interrupt → the process really
+  restarts → a later turn finishes). It **records, never blocks**; the report also lands in
+  `eval_report_long.json` so a benchmark run cannot overwrite the release gate's verdict.
+  The benchmarks paid for themselves on the first run — two real defects, both fixed with a
+  regression test each: step idempotency keys collided across rounds (round 2's write was silently
+  dropped, so `toolsOk` never counted past one), and an interrupt kept the task loop burning
+  rounds (the user's stop only took effect when the round cap ran out).
+- Eval scenarios gained inline `{"gate": …}` replies (every round re-asks the gate) and
+  `restart: true` (run the next turn on a fresh process), which is what lets the benchmarks
+  measure restart-and-continue instead of assuming it.
+
+### Execution plans (P1, `JOY_PLAN=1`)
+
+- A long task may spend one extra model call before its first round asking for a 3–6 step plan,
+  written into `task_steps` (`kind = "plan"`, empty `run_id` — a plan outlives the execution that
+  drew it) and appended to that round's message as plain text. A failed round may revise the plan
+  **once** (two versions max); a plan never carries acceptance conditions, so a model cannot
+  soften the human's standard by re-planning. Off by default: one more model call and a changed
+  prompt is a capability pressed by hand.
+- A broken planner never takes the task down: no valid JSON means one stderr line and the round
+  runs without a plan.
+- New `joyczl-agent` crate: acceptance (`verify`), observation (`observe`), plans (`plan`) and the
+  repo's single path-containment rule (`paths::inside_workspace`) move out of the app server; the
+  write tools re-export the same rule (`tools → agent`, no cycle). The crate has no JSON-RPC and
+  holds no `Server`, so fact-deciding logic is testable on its own.
+
 ## 0.13.0 — Someone knocks (the workspace version)
 
 ### Inbound mail: the door opening the other way

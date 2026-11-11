@@ -18,6 +18,7 @@
 mod approval;
 mod dispatch;
 mod goal;
+mod image_meta;
 mod inbox;
 mod jobs;
 /// Guardian lock: only one app-server per home (`joyczl_app_server::lock`).
@@ -65,6 +66,10 @@ mod task_tests;
 #[cfg(test)]
 #[path = "inbox_tests.rs"]
 mod inbox_tests;
+
+#[cfg(test)]
+#[path = "image_meta_tests.rs"]
+mod image_meta_tests;
 
 #[cfg(test)]
 #[path = "subagent_tests.rs"]
@@ -176,9 +181,18 @@ pub struct Server {
     /// Connector inbox (migration 0015): what came in from the outside, recorded as-is.
     /// Only the poller and `inbox/*` touch it; the model has no path here at all.
     pub(crate) inbox: joyczl_state::Inbox,
-    /// Long tasks (migration 0014): identity, status, round account. Human-only switches live
-    /// in task.rs; the goal loop above is the engine that drives their rounds.
+    /// Long tasks (migration 0014, rebuilt in 0017): identity, status, acceptance, budget,
+    /// spent. Human-only switches live in task.rs; the goal loop is the engine that drives rounds.
     pub(crate) tasks: joyczl_state::Tasks,
+    /// One row per execution of a task (migration 0017): "executed N times", what each cost.
+    pub(crate) runs: joyczl_state::Runs,
+    /// One row per tool call (migration 0017) — where idempotency lives: a step left `running`
+    /// is never replayed, it waits for a human.
+    pub(crate) steps: joyczl_state::Steps,
+    /// The task timeline: verification rounds, budget refusals, contradictions.
+    pub(crate) events: joyczl_state::Events,
+    /// The deliverable list: files that really exist after a round.
+    pub(crate) artifacts: joyczl_state::Artifacts,
     /// Turns a human just asked to suspend (`task/suspend`): at finalize time the checkpoint is
     /// kept as `suspended` instead of `abandoned` — pausing is not stopping.
     pub(crate) suspending: Arc<Mutex<HashSet<String>>>,
@@ -227,14 +241,17 @@ impl Server {
                 let id = format!("task{}", chrono::Local::now().timestamp_millis());
                 if let Err(e) = self
                     .tasks
-                    .create(
-                        &id,
-                        session_id,
-                        condition,
-                        Some(condition),
+                    .create(joyczl_state::NewTask {
+                        id: &id,
+                        session_id: Some(session_id),
+                        title: condition,
+                        goal_condition: Some(condition),
+                        acceptance_json: "[]",
+                        budget_json: "{}",
+                        cwd: None,
                         max_rounds,
-                        None,
-                    )
+                        tier: None,
+                    })
                     .await
                 {
                     eprintln!("(joy) 目标没建成任务（目标仍在内存里跑）：{e}");
@@ -396,6 +413,10 @@ impl Server {
             jobs: jobs_handle,
             goals: goal::store(),
             tasks: joyczl_state::Tasks::new(pool.clone()),
+            runs: joyczl_state::Runs::new(pool.clone()),
+            steps: joyczl_state::Steps::new(pool.clone()),
+            events: joyczl_state::Events::new(pool.clone()),
+            artifacts: joyczl_state::Artifacts::new(pool.clone()),
             suspending: Arc::new(Mutex::new(HashSet::new())),
             models,
             route_cache,
@@ -408,17 +429,52 @@ impl Server {
         server
     }
 
-    /// Boot restore for long tasks (migration 0014):
-    /// 1. a `running` row means the previous process died while carrying it — mark it suspended
-    ///    with the honest reason (the turn's `open` checkpoint may then flip it back to running);
-    /// 2. load surviving goals into the runner's mirror — a restart no longer forgets the target.
+    /// Boot restore for long tasks (migrations 0014 + 0017), in dependency order:
+    ///
+    /// 1. a step left `running` means "sent, its result never landed". It becomes `waiting` —
+    ///    **never replayed**: a write that may already have happened is a human's call;
+    /// 2. a run left `running` belonged to the dead process: closed as `waiting` too;
+    /// 3. a `running` task row is marked suspended with the honest reason (the turn's `open`
+    ///    checkpoint may then flip it back to running);
+    /// 4. surviving goals are loaded into the runner's mirror — a restart no longer forgets.
     async fn restore_tasks(&self) {
+        match self
+            .steps
+            .settle_running("进程在这一步落盘前退出，结果未知 —— 需要你确认要不要重做")
+            .await
+        {
+            Ok(0) => {}
+            Ok(count) => eprintln!(
+                "(joy) 对账：{count} 个执行步骤在结果落盘前中断，已标 waiting（不重放，等你确认）"
+            ),
+            Err(e) => eprintln!("(joy) 步骤对账读不了库（不挡启动）：{e}"),
+        }
+        match self.runs.open_runs().await {
+            Ok(runs) => {
+                for run in runs {
+                    eprintln!(
+                        "(joy) 对账：执行 {}（任务 {}）上次没跑完，标 waiting",
+                        run.id, run.task_id
+                    );
+                    let _ = self
+                        .runs
+                        .close(
+                            &run.id,
+                            joyczl_state::RunStatus::Waiting,
+                            Some("进程重启时还没收尾，等你确认"),
+                        )
+                        .await;
+                }
+            }
+            Err(e) => eprintln!("(joy) 执行记录对账读不了库（不挡启动）：{e}"),
+        }
         match self.tasks.reconcile_restart().await {
             Ok(rows) if !rows.is_empty() => {
                 for row in &rows {
                     eprintln!(
                         "(joy) 对账：任务「{}」在进程退出时还在跑，先标挂起（会话 {}）",
-                        row.title, row.session_id
+                        row.title,
+                        row.session_id.as_deref().unwrap_or("（无会话）")
                     );
                 }
             }
@@ -428,8 +484,10 @@ impl Server {
         match self.tasks.list_active().await {
             Ok(rows) => {
                 for row in rows {
-                    if let Some(condition) = &row.goal_condition {
-                        goal::set(&self.goals, &row.session_id, Some(condition));
+                    // A session-less task has no mirror slot — its condition lives on the row.
+                    if let (Some(condition), Some(session)) = (&row.goal_condition, &row.session_id)
+                    {
+                        goal::set(&self.goals, session, Some(condition));
                     }
                 }
             }

@@ -23,6 +23,12 @@ pub fn write(home: &Path, suite: &str, payload: serde_json::Value) -> Result<()>
             report_path.display()
         );
     }
+    // Per-suite copy: the long benchmark and the release gate answer different questions, and a
+    // shared "latest" file would let one run quietly overwrite the other's verdict.
+    let suite_path = home.join(format!("eval_report_{suite}.json"));
+    if let Err(e) = std::fs::write(&suite_path, record.to_string()) {
+        eprintln!("(joy) {} 写不进去：{e}", suite_path.display());
+    }
     let history = home.join("eval_runs.jsonl");
     if let Some(parent) = history.parent() {
         let _ = std::fs::create_dir_all(parent);

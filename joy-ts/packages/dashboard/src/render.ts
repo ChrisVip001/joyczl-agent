@@ -3,9 +3,14 @@
 // Mostly pure functions: give data, get back a node. main.ts only manages "when to repaint",
 // not "what it looks like" — when the page gets ugly, look at this one file.
 
+import { renderMarkdown } from "./markdown";
 import type {
   AgentTaskView,
   ApprovalLogEntry,
+  ArtifactView,
+  AcceptanceView,
+  BudgetView,
+  CheckView,
   DashboardData,
   Episode,
   Fact,
@@ -69,6 +74,7 @@ export function renderOverview(
         data.goal ?? { active: false, condition: null, roundsUsed: 0, maxRounds: 0 },
         data.todos ?? emptyTodos,
         data.task,
+        data.taskArtifacts ?? [],
         onTask,
       ),
     );
@@ -233,6 +239,7 @@ export function renderTaskCard(
   goal: GoalSetResponse,
   todos: TodoListView,
   task: AgentTaskView | undefined,
+  artifacts: ArtifactView[],
   onTask: (task: AgentTaskView, action: "suspend" | "resume" | "cancel") => void,
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
@@ -244,12 +251,16 @@ export function renderTaskCard(
     pending: "等待开始",
     running: "进行中",
     suspended: "已暂停",
+    // Not a failure: the machine measured something it must not overrule, so a person looks.
+    needs_attention: "需要你确认",
     done: "已完成",
     failed: "未达成",
     cancelled: "已取消",
   };
   if (task != null) {
     const live = task.status === "running" || task.status === "pending";
+    // "Needs you" is resumable on purpose: continue is exactly what this state is for.
+    const resumable = task.status === "suspended" || task.status === "needs_attention";
     block.append(
       el("h3", { text: "任务" }),
       el(
@@ -266,6 +277,15 @@ export function renderTaskCard(
       task.suspendReason !== null
         ? el("div", { class: "task-note", text: task.suspendReason })
         : document.createDocumentFragment(),
+      // ---- 验收清单：每条条件一行；通过给勾，未通过给叉和实测结果。
+      // 没有验收条件时整块不出现 —— 空的"验收"标题只是噪音。
+      ...acceptanceBlock(task.acceptance, task.checks),
+      // ---- 交付物：真的存在的文件，不是模型的总结。
+      ...artifactBlock(artifacts),
+      // ---- 预算：只有设了上限的维度才画条（没上限的只显示已用）。
+      ...budgetBlock(task.budget, task.spent),
+      // ---- 脚注：执行几次、上次停在哪。
+      taskFooter(task),
       el(
         "div",
         { class: "task-actions" },
@@ -279,7 +299,7 @@ export function renderTaskCard(
               }),
             ]
           : []),
-        ...(task.status === "suspended"
+        ...(resumable
           ? [
               el("button", {
                 class: "task-act task-act-go",
@@ -289,7 +309,7 @@ export function renderTaskCard(
               }),
             ]
           : []),
-        ...(live || task.status === "suspended"
+        ...(live || resumable
           ? [
               el("button", {
                 class: "task-act task-act-stop",
@@ -341,6 +361,155 @@ export function renderTaskCard(
 
   if (block.children.length > 0) fragment.append(block);
   return fragment;
+}
+
+/** At most this many condition rows before folding into "还有 N 条". */
+const CHECKS_SHOWN = 6;
+/** At most this many deliverables before folding. */
+const ARTIFACTS_SHOWN = 5;
+
+/**
+ * The acceptance checklist: **the reason** a task is not done, in the same words the checker
+ * used. `checks` is index-aligned with `acceptance`; a condition with no verdict yet says so
+ * instead of pretending to pass.
+ */
+function acceptanceBlock(
+  acceptance: AcceptanceView[],
+  checks: CheckView[],
+): Node[] {
+  if (acceptance.length === 0) return [];
+  const rows = acceptance.slice(0, CHECKS_SHOWN).map((condition, index) => {
+    const check = checks[index];
+    const passed = check?.passed === true;
+    return el(
+      "li",
+      { class: `task-check ${passed ? "ok" : "bad"}` },
+      el("span", { class: "task-glyph", "aria-hidden": "true" }),
+      el("span", {
+        class: "task-check-label",
+        text: condition.label ?? check?.label ?? condition.kind,
+      }),
+      el("span", {
+        class: "task-check-detail",
+        // Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement.
+        text: check?.detail ?? "尚未检查",
+      }),
+    );
+  });
+  const rest = acceptance.length - rows.length;
+  return [
+    el("h3", { text: "验收" }),
+    el("ul", { class: "task-checks" }, ...rows),
+    rest > 0 ? el("div", { class: "task-more", text: `还有 ${rest} 条` }) : document.createDocumentFragment(),
+  ];
+}
+
+/** The deliverables: files that exist, with their real sizes. */
+function artifactBlock(artifacts: ArtifactView[]): Node[] {
+  if (artifacts.length === 0) return [];
+  const rows = artifacts.slice(0, ARTIFACTS_SHOWN).map((artifact) =>
+    el(
+      "li",
+      { class: "task-artifact", title: artifact.path },
+      el("span", { class: "task-artifact-name", text: baseName(artifact.path) }),
+      el("span", { class: "task-artifact-size", text: formatBytes(artifact.bytes) }),
+    ),
+  );
+  const rest = artifacts.length - rows.length;
+  return [
+    el("h3", { text: "交付物" }),
+    el("ul", { class: "task-artifacts" }, ...rows),
+    rest > 0 ? el("div", { class: "task-more", text: `还有 ${rest} 个` }) : document.createDocumentFragment(),
+  ];
+}
+
+/**
+ * Three usage bars (time / tokens / tool calls). A dimension with no cap still shows what was
+ * spent — the numbers are the honest part; the bar only exists where there is a limit to hit.
+ */
+function budgetBlock(
+  budget: BudgetView | null,
+  spent: { wallMs: number; tokens: number; tools: number },
+): Node[] {
+  if (budget === null) return [];
+  // One unit per row: both numbers must read in the same scale, or "45.2s / 10 分 0 秒"
+  // happens — two ways of saying time side by side looks like a bug.
+  const clock = (budget.wallMs ?? spent.wallMs) >= 60_000;
+  const time = (value: number) => formatDuration(value, clock);
+  const rows = [
+    budgetRow("时长", time(spent.wallMs), spent.wallMs, budget.wallMs, time),
+    budgetRow("Token", String(spent.tokens), spent.tokens, budget.tokens, String),
+    budgetRow("工具调用", String(spent.tools), spent.tools, budget.tools, String),
+  ].filter((row): row is HTMLDivElement => row !== null);
+  if (rows.length === 0) return [];
+  return [el("h3", { text: "预算" }), el("div", { class: "task-budget" }, ...rows)];
+}
+
+function budgetRow(
+  name: string,
+  shown: string,
+  spent: number,
+  cap: number | null,
+  render: (value: number) => string,
+): HTMLDivElement | null {
+  if (cap === null && spent === 0) return null;
+  const ratio = cap !== null && cap > 0 ? spent / cap : null;
+  const level = ratio === null ? "" : ratio >= 1 ? " is-over" : ratio >= 0.8 ? " is-warn" : "";
+  return el(
+    "div",
+    { class: "task-budget-row" },
+    el(
+      "div",
+      { class: "task-budget-line" },
+      el("span", { class: "task-budget-name", text: name }),
+      el("span", {
+        class: "task-budget-num",
+        text: cap === null ? shown : `${shown} / ${render(cap)}`,
+      }),
+    ),
+    ratio === null
+      ? document.createDocumentFragment()
+      : el(
+          "div",
+          { class: `meter${level}`, role: "img", "aria-label": `${name} ${shown} / ${render(cap as number)}` },
+          el("div", {
+            class: "meter-fill",
+            style: `width:${Math.min(100, Math.round(ratio * 100))}%`,
+          }),
+        ),
+  );
+}
+
+/** "执行 3 次 · 上次停在「验收未通过：report.md 不存在」· 未设预算" */
+function taskFooter(task: AgentTaskView): Node {
+  const parts: string[] = [];
+  parts.push(task.runCount > 0 ? `执行 ${task.runCount} 次` : "还没执行过");
+  if (task.lastStopReason !== null && task.lastStopReason !== "") {
+    parts.push(`上次停在「${task.lastStopReason}」`);
+  }
+  if (task.budget === null) parts.push("未设预算");
+  const text = parts.join(" · ");
+  // The line is clipped on purpose; `title` keeps the whole sentence reachable on hover.
+  return el("div", { class: "task-foot", text, title: text });
+}
+
+function baseName(path: string): string {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return cut >= 0 ? path.slice(cut + 1) : path;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** `clock` = the row is long enough that minutes matter ("0:45 / 10:00" beats "45.2s / 600s"). */
+function formatDuration(ms: number, clock: boolean): string {
+  if (!clock) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.round((ms % 60_000) / 1000);
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 /**
@@ -501,11 +670,14 @@ export function attachmentStrip(files: { name: string; url?: string }[]): HTMLEl
  * refresh a message shouldn't look like a different client — they're two sources of one talk.
  */
 export function messageRow(message: Message): HTMLElement {
-  const bubble = el("div", { class: "bubble", text: message.content });
-
+  // The human's own words stay plain text: their input is not reinterpreted.
   if (message.role === "user") {
-    return el("div", { class: "msg me" }, bubble);
+    return el("div", { class: "msg me" }, el("div", { class: "bubble", text: message.content }));
   }
+
+  // The model writes Markdown, so paint Markdown — leaving `**` and `- ` on screen isn't
+  // "faithful", it's unrendered. Still DOM-only: see markdown.ts.
+  const bubble = el("div", { class: "bubble md" }, renderMarkdown(message.content));
 
   // Telemetry is the only thing that can reconstruct "what it was thinking then", so it's worth
   // painting — but it's a **turn summary**, not a per-item replay: in the live view each tool

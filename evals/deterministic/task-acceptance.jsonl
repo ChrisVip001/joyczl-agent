@@ -1,0 +1,17 @@
+# 任务验收（0.15，P0）：完成由**事实**决定，不由模型自己说。
+#
+# 三个场景各钉住一条：
+#   1. 模型说写好了、文件不在 → 任务停在「需要你确认」，不是 done、也不是 failed；
+#   2. 预算用完 → 在下一次模型调用之前停下，理由点名是哪一条超了；
+#   3. 文件真的存在 → 验收全过 → done，且交付物清单里有那个文件。
+#
+# 队列顺序 = 真实调用顺序：每轮先检索门（case 没写 gate 时自动补一段非 JSON，失败开放），
+# 再是模型应答。用例里的 cwd 就是任务的 cwd —— 写入与验收看同一个目录。
+#
+# 这一套离线、0/1、可重复，是发版门禁的一部分。
+
+{"id":"task-acceptance-blocks-a-false-done","description":"模型说写好了、文件不在：停在需要你确认，不变成完成","settings":{"write_enabled":true},"cwd":"{{home}}/work","files":{"work/.keep":""},"task":{"title":"写一份报告","acceptance":[{"kind":"fileExists","path":"report.md"}],"max_rounds":1},"message":"开始吧","gate":{"retrieve":false,"query":"","reason":"task"},"responses":[{"text":"报告已经写好了，请查收。"}],"expect":{"task_status":"needs_attention","task_checks_passed":false,"task_artifacts":0,"reply_contains":["写好了"]}}
+
+{"id":"task-over-budget-stops-before-spending-more","description":"预算用完就停：状态是 needs_attention，理由说清是 Token 超了","settings":{"write_enabled":true},"task":{"title":"慢慢做","budget":{"tokens":10}},"message":"开始吧","gate":{"retrieve":false,"query":"","reason":"task"},"responses":[{"text":"先做一点。"},{"text":"再做一点。"}],"expect":{"task_status":"needs_attention","reply_contains":["做一点"]}}
+
+{"id":"task-acceptance-passes-on-a-real-file","description":"文件真的存在 + 内容对得上：验收全过 → done，交付物记账","settings":{"write_enabled":true},"cwd":"{{home}}/work","files":{"work/.keep":""},"task":{"title":"写一份报告","acceptance":[{"kind":"fileExists","path":"report.md"},{"kind":"fileContains","path":"report.md","pattern":"结论","min":1}]},"message":"开始吧","gate":{"retrieve":false,"query":"","reason":"task"},"responses":[{"tool_use":{"name":"write_file","args":{"path":"{{home}}/work/report.md","content":"结论：可以上线\n"}}},{"text":"写好了。"}],"expect":{"task_status":"done","task_checks_passed":true,"task_artifacts":1,"tools_used":["write_file"],"reply_contains":["写好了"]}}

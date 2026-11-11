@@ -154,8 +154,8 @@ echo "  历史：$(head -c 220 "$WORK/session.json")"
 echo "  ✓ 说过的话读得回来（最新在前 + 已经到底）"
 
 # ---- Long task: create → appears on screen → pause → resume → cancel ----------------
-# One door (`/api/task`) with an action field; the rules (one active task per session)
-# live in app-server, so the assertions check the state machine end to end.
+# One door (`/api/task`) with an action field; the rules (acceptance, budget, the state
+# machine) live in app-server, so the assertions check the state machine end to end.
 curl -sS -X POST "$BASE/api/task" \
   -H 'content-type: application/json' \
   -d '{"action":"create","sessionId":"default","title":"盯三天服务器","goalCondition":"三天都盯着"}' \
@@ -167,12 +167,30 @@ TASK_ID="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$WORK/task1.json" | head -n1)"
 curl -sS "$BASE/api/data?sessionId=default" >"$WORK/data3.json"
 grep -q '"title":"盯三天服务器"' "$WORK/data3.json" || fail "任务没进首屏数据（任务卡会空）"
 grep -q '"goalCondition":"三天都盯着"' "$WORK/data3.json" || fail "目标没进任务行"
+grep -q '"acceptance":\[\]' "$WORK/data3.json" || fail "没写验收条件时该是空数组"
+grep -q '"spent":{"wallMs":0,"tokens":0,"tools":0}' "$WORK/data3.json" || fail "花费要如实给（0 也是事实）"
+grep -q '"runCount":0' "$WORK/data3.json" || fail "还没执行过，runCount 该是 0"
+grep -q '"taskArtifacts":\[\]' "$WORK/data3.json" || fail "没有交付物时该给空数组"
 
-# A second active task must be refused with the first one named — not a stack of ghosts.
+# 0.15: a task is its own entity — the same session may hold several, and the card shows
+# the newest. (It used to refuse the second one.)
 curl -sS -X POST "$BASE/api/task" \
   -H 'content-type: application/json' \
   -d '{"action":"create","sessionId":"default","title":"另一件事"}' >"$WORK/task2.json"
-grep -q '盯三天服务器' "$WORK/task2.json" || fail "第二个任务该被拒，并说清是哪个占着"
+grep -q '"title":"另一件事"' "$WORK/task2.json" || fail "第二个任务该建得成：$(cat "$WORK/task2.json")"
+grep -q '"sessionId":"default"' "$WORK/task2.json" || fail "任务行该带回会话 id"
+
+# Acceptance conditions are normalised at creation: the card's wording and the checker's
+# condition are the same sentence, so this string is a real end-to-end assertion.
+curl -sS -X POST "$BASE/api/task" -H 'content-type: application/json' \
+  -d "{\"action\":\"create\",\"title\":\"写一份报告\",\"cwd\":\"$WORK\",\"acceptance\":[{\"kind\":\"fileExists\",\"path\":\"report.md\"}]}" \
+  >"$WORK/task3.json" || fail "带验收条件的任务没建通"
+grep -q '"label":"report.md 存在"' "$WORK/task3.json" || fail "验收条件没人话标签：$(cat "$WORK/task3.json")"
+grep -q '"status":"pending"' "$WORK/task3.json" || fail "带验收条件的任务也该是 pending"
+# A task with no session carries **no** sessionId field at all (absent, not null): absence is
+# the honest shape for "belongs to nothing".
+python3 -c "import json,sys; t=json.load(open('$WORK/task3.json'))['task']; sys.exit(0 if t.get('sessionId') is None else 1)" \
+  || fail "没给会话的任务不该凭空长出一个会话"
 
 curl -sS -X POST "$BASE/api/task" -H 'content-type: application/json' \
   -d "{\"action\":\"suspend\",\"taskId\":\"$TASK_ID\"}" >"$WORK/suspend.json"
@@ -188,7 +206,10 @@ grep -q '"status":"cancelled"' "$WORK/cancel.json" || fail "取消失败"
 
 curl -sS "$BASE/api/tasks" >"$WORK/tasks.json"
 grep -q '"tasks":\[' "$WORK/tasks.json" || fail "任务列表没有 tasks 数组"
-echo "  ✓ 任务：建 → 首屏可见 → 拒第二个 → 暂停 → 继续 → 取消"
+# Three tasks exist, and the list is a list of rows — not a per-session singleton.
+TASK_COUNT="$(python3 -c "import json;print(len(json.load(open('$WORK/tasks.json'))['tasks']))")"
+[[ "$TASK_COUNT" -ge 3 ]] || fail "任务列表该有 3 条（实际 $TASK_COUNT）"
+echo "  ✓ 任务：建 → 首屏可见（验收/花费/执行次数都有）→ 第二个也建得成 → 暂停 → 继续 → 取消"
 
 # The connector panel is read-only truth from connectors.json: draft mode + allowlist width.
 curl -sS "$BASE/api/data?sessionId=default" >"$WORK/data4.json"

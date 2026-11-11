@@ -35,6 +35,9 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
                 │
          joyczl-state ────────── SQLite + FTS5(trigram)，sqlx 迁移
                 │
+        joyczl-agent ────────── 确定性内核：验收检查、工具事实观察、执行计划、
+                │               以及全仓唯一那条路径包含规则
+                │
         joyczl-app-server ──── JSON-RPC over stdio，唯一持有 state.db
           │         │
      joyczl-cli  joyczl-ops（dashboard：axum + SSE）

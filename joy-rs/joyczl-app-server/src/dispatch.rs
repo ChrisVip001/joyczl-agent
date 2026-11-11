@@ -14,8 +14,9 @@ use joyczl_protocol::{
     ModelListParams, ModelListResponse, ModelProfilesParams, ModelRemoveParams,
     ModelRoutesSaveParams, ModelSaveParams, RequestId, ScheduleListParams, SessionListParams,
     SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
-    SessionNewResponse, SessionViewParams, TaskActionParams, TaskCreateParams, TurnInterruptParams,
-    TurnInterruptResponse, TurnStartParams, UsageSummaryParams, JSONRPC_VERSION,
+    SessionNewResponse, SessionViewParams, TaskActionParams, TaskCreateParams, TaskGetParams,
+    TurnInterruptParams, TurnInterruptResponse, TurnStartParams, UsageSummaryParams,
+    JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -391,6 +392,21 @@ async fn dispatch(
         methods::TASK_VIEW => {
             let p: SessionViewParams = parse(params, method)?;
             respond(crate::task::view_of(server, &p.session_id).await)
+        }
+
+        methods::TASK_GET => {
+            let p: TaskGetParams = parse(params, method)?;
+            respond(crate::task::get(server, &p.task_id).await?)
+        }
+
+        methods::TASK_RUNS => {
+            let p: TaskGetParams = parse(params, method)?;
+            respond(crate::task::runs(server, &p.task_id).await)
+        }
+
+        methods::TASK_ARTIFACTS => {
+            let p: TaskGetParams = parse(params, method)?;
+            respond(crate::task::artifacts(server, &p.task_id).await)
         }
 
         methods::TASK_SUSPEND => {

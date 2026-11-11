@@ -1,14 +1,96 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "AgentTaskView": {
-      "description": "One task as the human sees it. `status` is a string on the wire (pending / running / suspended / done / failed / cancelled) — the dashboard paints it.",
+    "AcceptanceView": {
+      "description": "One acceptance condition — what must be measurably true for the task to count as done.\n\nThe same shape is both the **input** (`task/create`) and the **view** (what is required), so the card can never show a condition the verifier does not check.",
       "properties": {
+        "kind": {
+          "description": "`fileExists` / `fileContains` / `toolsOk`.",
+          "type": "string"
+        },
+        "label": {
+          "description": "The human's own wording, when they gave one. Absent = derived from the fields above.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "min": {
+          "description": "Occurrences required (`fileContains`) / successful calls required (`toolsOk`).",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Path, relative to the task's working directory (an absolute path must land inside it).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pattern": {
+          "description": "Plain substring for `fileContains` — **not** a regex: a badly written pattern must not be able to stall a whole round.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "Tool name for `toolsOk`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "AgentTaskView": {
+      "description": "One task as the human sees it. `status` is a string on the wire (pending / running / suspended / needsAttention / done / failed / cancelled) — the dashboard paints it.",
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "description": "What must be measurably true. Empty = no objective conditions (single-turn task).",
+          "items": {
+            "$ref": "#/definitions/AcceptanceView"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BudgetView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checks": {
+          "default": [],
+          "description": "The latest verdict per condition, same order as `acceptance`.",
+          "items": {
+            "$ref": "#/definitions/CheckView"
+          },
+          "type": "array"
+        },
         "createdAt": {
           "type": "string"
         },
         "currentTurnId": {
           "description": "The turn currently carrying this task (a heartbeat; absent when idle).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "description": "The task's own working directory (the boundary for verification and writes).",
           "type": [
             "string",
             "null"
@@ -30,6 +112,13 @@
         "id": {
           "type": "string"
         },
+        "lastStopReason": {
+          "description": "Why it stopped last time — the card's footnote, never guessed from the status.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "maxRounds": {
           "format": "int32",
           "type": "integer"
@@ -38,8 +127,21 @@
           "format": "int32",
           "type": "integer"
         },
+        "runCount": {
+          "default": 0,
+          "description": "How many times this task has been executed (\"执行 3 次\").",
+          "format": "int32",
+          "type": "integer"
+        },
         "sessionId": {
-          "type": "string"
+          "description": "Absent = a task that belongs to no conversation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spent": {
+          "$ref": "#/definitions/SpentView"
         },
         "status": {
           "type": "string"
@@ -66,7 +168,7 @@
         "id",
         "maxRounds",
         "roundsUsed",
-        "sessionId",
+        "spent",
         "status",
         "title"
       ],
@@ -207,6 +309,76 @@
         "accepted"
       ],
       "title": "ApprovalRespondResponse",
+      "type": "object"
+    },
+    "ArtifactView": {
+      "description": "One delivered file.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "bytes": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "bytes",
+        "path"
+      ],
+      "type": "object"
+    },
+    "BudgetView": {
+      "description": "A task's budget. An absent field means that dimension is uncapped.",
+      "properties": {
+        "tokens": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tools": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wallMs": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CheckView": {
+      "description": "One condition's latest measured verdict. Same order as `AgentTaskView.acceptance`.",
+      "properties": {
+        "detail": {
+          "description": "Passed: the evidence (\"report.md 12.4 KB\"). Failed: the measurement (\"report.md 不存在\").",
+          "type": "string"
+        },
+        "label": {
+          "description": "The condition in the human's words (\"report.md 里至少有 3 处结论\").",
+          "type": "string"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "detail",
+        "label",
+        "passed"
+      ],
       "type": "object"
     },
     "ConfigReadParams": {
@@ -380,6 +552,14 @@
           ],
           "default": null,
           "description": "The viewed session's current task (goal upgraded to a persisted entity), when asked for."
+        },
+        "taskArtifacts": {
+          "default": [],
+          "description": "What that task actually produced: files that exist, with their sizes (0.14). Always present (empty when there is no task), so the card needs no branch to render it.",
+          "items": {
+            "$ref": "#/definitions/ArtifactView"
+          },
+          "type": "array"
         },
         "todos": {
           "anyOf": [
@@ -1627,6 +1807,65 @@
       "title": "RunResponse",
       "type": "object"
     },
+    "RunView": {
+      "description": "One execution of a task. A task may run several times; each attempt is its own account.",
+      "properties": {
+        "endedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "rounds": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "status": {
+          "description": "running / waiting / suspended / completed / failed / cancelled.",
+          "type": "string"
+        },
+        "stopReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokensIn": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "tokensOut": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "toolsFailed": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "toolsOk": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "rounds",
+        "startedAt",
+        "status",
+        "tokensIn",
+        "tokensOut",
+        "toolsFailed",
+        "toolsOk"
+      ],
+      "title": "RunView",
+      "type": "object"
+    },
     "ScheduleListParams": {
       "title": "ScheduleListParams",
       "type": "null"
@@ -2209,7 +2448,11 @@
               "type": "integer"
             },
             "sessionId": {
-              "type": "string"
+              "description": "Absent for a task that belongs to no session.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "status": {
               "type": "string"
@@ -2226,7 +2469,6 @@
           },
           "required": [
             "roundsUsed",
-            "sessionId",
             "status",
             "taskId",
             "type"
@@ -2635,6 +2877,29 @@
       "title": "SettingsView",
       "type": "object"
     },
+    "SpentView": {
+      "description": "What the task has consumed so far. Always present (zeroes when nothing ran yet).",
+      "properties": {
+        "tokens": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "tools": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "wallMs": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tokens",
+        "tools",
+        "wallMs"
+      ],
+      "type": "object"
+    },
     "TaskActionParams": {
       "description": "`task/suspend|resume|cancel`: address one task and say why (the reason is shown, not dropped).",
       "properties": {
@@ -2655,9 +2920,51 @@
       "title": "TaskActionParams",
       "type": "object"
     },
+    "TaskArtifactsResponse": {
+      "description": "`task/artifacts`: what this task actually produced, newest first.",
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/definitions/ArtifactView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifacts"
+      ],
+      "title": "TaskArtifactsResponse",
+      "type": "object"
+    },
     "TaskCreateParams": {
       "description": "`task/create`: **only a human can start a long task** — there is no tool for it.",
       "properties": {
+        "acceptance": {
+          "default": [],
+          "description": "How \"done\" is measured. Empty = the goal/judge decides, as before.",
+          "items": {
+            "$ref": "#/definitions/AcceptanceView"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BudgetView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Caps on the whole task's spend. Absent dimensions are uncapped."
+        },
+        "cwd": {
+          "description": "The working directory this task owns. Absent = the turn's own cwd decides.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "goalCondition": {
           "default": null,
           "description": "The goal condition that keeps the loop going. Absent = single-turn task.",
@@ -2676,7 +2983,12 @@
           ]
         },
         "sessionId": {
-          "type": "string"
+          "default": null,
+          "description": "Absent = the task belongs to no session: it can be created and inspected on its own.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tier": {
           "description": "The model tier this task runs on (`fast` / `chat` / `reasoning`). Absent = decide per turn (auto mode) or use the active profile (fixed mode). A declared tier always wins — \"the task picks the model\" is the whole point of the tier.",
@@ -2691,7 +3003,6 @@
         }
       },
       "required": [
-        "sessionId",
         "title"
       ],
       "title": "TaskCreateParams",
@@ -2709,12 +3020,25 @@
       "title": "TaskEnvelope",
       "type": "object"
     },
+    "TaskGetParams": {
+      "description": "`task/get`: address one task by id (a session-less task has no other way in).",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "taskId"
+      ],
+      "title": "TaskGetParams",
+      "type": "object"
+    },
     "TaskListParams": {
       "title": "TaskListParams",
       "type": "null"
     },
     "TaskListResponse": {
-      "description": "Newest first; `active` is the session's one non-terminal task, when there is one.",
+      "description": "Newest first; `active` is the session's newest non-terminal task, when there is one.",
       "properties": {
         "tasks": {
           "items": {
@@ -2727,6 +3051,22 @@
         "tasks"
       ],
       "title": "TaskListResponse",
+      "type": "object"
+    },
+    "TaskRunsResponse": {
+      "description": "`task/runs`: every attempt of one task, newest first.",
+      "properties": {
+        "runs": {
+          "items": {
+            "$ref": "#/definitions/RunView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "runs"
+      ],
+      "title": "TaskRunsResponse",
       "type": "object"
     },
     "TaskUpdatedNotification": {
@@ -2743,7 +3083,11 @@
           "type": "integer"
         },
         "sessionId": {
-          "type": "string"
+          "description": "Absent for a task that belongs to no session.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "status": {
           "type": "string"
@@ -2754,7 +3098,6 @@
       },
       "required": [
         "roundsUsed",
-        "sessionId",
         "status",
         "taskId"
       ],

@@ -1,25 +1,133 @@
-//! The long-task ledger (migration 0014).
+//! The task ledger (migration 0017).
 //!
 //! A goal used to be a string in process memory: gone on restart, unsuspendable by nature.
-//! This store makes it an entity — identity, name, status, round account — that outlives the
-//! process. The goal loop keeps driving turns; the row keeps the truth.
+//! 0014 made it a row; 0017 makes that row an **entity that stands on its own**:
 //!
-//! One active task per session, enforced by a partial unique index. Terminal states
-//! (`done` / `failed` / `cancelled`) close the row and free the session for the next task.
+//! * a task may belong to no session at all (`session_id` is nullable);
+//! * the same intent may be executed in several runs (the row outlives each run);
+//! * "done" is decided by measurable facts — the row carries the acceptance conditions,
+//!   the latest measured verdict, the budget, and how much has been spent.
+//!
+//! `needs_attention` is the honest middle state: the verifier failed, the budget ran out, or a
+//! side effect never landed. It is **non-terminal** — a human can still confirm, continue, or
+//! cancel it. `done` is never written on a "the model says so" basis alone.
 
 use anyhow::Result;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::sqlite::{Sqlite, SqliteArgumentValue, SqliteTypeInfo, SqliteValueRef};
+use sqlx::{Decode, Encode, FromRow, SqlitePool, Type};
 
-/// One task row: what the human asked for, how far it got, and where it is now.
+/// The lifecycle of a task. Terminal states close the row; `needs_attention` does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskStatus {
+    /// Created, no run started yet.
+    Pending,
+    /// A run is carrying it right now.
+    Running,
+    /// A human pressed pause (or the process restarted mid-run).
+    Suspended,
+    /// Something a machine cannot settle: verification failed, budget spent, side effect unlanded.
+    NeedsAttention,
+    /// Acceptance conditions all passed (and the judge, if any, agreed).
+    Done,
+    /// The loop's own verdict: not achievable / round cap / the turn itself failed.
+    Failed,
+    /// A human stopped it. Never resumes on its own.
+    Cancelled,
+}
+
+impl TaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Suspended => "suspended",
+            Self::NeedsAttention => "needs_attention",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    /// Parse a stored value. `needsAttention` is accepted too: clients speak camelCase.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "pending" => Some(Self::Pending),
+            "running" => Some(Self::Running),
+            "suspended" => Some(Self::Suspended),
+            "needs_attention" | "needsAttention" => Some(Self::NeedsAttention),
+            "done" => Some(Self::Done),
+            "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+
+    /// Still alive: a human or a turn can push it forward. `needs_attention` is open on
+    /// purpose — that is exactly the state where a person is expected to look.
+    pub fn is_open(self) -> bool {
+        matches!(
+            self,
+            Self::Pending | Self::Running | Self::Suspended | Self::NeedsAttention
+        )
+    }
+
+    pub fn is_terminal(self) -> bool {
+        !self.is_open()
+    }
+}
+
+impl std::fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// Hand-written sqlx plumbing instead of `#[derive(sqlx::Type)]`: a derived decode turns an
+// unknown stored value into a generic error; here the SQL `CHECK` constraint is the real
+// guarantee, and the error names the offending value so a broken row is diagnosable.
+impl Type<Sqlite> for TaskStatus {
+    fn type_info() -> SqliteTypeInfo {
+        <&str as Type<Sqlite>>::type_info()
+    }
+}
+
+impl<'q> Encode<'q, Sqlite> for TaskStatus {
+    fn encode_by_ref(
+        &self,
+        buf: &mut Vec<SqliteArgumentValue<'q>>,
+    ) -> std::result::Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <&str as Encode<Sqlite>>::encode(self.as_str(), buf)
+    }
+}
+
+impl<'r> Decode<'r, Sqlite> for TaskStatus {
+    fn decode(value: SqliteValueRef<'r>) -> std::result::Result<Self, sqlx::error::BoxDynError> {
+        let raw = <&str as Decode<Sqlite>>::decode(value)?;
+        Self::parse(raw).ok_or_else(|| format!("不认识的任务状态：{raw}").into())
+    }
+}
+
+/// One task row: what the human asked for, how it is judged, and how far it got.
 #[derive(Debug, Clone, FromRow)]
 pub struct TaskRow {
     pub id: String,
-    pub session_id: String,
+    /// `None` = a task that belongs to no conversation.
+    pub session_id: Option<String>,
     pub title: String,
     /// The goal loop's condition; `None` = single-turn task.
     pub goal_condition: Option<String>,
-    /// pending / running / suspended / done / failed / cancelled.
-    pub status: String,
+    /// Acceptance conditions as JSON (`[{"kind":"fileExists","path":"report.md"}]`).
+    pub acceptance_json: String,
+    /// The latest measured verdict per condition, same order as `acceptance_json`.
+    pub checks_json: String,
+    /// Budget as JSON (`{"wallMs":…,"tokens":…,"tools":…}`); absent keys = no cap.
+    pub budget_json: String,
+    pub spent_wall_ms: i64,
+    pub spent_tokens: i64,
+    pub spent_tools: i64,
+    /// The task's own working directory — the boundary for verification and writes.
+    pub cwd: Option<String>,
+    pub status: TaskStatus,
     pub rounds_used: i32,
     pub max_rounds: i32,
     /// The declared model tier (fast / chat / reasoning); `None` = decide per turn.
@@ -27,12 +135,32 @@ pub struct TaskRow {
     /// The turn carrying this task right now (a heartbeat; cleared when it ends).
     pub current_turn_id: Option<String>,
     pub suspend_reason: Option<String>,
+    /// Why it stopped last time (verification failed / over budget / judge broke down).
+    pub last_stop_reason: Option<String>,
     pub created_at: String,
+    pub updated_at: String,
     pub finished_at: Option<String>,
 }
 
-const COLS: &str = "id, session_id, title, goal_condition, status, rounds_used, max_rounds, tier, \
-                    current_turn_id, suspend_reason, created_at, finished_at";
+const COLS: &str = "id, session_id, title, goal_condition, acceptance_json, checks_json, \
+                    budget_json, spent_wall_ms, spent_tokens, spent_tools, cwd, status, \
+                    rounds_used, max_rounds, tier, current_turn_id, suspend_reason, \
+                    last_stop_reason, created_at, updated_at, finished_at";
+
+/// What `create` needs: a struct instead of nine positional arguments — the call sites read
+/// as "this task has these properties", and a new field cannot silently land in the wrong slot.
+#[derive(Debug, Clone)]
+pub struct NewTask<'a> {
+    pub id: &'a str,
+    pub session_id: Option<&'a str>,
+    pub title: &'a str,
+    pub goal_condition: Option<&'a str>,
+    pub acceptance_json: &'a str,
+    pub budget_json: &'a str,
+    pub cwd: Option<&'a str>,
+    pub max_rounds: i32,
+    pub tier: Option<&'a str>,
+}
 
 /// The task store. Clone is cheap (one pool handle).
 #[derive(Clone)]
@@ -45,27 +173,24 @@ impl Tasks {
         Self { pool }
     }
 
-    /// Insert a new task. The partial unique index refuses a second active one; the caller
-    /// checks first (for a human-readable message), this is the backstop.
-    pub async fn create(
-        &self,
-        id: &str,
-        session_id: &str,
-        title: &str,
-        goal_condition: Option<&str>,
-        max_rounds: i32,
-        tier: Option<&str>,
-    ) -> Result<()> {
+    /// Insert a new task. There is no "one active task per session" rule any more: the same
+    /// session may hold several, and a task may hold no session at all.
+    pub async fn create(&self, task: NewTask<'_>) -> Result<()> {
         sqlx::query(
-            "INSERT INTO agent_tasks (id, session_id, title, goal_condition, max_rounds, tier)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO agent_tasks
+                 (id, session_id, title, goal_condition, acceptance_json, budget_json,
+                  cwd, max_rounds, tier)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(id)
-        .bind(session_id)
-        .bind(title)
-        .bind(goal_condition)
-        .bind(max_rounds)
-        .bind(tier)
+        .bind(task.id)
+        .bind(task.session_id)
+        .bind(task.title)
+        .bind(task.goal_condition)
+        .bind(task.acceptance_json)
+        .bind(task.budget_json)
+        .bind(task.cwd)
+        .bind(task.max_rounds)
+        .bind(task.tier)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -80,12 +205,34 @@ impl Tasks {
         )
     }
 
-    /// The session's one non-terminal task, when there is one.
+    /// The session's newest non-terminal task, when there is one. Several may be open —
+    /// the card shows the newest, `task/list` shows all.
     pub async fn active(&self, session_id: &str) -> Result<Option<TaskRow>> {
         Ok(sqlx::query_as::<_, TaskRow>(&format!(
             "SELECT {COLS} FROM agent_tasks
-             WHERE session_id = ? AND status IN ('pending', 'running', 'suspended')
-             ORDER BY created_at DESC LIMIT 1"
+             WHERE session_id = ? AND status IN ('pending', 'running', 'suspended', 'needs_attention')
+             ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        ))
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// The session's most recent task **whatever its state** — open ones beat closed ones,
+    /// then newest first.
+    ///
+    /// `active` is for "what is running now"; the card needs "what happened here last".
+    /// Using `active` there made a finished task vanish at the exact moment it became worth
+    /// reading: the verdicts it passed and the files it produced are the answer to
+    /// "did it actually do it", and they must survive `done`.
+    pub async fn latest(&self, session_id: &str) -> Result<Option<TaskRow>> {
+        Ok(sqlx::query_as::<_, TaskRow>(&format!(
+            "SELECT {COLS} FROM agent_tasks
+             WHERE session_id = ?
+             ORDER BY CASE WHEN status IN ('pending', 'running', 'suspended', 'needs_attention')
+                           THEN 0 ELSE 1 END,
+                      created_at DESC, rowid DESC
+             LIMIT 1"
         ))
         .bind(session_id)
         .fetch_optional(&self.pool)
@@ -106,7 +253,8 @@ impl Tasks {
     pub async fn list_active(&self) -> Result<Vec<TaskRow>> {
         Ok(sqlx::query_as::<_, TaskRow>(&format!(
             "SELECT {COLS} FROM agent_tasks
-             WHERE status IN ('pending', 'running', 'suspended') ORDER BY created_at ASC"
+             WHERE status IN ('pending', 'running', 'suspended', 'needs_attention')
+             ORDER BY created_at ASC"
         ))
         .fetch_all(&self.pool)
         .await?)
@@ -122,7 +270,7 @@ impl Tasks {
         .await?)
     }
 
-    /// A turn starts carrying this task.
+    /// A run starts carrying this task.
     pub async fn set_running(&self, id: &str, turn_id: &str) -> Result<()> {
         sqlx::query(
             "UPDATE agent_tasks SET status = 'running', current_turn_id = ?, suspend_reason = NULL,
@@ -135,7 +283,7 @@ impl Tasks {
         Ok(())
     }
 
-    /// The carrying turn ended (whatever its verdict); the row stays as it is.
+    /// The carrying run ended (whatever its verdict); the row stays as it is.
     pub async fn clear_turn(&self, id: &str) -> Result<()> {
         sqlx::query(
             "UPDATE agent_tasks SET current_turn_id = NULL, updated_at = datetime('now') WHERE id = ?",
@@ -158,6 +306,35 @@ impl Tasks {
         Ok(())
     }
 
+    /// Accumulate what one round cost. Called once per round with that round's numbers —
+    /// the row is the running total, so a restart never loses the spent half.
+    pub async fn add_spent(&self, id: &str, wall_ms: i64, tokens: i64, tools: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE agent_tasks SET spent_wall_ms = spent_wall_ms + ?,
+             spent_tokens = spent_tokens + ?, spent_tools = spent_tools + ?,
+             updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(wall_ms.max(0))
+        .bind(tokens.max(0))
+        .bind(tools.max(0))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Replace the latest measured verdict list (one JSON array, same order as the conditions).
+    pub async fn set_checks(&self, id: &str, checks_json: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE agent_tasks SET checks_json = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(checks_json)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// `goal/set`'s compatibility layer: change the condition on the live task.
     pub async fn set_goal(&self, id: &str, condition: Option<&str>) -> Result<()> {
         sqlx::query(
@@ -170,8 +347,13 @@ impl Tasks {
         Ok(())
     }
 
-    /// Terminal state: done / failed / cancelled. Closes the row and stamps the time.
-    pub async fn finish(&self, id: &str, status: &str) -> Result<()> {
+    /// Terminal state: `done` / `failed` / `cancelled`. Closes the row and stamps the time.
+    pub async fn finish(&self, id: &str, status: TaskStatus) -> Result<()> {
+        if !status.is_terminal() {
+            return Err(anyhow::anyhow!(
+                "finish 只收终态，收到的是 {status}（非终态请用 suspend / needs_attention）"
+            ));
+        }
         sqlx::query(
             "UPDATE agent_tasks SET status = ?, current_turn_id = NULL,
              finished_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
@@ -187,8 +369,9 @@ impl Tasks {
     pub async fn suspend(&self, id: &str, reason: Option<&str>) -> Result<()> {
         sqlx::query(
             "UPDATE agent_tasks SET status = 'suspended', suspend_reason = ?,
-             updated_at = datetime('now') WHERE id = ?",
+             last_stop_reason = ?, updated_at = datetime('now') WHERE id = ?",
         )
+        .bind(reason)
         .bind(reason)
         .bind(id)
         .execute(&self.pool)
@@ -196,7 +379,32 @@ impl Tasks {
         Ok(())
     }
 
-    /// A human pressed continue: back to running; the caller starts the turn.
+    /// Something a machine must not decide alone: stopped, but still open for a human.
+    /// Distinct from `suspend` so the card can show it in warning colours and say why.
+    pub async fn needs_attention(&self, id: &str, reason: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE agent_tasks SET status = 'needs_attention', current_turn_id = NULL,
+             suspend_reason = ?, last_stop_reason = ?, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(reason)
+        .bind(reason)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Why it stopped, without changing the status (used after a normal terminal write).
+    pub async fn set_last_stop(&self, id: &str, reason: &str) -> Result<()> {
+        sqlx::query("UPDATE agent_tasks SET last_stop_reason = ? WHERE id = ?")
+            .bind(reason)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// A human pressed continue: back to running; the caller starts the run.
     pub async fn resume(&self, id: &str) -> Result<()> {
         sqlx::query(
             "UPDATE agent_tasks SET status = 'running', suspend_reason = NULL,
@@ -209,8 +417,8 @@ impl Tasks {
     }
 
     /// Startup reconciliation: a `running` row means the process died while carrying it
-    /// (a `pending` one simply never got its first turn — leave it alone).
-    /// Mark it suspended with the honest reason — but the turn's own checkpoint decides
+    /// (a `pending` one simply never got its first run — leave it alone).
+    /// Mark it suspended with the honest reason — but the run's own checkpoint decides
     /// whether it actually continues (an `open` checkpoint resumes and flips it back).
     pub async fn reconcile_restart(&self) -> Result<Vec<TaskRow>> {
         let rows = sqlx::query_as::<_, TaskRow>(&format!(
@@ -221,6 +429,7 @@ impl Tasks {
         sqlx::query(
             "UPDATE agent_tasks SET status = 'suspended',
              suspend_reason = '进程重启，未完成的回合若可续跑会自动继续',
+             last_stop_reason = '进程重启，未完成的回合若可续跑会自动继续',
              updated_at = datetime('now')
              WHERE status = 'running'",
         )

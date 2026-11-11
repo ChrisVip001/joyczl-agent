@@ -13,33 +13,41 @@
 //!   * `fts`       turn human input into a safe FTS5 query string
 
 pub mod approvals;
+pub mod artifacts;
 pub mod calendar;
 pub mod chat;
 pub mod checkpoints;
 pub mod conformance;
 pub mod db;
 pub mod episodes;
+pub mod events;
 pub mod facts;
 pub mod fts;
 pub mod inbox;
 pub mod jobs;
+pub mod runs;
 pub mod schedules;
+pub mod steps;
 pub mod store;
 pub mod tasks;
 pub mod usage;
 
 pub use approvals::{ApprovalLogRow, Approvals};
+pub use artifacts::{ArtifactRow, Artifacts};
 pub use calendar::{Calendar, CalendarRow};
 pub use chat::{Chat, MessageRow, SessionRow};
 pub use checkpoints::{CheckpointRow, Checkpoints};
 pub use db::open;
 pub use episodes::{EpisodeRow, Episodes};
+pub use events::{EventRow, Events};
 pub use facts::{FactRow, Facts};
 pub use inbox::{Inbox, InboxItem};
 pub use jobs::{JobRow, Jobs};
+pub use runs::{RunRow, RunStatus, Runs};
 pub use schedules::{ScheduleRow, Schedules};
+pub use steps::{NewStep, StepRow, Steps};
 pub use store::{EpisodicStore, SemanticStore};
-pub use tasks::{TaskRow, Tasks};
+pub use tasks::{NewTask, TaskRow, TaskStatus, Tasks};
 pub use usage::{Usage, UsageByModel, UsageSummary};
 
 #[cfg(test)]

@@ -30,11 +30,16 @@ pub mod methods {
     pub const GOAL_VIEW: &str = "goal/view";
     /// Read a session's todo sheet (the dashboard's task card). Read-only, human-facing.
     pub const TODO_VIEW: &str = "todo/view";
-    /// Long tasks: create / list / view / suspend / resume / cancel.
+    /// Long tasks: create / list / view / get / runs / artifacts / suspend / resume / cancel.
     /// **All human-only** — the model has no path to any of them (like `goal/set`).
     pub const TASK_CREATE: &str = "task/create";
     pub const TASK_LIST: &str = "task/list";
     pub const TASK_VIEW: &str = "task/view";
+    pub const TASK_GET: &str = "task/get";
+    /// Every attempt of one task (how many times it ran, what each attempt cost).
+    pub const TASK_RUNS: &str = "task/runs";
+    /// The files this task produced.
+    pub const TASK_ARTIFACTS: &str = "task/artifacts";
     pub const TASK_SUSPEND: &str = "task/suspend";
     pub const TASK_RESUME: &str = "task/resume";
     pub const TASK_CANCEL: &str = "task/cancel";
@@ -216,17 +221,84 @@ pub struct GoalSetResponse {
 // ===========================================================================
 //
 // A task is what a goal becomes once it has to survive a restart: persisted, addressable,
-// and — crucially — **suspendable**. The goal loop is its engine; the row is its memory.
-// One active task per session at a time; the model has no task/* path (human-only, like goal).
+// and — crucially — **suspendable**. Since 0.14 it also stands on its own: a task may belong
+// to no session, may be executed several times, and its "done" is decided by measurable
+// acceptance conditions rather than by the model's own opinion.
+// The model has no task/* path (human-only, like goal).
+
+/// One acceptance condition — what must be measurably true for the task to count as done.
+///
+/// The same shape is both the **input** (`task/create`) and the **view** (what is required),
+/// so the card can never show a condition the verifier does not check.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct AcceptanceView {
+    /// `fileExists` / `fileContains` / `toolsOk`.
+    pub kind: String,
+    /// Path, relative to the task's working directory (an absolute path must land inside it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Plain substring for `fileContains` — **not** a regex: a badly written pattern must not
+    /// be able to stall a whole round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// Occurrences required (`fileContains`) / successful calls required (`toolsOk`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<i32>,
+    /// Tool name for `toolsOk`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The human's own wording, when they gave one. Absent = derived from the fields above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// One condition's latest measured verdict. Same order as `AgentTaskView.acceptance`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct CheckView {
+    /// The condition in the human's words ("report.md 里至少有 3 处结论").
+    pub label: String,
+    pub passed: bool,
+    /// Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md 不存在").
+    pub detail: String,
+}
+
+/// A task's budget. An absent field means that dimension is uncapped.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct BudgetView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_ms: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<i32>,
+}
+
+/// What the task has consumed so far. Always present (zeroes when nothing ran yet).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct SpentView {
+    pub wall_ms: i32,
+    pub tokens: i32,
+    pub tools: i32,
+}
 
 /// One task as the human sees it. `status` is a string on the wire
-/// (pending / running / suspended / done / failed / cancelled) — the dashboard paints it.
+/// (pending / running / suspended / needsAttention / done / failed / cancelled) — the dashboard paints it.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct AgentTaskView {
     pub id: String,
-    pub session_id: String,
+    /// Absent = a task that belongs to no conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub title: String,
     /// The goal loop's condition. Absent = a single-turn task: done when the turn is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +314,24 @@ pub struct AgentTaskView {
     pub current_turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspend_reason: Option<String>,
+    /// Why it stopped last time — the card's footnote, never guessed from the status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_stop_reason: Option<String>,
+    /// What must be measurably true. Empty = no objective conditions (single-turn task).
+    #[serde(default)]
+    pub acceptance: Vec<AcceptanceView>,
+    /// The latest verdict per condition, same order as `acceptance`.
+    #[serde(default)]
+    pub checks: Vec<CheckView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetView>,
+    pub spent: SpentView,
+    /// The task's own working directory (the boundary for verification and writes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// How many times this task has been executed ("执行 3 次").
+    #[serde(default)]
+    pub run_count: i32,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
@@ -252,7 +342,9 @@ pub struct AgentTaskView {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct TaskCreateParams {
-    pub session_id: String,
+    /// Absent = the task belongs to no session: it can be created and inspected on its own.
+    #[serde(default)]
+    pub session_id: Option<String>,
     /// What this task is, in the human's words — the card's first line.
     pub title: String,
     /// The goal condition that keeps the loop going. Absent = single-turn task.
@@ -266,6 +358,15 @@ pub struct TaskCreateParams {
     /// "the task picks the model" is the whole point of the tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
+    /// How "done" is measured. Empty = the goal/judge decides, as before.
+    #[serde(default)]
+    pub acceptance: Vec<AcceptanceView>,
+    /// Caps on the whole task's spend. Absent dimensions are uncapped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetView>,
+    /// The working directory this task owns. Absent = the turn's own cwd decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -279,7 +380,7 @@ pub struct TaskEnvelope {
 #[ts(export_to = "v2/")]
 pub struct TaskListParams;
 
-/// Newest first; `active` is the session's one non-terminal task, when there is one.
+/// Newest first; `active` is the session's newest non-terminal task, when there is one.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
@@ -294,6 +395,60 @@ pub struct TaskListResponse {
 pub struct TaskViewResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<AgentTaskView>,
+}
+
+/// `task/get`: address one task by id (a session-less task has no other way in).
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskGetParams {
+    pub task_id: String,
+}
+
+/// One execution of a task. A task may run several times; each attempt is its own account.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct RunView {
+    pub id: String,
+    /// running / waiting / suspended / completed / failed / cancelled.
+    pub status: String,
+    pub rounds: i32,
+    pub tokens_in: i32,
+    pub tokens_out: i32,
+    pub tools_ok: i32,
+    pub tools_failed: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+}
+
+/// `task/runs`: every attempt of one task, newest first.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskRunsResponse {
+    pub runs: Vec<RunView>,
+}
+
+/// One delivered file.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ArtifactView {
+    pub path: String,
+    pub bytes: i32,
+    pub at: String,
+}
+
+/// `task/artifacts`: what this task actually produced, newest first.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskArtifactsResponse {
+    pub artifacts: Vec<ArtifactView>,
 }
 
 /// `task/suspend|resume|cancel`: address one task and say why (the reason is shown, not dropped).
@@ -312,7 +467,9 @@ pub struct TaskActionParams {
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct TaskUpdatedNotification {
     pub task_id: String,
-    pub session_id: String,
+    /// Absent for a task that belongs to no session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     pub status: String,
     pub rounds_used: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1263,6 +1420,10 @@ pub struct DashboardData {
     #[serde(default)]
     #[ts(optional)]
     pub task: Option<AgentTaskView>,
+    /// What that task actually produced: files that exist, with their sizes (0.14). Always
+    /// present (empty when there is no task), so the card needs no branch to render it.
+    #[serde(default)]
+    pub task_artifacts: Vec<ArtifactView>,
     /// The connector inbox (0.13.0): newest mail plus how many still wait for a person.
     /// Always present (empty when no connector is configured) so the panel needs no branches.
     pub inbox: InboxListView,

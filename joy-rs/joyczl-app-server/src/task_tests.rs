@@ -22,6 +22,11 @@ use crate::{EventSink, Frame, Server};
 
 /// A server plus its home — booting a second one on the same home is how "restart" is tested.
 async fn boot(mock: Option<Arc<Mock>>) -> (Server, PathBuf) {
+    boot_with(mock, false).await
+}
+
+/// Same boot, with the planner switch (`JOY_PLAN`) set explicitly — planning is opt-in.
+async fn boot_with(mock: Option<Arc<Mock>>, plan_enabled: bool) -> (Server, PathBuf) {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
@@ -35,6 +40,11 @@ async fn boot(mock: Option<Arc<Mock>>) -> (Server, PathBuf) {
             // Graph routing would spend extra model calls on triage; these tests count
             // turns, not routes — the direct path is the one under test.
             graph_workflows: false,
+            // Acceptance conditions are about files that really exist, so the write tools must
+            // be registered: without them the "fake completion" tests would pass for the wrong
+            // reason (no tool at all, instead of a tool that did not write).
+            write_enabled: true,
+            plan_enabled,
             ..Settings::default()
         },
     )
@@ -95,21 +105,30 @@ async fn create_task(
 }
 
 #[tokio::test]
-async fn a_second_active_task_is_refused_with_the_first_one_named() {
+async fn several_tasks_may_be_open_in_one_session_and_the_newest_is_the_card() {
     let (server, _home) = boot(None).await;
-    create_task(&server, "default", "盯三天服务器", Some("三天都盯着")).await;
+    let first = create_task(&server, "default", "盯三天服务器", Some("三天都盯着")).await;
 
-    let error = call(
+    // 0.14 removed "one active task per session": two intents can genuinely coexist, and the
+    // row used to be the only place a task could live.
+    let second = create_task(&server, "default", "另一件事", None).await;
+    assert_ne!(first.task.id, second.task.id);
+
+    let open = server.tasks.list_active().await.expect("查活跃任务");
+    assert_eq!(open.len(), 2, "两个都还在");
+
+    // The card shows one: the newest. `task/list` shows both.
+    let view = call(
         &server,
-        joyczl_protocol::methods::TASK_CREATE,
-        json!({ "sessionId": "default", "title": "另一件事" }),
+        joyczl_protocol::methods::TASK_VIEW,
+        json!({ "sessionId": "default" }),
     )
     .await
-    .expect_err("一会话只许一个活跃任务");
-    assert!(error.contains("盯三天服务器"), "报错要说清是哪个：{error}");
+    .expect("看板该成功");
+    assert_eq!(view["task"]["title"], json!("另一件事"), "卡片给最新那个");
 
-    // A different session is a different task — the constraint is per session.
-    create_task(&server, "other", "另一件事", None).await;
+    // A different session is a different scope, as always.
+    create_task(&server, "other", "第三件事", None).await;
 }
 
 /// A task may declare its tier ("the task picks the model"). The declaration lands on the row —
@@ -186,7 +205,11 @@ async fn goal_set_creates_the_task_and_clearing_keeps_the_row() {
     .expect("清目标该成功");
     let task = server.tasks.get(&task.id).await.expect("查").expect("还在");
     assert!(task.goal_condition.is_none(), "目标清掉了");
-    assert_eq!(task.status, "pending", "任务本身留着");
+    assert_eq!(
+        task.status,
+        joyczl_state::TaskStatus::Pending,
+        "任务本身留着"
+    );
 }
 
 #[tokio::test]
@@ -224,7 +247,11 @@ async fn a_single_turn_task_closes_done_when_its_turn_ends() {
         .await
         .expect("查")
         .expect("还在");
-    assert_eq!(row.status, "done", "单回合任务：轮结束即完成");
+    assert_eq!(
+        row.status,
+        joyczl_state::TaskStatus::Done,
+        "单回合任务：轮结束即完成"
+    );
     assert!(row.finished_at.is_some());
     assert!(row.current_turn_id.is_none(), "心跳清掉了");
 }
@@ -254,6 +281,7 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
             &serde_json::to_string(&messages).expect("序列化"),
             1,
             "{}",
+            Some("t-pause"),
         )
         .await
         .expect("写 checkpoint");
@@ -350,7 +378,7 @@ async fn cancelling_closes_the_task_and_never_auto_continues() {
     let task = create_task(&server, "default", "停掉的事", Some("做不完")).await;
     server
         .checkpoints
-        .save("t-stop", "default", "停掉的事", "[]", 1, "{}")
+        .save("t-stop", "default", "停掉的事", "[]", 1, "{}", None)
         .await
         .expect("写 checkpoint");
     server
@@ -415,7 +443,7 @@ async fn a_restart_marks_a_running_task_suspended_honestly() {
         .await
         .expect("查")
         .expect("还在");
-    assert_eq!(row.status, "suspended");
+    assert_eq!(row.status, joyczl_state::TaskStatus::Suspended);
     assert!(
         row.suspend_reason
             .as_deref()
@@ -441,7 +469,7 @@ async fn an_unknown_task_id_is_an_error_not_a_panic() {
     let task = create_task(&server, "default", "已完成", None).await;
     server
         .tasks
-        .finish(&task.task.id, "done")
+        .finish(&task.task.id, joyczl_state::TaskStatus::Done)
         .await
         .expect("收尾");
     let error = call(
@@ -481,4 +509,528 @@ async fn task_transitions_are_announced() {
     assert!(!announced.is_empty(), "状态变化必须广播，不能静默");
     assert_eq!(announced.last().expect("有").status, "suspended");
     assert_eq!(announced.last().expect("有").task_id, task.task.id);
+}
+
+// ---- 0.14：任务独立存在 + 完成由事实决定 ------------------------------------------------
+
+/// Drive one turn in `session`, with an optional working directory.
+async fn drive(server: &Server, session: &str, message: &str, cwd: Option<&str>) {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    crate::turn::run_turn(
+        server,
+        TurnStartParams {
+            attachments: None,
+            session_id: Some(session.to_string()),
+            message: message.to_string(),
+            stream: Some(true),
+            cwd: cwd.map(str::to_string),
+            tier: None,
+        },
+        RequestId::Number(1),
+        &EventSink::new(tx),
+    )
+    .await
+    .expect("回合该跑完");
+}
+
+/// A task no longer needs a conversation: "do this thing" is a complete sentence.
+#[tokio::test]
+async fn a_task_can_exist_without_any_session() {
+    let (server, _home) = boot(None).await;
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({ "title": "整理下载目录", "acceptance": [
+            { "kind": "fileExists", "path": "index.md" }
+        ] }),
+    )
+    .await
+    .expect("无会话也该建得成");
+
+    assert!(created["task"]["sessionId"].is_null(), "没有会话就是没有");
+    let id = created["task"]["id"].as_str().expect("有 id");
+    assert_eq!(created["task"]["status"], json!("pending"));
+    // The condition is normalised at creation, so the card and the checker always agree.
+    assert_eq!(
+        created["task"]["acceptance"][0]["label"],
+        json!("index.md 存在")
+    );
+    assert_eq!(created["task"]["acceptance"][0]["min"], json!(1));
+
+    // The only way in for such a task: by id.
+    let got = call(
+        &server,
+        joyczl_protocol::methods::TASK_GET,
+        json!({ "taskId": id }),
+    )
+    .await
+    .expect("按 id 该查得到");
+    assert_eq!(got["task"]["title"], json!("整理下载目录"));
+
+    let listed = call(&server, joyczl_protocol::methods::TASK_LIST, json!({}))
+        .await
+        .expect("列表该成功");
+    assert_eq!(listed["tasks"].as_array().expect("数组").len(), 1);
+}
+
+/// The model says "done", the file is not there, the rounds are gone: **needs a human**.
+/// Not `done` (the lie would stick), not `failed` (the work may still be finishable).
+#[tokio::test]
+async fn a_task_whose_acceptance_fails_needs_a_human_not_a_done() {
+    // One response per model call: the retrieval gate speaks first (fail-open on plain text),
+    // then the turn's own reply.
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("skip"),
+        Mock::text("报告已经写好了，请查收。"),
+    ]));
+    let (server, _home) = boot(Some(mock)).await;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().display().to_string();
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "写一份报告",
+            "maxRounds": 1,
+            "cwd": workspace,
+            "acceptance": [{ "kind": "fileExists", "path": "report.md" }],
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    drive(&server, "default", "开始吧", None).await;
+
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(
+        row.status,
+        joyczl_state::TaskStatus::NeedsAttention,
+        "验收没过就不能算完成：{:?}",
+        row.last_stop_reason
+    );
+    let reason = row.last_stop_reason.as_deref().expect("要说清为什么停");
+    assert!(reason.contains("report.md 不存在"), "{reason}");
+
+    // The card shows the measurement per condition, not a vague "failed".
+    let checks: serde_json::Value = serde_json::from_str(&row.checks_json).expect("验收结果");
+    assert_eq!(checks[0]["passed"], json!(false));
+    assert_eq!(checks[0]["label"], json!("report.md 存在"));
+}
+
+/// The positive twin: a real write makes the same condition pass — and the artifact list
+/// records the file that is actually on disk.
+#[tokio::test]
+async fn a_condition_passes_only_after_the_file_really_exists() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("skip"),
+        Mock::tool_use(
+            "call_1",
+            "write_file",
+            json!({ "path": "report.md", "content": "结论：可以上线\n" }),
+        ),
+        Mock::text("写好了。"),
+    ]));
+    let (server, _home) = boot(Some(mock)).await;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().display().to_string();
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "写一份报告",
+            "cwd": workspace,
+            "acceptance": [
+                { "kind": "fileExists", "path": "report.md" },
+                { "kind": "fileContains", "path": "report.md", "pattern": "结论", "min": 1 }
+            ],
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    drive(&server, "default", "开始吧", None).await;
+
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(
+        row.status,
+        joyczl_state::TaskStatus::Done,
+        "文件真的在，该完成：{:?}",
+        row.last_stop_reason
+    );
+    assert!(row.finished_at.is_some());
+
+    // Deliverables are files that exist, with their real size.
+    let artifacts = server.artifacts.list(&id, 10).await.expect("查交付物");
+    assert_eq!(artifacts.len(), 1);
+    assert!(artifacts[0].path.ends_with("report.md"));
+    assert!(artifacts[0].bytes > 0);
+
+    // One tool call = one step, keyed so a re-observation cannot duplicate it.
+    let runs = server.runs.list_by_task(&id, 10).await.expect("查执行");
+    assert_eq!(runs.len(), 1, "一次回合就是一次执行");
+    assert_eq!(runs[0].status, "completed");
+    assert!(runs[0].tools_ok >= 1, "成功调用记在账上");
+
+    let steps = server.steps.list_by_run(&runs[0].id).await.expect("查步骤");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0].tool.as_deref(), Some("write_file"));
+    assert_eq!(steps[0].status, "ok");
+    let key = steps[0].idempotency_key.as_deref().expect("有幂等键");
+    assert!(key.ends_with(":1"), "键要带步号：{key}");
+    assert!(key.starts_with(&runs[0].id), "键要带回合：{key}");
+}
+
+/// A cap that is reached stops the task **before** another round can spend: the state is
+/// `needs_attention` (a human may raise the cap), and the reason names the dimension.
+#[tokio::test]
+async fn a_task_over_budget_stops_before_it_spends_more() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("skip"),
+        Mock::text("先做一点。"),
+        Mock::text("再做一点。"),
+    ]));
+    let (server, _home) = boot(Some(mock)).await;
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "慢慢来",
+            "budget": { "tokens": 10 },
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    drive(&server, "default", "开始吧", None).await;
+
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(row.status, joyczl_state::TaskStatus::NeedsAttention);
+    assert!(row.spent_tokens >= 10, "花费要记上：{}", row.spent_tokens);
+    let reason = row.last_stop_reason.as_deref().expect("要说清是哪一条超了");
+    assert!(
+        reason.contains("预算超了") && reason.contains("Token"),
+        "{reason}"
+    );
+}
+
+/// Every turn that carries the task is its own execution: the card's "执行 N 次" is a count of
+/// rows, not of rounds.
+#[tokio::test]
+async fn each_turn_that_carries_the_task_is_its_own_run() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("skip"),
+        Mock::text("第一趟。"),
+        Mock::text("skip"),
+        Mock::text("第二趟。"),
+    ]));
+    let (server, _home) = boot(Some(mock)).await;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().display().to_string();
+
+    // `needs_attention` is open on purpose: a human may look at the failed condition and just
+    // ask again — that is what makes a second execution possible at all.
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "分几次做",
+            "maxRounds": 1,
+            "cwd": workspace,
+            "acceptance": [{ "kind": "fileExists", "path": "report.md" }],
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    drive(&server, "default", "第一步", None).await;
+    assert_eq!(
+        server.runs.count_by_task(&id).await.expect("查执行次数"),
+        1,
+        "第一趟一次执行"
+    );
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(row.status, joyczl_state::TaskStatus::NeedsAttention);
+    assert!(row.current_turn_id.is_none(), "心跳要清掉");
+
+    // The second turn picks the same task up again — a new run row, same task.
+    drive(&server, "default", "第二步", None).await;
+    assert_eq!(
+        server.runs.count_by_task(&id).await.expect("查执行次数"),
+        2,
+        "第二趟是新的执行"
+    );
+
+    // Both attempts are readable, newest first.
+    let runs = server.runs.list_by_task(&id, 10).await.expect("查执行");
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].status, "waiting", "停在验收上，等人确认");
+    assert!(runs[0].stop_reason.is_some());
+}
+
+/// Rounds inside one turn share a step numbering, not a step **key**: `<turn_id>:<seq>` has to
+/// stay unique, or round 2's tool call collides with round 1's row and is silently dropped —
+/// which reads as "the tool never ran" and leaves `toolsOk` counting one success forever.
+#[tokio::test]
+async fn each_round_keeps_its_own_step_so_tools_ok_counts_them_all() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("skip"),
+        Mock::tool_use(
+            "call_1",
+            "write_file",
+            json!({ "path": "a.md", "content": "A\n" }),
+        ),
+        Mock::text("第一份。"),
+        Mock::text("skip"),
+        Mock::tool_use(
+            "call_2",
+            "write_file",
+            json!({ "path": "b.md", "content": "B\n" }),
+        ),
+        Mock::text("两批都好了。"),
+    ]));
+    let (server, _home) = boot(Some(mock)).await;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().display().to_string();
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "分两轮落两份文件",
+            "cwd": workspace,
+            "acceptance": [{ "kind": "toolsOk", "tool": "write_file", "min": 2 }],
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    drive(&server, "default", "开始吧", None).await;
+
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(
+        row.status,
+        joyczl_state::TaskStatus::Done,
+        "两次真的写成功就该完成：{:?}",
+        row.last_stop_reason
+    );
+    assert_eq!(row.rounds_used, 2, "成绩来自两轮，不是一轮");
+
+    let runs = server.runs.list_by_task(&id, 10).await.expect("查执行");
+    let steps = server.steps.list_by_run(&runs[0].id).await.expect("查步骤");
+    assert_eq!(steps.len(), 2, "两轮各一条，谁也没被幂等键吞掉");
+    let mut keys: Vec<&str> = steps
+        .iter()
+        .filter_map(|step| step.idempotency_key.as_deref())
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    assert_eq!(keys.len(), 2, "幂等键必须互不相同：{keys:?}");
+}
+
+/// A stop is the human's: interrupting one round must end the task loop **right there**.
+///
+/// Before this, the interrupted round's acceptance failed and "keep trying" bought another
+/// round — the user's stop only took effect once the round cap ran out. The case file gives the
+/// mock exactly two replies: if a second round were started, the turn would fail on an empty
+/// queue instead of coming back suspended.
+#[tokio::test]
+async fn an_interrupted_round_suspends_the_task_instead_of_spending_another() {
+    let mock = Arc::new(Mock::streaming(vec![
+        Mock::text("skip"),
+        Mock::text("我先把思路理清楚，然后就开始动手写这份报告，还有很多话没有说完。"),
+    ]));
+    let (server, _home) = boot(Some(mock)).await;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().display().to_string();
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "写一份报告",
+            "maxRounds": 4,
+            "cwd": workspace,
+            "acceptance": [{ "kind": "fileExists", "path": "report.md" }],
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sink = EventSink::new(tx);
+    let runner = server.clone();
+    let turn = tokio::spawn(async move {
+        crate::turn::run_turn(
+            &runner,
+            TurnStartParams {
+                attachments: None,
+                session_id: Some("default".to_string()),
+                message: "开始吧".to_string(),
+                stream: Some(true),
+                cwd: None,
+                tier: None,
+            },
+            RequestId::Number(1),
+            &sink,
+        )
+        .await
+    });
+
+    let mut deltas = 0usize;
+    let mut turn_id = String::new();
+    while let Some(frame) = rx.recv().await {
+        let Frame::Notification(notification) = frame else {
+            continue;
+        };
+        match notification {
+            ServerNotification::TurnStarted(started) => turn_id = started.turn_id,
+            ServerNotification::TextDelta(_) => {
+                deltas += 1;
+                if deltas == 2 {
+                    assert!(server.interrupt_turn(&turn_id), "打断该命中正在跑的回合");
+                }
+            }
+            ServerNotification::TurnCompleted(_) => break,
+            _ => {}
+        }
+    }
+    turn.await
+        .expect("回合任务不该崩")
+        .expect("打断是一次正常收尾，不是错误");
+
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(
+        row.status,
+        joyczl_state::TaskStatus::Suspended,
+        "被打断的任务停住，等人按继续：{:?}",
+        row.last_stop_reason
+    );
+    assert_eq!(row.rounds_used, 1, "只花了被打断的那一轮");
+    let runs = server.runs.list_by_task(&id, 10).await.expect("查执行");
+    assert_eq!(runs[0].status, "suspended");
+}
+
+/// P1 planner (JOY_PLAN): one extra call before the first round, and its steps land in the
+/// ledger as `kind = "plan"` — outside the run, so they can never be mistaken for tool calls or
+/// inflate `toolsOk`. Acceptance stays exactly what the human wrote.
+#[tokio::test]
+async fn the_planner_writes_plan_steps_without_touching_acceptance() {
+    let mock = Arc::new(Mock::new(vec![
+        // The plan call comes first: the gate, then the model's own round.
+        Mock::text("{\"steps\": [\"先写骨架\", \"再补结论\"]}"),
+        Mock::text("skip"),
+        Mock::tool_use(
+            "call_1",
+            "write_file",
+            json!({ "path": "report.md", "content": "结论：可以上线\n" }),
+        ),
+        Mock::text("写好了。"),
+    ]));
+    let (server, _home) = boot_with(Some(mock), true).await;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().display().to_string();
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "写一份发布报告",
+            "cwd": workspace,
+            "acceptance": [{ "kind": "fileExists", "path": "report.md" }],
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    drive(&server, "default", "开始吧", None).await;
+
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(row.status, joyczl_state::TaskStatus::Done);
+    // Re-planning is allowed to rewrite the plan; acceptance is not — it is still the human's.
+    let acceptance: serde_json::Value =
+        serde_json::from_str(&row.acceptance_json).expect("验收条件");
+    assert_eq!(acceptance.as_array().expect("数组").len(), 1);
+
+    let planned = server.steps.list_plan(&id).await.expect("查计划");
+    assert_eq!(planned.len(), 2, "两步计划各一行");
+    assert!(planned.iter().all(|step| step.kind == "plan"));
+    assert!(planned.iter().all(|step| step.status == "planned"));
+    assert!(
+        planned.iter().all(|step| step.run_id.is_none()),
+        "计划不属于某一次执行"
+    );
+    assert!(planned[0]
+        .input_json
+        .as_deref()
+        .is_some_and(|json| json.contains("先写骨架")));
+
+    // The run's own steps stay tool-only: the plan is not an execution.
+    let runs = server.runs.list_by_task(&id, 10).await.expect("查执行");
+    let tool_steps = server.steps.list_by_run(&runs[0].id).await.expect("查步骤");
+    assert_eq!(tool_steps.len(), 1);
+    assert_eq!(tool_steps[0].kind, "tool");
+}
+
+/// A planner that answers nonsense must not take the task down: the round runs without a plan.
+#[tokio::test]
+async fn a_broken_plan_is_ignored_not_fatal() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("我觉得可以这样做（并不打算给 JSON）"),
+        Mock::text("skip"),
+        Mock::tool_use(
+            "call_1",
+            "write_file",
+            json!({ "path": "report.md", "content": "结论\n" }),
+        ),
+        Mock::text("写好了。"),
+    ]));
+    let (server, _home) = boot_with(Some(mock), true).await;
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().display().to_string();
+
+    let created = call(
+        &server,
+        joyczl_protocol::methods::TASK_CREATE,
+        json!({
+            "sessionId": "default",
+            "title": "写一份报告",
+            "cwd": workspace,
+            "acceptance": [{ "kind": "fileExists", "path": "report.md" }],
+        }),
+    )
+    .await
+    .expect("建任务");
+    let id = created["task"]["id"].as_str().expect("有 id").to_string();
+
+    drive(&server, "default", "开始吧", None).await;
+
+    let row = server.tasks.get(&id).await.expect("查").expect("还在");
+    assert_eq!(
+        row.status,
+        joyczl_state::TaskStatus::Done,
+        "计划器坏了不影响任务本身"
+    );
+    assert!(server
+        .steps
+        .list_plan(&id)
+        .await
+        .expect("查计划")
+        .is_empty());
 }
