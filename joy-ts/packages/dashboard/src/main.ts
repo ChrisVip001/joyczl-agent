@@ -34,7 +34,7 @@ import {
   updateSession,
   uploadFile,
 } from "./api";
-import { renderMarkdown } from "./markdown";
+import { renderMarkdown, StreamMarkdown } from "./markdown";
 import {
   attachmentStrip,
   chip,
@@ -753,7 +753,10 @@ async function send(
   // row keeps only what needs interaction: approval cards and hard failures.
   const timeline = createTimeline();
   const trace = el("div", { class: "trace" });
-  const bubble = el("div", { class: "bubble streaming" });
+  // md from the first byte: the stream paints real Markdown as it arrives
+  // (StreamMarkdown, below) — not raw `**` that flips into rendered text at the end.
+  const bubble = el("div", { class: "bubble md streaming" });
+  const stream = new StreamMarkdown(bubble);
   const foot = el("div", { class: "foot" });
   dom.messages.append(
     el("div", { class: "msg joy" }, timeline.root, trace, bubble, foot),
@@ -787,9 +790,11 @@ async function send(
             showStatus("thinking", "回复中");
           }
           streamed += notification.delta;
-          // Incremental insert: appending one text node per delta, never repainting the
-          // whole bubble — a several-thousand-token reply must not reflow on every chunk.
-          bubble.append(document.createTextNode(notification.delta));
+          // Incremental paint, but at **block** granularity: settled blocks keep their
+          // nodes, only the still-growing last block is repainted — once per animation
+          // frame, not once per delta. A several-thousand-token reply must not reflow
+          // on every chunk, yet Markdown shows up while it streams, not after.
+          stream.push(notification.delta);
           scrollToEnd(true);
           break;
 
@@ -941,8 +946,9 @@ async function send(
       paintReply(bubble, completed.reply === "" ? "（这一轮没有回复）" : completed.reply);
       foot.textContent = turnFooter(completed);
     } else if (streamed !== "") {
-      // Truncated mid-way: show what did arrive, still as Markdown.
-      paintReply(bubble, streamed);
+      // Truncated mid-way: show what did arrive — the stream already painted it as
+      // Markdown, finish() just completes the still-growing last block.
+      stream.finish();
       foot.textContent = "这一轮没有收到结尾 —— 上面的回复可能被截断了";
     } else {
       bubble.textContent = "（这一轮没有回复）";
@@ -958,10 +964,11 @@ async function send(
 }
 
 /**
- * Swap the plain streamed text for the rendered Markdown, exactly once.
+ * Swap the streamed paint for the authoritative reply, exactly once.
  *
- * Streaming stays plain on purpose: appending one text node per delta costs nothing, while
- * re-parsing thousands of tokens on every chunk would reflow the whole bubble.
+ * The stream already renders Markdown live (StreamMarkdown); this full repaint exists
+ * only because `reply` from app-server is the truth — deltas may be missing
+ * (backpressure, disconnection) or differ from what actually landed in the transcript.
  */
 function paintReply(bubble: HTMLElement, markdown: string): void {
   bubble.classList.add("md");

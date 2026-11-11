@@ -111,3 +111,29 @@ test("乘号和变量名里的符号不当强调", () => {
   // 中文两侧不写空格，粗体照常生效。
   assert.equal(parseInline("这很**重要**")[1]?.kind, "strong");
 });
+
+test("流式不变量：整行前缀解析出的落定块与全文一致（StreamMarkdown 的根基）", () => {
+  // StreamMarkdown 敢「落定块不再重画」，靠的是这条：Markdown 只从尾部生长，
+  // **整行**前缀的块序列（去掉仍在生长的最后一块）永远是全文块序列的前缀。
+  // 注意这只对整行成立 —— 断在 `- ` 标记中间的半行会先被解析成段落，那类瞬态
+  // 由 StreamMarkdown 的逐帧对账兜住，不是解析器的性质。
+  const docs = [
+    "# 标题\n\n第一段带 `code` 和 **粗体**。\n\n- 甲\n- 乙\n  - 乙一\n\n| 项 | 值 |\n| --- | --- |\n| a | 1 |\n\n> 引用\n\n```ts\nconst x = 1;\n```\n\n结尾。",
+    "开场白直接进段落，没有标题，第二行接在后面。\n\n1. 第一步\n2. 第二步\n\n---",
+    "| 只有一个表 | 没有前面的段落 |\n| :-- | --: |\n| x | y |",
+  ];
+  for (const doc of docs) {
+    const full = parseMarkdown(doc);
+    for (let cut = 1; cut <= doc.length; cut += 1) {
+      // 只在换行处切：SSE 的 delta 通常按词/句到，半行瞬态存在但由对账兜底。
+      if (cut < doc.length && doc[cut - 1] !== "\n") continue;
+      const prefix = parseMarkdown(doc.slice(0, cut));
+      const keep = Math.max(0, prefix.length - 1); // 最后一块还在长，不比
+      assert.deepEqual(
+        prefix.slice(0, keep),
+        full.slice(0, keep),
+        `前缀截到 ${cut} 字符时，落定块和全文不一致`,
+      );
+    }
+  }
+});

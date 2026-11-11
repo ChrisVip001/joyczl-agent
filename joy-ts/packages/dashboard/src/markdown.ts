@@ -431,6 +431,94 @@ function renderBlock(block: Block): HTMLElement {
   }
 }
 
+/**
+ * 流式渲染：回复一边到一边就画成 Markdown，不再等传输完。
+ *
+ * 增量的粒度是**块**：解析用同一个 `parseMarkdown`，但每个动画帧只画有变化的部分
+ * —— 落定的块各留一个节点，每帧只重画仍在生长的最后一块，几千 token 的回复也
+ * 不会每个 delta 都整体重排。断在半截的行内标记（`**`、`` ` ``）下一帧自然长好。
+ *
+ * 解析器对「半行」前缀没有严格的前缀稳定性：流断在 `- ` 标记中间时，孤立的 `-`
+ * 先被解析成段落，下一帧才并回列表。所以每次重画都拿落定块和最新解析**对账**
+ * （缓存的序列化签名），从第一处不一致的块起作废重画 —— 正常情况下全等，代价
+ * 是每帧一次 O(回复长度) 的比较，和解析同阶。
+ *
+ * 节点直接画进宿主元素（不套中间层），`.md > :first-child` 这类子选择器照常生效。
+ * 流结束时调一次 `finish()`，把仍在生长的最后一块画完。
+ */
+export class StreamMarkdown {
+  private source = "";
+  /** 落定块下标 → 节点。画过就不再碰——除非对账发现它变了。 */
+  private settled: HTMLElement[] = [];
+  /** 落定块的序列化签名，对账用。与 `settled` 一一对应。 */
+  private signatures: string[] = [];
+  /** 仍在生长的最后一块；每个动画帧换一个新节点。 */
+  private tail: HTMLElement | null = null;
+  private frame: number | null = null;
+  private readonly host: HTMLElement;
+
+  constructor(host: HTMLElement) {
+    this.host = host;
+  }
+
+  push(delta: string): void {
+    this.source += delta;
+    this.schedule();
+  }
+
+  /** 流结束：取消排队的帧，把剩余内容一次画完。之后这个实例不再接收 push。 */
+  finish(): void {
+    if (this.frame !== null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = null;
+    }
+    this.repaint(true);
+  }
+
+  private schedule(): void {
+    if (this.frame !== null) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      this.repaint(false);
+    });
+  }
+
+  private repaint(final: boolean): void {
+    const blocks = parseMarkdown(this.source);
+    // 流式时最后一块还在长（live）；final 时没有活块，全部按落定处理。
+    const live = final ? -1 : blocks.length - 1;
+    this.tail?.remove();
+    this.tail = null;
+
+    // 对账：找到第一处与缓存不一致的落定块（正常情况全部一致，at = settled.length）。
+    let at = 0;
+    while (
+      at < this.settled.length &&
+      at < blocks.length &&
+      this.signatures[at] === JSON.stringify(blocks[at] as Block)
+    ) {
+      at += 1;
+    }
+    if (at < this.settled.length) {
+      // 解析器 reinterpret 了早先的尾部（半行的 `- ` 并回列表等）：作废重画。
+      for (const stale of this.settled.slice(at)) stale.remove();
+      this.settled.length = at;
+      this.signatures.length = at;
+    }
+    for (let i = at; i < blocks.length && i !== live; i += 1) {
+      const block = blocks[i] as Block;
+      const element = renderBlock(block);
+      this.settled.push(element);
+      this.signatures.push(JSON.stringify(block));
+      this.host.append(element);
+    }
+    if (live >= 0) {
+      this.tail = renderBlock(blocks[live] as Block);
+      this.host.append(this.tail);
+    }
+  }
+}
+
 /** 段落内的单换行渲染成 <br>：聊天里换行就是换行，不并成一行。 */
 function appendLines(parent: Node, lines: Inline[][]): void {
   lines.forEach((line, index) => {
