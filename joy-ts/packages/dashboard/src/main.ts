@@ -308,11 +308,67 @@ function addStopButton(): void {
   dom.status.append(stop);
 }
 
+/**
+ * The sidebar's edge is draggable: grab the border, pull left/right, the width
+ * sticks (localStorage). Double-click resets; ←/→ nudge by 24px when the handle
+ * is focused. Pointer events cover mouse and touch alike; `setPointerCapture`
+ * keeps the drag alive when the cursor outruns the 7px handle.
+ */
+function setupSidebarResize(): void {
+  const handle = must<HTMLElement>("sidebar-resizer");
+  const app = document.querySelector<HTMLElement>(".app");
+  if (app === null) return;
+
+  const MIN = 180;
+  const MAX = 480;
+  const DEFAULT = 232;
+  const KEY = "joy.sidebar.w";
+  const apply = (w: number): void => app.style.setProperty("--sidebar-w", `${Math.round(w)}px`);
+  const clamp = (w: number): number => Math.min(MAX, Math.max(MIN, w));
+
+  const saved = Number(localStorage.getItem(KEY));
+  if (Number.isFinite(saved) && saved >= MIN && saved <= MAX) apply(saved);
+
+  let dragging = false;
+  handle.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing");
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (dragging) apply(clamp(event.clientX));
+  });
+  const stop = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove("resizing");
+    const w = app.style.getPropertyValue("--sidebar-w");
+    if (w !== "") localStorage.setItem(KEY, w);
+  };
+  handle.addEventListener("pointerup", stop);
+  handle.addEventListener("pointercancel", stop);
+
+  handle.addEventListener("dblclick", () => {
+    apply(DEFAULT);
+    localStorage.removeItem(KEY);
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const current =
+      Number.parseFloat(getComputedStyle(app).getPropertyValue("--sidebar-w")) || DEFAULT;
+    const w = clamp(current + (event.key === "ArrowRight" ? 24 : -24));
+    apply(w);
+    localStorage.setItem(KEY, `${Math.round(w)}px`);
+  });
+}
+
 async function boot(): Promise<void> {
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
   dom.newSession.addEventListener("click", () => void newSession());
   dom.drawerClose.addEventListener("click", closeDrawer);
+  setupSidebarResize();
 
   // Click a thumbnail anywhere in the flow (or the staging strip) → full view.
   // Delegated once: history, staged, and future messages all get it for free.

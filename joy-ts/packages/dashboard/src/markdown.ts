@@ -432,6 +432,25 @@ function renderBlock(block: Block): HTMLElement {
 }
 
 /**
+ * 剥掉落库助手消息里模型专用的工具折叠尾巴。
+ *
+ * 历史（chat_log）写给两个读者。**模型**需要 `fold_tool_activity`（app-server 的
+ * turn.rs）追加的 `\n[tools used: …]` —— 没有它下一轮就忘了自己做过什么；
+ * **人**不需要：气泡上方的 trace 胶囊已经说了用过哪些工具，原始工具输出在对话里
+ * 只是噪音（「我的家目录列表怎么跑到聊天里了？」）。所以展示层把它摘掉 —— 一份
+ * 存储文本，两种画法，折叠留在数据库里。
+ *
+ * 标记是机器追加在**最末尾**的，所以：取**最后一次**出现（工具输出可能引用这个
+ * 标记），并且只在文本真的以折叠的收尾括号结束时才剥 —— 回复里只是提到标记的
+ * 原样保留。
+ */
+export function stripToolFold(content: string): string {
+  const at = content.lastIndexOf("\n[tools used:");
+  if (at === -1 || !content.endsWith("]")) return content;
+  return content.slice(0, at);
+}
+
+/**
  * 流式渲染：回复一边到一边就画成 Markdown，不再等传输完。
  *
  * 增量的粒度是**块**：解析用同一个 `parseMarkdown`，但每个动画帧只画有变化的部分

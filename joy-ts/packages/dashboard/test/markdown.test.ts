@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseInline, parseMarkdown } from "../src/markdown.ts";
+import { parseInline, parseMarkdown, stripToolFold } from "../src/markdown.ts";
 
 test("标题、段落、分隔线各归各位", () => {
   const blocks = parseMarkdown("# 结论\n\n第一段\n第二行\n\n---\n");
@@ -136,4 +136,25 @@ test("流式不变量：整行前缀解析出的落定块与全文一致（Strea
       );
     }
   }
+});
+
+test("stripToolFold：模型专用的折叠尾巴剥掉，人写的和只是提到的保留", () => {
+  const reply = "# 结论\n\n可以直接上线。";
+  assert.equal(stripToolFold(reply), reply, "没有折叠痕迹的回复原样返回");
+
+  const stored =
+    "已经看过了，目录里没有报告。\n[tools used: list_dir(.Trash/\n.agent-browser/\n…截断…); list_dir(Error: Operation not permitted)]";
+  assert.equal(
+    stripToolFold(stored),
+    "已经看过了，目录里没有报告。",
+    "工具名、参数、输出（含换行和括号）整体剥掉",
+  );
+
+  // 输出里引用了标记本身时，lastIndexOf 落在真正追加的那一条上。
+  const quoted = '写好了。\n[tools used: delegate_task(结论里提到 "[tools used:" 已被转义)]';
+  assert.equal(stripToolFold(quoted), "写好了。");
+
+  // 只是提到标记（没有被追加）的不动：没有收尾括号就不剥。
+  const noClose = "说到一半 [tools used: 还没收尾";
+  assert.equal(stripToolFold(noClose), noClose);
 });

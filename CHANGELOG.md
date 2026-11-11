@@ -4,6 +4,43 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### History display strips the model-only tool fold
+
+- Stored assistant replies carry a `\n[tools used: …]` trailer — written by
+  `fold_tool_activity` for the **model** (so the next turn remembers what was
+  already done). The human read it too, and wondered why a home-directory
+  listing was in the chat. The display layer now takes the fold off
+  (`stripToolFold` in `markdown.ts`): last occurrence wins (tool outputs may
+  quote the marker), and it only strips when the text really ends with the
+  fold's closing bracket. The fold stays in the database — one stored text,
+  two renderings. Live completion replies were always clean.
+
+### Sidebar session list
+
+- Session rows become **exactly one line**, sidebars: title on the left (ellipsis when
+  it overflows), relative time on the right, nothing else — details (message count, session id) 
+  live in the tooltip. No card box: hover and the current selection are the only backgrounds, 
+  the selected row gets a 2px accent bar on the left. Arrow keys move the focus along the rows
+  (Enter activates — native to buttons).
+- `sessionList` no longer nests a `ul.list` inside the host `<ul class="session-list">`
+  — it returns `<li>` rows directly, one list. The overview's "最近会话" section shares
+  the same rows (one source of truth, two surfaces, as before).
+- Service worker `VERSION` bumps to `joy-v14`: `main.js` is cache-first, so a frontend
+  change without a bump keeps serving the old bundle — exactly why the first version
+  of this redesign looked like "nothing changed".
+- The sidebar's **edge is draggable**: grab the border, pull left/right, width sticks
+  in localStorage (180–480px, default 232). Double-click resets; ←/→ nudge by 24px
+  when the handle is focused; a 7px hit area rides the border with an accent line on
+  hover/drag; pointer capture keeps the drag alive when the cursor outruns the handle.
+  Hidden on mobile, where the sidebar turns into a top bar.
+- Truncated titles get the **hover marquee**: hover for 500ms and the title
+  scrolls horizontally (40px/s, ellipsis lifted while scrolling), holds a beat at
+  the end, scrolls back, repeats while the pointer stays; leaving snaps back
+  instantly. Titles that fit never move; `prefers-reduced-motion` users never
+  see movement at all (the tooltip still carries the full text). The title is
+  now two spans — the outer clips at the row edge, the inner carries the
+  ellipsis and the translate.
+
 ### Dashboard streams Markdown as it arrives (block-incremental paint)
 
 - The chat bubble no longer shows raw `**` during a turn and flips to rendered

@@ -133,13 +133,15 @@ textarea::placeholder {
 
 .app {
   display: grid;
-  grid-template-columns: 232px 1fr;
+  /* 侧栏宽度可拖（main.ts 的 setupSidebarResize 写这个变量），232px 是缺省。 */
+  grid-template-columns: var(--sidebar-w, 232px) 1fr;
   height: 100vh;
 }
 
 /* 侧栏 */
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -147,6 +149,41 @@ textarea::placeholder {
   background: var(--bg-panel);
   border-right: 1px solid var(--line-soft);
   min-height: 0;
+}
+
+/* 边界抓手：骑在侧栏右边框上的 7px 命中区，悬停/拖动时亮出一条 accent 线。
+   拖动调宽窄是人的动作 —— 宽度记进 localStorage，双击复位。 */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 30;
+  touch-action: none;
+}
+
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background var(--speed) ease;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+body.resizing .sidebar-resizer::after {
+  background: var(--accent);
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .brand {
@@ -216,17 +253,75 @@ textarea::placeholder {
 
 .session-list {
   margin: 0;
-  padding: 0;
+  padding: 0 4px;
   list-style: none;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
-.session-list .item {
-  padding: 0;
+/* 会话行：Claude Code / Codex / WorkBuddy 侧栏那种单行条目 —— 每个会话只有
+   一行：标题左、相对时间右，超长省略号（完整信息在 tooltip）。没有卡片框，
+   悬停与当前选中是仅有的两处背景；选中行左侧一条 accent 窄条指路。 */
+.session-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  column-gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
   border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background var(--speed) ease,
+    color var(--speed) ease;
+}
+
+.session-row:hover,
+.session-row.current {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.session-row.current {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.session-row .row-title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+}
+
+/* 悬停超 500ms 的跑马灯：内层负责省略号与平移（marqueeOnHover 摘掉省略号、
+   推着它滚），外层负责在行边界裁掉 —— 所以结构是两层 span。 */
+.session-row .row-title-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row .row-title-text.scrolling {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.session-row.current .row-title {
+  color: var(--accent);
+}
+
+.session-row .row-when {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 /* 面板入口（侧栏竖排） */
@@ -1965,6 +2060,11 @@ textarea::placeholder {
   }
 
   .sidebar-foot .path {
+    display: none;
+  }
+
+  /* 移动端侧栏横过来当顶栏，宽度不再可调。 */
+  .sidebar-resizer {
     display: none;
   }
 

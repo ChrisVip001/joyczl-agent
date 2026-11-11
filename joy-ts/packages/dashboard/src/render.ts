@@ -3,7 +3,7 @@
 // Mostly pure functions: give data, get back a node. main.ts only manages "when to repaint",
 // not "what it looks like" — when the page gets ugly, look at this one file.
 
-import { renderMarkdown } from "./markdown";
+import { renderMarkdown, stripToolFold } from "./markdown";
 import type {
   AgentTaskView,
   ArtifactView,
@@ -472,7 +472,8 @@ function formatDuration(ms: number, clock: boolean): string {
 /**
  * The sidebar's session list — same rows as the overview's, one source of truth
  * (`sessionRow`), two surfaces. The sidebar is where switching actually happens;
- * the overview keeps the fuller picture.
+ * the overview keeps the fuller picture. The host in index.html is already the
+ * `<ul class="session-list">`, so this returns `<li>` rows directly (no nested list).
  */
 export function sessionList(
   data: DashboardData,
@@ -497,10 +498,33 @@ export function sessionList(
     fragment.append(muted("还没有会话"));
     return fragment;
   }
-  fragment.append(
-    el("ul", { class: "list" }, ...sessions.map((item) => sessionRow(item, current, onPick))),
-  );
+  for (const item of sessions) {
+    const li = sessionRow(item, current, onPick);
+    arrowKeyNav(li);
+    fragment.append(li);
+  }
   return fragment;
+}
+
+/**
+ * Claude Code resume-list keys: ↑/↓ move the focus along the rows (Enter activates —
+ * that part is native to buttons). Bound per row; the handler reaches the whole list
+ * through `closest("ul")`, so it works in both surfaces that render these rows.
+ */
+function arrowKeyNav(li: HTMLElement): void {
+  li.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const list = li.closest("ul");
+    if (list === null) return;
+    const rows = [...list.querySelectorAll<HTMLButtonElement>("button.session-row")];
+    const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+    if (at === -1) return;
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : rows.length - 1;
+    const next = rows[(at + step) % rows.length];
+    next?.focus();
+    next?.scrollIntoView({ block: "nearest" });
+  });
 }
 
 /** What a notification said (gate / tool / graph), as a small capsule. */
@@ -608,8 +632,9 @@ export function messageRow(message: Message): HTMLElement {
   }
 
   // The model writes Markdown, so paint Markdown — leaving `**` and `- ` on screen isn't
-  // "faithful", it's unrendered. Still DOM-only: see markdown.ts.
-  const bubble = el("div", { class: "bubble md" }, renderMarkdown(message.content));
+  // "faithful", it's unrendered. Still DOM-only: see markdown.ts. The stored text carries
+  // a model-only fold (see stripToolFold); the human reads the trace capsules instead.
+  const bubble = el("div", { class: "bubble md" }, renderMarkdown(stripToolFold(message.content)));
 
   // Telemetry is the only thing that can reconstruct "what it was thinking then", so it's worth
   // painting — but it's a **turn summary**, not a per-item replay: in the live view each tool
@@ -699,29 +724,104 @@ function row(label: string, value: string): [HTMLElement, HTMLElement] {
 }
 
 /**
- * One session row. **Clickable** — click to switch to it.
+ * One session row — **exactly one line**, like the Claude Code / Codex / WorkBuddy
+ * sidebars: title on the left (ellipsis when it overflows), relative time on the
+ * right, nothing else. No second line, no card box; hover and the current selection
+ * are the only backgrounds. Details live in the tooltip, not on the row.
  *
- * The inner element is a `<button>` rather than a click on `<li>`: something clickable and
- * hoverable should be a button; only then keyboard and screen readers recognize it (`<div>` +
- * click has neither). The content is a `<span>` not a `<div>`: buttons allow inline elements.
+ * The inner element is a `<button>` rather than a click on `<li>`: something clickable
+ * and hoverable should be a button; only then keyboard and screen readers recognize it.
  */
 function sessionRow(
   item: SessionSummary,
   current: string,
   onPick: (id: string) => void,
 ): HTMLElement {
-  const classes = item.id === current ? "item pick current" : "item pick";
+  const fresh = item.messages === 0;
   const button = el(
     "button",
-    { class: classes, type: "button", title: `切到会话「${item.id}」` },
-    el("span", { class: "title", text: item.title }),
-    el("span", {
-      class: "sub",
-      text: `${item.messages} 条 · ${formatWhen(item.lastAt)}`,
-    }),
+    {
+      class: item.id === current ? "session-row current" : "session-row",
+      type: "button",
+      title: fresh
+        ? `新会话「${item.id}」—— 说第一句就有了`
+        : `「${item.title}」 · ${item.messages} 条消息 · ${item.id}`,
+    },
+    el(
+      "span",
+      { class: "row-title" },
+      // 内层才被平移：外层负责在边界裁掉，内层负责省略号与滚动。
+      el("span", { class: "row-title-text", text: item.title }),
+    ),
+    el("span", { class: "row-when", text: fresh ? "" : formatWhen(item.lastAt) }),
   );
   button.addEventListener("click", () => onPick(item.id));
+  marqueeOnHover(button);
   return el("li", {}, button);
+}
+
+/**
+ * Hover a truncated title for 500ms and it scrolls horizontally so the whole
+ * text becomes readable — the marquee pattern: scroll to the end, hold a beat,
+ * scroll back, repeat while the pointer stays. Leave, and it snaps back
+ * instantly. Titles that fit never move; reduced-motion users never see it
+ * move at all (the tooltip already carries the full text).
+ */
+function marqueeOnHover(row: HTMLElement): void {
+  const box = row.querySelector<HTMLElement>(".row-title");
+  const text = row.querySelector<HTMLElement>(".row-title-text");
+  if (box === null || text === null) return;
+
+  const SPEED = 40; // px/s：一眼能跟上、又不至于慢得着急
+  const DELAY = 500;
+  let timer: number | null = null;
+  let running = false;
+
+  const stop = (): void => {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    running = false;
+    text.getAnimations().forEach((animation) => animation.cancel());
+    text.classList.remove("scrolling");
+  };
+
+  const play = async (): Promise<void> => {
+    if (running || !row.isConnected) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const distance = text.scrollWidth - box.clientWidth;
+    if (distance <= 0) return; // 没截断的标题不动
+    running = true;
+    text.classList.add("scrolling"); // 摘掉省略号，让平移出的字露出来
+    const hold = (ms: number) =>
+      new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+    try {
+      while (running && row.isConnected) {
+        const out = text.animate(
+          [{ transform: "translateX(0)" }, { transform: `translateX(${-distance}px)` }],
+          { duration: (distance / SPEED) * 1000, easing: "linear", fill: "forwards" },
+        );
+        await out.finished;
+        await hold(1000); // 尾部停一拍，读完结尾
+        const back = text.animate(
+          [{ transform: `translateX(${-distance}px)` }, { transform: "translateX(0)" }],
+          { duration: Math.min((distance / SPEED) * 1000, 600), easing: "ease-in-out", fill: "forwards" },
+        );
+        await back.finished;
+        await hold(500);
+      }
+    } catch {
+      // cancel() 会让 finished reject —— 那是 stop() 的路径，不是错误。
+    } finally {
+      if (!running) text.classList.remove("scrolling");
+    }
+  };
+
+  box.addEventListener("mouseenter", () => {
+    timer = window.setTimeout(() => void play(), DELAY);
+  });
+  box.addEventListener("mouseleave", stop);
 }
 
 // --- Formatting ---------------------------------------------------------------
