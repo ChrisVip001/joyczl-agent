@@ -41,6 +41,28 @@ The first screen shows config / sessions / memory; the chat area shows the
 retrieval gate's ruling, tool calls, and streaming replies live. If port
 7777 is taken it scans upward (10 tries).
 
+### Putting it on a server (self-hosting)
+
+```bash
+export JOY_OPS_HOST=0.0.0.0            # a non-loopback bind requires a token, or startup is refused
+export JOY_OPS_TOKEN=$(openssl rand -hex 16)
+export JOY_HOME=/srv/joy/.joy
+joy dashboard                          # → http://<server>:7777 (/api/* needs the Bearer token)
+```
+
+- The page asks for the token once on the first 401 and keeps it in
+  localStorage; the static page itself needs no token (it must load before it
+  can ask).
+- **No key files to copy**: put `"key_source": "env:DEEPSEEK_API_KEY"` in
+  `models.json` and export that variable in the server's environment. The key
+  is only read into the memory of the process running the turn — never on
+  disk, never in an `/api/*` response.
+- TLS belongs to a reverse proxy (Caddy / nginx terminate HTTPS); Joy speaks
+  plain HTTP.
+- Product boundary: the server runs **orchestration**; connectors and MCP
+  servers stay on the user's own device (local-first / no sandbox, no
+  execution) — never put user-configured extensions on a shared server.
+
 ## MCP servers
 
 Write `<home>/mcp.json` (stdio or HTTP servers); their tools merge into the

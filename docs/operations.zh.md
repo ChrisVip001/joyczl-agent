@@ -39,6 +39,24 @@ JOY_HOME=$HOME/.joy ./target/debug/joy dashboard        # → http://localhost:7
 首屏展示配置 / 会话 / 记忆；聊天区实时呈现检索门判定、工具调用与流式
 回复。端口被占自动 +1（最多 10 个）。
 
+### 放到一台服务器上（自托管）
+
+```bash
+export JOY_OPS_HOST=0.0.0.0            # 非回环地址必须配 token，否则拒绝启动
+export JOY_OPS_TOKEN=$(openssl rand -hex 16)
+export JOY_HOME=/srv/joy/.joy
+joy dashboard                          # → http://<服务器>:7777（/api/* 需要 Bearer token）
+```
+
+- 页面首次 401 时会问一次 token，之后存在浏览器 localStorage；静态页本身
+  不需要 token（先能加载，才能问）。
+- **key 不用拷文件**：`models.json` 里写 `"key_source": "env:DEEPSEEK_API_KEY"`，
+  在服务器的环境里 export 这个变量即可。key 只在跑那一轮的进程内存里被读到，
+  永不落盘，也永远不会出现在 `/api/*` 的应答里。
+- TLS 交给反向代理（Caddy / nginx 终结 HTTPS），Joy 自己只说 HTTP。
+- 产品边界：服务器跑的是**编排**；连接器与 MCP 服务器留在用户自己的设备上
+  （本地优先 / 无沙箱不执行），不要把用户自配的外挂放上共享服务器。
+
 ## MCP 外挂
 
 写 `<home>/mcp.json`（stdio 或 HTTP 服务器），工具自动并入工具表。
