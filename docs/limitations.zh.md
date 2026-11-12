@@ -292,6 +292,9 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **未做** —— 技能触发只对 ASCII 字母数字分词，所以哪怕对话是中文，技能的触发
   词也得写成英文。补法是 CJK 分词，或给技能加一个 `triggers:` 字段。
   → `joy-rs/joyczl-memory/src/skills.rs`（`tokens`）
+* **刻意** —— 注入提示的 bundle 目录是截断过的（`index_text`）。不修剪的目录会变成它本来
+  要解决的那个上下文问题；掉出列表的页面仍然可以按名字取到。
+  → `joy-rs/joyczl-memory/src/bundle.rs`（`index_text`）
 
 ## 检索
 
@@ -321,6 +324,13 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
 * **未做** —— 摘要不会被再摘要：一个很长的会话就是一段越来越长的文字。摘要的
   摘要（分层滚动）没实现。
   → `joy-rs/joyczl-memory/src/compaction.rs`（`roll_forward`）
+* **刻意** —— 六段计量只覆盖「会随会话增长的部分」。时钟、待办板、能力缺口说明每轮都在
+  提示里但不计数：它们只有几十个 token 且恒定，一条增长曲线把常量算进去就不再是增长曲线。
+  → `joy-rs/joyczl-app-server/src/turn.rs`（`usage_of` 调用）、`memory_center.rs`
+* **刻意** —— `JOY_MAX_ITERATIONS`（默认 32）是**花多少**的预算，不是「能不能做成」的判决。
+  最后一步是收尾轮（工具收起），所以撞到它是「完成 / 卡住 / 下一步」，不是一句道歉。
+  硬停只剩两种情况：`max_iterations = 1`，以及供应商在空工具表下仍硬要调工具。
+  → `joy-rs/joyczl-loop/src/lib.rs`（护栏 2、`WRAP_UP`）
 
 ## 轮次与协议
 
@@ -487,3 +497,21 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   环境变量之上的。所以对那个字段来说，保存过的补丁比 `JOY_*` 说话更响，直到把它
   清掉（空串清掉 model 覆盖；全空的补丁会删掉文件）。
   → `joy-rs/joyczl-config/src/lib.rs`（`apply_patch`、`save_patch`）
+
+## 记忆与上下文
+
+* **历史工具输出不可重建。** 一次性回填只能把 `chat_log` 的文本折成 `fidelity: folded`
+  的行。重建这样的轮次得到的是摘要；记忆中心会显示 `折叠`，而不是假装原文还在。
+* **延迟加载的工具激活不跨重启。** `JOY_TOOL_POLICY=deferred` 把每会话的激活集合放在
+  内存里。重启之后让模型重新找一次 —— 便宜且诚实；持久化到磁盘的工具表可能比产生它的
+  那些开关活得更久。
+* **上下文占用是估算。** cl100k 计数，和预算用的是同一个近似。它是决策辅助，不是账单。
+* **`cache_control` 只有 Anthropic 有。** 其他 wire 拿到同一段稳定前缀，靠各自的自动
+  前缀缓存；用量账本记下供应商真正报上来的 cached token 字段，没报就是 0。
+
+## 崩溃恢复
+
+* **崩溃的回合只在一小时内自动续跑。** `JOY_RESUME_MAX_AGE`（默认 60 分钟）会在启动时把
+  更旧的 checkpoint 标成 `abandoned` 而不是接着跑。checkpoint 本来就是崩溃恢复用的，
+  诚实的跨度是秒到分钟；再久，「今天」已经换了，而且替人花掉一次他当天并不想要的模型调用。
+  那一行照样留在账本里 —— `abandoned` 是状态，不是删除。

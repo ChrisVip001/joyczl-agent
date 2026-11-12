@@ -34,10 +34,10 @@
 | ③ | [配置层](03-config.md) | `Settings` 的只读一次模型、`SettingsPatch` 的三级叠加、`config/write` 的落盘顺序 |
 | ④ | [provider 层](04-provider.md) | 12 家厂商表、`resolve` 的优先级链、两种 wire format 的纯函数翻译、SSE 解析、embedding |
 | ⑤ | [agent 循环](05-loop.md) | `Turn` 的全部输入、双护栏、流式与非流式如何归一、打断的三个安全点 |
-| ⑥ | [工具层](06-tools.md) | `Tool`/`ToolRegistry` 契约、22 个内置工具逐个讲、`run_command` 的三道闸门与沙箱 |
+| ⑥ | [工具层](06-tools.md) | `Tool`/`ToolRegistry` 契约、**28 个内置工具**（21 常驻 + 7 门控）逐个讲、`run_command` 的三道闸门与沙箱 |
 | ⑦ | [记忆层](07-memory.md) | 检索门、consolidation、上下文压缩的水位线、RRF 混合检索、技能渐进披露、技能安装 |
 | ⑧ | [图引擎](08-graph.md) | 波次执行算法、写冲突检测、路由与 `on_error`、triage 前门、gather 晨报 |
-| ⑨ | [服务端](09-app-server.md) | `Server` 装配、`run_turn` 全流程（会话门/任务/计划/验收）、dispatch 的 39 个方法、确定性内核 `joyczl-agent`、stdio 并发模型、trace |
+| ⑨ | [服务端](09-app-server.md) | `Server` 装配、`run_turn` 全流程（会话门/任务/计划/验收）、dispatch＋记忆中心的 45 个方法、确定性内核 `joyczl-agent`、stdio 并发模型、trace |
 | ⑩ | [命令行](10-cli.md) | 12 个子命令、REPL 的流式渲染、`joy schedule` 的 cron、`joy gather` 的真实绑定 |
 | ⑪ | [前端与 SDK](11-frontends.md) | TS 客户端/驾驶舱/四平台网关、Python SDK 与分平台二进制包 |
 | ⑫ | [质量体系](12-quality.md) | eval 场景格式与断言、mock provider、judge、长任务基准、七条冒烟、CI 门 |
@@ -49,7 +49,7 @@
 1. **启动**（⑩）：`main` 看到没有子命令 → 读环境变量得到 `Settings`（③）→
    `joyczl_app_server::open` 把 `<home>/settings.json` 里的补丁叠上去 →
    `state.db` 建/开、WAL、迁移跑到最新（②）→ `resolve()` 拿 provider 客户端（④）→
-   `builtin_tools()` 组装工具表（内置 22 个 + 可能有的 exec + MCP）（⑥）→ 进 REPL。
+   `build_default()` 组装工具表（20 个 + 常驻的 `todo_write` + 门控的 7 个 + 可能的 MCP）（⑥）→ 进 REPL。
 2. **你敲的这句话**进 `chat_turn`：起一个 `EventSink` 通道，`run_turn` 跑在另一个
    任务里，REPL 同时开始消费通知（⑩）。
 3. **`run_turn` 第一步**（⑨）：登记取消令牌（`turns[turn_id] = Interrupt`）并挂上
@@ -66,7 +66,7 @@
 7. **loop**（⑤）：带当前工作记忆调一次模型（走 SSE 流式，每个 delta 既转发给
    REPL 也作为 `Text` 事件给观察者）→ 模型要工具就逐个执行（`ToolStarted` 先发，
    `Tool` 后发）→ 工具结果作为一轮 User 消息喂回去 → 再调模型，直到模型不再要工具
-   （护栏 1）或到 `max_iterations`（护栏 2）。全程与取消令牌竞速（`turn/interrupt`）。
+   （护栏 1）或到 `max_iterations`——最后一次把工具收起，让模型自己收尾（护栏 2）。全程与取消令牌竞速（`turn/interrupt`）。
 8. **收尾**（⑨）：`ToolCompleted` 通知补齐 → `fold_tool_activity` 把「用过什么工具」
    折进回复文本（防重复预订会议）→ 组装 `TurnMeta`（门/图/迭代/耗时/工具/模型/
    **usage**/interrupted）→ 落 `chat_log`（assistant 行带 meta）→ trace 与 usage

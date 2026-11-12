@@ -94,6 +94,27 @@ SSE 那两个细节值得记：
 `AppServer::spawn` 起的是**自己**（`current_exe()`）加 `app-server` 参数，
 `JOY_HOME` 用同一个——所以驾驶舱不会另开一个状态目录。
 
+### 记忆中心：抽屉的第四个页签
+
+三个二级分段，一次只显示一段（抽屉只有几百像素宽，三栏并排会挤成三条缝）：
+
+| 分段 | 数据 | 交互 |
+|---|---|---|
+| 账本 | `GET /api/ledger/turns`（一行一轮） | 点开一行 → `GET /api/ledger/turn` 取该轮条目，就地展开 |
+| 记忆库 | `GET /api/memory/index` + `GET /api/memory/page` | 目录 → 正文；页脚的 `ledger:…` chip 跳回账本那一轮 |
+| 上下文 | `GET /api/context` | 六段分层条 + 已用/预算；到阈值出现一句提示；按钮打 `/api/compact` |
+
+两条约束，都是踩过的坑：
+
+- **打开就重读，不缓存。** 账本只增、bundle 会被后台 worker 改写、占用率属于上一轮 ——
+  缓存下来就是把「过去」当成「现在」展示。
+- **`must()` 的 id 必须与页面同时更新。** 页面和 bundle 版本错配会整屏白屏；`index.html` 带
+  `main.js?v=<build>` 版本戳，`sw.js` 的 `VERSION` 每次构建递增，`smoke-dashboard.sh` 对着
+  `must("…")` 的 id 列表逐条比对 —— 三处任缺一处，白屏就会回来。
+
+「重新生成」故意不做成按钮：整页重生成是一次模型调用，它属于 `joy memory rebuild`，
+不属于界面里一个顺手点下去的链接。
+
 ## 11.4 `packages/gateway`：四个平台
 
 四个平台**接入方式完全不同**，这一章的价值在于对照：

@@ -13,16 +13,21 @@ Joy 是一个本地优先的个人助手：Rust 独占逻辑与状态，TypeScri
 joy-rs/
   joyczl-protocol/      跨语言契约，唯一事实来源（schema/ 生成物 check-in）
   joyczl-config/        JOY_* 环境变量，启动读一次
-  joyczl-state/         SQLite + FTS5(trigram)；记忆后端契约与 conformance
-  joyczl-provider/      12 家厂商（含本地 Ollama），两种 wire format + SSE，重试与 token 估算
+  joyczl-schedule/      定时任务的全部语义：五段 cron + `schedules.json`（declarations.rs）。
+                        `joy schedule` 按它触发，能力中心按它算「下次触发」，`schedule_job` /
+                        `list_schedules` / `cancel_schedule` 走它写
+  joyczl-state/         SQLite + FTS5(trigram)；只追加的会话账本（ledger）；记忆后端契约与 conformance
+  joyczl-provider/      12 家厂商（含本地 Ollama），两种 wire format + SSE，重试与 token 估算、
+                        cached token 记账
   joyczl-tools/         工具注册表（带 schema 校验）+ 内置工具、沙箱执行、子代理、批准、
-                        生命周期钩子、待办清单、后台作业宿主接口
+                       生命周期钩子、待办清单、后台作业宿主接口、延迟加载（find_tools）
   joyczl-loop/          agent 主循环（可打断）
   joyczl-graph/         波次 DAG 引擎 + triage / gather 工作流
   joyczl-mcp/           MCP 客户端（stdio/HTTP）+ 浏览器 OAuth + 记忆服务器（`joy mcp serve`）
-  joyczl-memory/        检索门 + consolidation + Skills + MEMORY.md 镜像
+  joyczl-memory/        检索门 + consolidation + Skills + `home/memory` 的 OKF bundle 与 MEMORY.md 镜像
   joyczl-app-server/    JSON-RPC over stdio，唯一持有 state.db，一轮的全流程、批准等待表、
-                        钩子落地、待办注入、后台作业与目标循环
+                       钩子落地、待办注入、后台作业与目标循环；账本写入、后台整理 worker、
+                       记忆中心（memory_center）与稳定前缀/动态尾巴的提示装配
   joyczl-ops/           驾驶舱后端（axum + SSE）
   joyczl-cli/           joy 二进制（REPL / dashboard / gather / eval / mcp / skill）
   joyczl-eval/          确定性 eval + judge + release gate
@@ -37,8 +42,9 @@ scripts/                schema 生成与 4 条端到端冒烟
 ## 命令
 
 ```sh
-just check                    # 全部门禁：fmt + schema 漂移 + ts-check + py-check
-                              # + clippy -D warnings + cargo test + 确定性 eval
+just check                    # 全部门禁：fmt + schema 漂移 + 工具文档漂移 + ts-check
+                              # + py-check + clippy -D warnings + cargo test + 确定性 eval
+just check-tool-docs          # 06-tools §6.0 与 README 的工具表 vs. 代码里的工具名单
 just eval / just judge        # 确定性 eval（exit 0 = 可发布）/ judge 出分
 just write-app-server-schema  # 改协议后必跑；just check-app-server-schema 为 CI 漂移检查
 just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # 端到端冒烟

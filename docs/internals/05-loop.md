@@ -80,7 +80,11 @@ for iteration in 1..=max_iterations.max(1):
 
   安全点 A（轮首）：已取消 → 立即 interrupted_result(..., iteration-1, ...)
 
-  组装 CreateRequest{model, system, messages.clone(), tools.schemas(), max_tokens}
+  ▸ 收尾轮：iteration == max_iterations 且 max_iterations > 1 时
+      往 messages 追加一条 user 指令（WRAP_UP：三句话收尾）
+      tools 传空 —— 这一轮只允许说话，不允许再调工具
+
+  组装 CreateRequest{model, system, messages.clone(), tools, max_tokens}
 
   按 (on_text, observer) 四种组合构造 future：          ← 见下表
      四条路最终都归约为 Result<CreateResponse>
@@ -106,7 +110,8 @@ for iteration in 1..=max_iterations.max(1):
       results.push(ContentBlock::ToolResult{tool_use_id: id, content: output})
   messages.push(Message{role: User, content: results})     ← 工具结果作为一轮 User
 
-护栏 2：循环跑满 → reply = "（我还没做完就到了迭代上限——试试把请求拆小一点。）"
+护栏 2：仍跑满（只有 max_iterations == 1，或收尾轮仍硬要调工具才会走到）
+       → reply = 一句兜底说明：用满了几步、上面的记录还在、说「接着做」就续
 ```
 
 **四种流式组合**（`:198-229`），这张表解释了「为什么流式与非流式的后续逻辑完全
@@ -154,7 +159,7 @@ fn interrupted_result(streamed, tool_calls, iterations, usage, messages) -> Loop
 | 护栏 | 条件 | 结果 |
 |---|---|---|
 | 1 | 模型不再要工具（`tool_uses()` 为空） | 正常返回，`reply = response.text()` |
-| 2 | 迭代次数用满 | `reply` 是一句**说明**：「我还没做完就到了迭代上限——试试把请求拆小一点。」 |
+| 2 | 迭代次数用满 | 最后一次调用**收起工具**，让模型用三句话说「完成 / 卡住 / 下一步」；真正的兜底文案只在 `max_iterations == 1` 或收尾轮仍调工具时出现 |
 
 护栏 2 刻意不返回「最后一条模型文本」：那句通常是「我接下来要……」而不是答案，
 把它当答案交出去是撒谎。宁可说清楚「没做完」。
@@ -194,9 +199,13 @@ fn interrupted_result(streamed, tool_calls, iterations, usage, messages) -> Loop
 
 `run_command` 会自己截断自己，MCP 工具不会 —— 这是轮内唯一无人看管的增长点。所以
 每轮**组装请求之前**过一遍 `trim_tool_results`：总量超 `JOY_TOOL_RESULT_TOTAL_CHARS`
-时，从最大的开始把 > `JOY_TOOL_RESULT_MAX_CHARS` 的结果换成桩（落盘完整原文 +
+时，**从最旧的开始**把 > `JOY_TOOL_RESULT_MAX_CHARS` 的结果换成桩（落盘完整原文 +
 头尾各一半的**完整行** + 省略说明），装得下就停手
 （`if total <= max: break`）。
+
+为什么按新旧而不是按体积：上一版从最大的开始，代价是「模型正在推理的那条最长的输出
+最先被抽走」，它只能再读一遍。所以最新的 `JOY_TOOL_RESULT_KEEP_RECENT` 条（默认 3）
+永不换桩；如果全被保住之后仍然超预算，就照旧换桩并在桩里写明 —— 不默默超预算。
 
 三个容易写错的地方都留了测试：**幂等**（每轮都跑，已是桩的跳过）、**落盘在切之前**
 （顺序反了存下去的是切过的那份）、**桩的预算必须显著小于门槛**（门槛配小时若桩的
@@ -220,7 +229,7 @@ impl ToolOutcome { fn ok(&self) -> bool { !self.output.starts_with("Error:") } }
 
 `loop_tests.rs` 覆盖：
 
-- 双护栏各一条（工具往返后正常收尾 / 卡在迭代上限时的文案）；
+- 双护栏各一条（工具往返后正常收尾 / 收尾轮的请求里没有工具、且带 WRAP_UP 指令）；
 - 事件顺序：`llm#1=tool_use → tool_start:save_note → tool:save_note → llm#2=end_turn`
   （顺序错就等于 `ToolStarted` 通知会晚于完成通知）；
 - 流式增量只来自有文本的那一轮（工具轮的 delta 不该出现）；

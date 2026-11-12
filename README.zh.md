@@ -42,11 +42,18 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
   飞书——见 [docs/gateways.zh.md](docs/gateways.zh.md)）
 - **记忆**：语义事实（FTS5、支持中文）、带日期的情景、过程 Skills——
   检索门保证只在相关时才翻记忆（[docs/architecture.zh.md](docs/architecture.zh.md)）
-- **行动**：22 个内置工具外加 MCP 服务器
+- **把记忆摊开给你看**：抽屉的「记忆」页能翻只追加的账本（一轮一行，点开看这一轮的
+  条目流）、记忆库（目录、一次一页的正文，以及跳回来源轮次的 `ledger:…` chip）和上下文
+  占用（六段分层条，快满之前先给一句提示）。想压缩就按一下，不必等它自己到点
+  （[docs/operations.zh.md](docs/operations.zh.md)）
+- **行动**：28 个内置工具（21 个默认常驻，7 个在开关后面）外加 MCP 服务器
   （[docs/configuration.zh.md](docs/configuration.zh.md)）
-- **长本事，但你说了算**：驾驶舱的「能力中心」把技能和 MCP 连接器并排摆着 ——
-  自己的可以加、可以删；随安装分发的内置项置灰只读
-  （[docs/skills.zh.md](docs/skills.zh.md)）
+- **花得少一点**：系统提示是「稳定前缀 + 每轮尾巴」，供应商那边能缓存；技能目录一个技能
+  一行、正文按需取；`JOY_TOOL_POLICY=deferred` 时请求里只放常驻工具的 schema
+  （[docs/configuration.zh.md](docs/configuration.zh.md)）
+- **长本事，但你说了算**：驾驶舱的「能力中心」把技能、MCP 连接器和**定时任务**并排摆着
+  —— 自己的可以加、可以删；随安装分发的内置项、以及技能自带的定时任务都置灰只读
+  （[docs/skills.zh.md](docs/skills.zh.md)、[docs/operations.zh.md](docs/operations.zh.md)）
 - **图式规划**：triage 前门让闲聊便宜地得到快答；gather 工作流写晨报
   （[docs/architecture.zh.md](docs/architecture.zh.md)）
 - **被检验**：确定性 eval 把守每次发布；judge 给回答质量打分
@@ -72,6 +79,12 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——终端与 hub 默认关，驾驶舱默认开且每次写入在对话里问一次；可写范围 = **会话绑定的工作目录** + `JOY_EXEC_WRITABLE_ROOTS`（会话没选目录时可在这一轮临时指定），没有目录一处也写不了 |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)）；`background=true` 丢到后台跑 |
 | `delegate_task` | 把一件自成一体的活交给子代理——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生；可给 `result_schema` 要结构化结论（不合规重试一次后回落散文） |
+| `read_skill` | 读一个技能的完整正文——常驻的目录里只有名字与一句话；**默认开** |
+| `read_memory_page` | 按名字读记忆库里的一页正文，连带它是从哪几轮提炼来的 `sources`；**默认开** |
+| `find_tools` | 按关键词在延迟加载的工具里找，并把命中的工具在本会话里打开（`JOY_TOOL_POLICY=deferred`）；**默认开** |
+| `schedule_job` | 在 `<home>/schedules.json` 里新建或覆盖一个定时任务：名字、五段 cron、一句话；**默认开** |
+| `list_schedules` | 列出所有已声明的任务（含技能自带的那种）及其 cron 与提示词；**默认开** |
+| `cancel_schedule` | 按名字删掉一个文件声明的任务 —— 随技能来的会被拒绝并说明去处；**默认开** |
 
 ### 模型与密钥
 
@@ -84,7 +97,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | 文档 | 内容 |
 |---|---|
 | [docs/architecture.zh.md](docs/architecture.zh.md) | 技术架构：原则、crate 依赖图、turn 数据流、关键机制、设计决策 |
-| [docs/protocol.zh.md](docs/protocol.zh.md) | 协议参考：41 个方法、通知序列、错误码、客户端 |
+| [docs/protocol.zh.md](docs/protocol.zh.md) | 协议参考：45 个方法、通知序列、错误码、客户端 |
 | [docs/configuration.zh.md](docs/configuration.zh.md) | 配置参考：全部 `JOY_*` 变量、网关变量、mcp.json、settings.json |
 | [docs/gateways.zh.md](docs/gateways.zh.md) | Telegram / Discord / 微信 / 飞书的接法、平台怪癖与安全提示 |
 | [docs/testing.zh.md](docs/testing.zh.md) | 四层质量体系与最新测试报告 |
@@ -121,6 +134,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P17 ✅ | 会话元数据（0.15）：`sessions` 表（迁移 0018）、`session/get` / `session/update` / `turn/list`、工作目录跟着会话走 |
 | P18 ✅ | 会话门（0.16）：一个会话同时只跑一轮（`SESSION_BUSY`）、`turn/steer` 运行中补充、`turn/follow-up` 排队下一轮（迁移 0019，重启不丢）、`turnSteered` 通知 |
 | P19 ✅ | 密钥与产品化：Windows Credential Manager + `SecretVault` 接缝、驾驶舱自托管安全（绑非回环强制 `JOY_OPS_TOKEN`）、models.dev 目录生成器（`scripts/gen_catalog.py`）、驾驶舱流式 Markdown 块级渲染、单行会话侧栏 + 可拖边界 + 悬停跑马灯 |
+| P20 ✅ | 记忆与上下文（0.17）：只追加的会话账本（逐行 digest、超限内容转存 `ledger/`、按行重建一轮）、`<home>/memory` 的 OKF bundle 与可重建的 FTS5 索引、后台整理 worker（claim-first 单飞、退避）、驾驶舱记忆中心（账本 / 记忆库 / 占用率）、拆成「稳定前缀 + 每轮尾巴」的系统提示与 Anthropic 缓存断点、cached token 记账、薄/全两档灵魂、技能目录 + 正文按需（`read_skill`）、延迟加载工具（`find_tools`）、从旧到新的结果换桩、`/compact [重点]` |
 
 ## 命名
 

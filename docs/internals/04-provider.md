@@ -279,3 +279,22 @@ pub received: Mutex<Vec<CreateRequest>>   // 收到过什么（断言提示词�
 
 **这一层的不变量**：loop 只见中间方言；厂商差异只在两个纯函数里；没有静默重试；
 流式与非流式产出同一个 `CreateResponse`；空 key 不发空头。
+
+## 4.10 提示分段与缓存断点
+
+`CreateRequest` 的 system 现在有两半：
+
+```
+cache_prefix：稳定前缀（灵魂 + 模型身份）   ← 同一会话里逐字节不变
+system：      每轮尾巴（日粒度时间、待办、记忆命中、技能目录、摘要）
+```
+
+三个动作，都在 wire 层：
+
+- **Anthropic**：在前缀末尾与最后一条消息打 `cache_control: {type: "ephemeral"}`；
+  `system_text()` 负责把两半拼回去，调用方永远只看到一份文本。
+- **其余 wire**：只拼接，不加字段 —— 未知字段在某些供应商那里是硬错误。
+- **用量**：`Usage` 增 `cache_read_input_tokens` / `cache_creation_input_tokens`，落到
+  用量账本。命中率因此是个可对比的数字，而不是「应该会命中吧」。
+
+日粒度是刻意的：带时分的时间戳会让前缀每小时失效一次，缓存收益刚好被自己吃掉。

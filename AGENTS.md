@@ -15,16 +15,23 @@ joy-rs/
   joyczl-protocol/      the cross-language contract, single source of truth
                         (schema/ artifacts are checked in)
   joyczl-config/        JOY_* environment variables, read once at boot
-  joyczl-state/         SQLite + FTS5(trigram); memory-backend contract & conformance
+  joyczl-schedule/      scheduling, one implementation: five-field cron + `schedules.json`
+                        (declarations.rs). `joy schedule` fires on it, the capability center
+                        predicts with it, `schedule_job` / `list_schedules` /
+                        `cancel_schedule` write through it
+  joyczl-state/         SQLite + FTS5(trigram); the append-only ledger; memory-backend contract & conformance
   joyczl-provider/      12 providers (incl. local Ollama), two wire formats + SSE, retry + token estimation
   joyczl-tools/         tool registry (schema-checked) + built-in tools, sandboxed exec, subagents,
                         approval, lifecycle hooks, the todo list, the background-job host trait
   joyczl-loop/          the agent loop (cancellable)
   joyczl-graph/         wave-based DAG engine + triage / gather workflows
   joyczl-mcp/           MCP client (stdio/HTTP) + browser OAuth + memory server (`joy mcp serve`)
-  joyczl-memory/        retrieval gate + consolidation + Skills + MEMORY.md mirror
+  joyczl-memory/        retrieval gate + consolidation + Skills + the OKF bundle in `home/memory`
+                        (bundle.rs, mirror.rs) + MEMORY.md mirror
   joyczl-app-server/    JSON-RPC over stdio, the only holder of state.db, and with it the whole turn:
-                        approval, hooks, todo injection, background jobs, the goal loop
+                        approval, hooks, todo injection, background jobs, the goal loop; the ledger
+                        writer, the background memory worker, the memory center, and prompt assembly
+                        (stable prefix + per-turn tail)
   joyczl-ops/           dashboard backend (axum + SSE)
   joyczl-cli/           the joy binary (REPL / dashboard / gather / eval / mcp / skill)
   joyczl-eval/          deterministic evals + judge + release gate
@@ -39,8 +46,9 @@ scripts/                schema generation + four end-to-end smokes
 ## Commands
 
 ```sh
-just check                    # every gate: fmt + schema drift + ts-check + py-check
-                              # + clippy -D warnings + cargo test + deterministic eval
+just check                    # every gate: fmt + schema drift + tool docs drift + ts-check
+                              # + py-check + clippy -D warnings + cargo test + deterministic eval
+just check-tool-docs          # 06-tools §6.0 / README 的工具表 vs. 代码里的工具名单
 just eval / just judge        # deterministic eval (exit 0 = releasable) / judge scores
 just write-app-server-schema  # required after any protocol change;
                               # just check-app-server-schema is the CI drift check

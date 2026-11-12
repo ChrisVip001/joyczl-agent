@@ -51,6 +51,12 @@
 | `model/routes/save` | `ModelRoutesSaveParams` → `ModelRoutesResponse` | 整表替换；档位名与 profile id 都在写入前校验，拼错直接报错 |
 | `usage/summary` | `UsageSummaryParams` → `UsageSummaryResponse` | 用量台账（迁移 0010）：per-model 聚合 + 总数。**只记账不强制** —— 没有配额、没有限速 |
 | `schedule/list` | `ScheduleListParams` → `ScheduleListResponse` | 调度状态快照（迁移 0012）：每任务的 `last_fired` / `claimed` / `catch_up` / `delivery`。只读 —— 写入权在调度器 |
+| `memory/ledger` | `MemoryLedgerParams` → `MemoryLedgerResponse` | 一个会话的账本，最新在前；带 `turnId` 时连同那一轮的条目一起给。只读 |
+| `memory/index` | — → `MemoryIndexResponse` | bundle 的目录（`index.md`）以及每页一句话摘要。只读 |
+| `memory/page` | `MemoryPageParams` → `MemoryPageResponse` | 一页的正文与 `sources`；没有这一页时是 `page: null` |
+| `context/usage` | `ContextUsageParams` → `ContextUsageResponse` | 上一轮的六段占用明细；`usage: null` = 还没测量过 |
+| `skill/stats` | — → `SkillStatsResponse` | 汇总 `<home>/skill-hits.jsonl`。只读 |
+| `session/compact` | `SessionCompactParams` → `SessionCompactResponse` | **现在**把较早轮次折进滚动摘要，最近两轮留在上下文里。只有人能发起 —— 没有任何工具能走到它 |
 
 约定：方法名 `<resource>/<method>`（resource 单数）；载荷命名
 `*Params` / `*Response` / `*Notification`；wire 字段 camelCase；整数一律
@@ -111,7 +117,7 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
 | -32700 / -32600 / -32601 / -32602 / -32603 | 标准 JSON-RPC：解析 / 请求 / 方法不存在 / 参数 / 内部错误 |
 | `-32000` PROVIDER_ERROR | 模型侧失败（缺 key、401、限流……），附「怎么办」 |
 | `-32001` TOOL_ERROR | 工具执行失败（错误同时作为文本回给模型，不中断 turn） |
-| `-32002` NOT_IMPLEMENTED | 协议定义了但尚未实现（当前 39 个方法已全部实现） |
+| `-32002` NOT_IMPLEMENTED | 协议定义了但尚未实现（当前 45 个方法已全部实现） |
 
 ## 客户端
 

@@ -132,3 +132,21 @@ After teaching Joy a reusable flow in conversation, say "save this as a
 skill" — it calls `create_skill` to write a valid SKILL.md. The rules: **only
 after the user agrees**, never overwrite an existing skill, lowercase slug
 names enforced.
+
+## Choosing a skill: the catalog, then the body
+
+Every turn's system prompt carries a **catalog** — one line per skill, `name — description`,
+capped by `JOY_SKILL_INDEX_TOKENS` — while a body is loaded only when it is needed: a `$name`
+reference or a keyword match (`JOY_SKILL_BODY_TOKENS` caps one body, whole lines only,
+ending in an honest marker), or the model calling `read_skill` after reading the catalog.
+
+The reason for a catalog rather than keyword hit-or-miss alone: overlap scoring only fires
+when the user happens to use the description's words, so a skill whose phrasing is new never
+loads. A model that can see the shelf picks the right folder.
+
+Two marks ride in the catalog — `explicit $name only` and `needs <dependency>` — because
+offering a skill that cannot actually run costs a turn to discover.
+
+Hits are appended to `<home>/skill-hits.jsonl`, one line per fire, and summarized in the
+dashboard under **Skills**. A malformed line is skipped, never fatal: this is telemetry, and
+one bad line must not take the panel down.

@@ -3,8 +3,45 @@
 模型能「动手」的全部途径都在这里。这一层最重要的一条约定是：
 **工具永远不返回 `Err`，失败是一段给模型读的文本。**
 
-目录：`joy-rs/joyczl-tools/src/`（`lib.rs`、`handlers.rs`、`calendar.rs`、
-`messages.rs`、`memory_admin.rs`、`web.rs`、`exec.rs`）。
+目录：`joy-rs/joyczl-tools/src/`（`lib.rs`、`handlers.rs`、`memory_admin.rs`、
+`schedules.rs`、`calendar.rs`、`messages.rs`、`fs.rs`、`fs_write.rs`、`web.rs`、
+`exec.rs`、`jobs.rs`、`todo.rs`、`subagent.rs`）。
+
+## 6.0 清单：21 个常驻 + 7 个门控
+
+先给数字，因为这一层最容易「文档说 22 个，代码里其实是 28 个」。
+
+**常驻（21，没配搜索后端时 20）** —— `handlers::build_default()` 装 20 个，`app-server`
+再补 `todo_write`：
+
+| 组 | 工具 | 一句 |
+|---|---|---|
+| 记忆 | `save_note` `forget_note` `search_memory` `list_memory` | 事实的增删查 |
+| 记忆只读 | `read_memory_page` `read_skill` | 目录里只有名字，正文按需取 |
+| 记忆管理 | `manage_memory` `create_skill` | 按编号改/删；把工作流固化 |
+| 日程 | `create_event` `list_events` | 幂等写入 + ICS |
+| 文件（只读） | `read_file` `list_dir` | 无副作用，所以默认开 |
+| 网络 | `fetch_url` `search_web`※ | ※ 没配后端时**不进表** —— 能调必失败的工具不该被看见 |
+| 时间 / 发现 | `current_time` `find_tools` | `find_tools` 在延迟加载模式下是唯一的门 |
+| 消息 | `send_message` | 只写草稿，从不发送 |
+| 待办 | `todo_write` | 整表替换，每轮重新注入 |
+| 定时 | `schedule_job` `list_schedules` `cancel_schedule` | 见 6.12 |
+
+**门控（7）** —— 开关一关，工具**不注册**，不是「注册了再拒」：
+
+| 工具 | 开关 | 缺了它意味着什么 |
+|---|---|---|
+| `write_file` `edit` | `JOY_WRITE=1` | 改不了任何文件 |
+| `run_command` | `JOY_EXEC=1` | 跑不了任何命令（包括 `df`、`sqlite3`） |
+| `job_output` `job_list` `job_kill` | `JOY_EXEC=1` | 后台作业无从查看 |
+| `delegate_task` | `JOY_DELEGATE=1` | 不能派子代理（派了也不能再派） |
+
+全开 **28**。另有连接器工具（`feishu_send`、`email_send`）由 `joyczl-connector` 在配好凭据后
+追加 —— 它们是外挂，不算内置。
+
+数字本身不重要，**边界**才重要：模型能做什么，取决于这台机器被允许做什么。关掉 `JOY_EXEC`
+的实例里没有 shell，这一点必须写在提示里（`capability_note`，见 09 的 9.10），否则模型会
+用「还没找到工具」解释「工具不存在」，然后花掉一轮预算去读源码。
 
 ## 6.1 三个类型与一条铁律
 
@@ -224,6 +261,18 @@ save_note → forget_note → search_memory → list_memory → current_time
 
 **为什么要写清落点**：模型会转述工具输出。写着「存在 .joy/state.db 的 facts 表」，
 它就不会说「已同步到苹果日历」。
+
+### 同一组里的另外两个：`read_memory_page` / `read_skill`
+
+它们和四件套同属 `memory_tools()`，是「目录进提示、正文按需取」这条纪律的取用端：
+
+| 工具 | 参数 | 行为 |
+|---|---|---|
+| `read_memory_page` | `name` | 返回一页正文 + `sources`（这页是从哪几轮提炼的）—— 没有 `sources` 的记忆无法追溯，也就无法反驳 |
+| `read_skill` | `name` | 返回技能正文（SKILL.md 去掉 frontmatter）—— 目录里只有名字和一句话 |
+
+两个都是**只读、无副作用**，所以在延迟加载模式下也是最先被激活的那批（6.11）。正文按需取
+的收益写在 ⑦ 7.9：目录十几行，整页几十行，而一个人不修剪的记忆库没有上限。
 
 ## 6.4 `manage_memory`：按编号改/删
 
@@ -468,3 +517,47 @@ bwrap --ro-bind / / --dev /dev --proc /proc --bind /tmp /tmp --die-with-parent
 
 后两条在沙箱不可用的机器上**跳过**，跳过不是假装通过——「没沙箱就不跑」本身
 也是被测的行为。
+
+## 6.11 延迟加载：`find_tools` 与激活集合
+
+`JOY_TOOL_POLICY=deferred` 只把常驻工具交给模型，其余靠 `find_tools(query)` 打开：
+
+```
+ALWAYS_ON（`joyczl-tools/src/lib.rs` 的常量，改它等于改策略）：
+  run_command / write_file / edit / delegate_task     ← 受开关与审批约束，永不被藏
+  todo_write / find_tools / current_time / save_note / search_memory /
+  read_memory_page / read_skill / read_file / list_dir
+激活集合：按 session 存在 Server 内存里（joyczl_tools::ActivationSet）
+```
+
+三条设计约束：
+
+- **不做 `call_tool(name, args)` 代理。** 代理会绕过审批与可写范围栅栏 —— 「模型自己拼一个
+  调用」和「模型调用一个已授权的工具」不是一回事，能省掉的是 schema 的体积，不该顺手省掉
+  授权。
+- **受开关约束的工具不进 deferred 候选。** 一个只有人打开 `JOY_EXEC` 才存在的工具，不该
+  通过「先被发现」获得另一种打开方式。
+- **激活集合按会话、在内存里。** `find_tools` 在上一轮打开，下一轮才用得上；每轮新建一个
+  集合会让模型每句话都重新找一次，那比 eager 更贵。重启后集合清空 —— 重新找一次很便宜，
+  把工具表持久化到磁盘反而会让它比产生它的开关活得更久。
+
+`schemas()` 是唯一出口：注册表只负责「给不给」，loop 不判断策略。
+
+## 6.12 定时任务三件套：`schedule_job` / `list_schedules` / `cancel_schedule`
+
+这三个工具存在的原因很具体：`<home>/schedules.json` 在**每个工作区之外**，所以模型
+「自己去写这个文件」永远写不成 —— `write_file` 拒绝得没错，界面只好问人「请选择目录」，
+而那个文件跟任何项目都无关。于是这件事变成 Joy 自己的状态，由管它的工具来写。
+
+三处调用共用 `joyczl-schedule` 一份语义（`cron` + `declarations`）：`joy schedule` 按它触发、
+驾驶舱按它算「下次触发」、工具按它写入和删除。分开写会漂成「面板说八点，八点什么都没跑」。
+
+约定：
+
+- **写入是原子写**（tmp + rename），保留文件里其它任务和你不认识的键；解析不了的
+  `schedules.json` 直接拒绝写入，绝不覆盖。
+- **拒绝是一句话**：「cron 写得不对（五段：分 时 日 月 周）」而不是 `Err`。
+- **回执必须提到 `joy schedule`**：建好不等于排好，那个常驻进程不跑就没人触发。少了这句，
+  一条任务看起来像已经生效了。
+- **技能自带的 `schedule:` 行只读**：`cancel_schedule` 会拒绝并说明「删掉那个技能，或把
+  `SKILL.md` 里的 schedule 行去掉」。

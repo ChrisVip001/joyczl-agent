@@ -234,6 +234,8 @@ points cannot disagree.
 | `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
 | `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
+| `JOY_TOOL_RESULT_KEEP_RECENT` | 0 – 50 |
+| `JOY_RESUME_MAX_AGE` | 0 – 10080 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
@@ -260,13 +262,15 @@ nothing", which is the default.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `JOY_MAX_ITERATIONS` | `10` | hard iteration cap for one loop |
+| `JOY_MAX_ITERATIONS` | `32` | per-turn step budget. The **last** step is a wrap-up: the tools are taken away and the model is asked to say what it did, where it is stuck, and what it needs — the cap bounds cost, it does not turn success into an apology |
 | `JOY_MAX_TOKENS` | `8192` | per-call output cap (headroom for reasoning models) |
 | `JOY_HISTORY_TURNS` | `12` | working-memory window **ceiling**: only the last N turns enter the prompt (older turns are folded into a rolling summary, not dropped) |
 | `JOY_CONTEXT_WINDOW` | provider default | override the context-window estimate (local models differ wildly; the table holds common defaults) |
 | `JOY_COMPACT_THRESHOLD` | `0.8` | start compacting at this fraction of the window — tokens are the real gate, turns are the ceiling |
-| `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | per-turn cap on the total size of tool results; over it the largest are replaced with stubs (`0` disables) |
+| `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | per-turn cap on the total size of tool results; over it the **oldest** results are replaced with stubs, newest kept whole (`0` disables) |
 | `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | a single result must exceed this to be stubbed (`0` disables) |
+| `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | how many of the newest results are never stubbed (trimming is oldest-first) |
+| `JOY_RESUME_MAX_AGE` | `60` | minutes; an `open` turn checkpoint older than this is marked `abandoned` at startup instead of resumed (`0` = always resume) |
 | `JOY_CONSOLIDATE_EVERY` | `6` | run consolidation every N new turns |
 | `JOY_RETRIEVAL_TOP_K` | `4` | facts fetched when the gate opens |
 | `JOY_GRAPH_WORKFLOWS` | `0` | enable the triage front-door graph (fail-open, costs time only) |
@@ -290,6 +294,31 @@ cosine are not the same unit, and pretending otherwise is inventing data. A
 dead embedding service degrades to keyword-only with a warning; it never
 becomes "I remember nothing". Facts written before the switch was on have no
 vector: run `joy memory reindex` to backfill.
+
+## Prompt shape and the context meter
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `JOY_SOUL_MODE` | `auto` | `thin` / `full` / `auto`: how much built-in scaffolding wraps `SOUL.md` |
+| `JOY_SKILL_INDEX_TOKENS` | `200` | cap on the always-present skill catalog (name plus one line each) |
+| `JOY_SKILL_BODY_TOKENS` | `1200` | cap on one selected skill's body; beyond it, `read_skill` returns the rest |
+| `JOY_TOOL_POLICY` | `eager` | `deferred` keeps only the always-on schemas in the request; `find_tools` opens the rest |
+| `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | newest tool results are never stubbed; trimming runs oldest-first |
+| `JOY_CONTEXT_WARN_RATIO` | `85` | percentage of the window at which the meter shows a notice |
+
+The system prompt is two halves: a **stable prefix** (soul plus model identity) and a
+per-turn tail (day-granular clock, todo list, memory hits, skill catalog, rolling summary).
+Anthropic gets an explicit `cache_control` boundary between them; the wires with automatic
+prefix caching only need the prefix not to move. Token accounting records
+`cache_read_input_tokens` and `cache_creation_input_tokens`, so the hit rate is a number
+rather than a belief.
+
+`thin` and `full` only decide which built-in text **seeds** `SOUL.md` and which an
+**untouched** default becomes — a soul the user edited is returned as written, in either
+mode. `deferred` never hides a tool a human switched on: `run_command`, `write_file`, `edit`
+and `delegate_task` stay in the table, because a discovery step must not run ahead of
+consent. Activations are per session and in memory: a restart asks the model to search
+again, which is cheap and honest.
 
 ## Lifecycle hooks (`JOY_HOOKS`)
 

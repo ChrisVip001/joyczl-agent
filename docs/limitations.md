@@ -375,6 +375,10 @@ no image library, no decode).
   trigger words must be written in English even when the conversation is in
   Chinese. CJK tokenisation (or a per-skill `triggers:` list) is the fix.
   → `joy-rs/joyczl-memory/src/skills.rs` (`tokens`)
+* **Deliberate** — The bundle catalog injected into the prompt is truncated
+  (`index_text`). An unpruned catalog becomes the context problem it was meant
+  to solve; a page that falls off the list is still reachable by name.
+  → `joy-rs/joyczl-memory/src/bundle.rs` (`index_text`)
 
 ## Retrieval
 
@@ -408,6 +412,17 @@ no image library, no decode).
   growing paragraph. Compaction of the compaction (hierarchical rollups) is
   not implemented.
   → `joy-rs/joyczl-memory/src/compaction.rs` (`roll_forward`)
+* **Deliberate** — The six-section meter covers only what grows with a session.
+  The clock, the todo board and the capability note ride in the prompt uncounted:
+  they are a few dozen constant tokens, and a growth chart that includes
+  constants stops being one.
+  → `joy-rs/joyczl-app-server/src/turn.rs` (`usage_of` call), `memory_center.rs`
+* **Deliberate** — `JOY_MAX_ITERATIONS` (default 32) is a spend budget, not a
+  verdict on what is possible. The last step is a wrap-up with the tools removed,
+  so hitting it yields "done / stuck / next" instead of an apology. A hard stop
+  still exists for `max_iterations = 1` and for providers that keep emitting tool
+  calls with an empty tool table.
+  → `joy-rs/joyczl-loop/src/lib.rs` (guardrail 2, `WRAP_UP`)
 
 ## Turns and protocols
 
@@ -612,3 +627,25 @@ no image library, no decode).
   `JOY_*` for that field until it is cleared (empty string clears model
   overrides; an empty patch removes the file).
   → `joy-rs/joyczl-config/src/lib.rs` (`apply_patch`, `save_patch`)
+
+## Memory and context
+
+* **Historical tool output is not recoverable.** The one-off backfill could only fold
+  `chat_log` text into rows marked `fidelity: folded`. Rebuilding such a turn yields the
+  summary; the memory center shows `折叠` instead of pretending the bytes are there.
+* **Deferred tool activations do not survive a restart.** `JOY_TOOL_POLICY=deferred` keeps
+  the per-session set in memory. A restart asks the model to search again — cheap and honest;
+  a table persisted on disk could outlive the switches that produced it.
+* **The context meter is an estimate.** cl100k counting, the same approximation the budget
+  uses. It is a decision aid, not a billing statement.
+* **`cache_control` is Anthropic-only.** Other wires get the stable prefix and rely on their
+  automatic prefix cache; the token ledger records whichever cached-token fields the provider
+  reports, and zero when it reports none.
+
+## Crash recovery
+
+* **A crashed turn is only resumed within an hour.** `JOY_RESUME_MAX_AGE` (default 60
+  minutes) marks older checkpoints `abandoned` at startup instead of continuing them.
+  A checkpoint is a crash-recovery device, so its honest span is seconds to minutes; past
+  that, "today" has moved and answering costs a model call nobody asked for on that day.
+  The row stays in the ledger — `abandoned` is a status, not a deletion.

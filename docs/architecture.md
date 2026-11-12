@@ -61,13 +61,20 @@ user message
   → [triage graph, optional] classify (small model) ∥ check_calendar → quick | full
   → [retrieval gate] a small model decides whether to consult memory
       (fail-open: a broken gate means search anyway)
-  → [memory retrieval] facts (FTS5, top_k) + episodes → into the system prompt
-  → [Skills] scan SKILL.md frontmatter; load the body only on a match
+  → [memory retrieval] facts (FTS5, top_k) + episodes → the prompt tail
+  → [Skills] catalog every turn (name + one line); bodies only on a match
+  → [prompt assembly] stable prefix (soul + model identity) + per-turn tail
+      (clock · capability gaps · todo · memory hits · catalogs · summary)
+      the prefix is byte-identical within a session: that is the cache boundary
   → [THE LOOP] observe → reason → act → repeat
         · every model call races the cancellation token (turn/interrupt)
         · every tool execution races it too; errors return as text
+        · the last allowed step is a wrap-up: tools go away, the model summarizes
+  → [ledger] every row appended (user / assistant / tool_use / tool_result);
+      payloads over JOY_LEDGER_INLINE_MAX spool to <home>/ledger/
   → [persist] conversation + meta (gate/graph/tools/model/usage) into chat_log
   → [consolidation] every N turns, a small model distills facts + an episode
+  → [bundle] the background worker writes those into <home>/memory/ and reindexes
   → [mirrors] MEMORY.md (human-readable), traces/<date>.jsonl, usage.jsonl
   → [notifications] turnStarted → gateDecided → textDelta → toolStarted →
            toolCompleted → consolidationCompleted → turnCompleted
@@ -106,10 +113,42 @@ interface and run the same tests.
   body enters the system prompt only when the message matches. `MEMORY.md` is
   a human-readable mirror rebuilt every turn; state.db remains the source of
   truth.
+* **The bundle (derived knowledge)**: the background worker distils facts into
+  `<home>/memory/` pages (OKF shape, one concept per file) and keeps an FTS5 index
+  over them. The prompt carries the **catalog**, not the pages; the model pulls one
+  with `read_memory_page`. A person may edit a page by hand — the next
+  `joy memory reindex` takes the file as truth.
+* **Ledger first**: every turn is appended to `state.db`'s `ledger` row by row
+  (digest per row, oversized payloads spooled under `<home>/ledger/`), and the
+  memory center reads turns back from it. None of the layers above is the only
+  copy of anything.
+
+### Context budget (what actually reaches the model)
+
+Everything the model sees each turn is assembled once, in `build_system`, and then
+measured by the memory center's meter:
+
+| Section | Where it comes from | Knob |
+|---|---|---|
+| soul | `SOUL.md` (thin or full) | `JOY_SOUL` |
+| memory | gate hits + the bundle catalog + the skill catalog | `JOY_RETRIEVAL_TOP_K` |
+| skills | the bodies that matched this message | — |
+| tools | JSON schemas of the registered tools | `JOY_TOOL_POLICY=deferred` shrinks it |
+| history | the last N turns, read from the ledger | `JOY_HISTORY_TURNS` |
+| summary | the rolling compaction summary | `JOY_COMPACT_THRESHOLD` |
+
+Three things keep that budget from quietly growing: **compaction** folds evicted turns
+into the rolling summary (deterministic excerpt fallback, so eviction is never amnesia);
+**tool-result trimming** stubs the oldest oversized results before each request
+(`JOY_TOOL_RESULT_TOTAL_CHARS`, newest `JOY_TOOL_RESULT_KEEP_RECENT` kept whole); and the
+**iteration budget** bounds the turn itself (`JOY_MAX_ITERATIONS`; the last step is a
+wrap-up). The short lines that ride in the tail — clock, todo board, capability note — are
+a few dozen tokens and are deliberately **not** part of the six-section meter: the band
+exists to show what grows, and constants only add noise.
 
 ### Tools (joyczl-tools)
 
-22 built-in tools + MCP, merged into one `ToolRegistry`. The contract:
+Some two dozen built-in tools + MCP, merged into one `ToolRegistry`. The contract:
 `execute` never returns Err — errors return to the model as `Error: …` text
 and the loop keeps going. A tool failure is information the model can correct,
 not a crash.
@@ -179,3 +218,24 @@ artifacts puts that drift in the PR diff; CI gates it with `--check`.
 
 So `cargo build` never touches the generators and the binary carries none of
 them.
+
+## Three layers of memory
+
+* **The ledger is the fact.** `ledger` in `state.db`, append-only: each turn's
+  user / assistant / tool_use / tool_result / image rows, every row with a `digest` over its
+  canonical payload. Payloads over `JOY_LEDGER_INLINE_MAX` move to `<home>/ledger/…` and the
+  row keeps a pointer, digest and byte count. Any turn can be rebuilt from it — the history
+  loader reads turns back, it does not read a folded transcript. Rows that came through the
+  one-off backfill carry `fidelity: folded`, which is the honest label for "this tool output
+  only exists as a summary".
+* **The bundle is derived knowledge.** `<home>/memory/` in OKF shape: one Markdown page per
+  concept, frontmatter carrying `title` / `kind` / `sources`, `index.md` as the catalog,
+  `changelog.md` as the history. A person can edit any page; when they do, the page's digest
+  no longer matches the index and the next `joy memory reindex` takes the **file** as truth.
+* **The index is a cache.** SQLite FTS5 behind the retrieval gate. Losing it costs a reindex,
+  never a fact. `MEMORY.md` is a generated copy of the catalog, kept only for the transition.
+
+The prompt carries the **catalog** of the first two layers — not the encyclopedia. A new
+session starts with a directory and pulls pages on demand (`read_memory_page`), which is the
+same progressive-disclosure move as the skill catalog and the deferred tool table: the model
+sees a table of contents and decides, instead of being handed everything every turn.

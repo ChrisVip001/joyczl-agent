@@ -393,3 +393,45 @@ raw 地址）或本地文件读取。
 它是**生成的视图，不是事实来源**。这句话必须写在文件里：否则有人会去编辑它，
 然后发现改动被下一轮覆盖。「你的记忆就是一个能打开的文件」这句话要成立，
 但得说清是只读的一张照片。
+
+## 7.8 派生层：bundle 与索引，账本在隔壁
+
+记忆层里有两样东西必须分清，否则每次讨论「记忆存在哪」都会绕回原点：
+
+```
+事实（不可重建）：state.db 的 ledger 表        ← 只追加，joyczl-state/src/ledger.rs
+派生知识（可重生成）：<home>/memory/ 的 OKF bundle  ← src/bundle.rs 读写、src/mirror.rs 整理
+加速器（可丢弃）：facts 表与 FTS5 索引             ← 坏了就 joy memory reindex
+```
+
+- **bundle 落盘、索引跟着重建。** 后台整理写 `<home>/memory/<page>.md`（frontmatter 带
+  `title` / `kind` / `sources`），随后 `Bundle::rewrite_index()` 重写 `index.md`，变更行进
+  `changelog.md`。人改了某一页，文件 digest 与索引里记的对不上 —— 下次 `reindex` 以**文件**为准。
+- **出处可回溯。** 页面的 `sources` 是 `ledger:<session>/<turn>` 形状，驾驶舱点一下就能跳回
+  那一轮。没有这条链，「这条记忆哪来的」只能靠人回忆。
+- **`MEMORY.md` 仍是过渡件。** 它继续由 `export_markdown` 从 facts / episodes 表生成（一张
+  人类可读的只读照片）；真正的目录是 bundle 的 `index.md`，提示里注入的也是那一份。
+
+## 7.9 记忆怎么进提示（以及刻意不进的部分）
+
+记忆不是「一把塞进去」，而是三条各走各的路：
+
+| 路 | 进什么 | 体量 | 开关 |
+|---|---|---|---|
+| 检索门 | 几条命中的 fact / episode 文本 | 十几行 | 门判「要翻」才走（失败开放） |
+| 目录 | bundle 的 `index.md`（一页一行：标题 · 类别 — 一句话）+ 技能目录 | 十几行 | 始终带 |
+| 按需取 | `read_memory_page` / `read_skill` 取回的**正文** | 一页 / 一个技能 | 模型自己决定 |
+
+**刻意不进提示的**：整页记忆、全部 facts、账本原文。前者会把「目录」变成「百科」，后两者会
+让一轮的输入随会话长度线性膨胀 —— 而账本本来就能按需重建（`rebuild_turn`）。
+
+三条相关的边界：
+
+- **目录要有上限。** 一个人不修剪的目录会变成它本来要解决的那个上下文问题；`index_text()`
+  的截断是机制的一部分，不是偷懒。
+- **压缩产物也是记忆。** 被滑窗挤出去的轮次折进滚动摘要（7.3），摘要进尾巴的 `summary`
+  段。它和 fact 的区别是：摘要按会话存、只往前滚，不参与跨会话检索。
+- **计量只覆盖会增长的部分。** 六段（soul / memory / skills / tools / history / summary）
+  由 `memory_center::usage_of` 统计；时钟、待办板、能力缺口说明每轮几十个 token 且恒定，
+  故意不计入 —— 那条带子的用途是「看什么在长」。改计量时同步 `docs/architecture.md`
+  的 Context budget 与 `docs/internals/09-app-server.md` 的 9.10。

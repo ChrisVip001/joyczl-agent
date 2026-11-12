@@ -170,6 +170,34 @@ firing per minute at most, jobs run one at a time, skill edits are picked up
 without a restart. Run it under launchd/systemd — or skip it entirely and call
 `joy gather` from system cron if that is all you need.
 
+Both sources show up in the dashboard's capability center (**抽屉 → 定时**), next to
+Skills and MCP connectors: one row per job with its cron, its prompt, the next fire, the
+last fire, and where the result goes. Rows that come from a skill are greyed and read-only
+— that job *is* the skill, so the way to remove it is to edit `SKILL.md` or delete the
+skill. Adding or deleting a `schedules.json` row writes exactly that file and nothing else:
+
+```
+name      morning-news        lowercase letters, digits and hyphens (the schedule key)
+cron      0 8 * * 1-5         five fields: minute hour day month weekday
+prompt    给我一份今天的科技简报   one sentence — it becomes one turn
+delivery  outbox | notify | quiet
+catch_up  错过之后补跑一次（默认）还是放弃
+```
+
+The panel is an editor for a file, not a scheduler. `joy schedule` still has to be running
+(or something else has to call `joy gather`), and the panel says so at the bottom of the
+list — a form that silently needed a resident process would be worse than no form.
+
+The panel is not the only door: say it in chat — 「每天八点给我一份科技简报」— and the model
+calls `schedule_job`, which writes the same file through the same validation. It answers
+with the next fire time and the reminder that `joy schedule` has to be running. Deleting
+from chat is `cancel_schedule`; listing is `list_schedules`.
+
+Why a tool and not "let it write the file": `<home>/schedules.json` is outside every
+workspace, so `write_file` refuses it and the UI asks you to pick a working directory — for
+a file that has nothing to do with your project. Since 0.17 the declaration is Joy's own
+state, written by a tool that owns it; nothing asks for a directory any more.
+
 ## Data and backups
 
 Only a few things under `<home>/` are worth backing up: `state.db` (memory
@@ -187,3 +215,47 @@ and conversation, the source of truth), `SOUL.md` (persona), `skills/`
 | `[tools used: …]` in a reply | expected folding marker; tool activity is in history |
 | "why did it answer that" | open `traces/<date>.jsonl` at that turnId |
 | port 7777 taken | the dashboard scans upward; the startup log has the real port |
+
+## Compacting and looking at memory
+
+* `/compact [focus]` in the REPL — or **现在压缩** in the dashboard's memory center — folds
+  the older turns into the rolling summary **now**, keeping the newest two in the prompt. The
+  focus is one extra sentence in the summarizer's material ("keep the migration plan in
+  mind"), not a different prompt: summaries have to stay comparable turn to turn.
+* The memory center (drawer → 记忆) has three read-only views. **账本**: one row per turn,
+  open it for that turn's entry stream; `折叠` marks a backfilled turn whose tool output only
+  exists as a summary. **记忆库**: catalog on top, one page below, and the `ledger:…` chips
+  walk back to the rows the page was distilled from. **上下文**: the six-section band
+  (soul / memory / skills / tools / history / summary) with used, budget and a notice at
+  `JOY_CONTEXT_WARN_RATIO`.
+* The band measures what **grows with the session**. Three short lines ride in every prompt
+  uncounted — the clock, the todo board, and the capability note (the two or three lines that
+  appear when `JOY_EXEC` / `JOY_WRITE` are off) — because they are constant: mixing constants
+  into a growth chart only adds noise.
+* A turn may spend at most `JOY_MAX_ITERATIONS` model calls (default 32). The **last one is a
+  wrap-up**: the tools are taken away and the model has to answer in three sentences — done /
+  stuck / what it needs next. A long turn therefore ends with something you can act on
+  instead of an apology. Oversized tool results are stubbed oldest-first before each request
+  (`JOY_TOOL_RESULT_TOTAL_CHARS`), so one chatty command cannot fill the window by itself.
+* `joy memory rebuild --page <slug>` regenerates one page from its source turns. It is a CLI
+  command on purpose: a whole-page regeneration is a model call, and a model call should be
+  something you asked for, not something a button did quietly.
+
+## Crash recovery has an age limit
+
+A checkpoint left `open` means the last process died mid-turn. At startup Joy resumes it —
+the human asked for that work, and continuing is not the model assigning itself anything.
+Since 0.17 that is true **within a window**: `JOY_RESUME_MAX_AGE` (minutes, default `60`)
+bounds how old the row may be. `0` turns the limit off (resume everything, the old rule).
+
+Why an hour and not "forever": a checkpoint is crash recovery, so its real span is seconds
+to minutes. Resuming a two-day-old turn is not the same turn continued — "give me today's
+tech news", answered two days later, answers a question nobody is asking, and it spends a
+real model call plus a real fetch to do it. The stale row is marked `abandoned` and the
+startup log says so:
+
+```
+(joy) 对账：回合 t… 停在 2 天前（上限 1 小时），没有自动续跑 —— 要接着做，把那句话再说一遍
+```
+
+The ledger keeps the row either way: `abandoned` is a status, not a deletion.

@@ -166,7 +166,9 @@ clone settings
 `builtin_tools` 的三段：
 
 ```
-1. handlers::build_default()                           ← 22 个内置工具（⑥）
+1. handlers::build_default()                           ← 20 个（⑥ 的 21 个常驻里，差一个 todo_write）
+2. tools.register(todo_write)                         ← 常驻，不占权限
+3. 门控：write_file/edit(JOY_WRITE) · run_command 与三个 job_*(JOY_EXEC) · delegate_task(JOY_DELEGATE)
 2. if settings.exec_enabled { register(run_command) }   ← 默认关；开了才注册（⑥）
 3. McpClient::connect(home/mcp.json) → warnings 打 stderr、每个工具注册进来
 ```
@@ -299,7 +301,7 @@ calls.is_empty() → 原样返回 reply
 - 事件：`Started/NodeStarted/NodeEnded/Ended` 翻成通知；`Route` 落进 `meta.graph`；
   `Inner` **不再翻**（loop 层已经发过了，翻两次会重复）。
 
-## 9.5 `dispatch.rs`：39 个方法的实现
+## 9.5 `dispatch.rs`：45 个方法的实现（39 条在这里，6 条在 9.9 的记忆中心）
 
 ```rust
 enum Outcome { Value(Value), SelfSent }
@@ -383,3 +385,63 @@ JSON。这条规矩在 `lib.rs`、`builtin_tools`、`exec`、`oauth` 等所有�
 
 **这一层的不变量**：一轮的应答永远在所有通知之后；`TurnGuard` 保证取消令牌一定
 被摘掉；`stdout` 只有协议帧；任何观测/镜像/提炼的失败都不影响这一轮的答复。
+
+## 9.9 记忆中心、账本写入与后台整理
+
+三个新文件，各管一件事，谁也不替谁做决定：
+
+| 文件 | 管什么 | 边界 |
+|---|---|---|
+| `ledger_writer.rs` | 每轮把 user / assistant / tool_use / tool_result / image 结构化落账 | 只追加；超过 `JOY_LEDGER_INLINE_MAX` 转存 `ledger/`，行里留指针；**写失败只降级**为 stderr 一行 + 通知，绝不让回合失败 |
+| `memory_worker.rs` | 后台整理与 bundle 镜像 | 单飞靠 DB 的 claim-first；`wake` 由「新增账本条数够不够」触发，60s 心跳兜底；`stop` 最多等 5s，没跑完的下次启动接着来 |
+| `memory_center.rs` | 记忆中心的读窗口 + 手动压缩 | 全部只读端点按 `home` 沙箱；页面路径交给 `Bundle::page_path` 校验，HTTP 层不重复实现一遍 |
+
+几条容易写错的地方：
+
+- **`entries_for_turn` 与 `payload_text` 是同一份解码的两面。** 前者给界面看（摘要 + 指针），
+  后者给 `rebuild_turn` 还原原文。转存过的行必须两条路都能走通，否则「能看不能读」。
+- **`usage_of` 的除法有零预算分支。** 没有解析到窗口时 `budget = 0`，比例按 0 处理并**不给提示** ——
+  否则界面会出现 `inf%` 和一个永远亮着的警告。
+- **`compact_session` 被协议方法与 REPL 共用。** 两处各写一遍一定会漂：终端压了一半、抽屉没压，
+  长会话里没人报这个 bug，只会觉得「摘要怎么不太对」。
+- **摘要只进不出。** `save_rollup` 的单调护栏（`Ok(false)`）表示库里已有一份覆盖更多轮次的摘要；
+  这时返回明确的错误而不是静默覆盖，否则按钮看起来像没反应。
+
+## 9.10 提示装配：稳定前缀、每轮尾巴与六段计量
+
+`build_system(PromptParts) -> SystemPrompt { stable, tail }`，切点是缓存断点：
+
+```
+stable = SOUL.md + 「你的模型是谁、跑在哪」      ← 同一会话里逐字节不变
+tail   = 时钟 · 能力缺口 · 待办 · 记忆命中 · 记忆库目录 · 技能目录 ·
+         技能正文（命中才载）· 滚动摘要
+```
+
+三条约束，各自都踩过：
+
+- **前缀里不放任何随轮变化的东西。** 时钟只到「日」粒度（`current_time` 负责答精确时间）——
+  精确到分钟会让前缀每小时失效一次，缓存收益刚好被自己吃掉。
+- **能力缺口写进尾巴，而且只在真的缺时才写。** `capability_note(settings)` 在
+  `JOY_EXEC` / `JOY_WRITE` 关着时给出一段「本机做不到这些，直说并停下，不要用别的工具模拟」。
+  没有这句，模型分不清「工具不存在」和「还没找到」，于是一次「清理日历」的请求变成八轮读
+  本仓库文档（见 05-loop 的护栏 2）。开关都开着时这段**完全不出现**。
+- **尾巴的顺序是有意的**：能力 → 待办 → 记忆 → 目录 → 摘要。先约束「能做什么」，再给
+  「正在做什么」，最后才是背景知识。
+
+同一个函数产出六段计量（`memory_center::usage_of`）：
+
+| 段 | 量的是什么 |
+|---|---|
+| soul | `stable` 的估算 |
+| memory | 命中文本 + bundle 目录 |
+| skills | 技能目录 + 本轮载入的正文 |
+| tools | 已注册工具的 schema |
+| history | 工作记忆里的历史轮次 |
+| summary | 滚动摘要 |
+
+预算 = `context_window × JOY_COMPACT_THRESHOLD / 校准系数`（校准系数来自上一轮「估算 ÷
+供应商实测」），比例超过 `JOY_CONTEXT_WARN_RATIO`（默认 85）就在面板上说一句。
+
+**没有计入六段的**：时钟、待办板、能力缺口那几行 —— 每轮几十个 token，且不随会话增长。
+六段那条带子的用途是「看什么在长」，把常量混进去只会让它变成噪音。这条边界写在
+`docs/architecture.md` 的 Context budget 一节里，改计量时两边一起改。

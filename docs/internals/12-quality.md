@@ -105,7 +105,7 @@
 | `multi-turn` | 滑窗（第 4 轮只看得见最近两轮，第 1 轮已被折进摘要）、工具活动折叠防重复、会话隔离 |
 | `consolidation` | 到点提炼、条数正确 |
 | `interrupt` | 流式中途打断：半截回复落库且 `meta.interrupted` |
-| `config-write` | 热生效（下一轮 `max_iterations=1` 立即卡护栏） |
+| `config-write` | 热生效（下一轮 `max_iterations=1` 立即到预算，退回兜底文案） |
 | `graph-triage` | 图开着时的 quick/full 分流与失败开放 |
 | `mcp` | 起假 MCP 服务器，工具注入与调用 |
 | `compaction` | 摘要替换被挤出的轮次；摘要失败退化为确定性摘录（**原文不丢**） |
@@ -147,6 +147,7 @@ release gate 步骤里跑（`bash ../scripts/smoke.sh`）。
 |---|---|
 | Rust (fmt / clippy / test) | `cargo fmt --check`、`clippy --all-targets -D warnings`、`cargo test --workspace` |
 | Protocol artifacts (drift check) | `python3 scripts/write_schema.py --check`（① 的漂移检查） |
+| Tool docs (drift check) | `python3 scripts/check_tool_docs.py`（⑥：代码里的工具名单、06-tools §6.0 的清单与数字、两份 README 的工具表必须一致） |
 | TypeScript | `npm install` → `npm run typecheck` → `npm test` |
 | Python SDK | `uv sync` → `uv run mypy` → `uv run pytest` |
 | Release gate | `cargo build -p joyczl-cli` → `joy eval evals/deterministic` → `bash ../scripts/smoke.sh` |
@@ -158,7 +159,7 @@ release gate 步骤里跑（`bash ../scripts/smoke.sh`）。
   边界对」。这两件事各自出过问题（一次是测试本身平台相关、一次是 Rust↔前端的缝），
   所以都不当可选项。
 
-`just check` 是本地版：`fmt-check + schema drift + ts-check + py-check + eval`，
+`just check` 是本地版：`fmt-check + schema drift + tool docs drift + ts-check + py-check + eval`，
 再加 `clippy` 与 `cargo test`。**提交前跑它**——本轮工作里 CI 连红六次就是没跑全
 导致的（本地全绿但 CI 红，因为一个测试断言依赖了本机有沙箱）。
 

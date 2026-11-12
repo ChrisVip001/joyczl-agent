@@ -52,6 +52,12 @@ before the response). Every type is defined in
 | `model/routes/save` | `ModelRoutesSaveParams` → `ModelRoutesResponse` | replace the whole table; tier names and profile ids are validated before writing |
 | `usage/summary` | `UsageSummaryParams` → `UsageSummaryResponse` | the usage ledger (migration 0010): per-model aggregates + totals. **Accounting only, no enforcement** |
 | `schedule/list` | `ScheduleListParams` → `ScheduleListResponse` | the schedule snapshot (migration 0012): per-job `last_fired` / `claimed` / `catch_up` / `delivery`. Read-only |
+| `memory/ledger` | `MemoryLedgerParams` → `MemoryLedgerResponse` | one session's ledger, newest first; with `turnId` also that turn's entries. Read-only |
+| `memory/index` | — → `MemoryIndexResponse` | the bundle's catalog (`index.md`) plus one summary per page. Read-only |
+| `memory/page` | `MemoryPageParams` → `MemoryPageResponse` | one page with body and `sources`; `page: null` when there is no such page |
+| `context/usage` | `ContextUsageParams` → `ContextUsageResponse` | the last turn's six-section breakdown; `usage: null` = nothing measured yet |
+| `skill/stats` | — → `SkillStatsResponse` | aggregated `<home>/skill-hits.jsonl`. Read-only |
+| `session/compact` | `SessionCompactParams` → `SessionCompactResponse` | fold older turns into the rolling summary **now**, keeping the newest two. Human-only — no tool reaches it |
 
 Conventions: methods are `<resource>/<method>` (singular resource); payloads
 are named `*Params` / `*Response` / `*Notification`; wire fields are
@@ -116,7 +122,7 @@ unknown value is normalised to `fact`.
 | -32700 / -32600 / -32601 / -32602 / -32603 | standard JSON-RPC: parse / request / method not found / params / internal |
 | `-32000` PROVIDER_ERROR | model-side failure (missing key, 401, rate limit…), with what to do |
 | `-32001` TOOL_ERROR | tool execution failed (the error also returns to the model as text; the turn continues) |
-| `-32002` NOT_IMPLEMENTED | defined but not yet implemented (all 39 methods are implemented) |
+| `-32002` NOT_IMPLEMENTED | defined but not yet implemented (all 45 methods are implemented) |
 
 ## Clients
 

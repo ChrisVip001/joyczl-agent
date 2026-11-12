@@ -4,6 +4,80 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### The tool count is checked, not remembered
+
+- `just check` now runs `scripts/check_tool_docs.py` (`check-tool-docs`). The number of
+  built-in tools lives in three places — the code, `docs/internals/06-tools.md` §6.0 (the
+  list and the "N always-on + M gated" heading), and both READMEs' tool tables — and three
+  copies drift. The script reads the registry names the test pins, reads what `app-server`
+  registers itself, and fails on a missing name **or** a wrong number. Prompted by finding
+  the docs saying 22 while the code had 28.
+
+### The step budget is a budget, not a cliff
+
+- Hitting `JOY_MAX_ITERATIONS` no longer ends the turn with 「我还没做完就到了迭代上限」.
+  The **last** iteration is a wrap-up: the tool table is emptied for that one call and the
+  model is told to answer in three sentences — what it finished, where it is stuck, what it
+  needs next. Same shape as Claude Code, whose interactive loop has no turn cap at all (it
+  ends when the model stops calling tools); we keep a cap so a laptop agent cannot spend the
+  night, but the cap bounds cost, not success.
+- The default goes `10` → `32`: ten was small enough that an honest exploration (read the
+  file, check the schema, retry once) could hit the ceiling. `JOY_MAX_ITERATIONS` still
+  overrides it.
+- The system prompt now says what this machine **cannot** do — no shell when `JOY_EXEC` is
+  off, no file writes when `JOY_WRITE` is off — with one line telling the model to say so
+  and stop rather than approximate it. Without that line a model cannot tell "the tool is
+  missing" from "I have not found the right tool yet", which is how a request to clean up
+  calendar events turned into eight iterations of reading this repository's docs.
+
+### Scheduled jobs in the capability center
+
+- The drawer gains a fifth tab, **定时**: every declared job in one list — cron, prompt,
+  next fire, last fire, delivery — merged from `<home>/schedules.json` and the `schedule:`
+  lines in skill frontmatter. Jobs that come from a skill are read-only there; the way to
+  remove one is to edit `SKILL.md` or delete the skill, and the row says so.
+- Adding or deleting a file job writes `<home>/schedules.json` (atomically, preserving
+  unknown keys and every other job) through `POST /api/schedules/save` / `remove`. A
+  `schedules.json` that does not parse is **refused**, never overwritten.
+- Next-run prediction, the scheduler and the tools now share one implementation, in the new
+  `joyczl-schedule` crate (`cron` + `declarations`). Separate copies would drift into "the
+  panel says 08:00, nothing ran at 08:00".
+- Three new tools — `schedule_job`, `list_schedules`, `cancel_schedule` — so 「帮我做一个
+  定时任务」 works in chat. Before them the model tried to `write_file` `<home>/schedules.json`,
+  which is outside every workspace: the refusal was correct and the UI could only ask for a
+  working directory, for a file that has nothing to do with the project.
+
+### The memory center: ledger, library, meter
+
+- The drawer gains a fourth tab, **记忆**, with three read-only views. **账本** is one row
+  per turn — open it for that turn's entry stream; `折叠` marks a turn that came through the
+  backfill and whose tool output only exists as a summary. **记忆库** shows the bundle's
+  catalog and one page at a time, with `ledger:…` chips that walk back to the source turns.
+  **上下文** is a six-section band (soul / memory / skills / tools / history / summary) with
+  used, budget, and a notice at `JOY_CONTEXT_WARN_RATIO`.
+- The system prompt is now **two halves**: a stable prefix (soul plus model identity) and a
+  per-turn tail (day-granular clock, todo list, memory hits, skill catalog, summary).
+  Anthropic gets an explicit `cache_control` boundary; the other wires rely on their
+  automatic prefix cache. Usage accounting records `cache_read_input_tokens` and
+  `cache_creation_input_tokens`.
+- Skills become **choosable**: a catalog (name plus one line, capped by
+  `JOY_SKILL_INDEX_TOKENS`) rides in every prompt, bodies load on demand (a `$name`
+  reference, a keyword match capped by `JOY_SKILL_BODY_TOKENS`, or the new `read_skill`
+  tool). Hits are logged and summarized in the Skills panel.
+- `JOY_TOOL_POLICY=deferred` keeps only the always-on tool schemas in the request; the new
+  `find_tools` opens the rest for this session. Switch- and approval-gated tools
+  (`run_command`, `write_file`, `edit`, `delegate_task`) are never deferred.
+- Tool-result trimming is now **oldest-first** with `JOY_TOOL_RESULT_KEEP_RECENT` (default
+  3) newest results kept whole — the model is reasoning about those.
+- `JOY_SOUL_MODE` (`auto` / `thin` / `full`) decides how much built-in scaffolding wraps
+  `SOUL.md`; a soul the user edited always wins over the mode.
+- `/compact [focus]` in the REPL and **现在压缩** in the dashboard fold older turns into the
+  rolling summary on demand. `search_memory` now uses the same hybrid retrieval as the gate.
+- Crash recovery has an age limit. `JOY_RESUME_MAX_AGE` (default 60 minutes) marks an
+  `open` checkpoint `abandoned` at startup instead of resuming it — a resumed turn from two
+  days ago answers a question whose "today" has moved, and pays a model call to do it. `0`
+  restores the old "always resume" rule; the row stays in the ledger.
+
 ### The capability center: skills and MCP connectors in the sidebar
 
 - The dashboard's sidebar gains a **能力中心** section with two entries —

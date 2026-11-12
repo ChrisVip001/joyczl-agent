@@ -10,7 +10,7 @@
 ```
 src/lib.rs          pub use protocol::v2::*;  pub use rpc::*;
 src/protocol/mod.rs pub mod v2;
-src/protocol/v2.rs  业务契约：39 个方法常量 + 130 个类型
+src/protocol/v2.rs  业务契约：45 个方法常量 + 130 个类型
 src/rpc.rs          JSON-RPC 2.0 信封（与业务无关的通用层）
 src/export.rs       生成器：TS / JSON Schema / 常量
 src/export_tests.rs 生成入口（标了 #[ignore]，只在需要时跑）
@@ -48,7 +48,7 @@ src/export_tests.rs 生成入口（标了 #[ignore]，只在需要时跑）
 | 驾驶舱 | 5 | `DashboardData`、`TodoListView`、`ConnectorStatus`、`SessionViewParams` |
 | 通知 | 23 | 21 个 `*Notification` + `ErrorNotification` + `ServerNotification` 枚举 |
 
-**39 个方法**（常量集中在 `v2.rs` 的 `methods` 段，值形如 `<资源>/<动作>`）：
+**45 个方法**（常量集中在 `v2.rs` 的 `methods` 段，值形如 `<资源>/<动作>`）：
 
 ```
 turn/start  turn/interrupt  turn/steer  turn/follow-up  turn/list

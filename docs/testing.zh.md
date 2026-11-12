@@ -75,6 +75,13 @@ eval 跑的是「一条消息进、一条消息出」的同一套 `run_turn`，�
 （harness 给模型看了什么）、consolidation 计数、interrupt 时序、config/write 热生效、
 `prereq` 依赖缺失跳过。所有判定离线、可重复。
 
+`prompt_contains` 读的是模型**真正看到**的东西：稳定前缀 + 每轮尾巴，再加上工具表的
+名字与说明。两个新用例族就靠这一点成立 —— `deterministic/tool-policy.jsonl`（延迟加载
+的工具 schema 不在请求里、`find_tools` 打开它、下一次请求就有了）与
+`deterministic/prompt-shape.jsonl`（薄/全灵魂、目录在但正文不在）。场景级 settings 也
+跟着长了对应的旋钮：`soul_mode`、`tool_policy`、`skill_index_tokens`、`skill_body_tokens`、
+`tool_result_keep_recent`、`context_warn_ratio`。
+
 ## 长任务基准（P1）
 
 `joy bench` 跑 `evals/long/*.jsonl`：同一套 scripted 装置，但问的是另一个问题 ——

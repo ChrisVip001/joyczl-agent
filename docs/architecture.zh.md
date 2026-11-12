@@ -55,13 +55,20 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
 用户消息
   → [triage 图，可选] classify（小模型）∥ check_calendar → quick | full
   → [检索门] 小模型判断要不要翻记忆（失败开放：门坏了就照常检索）
-  → [记忆检索] facts (FTS5, top_k) + episodes → 拼进 system prompt
-  → [Skills] 扫描 SKILL.md frontmatter，命中消息才载入正文
+  → [记忆检索] facts (FTS5, top_k) + episodes → 进提示的尾巴
+  → [Skills] 每轮带目录（名字 + 一句话），命中消息才载入正文
+  → [提示装配] 稳定前缀（灵魂 + 模型身份）＋ 每轮尾巴
+      （时钟 · 能力缺口 · 待办 · 记忆命中 · 两份目录 · 滚动摘要）
+      → 同一会话里前缀逐字节不变：这就是缓存断点
   → [THE LOOP] observe → reason → act → repeat
         · 每次模型调用与「取消令牌」竞速（turn/interrupt）
         · 每次工具执行同样竞速；错误作为文本回给模型，不崩
+        · 最后一步是收尾轮：工具收起，让模型自己说「完成 / 卡住 / 需要什么」
+  → [账本] 逐行追加（user / assistant / tool_use / tool_result）；
+      超过 JOY_LEDGER_INLINE_MAX 的内容转存到 <home>/ledger/
   → [落库] 对话 + meta（gate/graph/tools/model/usage）入 chat_log
   → [consolidation] 攒够 N 轮，小模型蒸馏出 facts + episode
+  → [bundle] 后台 worker 把它们写成 <home>/memory/ 的页，并重建索引
   → [镜像] MEMORY.md（人类可读视图）、traces/<日期>.jsonl、usage.jsonl
   → [通知] turnStarted → gateDecided → textDelta → toolStarted →
            toolCompleted → consolidationCompleted → turnCompleted
@@ -94,10 +101,37 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
 * **Skills（过程记忆）**：`SKILL.md`（Agent Skills 格式）渐进披露——
   frontmatter 常扫，正文只在消息与描述关键词重合 ≥2 时进 prompt。
   `MEMORY.md` 是每轮重建的人类可读镜像，state.db 永远是事实来源。
+* **bundle（派生知识）**：后台 worker 把 facts 蒸馏成 `<home>/memory/` 里的一页页
+  （OKF 形态，一个概念一个文件），并在上面维护 FTS5 索引。提示里带的是**目录**，不是页；
+  模型用 `read_memory_page` 按需取。人也可以手改某一页 —— 下一次 `joy memory reindex`
+  以文件为准。
+* **账本优先**：每一轮都逐行追加进 `state.db` 的 `ledger`（每行一个 digest，超限内容转存
+  `<home>/ledger/`），记忆中心就是从它把一轮读回来的。上面那些层都不是任何东西的唯一副本。
+
+### 上下文预算（模型每轮到底看到什么）
+
+模型每轮看到的东西都在 `build_system` 里装配一次，然后由记忆中心计量成六段：
+
+| 段 | 来源 | 旋钮 |
+|---|---|---|
+| soul | `SOUL.md`（薄 / 全） | `JOY_SOUL` |
+| memory | 检索门命中 + bundle 目录 + 技能目录 | `JOY_RETRIEVAL_TOP_K` |
+| skills | 这条消息命中的技能正文 | — |
+| tools | 已注册工具的 JSON schema | `JOY_TOOL_POLICY=deferred` 会把它压小 |
+| history | 账本里的最近 N 轮 | `JOY_HISTORY_TURNS` |
+| summary | 滚动压缩摘要 | `JOY_COMPACT_THRESHOLD` |
+
+三件事拦住它悄悄变大：**压缩**把被挤出去的轮次折进滚动摘要（摘要模型罢工时退化为确定性
+摘录，挤出窗口不等于失忆）；**工具结果换桩**在每次请求前把最旧的超大结果换成桩
+（`JOY_TOOL_RESULT_TOTAL_CHARS`，最新的 `JOY_TOOL_RESULT_KEEP_RECENT` 条整条留着）；
+**迭代预算**限制这一轮本身（`JOY_MAX_ITERATIONS`，最后一步是收尾轮）。
+
+尾巴里还有几行很短的东西 —— 时钟、待办板、能力缺口说明 —— 每轮几十个 token，**故意不计入**
+那六段：六段那条带子是用来看「什么在长」的，混进常量只会变成噪音。
 
 ### 工具层（joyczl-tools）
 
-22 个内置工具 + MCP 外挂，统一进 `ToolRegistry`。契约：`execute`
+二十多个内置工具 + MCP 外挂，统一进 `ToolRegistry`。契约：`execute`
 永不返回 Err——错误作为 `Error: …` 文本回给模型，loop 不崩。工具失败
 是模型可以纠正的信息，不是崩溃理由。
 
@@ -157,3 +191,21 @@ bug。把生成物提交进仓库，这类漂移就会出现在 PR diff 里；CI
 ```
 
 所以 `cargo build` 完全不碰代码生成器，二进制里也没有它们。
+
+## 记忆的三层
+
+* **账本是事实。** `state.db` 里的 `ledger` 表，只追加：一轮里的 user / assistant /
+  tool_use / tool_result / image 各成一行，每行对规范化后的 payload 求 `digest`。超过
+  `JOY_LEDGER_INLINE_MAX` 的内容转存到 `<home>/ledger/…`，行里留指针、摘要与字节数。
+  任意一轮都能从账本重建 —— 历史装配读的是账本，不是一段被折叠过的文本。走一次性回填
+  进来的行带 `fidelity: folded`，这是「这段工具输出只以摘要形式存在」的诚实标签。
+* **bundle 是派生的知识。** `<home>/memory/` 按 OKF 的形态：一个概念一页 Markdown，
+  frontmatter 里写 `title` / `kind` / `sources`，`index.md` 是目录，`changelog.md` 是变更史。
+  人可以随手改任一页；改过之后那一页的 digest 与索引对不上，下次 `joy memory reindex`
+  以**文件**为准重建索引。
+* **索引是缓存。** 检索门后面的 SQLite FTS5。丢了它只损失一次重建，绝不损失事实。
+  `MEMORY.md` 是目录的生成副本，只为过渡保留。
+
+提示里带的是前两层的**目录**，不是百科。新会话从一张目录开始，需要时按路径取页
+（`read_memory_page`）—— 这和技能目录、延迟加载的工具表是同一个动作：把目录交给模型，
+让它自己决定拿哪一本，而不是每轮把整架书塞过去。

@@ -177,6 +177,8 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
 | `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
+| `JOY_TOOL_RESULT_KEEP_RECENT` | 0 – 50 |
+| `JOY_RESUME_MAX_AGE` | 0 – 10080 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
 | `JOY_LLM_TIMEOUT` | 1 – 3600 |
@@ -202,13 +204,15 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `JOY_MAX_ITERATIONS` | `10` | 单轮 loop 的迭代上限（硬停护栏） |
+| `JOY_MAX_ITERATIONS` | `32` | 单轮的步数预算。**最后一步是收尾轮**：工具被收起，模型只用三句话说「完成 / 卡住 / 需要什么」—— 这个数限定的是成本，不是把「没做成」变成一句道歉 |
 | `JOY_MAX_TOKENS` | `8192` | 单次模型调用输出上限（给推理模型留思考余量） |
 | `JOY_HISTORY_TURNS` | `12` | 工作记忆滑窗的**上限**：只把最近 N 轮塞进 prompt（更老的折进滚动摘要，不是丢掉） |
 | `JOY_CONTEXT_WINDOW` | provider 默认 | 覆盖上下文窗口的估算值（本地模型窗口差异极大，表里只是常见默认） |
 | `JOY_COMPACT_THRESHOLD` | `0.8` | 用到窗口的这个比例就开始压缩 —— token 才是闸门，轮数是上限 |
-| `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | 一轮里所有工具结果的字符总量上限；超了就从最大的开始换成桩（`0` 关闭） |
+| `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | 一轮里所有工具结果的字符总量上限；超了就从**最旧**的开始换成桩，最新的整条留着（`0` 关闭） |
 | `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | 单条结果超过它才有资格被换桩（`0` 关闭） |
+| `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | 最新的几条结果永不换桩（清理从最旧的开始） |
+| `JOY_RESUME_MAX_AGE` | `60` | 分钟；比这更旧的 `open` checkpoint 在启动时标 `abandoned`，不自动续跑（`0` = 一律续跑） |
 | `JOY_CONSOLIDATE_EVERY` | `6` | 每 N 轮新对话触发一次 consolidation |
 | `JOY_RETRIEVAL_TOP_K` | `4` | 检索门放行时拉回的 facts 条数 |
 | `JOY_GRAPH_WORKFLOWS` | `0` | 打开 triage 前门图（失败开放，只能更快不能更差） |
@@ -230,6 +234,27 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 融合（RRF，k=60）而不是按分数——bm25 与余弦不是同一个量纲，硬凑等于编数据。
 embedding 服务不可用会降级成纯关键词并警告，绝不会变成「什么都想不起来」。
 开关打开之前写入的事实没有向量，用 `joy memory reindex` 补齐。
+
+## 提示形状与上下文计量
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `JOY_SOUL_MODE` | `auto` | `thin` / `full` / `auto`：包在 `SOUL.md` 外面的内置脚手架有多少 |
+| `JOY_SKILL_INDEX_TOKENS` | `200` | 常驻的技能目录上限（名字 + 一句话） |
+| `JOY_SKILL_BODY_TOKENS` | `1200` | 单个被选中技能的正文上限；超出部分由 `read_skill` 取 |
+| `JOY_TOOL_POLICY` | `eager` | `deferred` 只把常驻工具放进请求，其余用 `find_tools` 打开 |
+| `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | 最新的几条工具结果永不换桩；清理从最旧的开始 |
+| `JOY_CONTEXT_WARN_RATIO` | `85` | 占用率到这个百分比时，分层条给一句提示 |
+
+系统提示分成两半：**稳定前缀**（灵魂 + 模型身份）与每轮的尾巴（日粒度时间、待办、
+记忆命中、技能目录、滚动摘要）。Anthropic 在前缀末尾打 `cache_control` 断点；有自动
+前缀缓存的 wire 只需要这段前缀不要移动。用量账本记 `cache_read_input_tokens` 与
+`cache_creation_input_tokens`，命中率是个数字，不是一种信念。
+
+`thin` / `full` 只决定**内置文本**往 `SOUL.md` 里写哪一份、以及「用户没动过的默认值」
+变成哪一份 —— 用户改过的 SOUL 在两种模式下都原样返回。`deferred` 永远不会藏起人已经
+打开的工具：`run_command`、`write_file`、`edit`、`delegate_task` 常驻工具表，因为
+「先发现再授权」是反的。激活集合按会话放在内存里：重启后让模型重新找一次，便宜且诚实。
 
 ## 生命周期钩子（`JOY_HOOKS`）
 

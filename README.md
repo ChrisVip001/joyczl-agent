@@ -47,12 +47,21 @@ persisted with the conversation.
 - **Remember**: semantic facts (FTS5, CJK-capable), dated episodes, and
   procedural Skills — with a retrieval gate so memory is consulted only when
   relevant ([docs/architecture.md](docs/architecture.md))
-- **Act**: 22 built-in tools plus MCP servers
+- **Show its memory**: the drawer's **记忆** tab opens the append-only ledger (one row per
+  turn; open it for that turn's entry stream), the memory library (catalog, one page at a
+  time, and `ledger:…` chips back to the source turns), and the context meter (six
+  sections, with a notice before the window fills). One button compacts on demand
+  ([docs/operations.md](docs/operations.md))
+- **Act**: 28 built-in tools (21 always on, 7 behind switches) plus MCP servers
   ([docs/configuration.md](docs/configuration.md))
-- **Grow itself, on your say-so**: the dashboard's capability center lists Skills and
-  MCP connectors side by side — add your own, delete your own; the ones that ship
-  with the install are greyed out and read-only
-  ([docs/skills.md](docs/skills.md))
+- **Stay cheap**: the system prompt is a stable prefix plus a per-turn tail, so the
+  provider can cache it; the skill catalog is one line per skill with bodies on demand, and
+  `JOY_TOOL_POLICY=deferred` keeps only the always-on tool schemas in the request
+  ([docs/configuration.md](docs/configuration.md))
+- **Grow itself, on your say-so**: the dashboard's capability center lists Skills, MCP
+  connectors and **scheduled jobs** side by side — add your own, delete your own; what
+  ships with the install, and the jobs a skill declares, are greyed out and read-only
+  ([docs/skills.md](docs/skills.md), [docs/operations.md](docs/operations.md))
 - **Plan as a graph**: the triage front door answers small talk cheaply; the
   gather workflow writes a morning brief
   ([docs/architecture.md](docs/architecture.md))
@@ -79,6 +88,12 @@ persisted with the conversation.
 | `write_file` / `edit` | write a text file / one exact-match replacement with a change hunk — off unless `JOY_WRITE=1`; writable boundary = the working directory **bound to the session** (or named for this turn when the session has none) + `JOY_EXEC_WRITABLE_ROOTS` |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
 | `delegate_task` | hand one self-contained job to a subagent — off unless `JOY_DELEGATE=1`, cannot delegate again; pass `result_schema` for a structured answer (retried once, then prose) |
+| `read_skill` | read one skill's full body — the always-present catalog carries only its name and one line; **on by default** |
+| `read_memory_page` | read one page of the memory bundle by name, with the `sources` it was distilled from; **on by default** |
+| `find_tools` | search the deferred shelf by keyword and open what it finds for **this session** (`JOY_TOOL_POLICY=deferred`); **on by default** |
+| `schedule_job` | create or replace a scheduled job in `<home>/schedules.json` — name, five-field cron, one prompt; **on by default** |
+| `list_schedules` | every declared job with its cron and prompt (skill-declared ones included); **on by default** |
+| `cancel_schedule` | delete a file-declared job by name — a skill's job is refused with the way out; **on by default** |
 
 ### Providers and keys
 
@@ -91,7 +106,7 @@ Tool failures return to the model as text — the loop never crashes on one.
 | Document | Content |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | principles, crate dependency graph, one turn's data flow, key mechanisms, design decisions |
-| [docs/protocol.md](docs/protocol.md) | the 41 JSON-RPC methods, notification sequence, error codes, clients |
+| [docs/protocol.md](docs/protocol.md) | the 45 JSON-RPC methods, notification sequence, error codes, clients |
 | [docs/configuration.md](docs/configuration.md) | every `JOY_*` variable, gateway variables, mcp.json, settings.json |
 | [docs/gateways.md](docs/gateways.md) | Telegram / Discord / WeChat / Lark setup, quirks, and security notes |
 | [docs/testing.md](docs/testing.md) | the four-layer quality system and the latest test report |
@@ -128,6 +143,7 @@ Tool failures return to the model as text — the loop never crashes on one.
 | P17 ✅ | session metadata (0.15): the `sessions` table (migration 0018), `session/get` / `session/update` / `turn/list`, the working directory follows the session |
 | P18 ✅ | session gate (0.16): one turn per session at a time (`SESSION_BUSY`), `turn/steer` for a running turn, `turn/follow-up` to queue the next one (migration 0019, survives a restart), the `turnSteered` notification |
 | P19 ✅ | secrets & productization: Windows Credential Manager + the `SecretVault` seam, self-hosting security (non-loopback demands `JOY_OPS_TOKEN`), the models.dev catalog generator (`scripts/gen_catalog.py`), dashboard streams Markdown block-incrementally, a one-line session sidebar with a draggable edge and hover marquee |
+| P20 ✅ | memory & context (0.17): the append-only ledger (a digest per row, oversized payloads spooled under `ledger/`, turns rebuilt from rows), the OKF bundle in `<home>/memory` with a rebuildable FTS5 index, a background worker that consolidates and mirrors (claim-first, one flight, backoff), the dashboard's memory center (ledger / library / meter), a split system prompt with an Anthropic cache breakpoint and cached-token accounting, thin/full souls, a skill catalog with on-demand bodies (`read_skill`), deferred tool loading (`find_tools`), oldest-first result trimming, and `/compact [focus]` |
 
 ## Naming
 

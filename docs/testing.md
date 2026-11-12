@@ -81,6 +81,14 @@ the model), consolidation counts, interrupt timing, config/write hot reload, per
 settings overrides (history window, execution policy, graph workflows) and
 `prereq`-based skipping. Every assertion is offline and reproducible.
 
+`prompt_contains` reads what the model actually saw: the **stable prefix plus the
+per-turn tail**, and the tool table's name + description. Half of that is exactly what
+two newer case families depend on — `deterministic/tool-policy.jsonl` (a deferred schema is
+absent, `find_tools` opens it, the next request has it) and
+`deterministic/prompt-shape.jsonl` (thin vs full soul, catalog present but body absent).
+Per-scenario settings grew the matching knobs: `soul_mode`, `tool_policy`,
+`skill_index_tokens`, `skill_body_tokens`, `tool_result_keep_recent`, `context_warn_ratio`.
+
 ## Long-task benchmarks (P1)
 
 `joy bench` runs `evals/long/*.jsonl`: the same scripted harness, but it asks a different
