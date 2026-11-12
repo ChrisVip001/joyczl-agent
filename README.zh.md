@@ -12,10 +12,8 @@ Rust 独占 agent 循环、记忆和 29 个工具；TypeScript 只负责驾驶�
 
 > 多数 Agent 的记忆是个黑盒。Joy **每一轮对话只追加一行账本**：点开这一行，能看到这一轮的完整事件流——检索门怎么判的、跑了哪些工具、哪个模型答的、花了多少 token。记忆库用 `ledger:…` 回溯到原始轮次，FTS5 索引能从账本重建。不藏东西，也不会悄悄丢东西。
 
-<!-- 补图后取消注释（拍摄清单见 01-README改写.md）
-![Joy 驾驶舱与记忆抽屉](docs/assets/dashboard.png)
-![记忆账本展开一行](docs/assets/memory-ledger.png)
--->
+![Joy 驾驶舱英文界面（深色主题）](docs/assets/dashboard.png)
+![记忆账本面板：每轮只追加一行，索引可从账本重建](docs/assets/memory-ledger.png)
 
 ## 两分钟跑起来
 

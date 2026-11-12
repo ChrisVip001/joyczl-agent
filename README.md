@@ -12,10 +12,8 @@ Rust owns the agent loop, memory and 29 tools; TypeScript is only the dashboard 
 
 > Most agents keep memory in a black box. Joy writes **one append-only ledger row per turn**. Open any row and you see that turn's full entry stream: the retrieval decision, which tools ran, which model answered, and what it cost. The memory library links back to source turns via `ledger:…` chips, and the FTS5 index can be rebuilt from the ledger. Nothing is hidden, nothing is silently lost.
 
-<!-- Uncomment after adding the images to docs/assets/ (shot list in 01-README改写.md)
-![Joy dashboard with the memory drawer open](docs/assets/dashboard.png)
-![Memory ledger with one row expanded](docs/assets/memory-ledger.png)
--->
+![Joy cockpit, English UI (dark theme)](docs/assets/dashboard.png)
+![Memory ledger panel — one append-only row per turn, index rebuildable from the ledger](docs/assets/memory-ledger.png)
 
 ## Run it in two minutes
 
