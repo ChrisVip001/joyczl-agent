@@ -4,19 +4,19 @@
 // not "what it looks like" — when the page gets ugly, look at this one file.
 
 import { renderMarkdown, stripToolFold } from "./markdown";
-import type {
-  McpRow,
-  McpView,
-  SkillRow,
-  SkillsView,
-} from "./api";
+import type { McpRow, McpView, ScheduleJob, SchedulesView, SkillRow, SkillsView } from "./api";
 import type {
   AgentTaskView,
   ArtifactView,
   AcceptanceView,
   BudgetView,
   CheckView,
+  ContextUsage,
   DashboardData,
+  LedgerEntryView,
+  LedgerTurnView,
+  MemoryPageSummary,
+  MemoryPageView,
   Message,
   TodoListView,
   SessionSummary,
@@ -1084,4 +1084,309 @@ function capMeta(items: (string | null)[]): HTMLElement {
     row.append(el("span", { class: "cap-meta-item", text: item }));
   }
   return row;
+}
+
+/**
+ * The scheduled-jobs list: when it fires, what it does, and where the result goes.
+ *
+ * A row that came from a skill's `schedule:` line is greyed and has no delete button — the
+ * job **is** that skill, and removing it here would either do nothing or lie. The `随技能`
+ * tag plus the title attribute say where to go instead.
+ */
+export function renderSchedules(
+  view: SchedulesView,
+  onAdd: () => void,
+  onRemove: (job: ScheduleJob) => void,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  fragment.append(capHead(`定时任务 · ${view.jobs.length} 个`, "＋ 添加任务", onAdd));
+
+  if (view.error !== null) {
+    fragment.append(el("div", { class: "failure", text: view.error }));
+  }
+  if (view.jobs.length === 0) {
+    fragment.append(
+      muted(
+        "还没有定时任务。加一个：什么时候（cron，如 0 8 * * 1-5）、做什么（一句话）。到点它会在自己的会话里跑一轮，结果写进 outbox。",
+      ),
+    );
+  }
+
+  for (const job of view.jobs) {
+    const row = el(
+      "div",
+      {
+        class: `cap-row${job.source === "skill" ? " builtin" : ""}`,
+        title:
+          job.source === "skill"
+            ? `「${job.name}」的定时来自技能 ${job.skill ?? job.name} 的 SKILL.md —— 改那里，不在这里`
+            : `「${job.name}」写在 <home>/schedules.json`,
+      },
+      el(
+        "div",
+        { class: "cap-row-head" },
+        el("span", { class: "cap-name", text: job.name }),
+        el("span", { class: "tag sched-cron", text: job.cron }),
+        job.source === "skill"
+          ? el("span", { class: "tag cap-builtin-tag", text: "随技能" })
+          : document.createDocumentFragment(),
+        job.source === "file"
+          ? el("button", {
+              class: "cap-del",
+              type: "button",
+              text: "×",
+              title: `删除定时任务「${job.name}」`,
+              onclick: () => onRemove(job),
+            })
+          : document.createDocumentFragment(),
+      ),
+      el("p", { class: "cap-desc", text: job.prompt }),
+      capMeta([
+        job.nextRun !== null ? `下次 ${job.nextRun}` : job.nextRunNote,
+        job.lastFiredMinute !== null
+          ? `上次 ${job.lastFiredMinute}`
+          : "还没跑过",
+        job.claimedMinute !== null ? "上次被中断，重启时按「错过是否补跑」处理" : null,
+        `投递 ${job.delivery}`,
+        job.catchUp ? null : "错过不补跑",
+      ]),
+    );
+    fragment.append(row);
+  }
+
+  fragment.append(
+    el("p", {
+      class: "cap-note",
+      text: "到点执行的是 `joy schedule` 这个常驻进程 —— 它没在跑就不会触发（用系统 cron 驱动 `joy gather` 也一样）。输出落在 <home>/outbox/，不进聊天。",
+    }),
+  );
+  return fragment;
+}
+
+// ---- The memory center ---------------------------------------------------------------
+//
+// Three read-only views over one drawer. Density over decoration: the ledger is "one turn
+// per row, open it for structure", the bundle is a book page with its provenance on top,
+// the meter is one band. No charts, no cards inside cards.
+
+/** Local `HH:MM` from the ledger's ISO stamp; the raw value when it will not parse. */
+function clockOf(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The ledger: one row per turn, opening in place.
+ *
+ * A folded row is marked, not hidden: after the backfill those turns genuinely only have a
+ * summary, and pretending they are complete would make the ledger lie about its own fidelity.
+ */
+export function renderLedger(
+  turns: LedgerTurnView[],
+  entries: LedgerEntryView[],
+  openTurn: string | null,
+  onOpen: (turnId: string) => void,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  if (turns.length === 0) {
+    fragment.append(
+      muted("这个会话还没有记录。第一轮说完话，账本就会有第一行 —— 只追加，不改写。"),
+    );
+    return fragment;
+  }
+  const head = el(
+    "div",
+    { class: "mem-head" },
+    el("p", { class: "hint", text: `账本 · ${turns.length} 轮` }),
+    el("span", { class: "mem-note", text: "只追加 · 可重建" }),
+  );
+  fragment.append(head);
+
+  for (const turn of turns) {
+    const folded = turn.fidelity !== "exact";
+    const row = el("button", {
+      class: `mem-row${openTurn === turn.turnId ? " open" : ""}`,
+      type: "button",
+      title: folded ? "这一轮的工具输出只保留了摘要（回填而来，原文已不可重建）" : turn.preview,
+      onclick: () => onOpen(turn.turnId),
+    });
+    row.append(
+      el("span", { class: "mem-time", text: clockOf(turn.at) }),
+      el("span", { class: "mem-preview", text: turn.preview === "" ? "（空）" : turn.preview }),
+      el(
+        "span",
+        { class: "mem-tags" },
+        el("span", { class: "tag", text: `${turn.entries} 条` }),
+        turn.consolidated ? el("span", { class: "tag", text: "已整理" }) : document.createDocumentFragment(),
+        folded ? el("span", { class: "tag mem-folded", text: "折叠" }) : document.createDocumentFragment(),
+      ),
+    );
+    fragment.append(row);
+
+    if (openTurn !== turn.turnId) continue;
+    const detail = el("div", { class: "mem-entries" });
+    if (entries.length === 0) {
+      detail.append(muted("这一轮没有可展开的条目。"));
+    }
+    for (const entry of entries) {
+      detail.append(
+        el(
+          "div",
+          { class: "mem-entry" },
+          el("span", { class: `mem-kind mem-kind-${entry.kind}`, text: entry.kind }),
+          el("span", { class: "mem-entry-text", text: entry.preview }),
+          entry.fidelity !== "exact"
+            ? el("span", { class: "tag mem-folded", text: "折叠" })
+            : document.createDocumentFragment(),
+        ),
+      );
+    }
+    fragment.append(detail);
+  }
+  return fragment;
+}
+
+/**
+ * The bundle: catalog on the left, one page on the right, provenance across the top.
+ *
+ * `sources` are clickable on purpose — the whole point of a derived knowledge page is that
+ * you can walk back to the rows it was distilled from.
+ */
+export function renderWiki(
+  pages: MemoryPageSummary[],
+  current: MemoryPageView | null,
+  onPick: (slug: string) => void,
+  onSource: (source: string) => void,
+  onRebuild: () => void,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  if (pages.length === 0) {
+    fragment.append(
+      muted("记忆库还是空的。它由后台整理写出来 —— 攒够几轮之后就会有自己的目录。"),
+    );
+    return fragment;
+  }
+
+  const catalog = el("div", { class: "mem-catalog" });
+  catalog.append(el("p", { class: "hint", text: `目录 · ${pages.length} 页` }));
+  for (const page of pages) {
+    catalog.append(
+      el("button", {
+        class: `mem-page-row${current !== null && current.slug === page.slug ? " open" : ""}`,
+        type: "button",
+        title: page.summary,
+        onclick: () => onPick(page.slug),
+      }, el("span", { class: "mem-page-title", text: page.title }), el("span", { class: "tag", text: page.kind })),
+    );
+  }
+  fragment.append(catalog);
+
+  if (current === null) {
+    fragment.append(muted("点左边的一页看看 —— 每页都带着它从哪几轮账本里来的。"));
+    return fragment;
+  }
+
+  const sources = el("div", { class: "mem-sources" });
+  if (current.sources.length === 0) {
+    sources.append(el("span", { class: "mem-note", text: "这页没有记出处" }));
+  }
+  for (const source of current.sources) {
+    sources.append(
+      el("button", {
+        class: "chip note mem-source",
+        type: "button",
+        text: source,
+        title: "跳到账本里那一轮",
+        onclick: () => onSource(source),
+      }),
+    );
+  }
+
+  fragment.append(
+    el(
+      "article",
+      { class: "mem-page" },
+      el(
+        "header",
+        { class: "mem-page-head" },
+        el("h1", { class: "mem-page-name", text: current.title }),
+        el("span", { class: "tag", text: current.kind }),
+      ),
+      el("p", { class: "mem-page-summary", text: current.summary }),
+      sources,
+      el("div", { class: "mem-page-body" }, renderMarkdown(current.body)),
+      el("button", {
+        class: "ghost mem-rebuild",
+        type: "button",
+        text: "重新生成",
+        title: "换更强的模型后可以整页重跑（会先在后台重读来源轮次）",
+        onclick: onRebuild,
+      }),
+    ),
+  );
+  return fragment;
+}
+
+/**
+ * The context meter: one band, six sections, two numbers underneath.
+ *
+ * A notice appears at the configured threshold — a sentence at the end of the bar, not a
+ * dialog: being close to the window's edge is information, not an emergency.
+ */
+export function renderContext(
+  usage: ContextUsage | null,
+  onCompact: () => void,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+  if (usage === null) {
+    fragment.append(muted("还没有测量 —— 这个会话跑过一轮之后就有数了。"));
+    return fragment;
+  }
+  const total = usage.parts.reduce((sum, part) => sum + Math.max(part.tokens, 0), 0);
+  const band = el("div", { class: "mem-band", role: "img", "aria-label": "上下文占用分层条" });
+  for (const part of usage.parts) {
+    if (part.tokens <= 0 || total === 0) continue;
+    band.append(
+      el("span", {
+        class: `mem-band-seg seg-${part.name}`,
+        style: `flex-grow: ${part.tokens}`,
+        title: `${part.name} · ${part.tokens} token`,
+      }),
+    );
+  }
+
+  const percent = Math.round(usage.ratio * 100);
+  const numbers = el(
+    "div",
+    { class: "mem-numbers" },
+    el("span", { text: `${usage.usedTokens} / ${usage.budgetTokens} token · ${percent}%` }),
+    el(
+      "span",
+      { class: `mem-percent${percent >= 85 ? " hot" : ""}` },
+      el("span", { class: "mem-key" }),
+      el("span", { text: "灵魂 · 记忆 · 技能 · 工具 · 历史 · 摘要（hover 看明细）" }),
+    ),
+  );
+
+  fragment.append(
+    el(
+      "div",
+      { class: "mem-meter" },
+      el("p", { class: "hint", text: "上下文占用" }),
+      band,
+      numbers,
+      usage.notice !== null
+        ? el("p", { class: "mem-warn", text: usage.notice })
+        : document.createDocumentFragment(),
+      el("button", {
+        class: "ghost mem-compact",
+        type: "button",
+        text: "现在压缩",
+        title: "把较早的轮次折进摘要，保留最近两轮",
+        onclick: onCompact,
+      }),
+    ),
+  );
+  return fragment;
 }

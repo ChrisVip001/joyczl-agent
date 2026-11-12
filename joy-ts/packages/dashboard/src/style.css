@@ -928,10 +928,15 @@ body.resizing {
   gap: 6px;
 }
 
-/* display:flex beats the UA's [hidden] rule — say it explicitly or "collapse" never collapses. */
-.tl-body[hidden],
-.staged[hidden] {
-  display: none;
+/* display:flex beats the UA's [hidden] rule — say it explicitly or "collapse" never collapses.
+ *
+ * This is one rule for **every** hidden element, not one selector per component: the memory
+ * center's three views are `.panel .body` (`display: flex`), so `hidden` did nothing there and
+ * all three rendered at once. Clicking 记忆库 / 上下文 changed the data but the first thing on
+ * screen stayed 账本 — the view that happens to sit first in the DOM. Same trap as `.tl-body`
+ * below, second time in this file; a component-by-component fix invites a third. */
+[hidden] {
+  display: none !important;
 }
 
 /* After the turn the head dot stops breathing: the thread is history now. */
@@ -2435,4 +2440,384 @@ body.resizing {
 .login-primary:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* ---- Memory center ----------------------------------------------------------
+ *
+ * 一个抽屉里的三个只读视图。密度优先：账本一轮一行、记忆库一页一屏、上下文一条带。
+ * 所有类名带 mem- 前缀，和能力中心（cap-*）彼此不借样式 —— 两个面板的主题不一样，
+ * 一个是「我能装什么」，一个是「我记住了什么」。 */
+
+.mem-segs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.mem-seg {
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px 8px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color var(--speed) ease, border-color var(--speed) ease;
+}
+
+.mem-seg:hover {
+  color: var(--text);
+}
+
+.mem-seg.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.mem-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 2px 6px;
+}
+
+.mem-note {
+  font-size: 11px;
+  color: var(--text-3);
+  flex: none;
+}
+
+/* 账本：一行一轮。左时间、中摘要、右标签；点开就地展开。 */
+.mem-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 8px 8px 6px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mem-row:hover {
+  background: var(--surface-hover);
+}
+
+.mem-row.open {
+  border-left-color: var(--accent);
+  background: var(--surface);
+}
+
+.mem-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.mem-preview {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mem-row.open .mem-preview {
+  color: var(--text);
+}
+
+.mem-tags {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.tag.mem-folded {
+  color: var(--text-3);
+  border-style: dashed;
+}
+
+/* 展开的这一轮：一种条目一行，kind 用等宽小字，像日志一样可扫。 */
+.mem-entries {
+  margin: 2px 0 10px 14px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line-soft);
+  display: grid;
+  gap: 4px;
+}
+
+.mem-entry {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.mem-kind {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+
+.mem-kind-user {
+  color: color-mix(in srgb, var(--accent) 75%, var(--text));
+}
+
+.mem-kind-assistant {
+  color: var(--text);
+}
+
+.mem-entry-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 记忆库：左目录右正文。抽屉窄，所以目录在上、正文在下。 */
+.mem-catalog {
+  display: grid;
+  gap: 2px;
+  padding: 10px 0 6px;
+}
+
+.mem-page-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mem-page-row:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.mem-page-row.open {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.mem-page-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 书页：比账本松一点，正文用阅读行高。 */
+.mem-page {
+  margin-top: 10px;
+  padding: 12px 12px 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.mem-page-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.mem-page-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.mem-page-summary {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.mem-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 0 10px;
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 10px;
+}
+
+.mem-source {
+  cursor: pointer;
+  border: 1px solid var(--line-soft);
+  background: none;
+}
+
+.mem-source:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.mem-page-body {
+  font-size: 13px;
+  line-height: 1.68;
+  color: var(--text);
+}
+
+.mem-rebuild {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* 上下文：一条带、两个数、一句提示。 */
+.mem-meter {
+  padding: 10px 2px;
+  display: grid;
+  gap: 8px;
+}
+
+.mem-band {
+  display: flex;
+  height: 8px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--line-soft);
+}
+
+.mem-band-seg {
+  height: 100%;
+  transition: opacity var(--speed) ease;
+}
+
+.mem-band-seg:hover {
+  opacity: 0.72;
+}
+
+/* 六段用同一中性色的不同明度：读得出比例，不会被误当成六种品牌色。 */
+.seg-soul {
+  background: color-mix(in srgb, var(--text) 62%, transparent);
+}
+
+.seg-memory {
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.seg-skills {
+  background: color-mix(in srgb, var(--text) 46%, transparent);
+}
+
+.seg-tools {
+  background: color-mix(in srgb, var(--text) 34%, transparent);
+}
+
+.seg-history {
+  background: color-mix(in srgb, var(--text) 24%, transparent);
+}
+
+.seg-summary {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.mem-numbers {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.mem-percent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-family: var(--font);
+}
+
+.mem-key {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-3);
+}
+
+.mem-percent.hot {
+  color: var(--warn);
+}
+
+.mem-percent.hot .mem-key {
+  background: var(--warn);
+}
+
+.mem-warn {
+  margin: 0;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.mem-compact {
+  justify-self: start;
+  font-size: 11px;
+}
+
+@media (max-width: 900px) {
+  /* 抽屉全宽时，账本的右侧标签收进第二行。 */
+  .mem-row {
+    grid-template-columns: auto 1fr;
+    row-gap: 2px;
+  }
+
+  .mem-tags {
+    grid-column: 2;
+  }
+
+  .mem-entry {
+    grid-template-columns: 64px 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mem-seg,
+  .mem-band-seg {
+    transition: none;
+  }
+}
+
+/* ---- 定时任务 ------------------------------------------------------------------
+ * 只有两处需要新样式：cron 要等宽（它是一段模式，不是名字），表单里的下拉要跟输入框
+ * 长得一样。行、标签、删除按钮全部复用能力中心已有的 cap-* —— 三张表是同一类东西。 */
+
+.sched-cron {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.cap-field select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  width: 100%;
 }

@@ -7,21 +7,44 @@
 
 import type {
   AgentTaskView,
+  ContextUsage,
+  LedgerEntryView,
+  LedgerTurnView,
+  MemoryPageSummary,
+  MemoryPageView,
   TurnAttachment,
   TurnCompletedNotification,
   TurnView,
 } from "./protocol";
-import type { McpRow, McpServerSpec, McpView, Outcome, SkillRow, SkillsView } from "./api";
+import type {
+  McpRow,
+  McpServerSpec,
+  McpView,
+  Outcome,
+  ScheduleJob,
+  ScheduleSpec,
+  SchedulesView,
+  SkillRow,
+  SkillsView,
+} from "./api";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
 import {
+  compactSession,
   createFolder,
   createSession,
+  fetchContextUsage,
   fetchDashboard,
   fetchFs,
+  fetchLedger,
+  fetchLedgerTurn,
+  fetchMemoryIndex,
+  fetchMemoryPage,
+  fetchSkillStats,
   fetchMcp,
   fetchMessages,
+  fetchSchedules,
   fetchRecents,
   fetchSessionMeta,
   fetchSkills,
@@ -31,9 +54,11 @@ import {
   interruptTurn,
   recordRecent,
   removeMcpServer,
+  removeSchedule,
   removeSkill,
   respondApproval,
   saveMcpServer,
+  saveSchedule,
   steerTurn,
   summarizeInbox,
   talk,
@@ -53,9 +78,13 @@ import {
   formatStamp,
   messageRow,
   muted,
+  renderContext,
+  renderLedger,
   renderMcp,
+  renderSchedules,
   renderOverview,
   renderSkills,
+  renderWiki,
   sessionList,
   toolSummary,
   turnFooter,
@@ -105,15 +134,28 @@ const dom = {
   tabOverview: must<HTMLButtonElement>("tab-overview"),
   tabSkills: must<HTMLButtonElement>("tab-skills"),
   tabMcp: must<HTMLButtonElement>("tab-mcp"),
+  tabMemory: must<HTMLButtonElement>("tab-memory"),
+  tabSchedule: must<HTMLButtonElement>("tab-schedule"),
   panelOverview: must("panel-overview"),
   panelSkills: must("panel-skills"),
   panelMcp: must("panel-mcp"),
+  panelMemory: must("panel-memory"),
+  panelSchedule: must("panel-schedule"),
   skillsBody: must("skills-body"),
   mcpBody: must("mcp-body"),
+  schedulesBody: must("schedules-body"),
+  memSegLedger: must<HTMLButtonElement>("mem-seg-ledger"),
+  memSegWiki: must<HTMLButtonElement>("mem-seg-wiki"),
+  memSegContext: must<HTMLButtonElement>("mem-seg-context"),
+  memLedger: must("mem-ledger"),
+  memWiki: must("mem-wiki"),
+  memContext: must("mem-context"),
   capSkills: must<HTMLButtonElement>("cap-skills"),
   capMcp: must<HTMLButtonElement>("cap-mcp"),
+  capSchedules: must<HTMLButtonElement>("cap-schedules"),
   capSkillsCount: must<HTMLElement>("cap-skills-count"),
   capMcpCount: must<HTMLElement>("cap-mcp-count"),
+  capSchedulesCount: must<HTMLElement>("cap-schedules-count"),
 };
 
 /**
@@ -229,7 +271,7 @@ function renderStaged(): void {
  * in a settings page because they are things a human adds and removes, not config to
  * stare at — same reason they get a sidebar entry.
  */
-const TAB_IDS = ["overview", "skills", "mcp"] as const;
+const TAB_IDS = ["overview", "skills", "mcp", "memory", "schedule"] as const;
 type TabId = (typeof TAB_IDS)[number];
 
 /** Which panel is showing. Kept so the 进度 button can toggle instead of only opening. */
@@ -238,6 +280,7 @@ let currentTab: TabId = "overview";
 /** Latest capability data, refreshed with the rest of the screen. */
 let skillsView: SkillsView = { skills: [], error: null };
 let mcpView: McpView = { servers: [], error: null };
+let schedulesView: SchedulesView = { jobs: [], error: null };
 
 function switchTab(tab: TabId): void {
   currentTab = tab;
@@ -249,6 +292,8 @@ function switchTab(tab: TabId): void {
     ["overview", dom.tabOverview],
     ["skills", dom.tabSkills],
     ["mcp", dom.tabMcp],
+    ["memory", dom.tabMemory],
+    ["schedule", dom.tabSchedule],
   ] as const) {
     const active = id === tab;
     button.classList.toggle("active", active);
@@ -257,9 +302,18 @@ function switchTab(tab: TabId): void {
   dom.panelOverview.hidden = tab !== "overview";
   dom.panelSkills.hidden = tab !== "skills";
   dom.panelMcp.hidden = tab !== "mcp";
+  dom.panelMemory.hidden = tab !== "memory";
+  dom.panelSchedule.hidden = tab !== "schedule";
   // The capability panels paint on open: their data may predate the last refresh.
-  if (tab === "skills") paintSkills();
+  if (tab === "skills") {
+    paintSkills();
+    void loadSkillStats();
+  }
   if (tab === "mcp") paintMcp();
+  if (tab === "schedule") paintSchedules();
+  // The memory center re-reads on open: the ledger grows and the bundle changes under the
+  // background worker, so a cached view would be a claim about the past.
+  if (tab === "memory") void loadMemory();
   openDrawer();
 }
 
@@ -278,11 +332,39 @@ function closeDrawer(): void {
   dom.drawer.hidden = true;
 }
 
+/**
+ * How often each skill actually fired — the memory center's answer to "is this skill worth
+ * keeping". Telemetry: if the log cannot be read, the panel simply says nothing about it.
+ */
+let skillHits = new Map<string, number>();
+
+async function loadSkillStats(): Promise<void> {
+  try {
+    const answer = await fetchSkillStats();
+    skillHits = new Map(answer.data.map((stat) => [stat.name, stat.hits]));
+  } catch {
+    return;
+  }
+  paintSkills();
+}
+
+/** The three most-fired skills, as one line. Silent when nothing has fired yet. */
+function hitsLine(): Node[] {
+  const rows = [...skillHits.entries()]
+    .filter(([, hits]) => hits > 0)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3);
+  if (rows.length === 0) return [];
+  const text = rows.map(([name, hits]) => `${name} ${hits} 次`).join("、");
+  return [chip(`命中：${text}`, "note")];
+}
+
 /** Paint the skill panel from the latest `skillsView`. */
 function paintSkills(): void {
   const note = outcomeNote(dom.skillsBody);
   dom.skillsBody.replaceChildren(
     ...(note === null ? [] : [note]),
+    ...hitsLine(),
     renderSkills(skillsView, () => void skillAddOverlay(), (skill) => void removeSkillAsk(skill)),
   );
 }
@@ -294,6 +376,213 @@ function paintMcp(): void {
     ...(note === null ? [] : [note]),
     renderMcp(mcpView, () => void mcpAddOverlay(), (server) => void removeMcpAsk(server)),
   );
+}
+
+/** Paint the scheduled-jobs panel from the latest `schedulesView`. */
+function paintSchedules(): void {
+  const note = outcomeNote(dom.schedulesBody);
+  dom.schedulesBody.replaceChildren(
+    ...(note === null ? [] : [note]),
+    renderSchedules(
+      schedulesView,
+      () => void scheduleAddOverlay(),
+      (job) => removeScheduleAsk(job),
+    ),
+  );
+}
+
+// ---- The memory center ---------------------------------------------------------------
+//
+// Three views, one state each, no cache: opening a view re-reads it. The ledger only grows,
+// the bundle is rewritten under the background worker, and the meter belongs to the last
+// turn — a picture painted from memory would be a claim about a past that has moved.
+
+const MEM_SEGS = ["ledger", "wiki", "context"] as const;
+type MemSeg = (typeof MEM_SEGS)[number];
+
+let memSeg: MemSeg = "ledger";
+let ledgerTurns: LedgerTurnView[] = [];
+let ledgerEntries: LedgerEntryView[] = [];
+/** Which turn is open. `null` = all rows collapsed. */
+let ledgerOpen: string | null = null;
+let wikiPages: MemoryPageSummary[] = [];
+let wikiCurrent: MemoryPageView | null = null;
+let contextUsage: ContextUsage | null = null;
+/** One line of context for the current view (a rebuild hint, a "nothing to fold"). */
+let memNote: string | null = null;
+let memError: unknown = null;
+
+function paintMemory(): void {
+  for (const [id, button] of [
+    ["ledger", dom.memSegLedger],
+    ["wiki", dom.memSegWiki],
+    ["context", dom.memSegContext],
+  ] as const) {
+    const active = id === memSeg;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+  dom.memLedger.hidden = memSeg !== "ledger";
+  dom.memWiki.hidden = memSeg !== "wiki";
+  dom.memContext.hidden = memSeg !== "context";
+
+  if (memError !== null) {
+    // One failure at a time, on whichever view is showing: a stale error under a fresh
+    // view reads as "this is broken now", which is worse than saying nothing.
+    const error = memError;
+    memError = null;
+    const target =
+      memSeg === "ledger" ? dom.memLedger : memSeg === "wiki" ? dom.memWiki : dom.memContext;
+    target.replaceChildren(failureOf(error));
+    return;
+  }
+
+  const note = memNote === null ? [] : [chip(memNote, "note")];
+  if (memSeg === "ledger") {
+    dom.memLedger.replaceChildren(
+      renderLedger(ledgerTurns, ledgerEntries, ledgerOpen, (turnId) => void openLedgerTurn(turnId)),
+    );
+  } else if (memSeg === "wiki") {
+    dom.memWiki.replaceChildren(
+      ...note,
+      renderWiki(
+        wikiPages,
+        wikiCurrent,
+        (slug) => void openMemoryPage(slug),
+        (source) => void jumpToSource(source),
+        rebuildHint,
+      ),
+    );
+  } else {
+    dom.memContext.replaceChildren(renderContext(contextUsage, () => void compactNow()));
+  }
+}
+
+/** Read the view that is showing, then paint it. */
+async function loadMemory(): Promise<void> {
+  if (current === "") {
+    memError = new Error("还没有选会话 —— 先开一个会话，账本才有得看。");
+    paintMemory();
+    return;
+  }
+  try {
+    if (memSeg === "ledger") {
+      const answer = await fetchLedger(current, 30);
+      ledgerTurns = answer.turns;
+      ledgerEntries = [];
+      ledgerOpen = null;
+    } else if (memSeg === "wiki") {
+      const answer = await fetchMemoryIndex();
+      wikiPages = answer.pages;
+      wikiCurrent = null;
+    } else {
+      const answer = await fetchContextUsage(current);
+      contextUsage = answer.usage;
+    }
+    memError = null;
+  } catch (error) {
+    memError = error;
+  }
+  paintMemory();
+}
+
+/** Open one turn in place; opening the open one closes it. */
+async function openLedgerTurn(turnId: string): Promise<void> {
+  if (ledgerOpen === turnId) {
+    ledgerOpen = null;
+    ledgerEntries = [];
+    paintMemory();
+    return;
+  }
+  try {
+    const answer = await fetchLedgerTurn(current, turnId);
+    ledgerTurns = answer.turns;
+    ledgerEntries = answer.entries;
+    ledgerOpen = turnId;
+    memError = null;
+  } catch (error) {
+    memError = error;
+  }
+  paintMemory();
+}
+
+async function openMemoryPage(slug: string): Promise<void> {
+  try {
+    const answer = await fetchMemoryPage(slug);
+    if (answer.page === null) {
+      memNote = `记忆库里没有「${slug}」这一页 —— 它可能在后台整理时被改名了，刷新目录看看。`;
+      wikiCurrent = null;
+    } else {
+      wikiCurrent = answer.page;
+      memNote = null;
+    }
+    memError = null;
+  } catch (error) {
+    memError = error;
+  }
+  paintMemory();
+}
+
+/**
+ * Walk back from a page's provenance to the ledger rows it came from.
+ *
+ * Sources read `ledger:<session>/<turn>` (older pages: `ledger:<seq>`). Neither form is a
+ * session-scoped `turnId` we can open directly, so the honest move is: switch to the ledger
+ * and open the row whose id ends with that tail — or say we could not find it.
+ */
+async function jumpToSource(source: string): Promise<void> {
+  const tail = source.split(/[:/]/).filter(Boolean).at(-1) ?? "";
+  memSeg = "ledger";
+  memNote = null;
+  if (tail === "") {
+    await loadMemory();
+    return;
+  }
+  try {
+    const answer = await fetchLedger(current, 100);
+    ledgerTurns = answer.turns;
+    const match = answer.turns.find((turn) => turn.turnId === tail || turn.turnId.endsWith(tail));
+    if (match === undefined) {
+      ledgerEntries = [];
+      ledgerOpen = null;
+      memNote = `账本里没有 ${source} 对应的那一轮（可能已被整理进更早的摘要）。`;
+      memError = null;
+      paintMemory();
+      return;
+    }
+    await openLedgerTurn(match.turnId);
+  } catch (error) {
+    memError = error;
+    paintMemory();
+  }
+}
+
+/**
+ * "Regenerate" is a **command**, not a button that secretly spends a model call.
+ *
+ * Whole-page regeneration re-reads the source turns with whatever model is configured now;
+ * that is `joy memory rebuild`, and it belongs where a person can see the cost.
+ */
+function rebuildHint(): void {
+  memNote = "整页重生成走 CLI：joy memory rebuild --page " + (wikiCurrent?.slug ?? "<slug>");
+  paintMemory();
+}
+
+/** `POST /api/compact`: fold the older turns in now, keeping the newest few. */
+async function compactNow(): Promise<void> {
+  try {
+    const answer = await compactSession(current);
+    memNote =
+      answer.coveredTurns === 0
+        ? "没有更早的轮次可折 —— 摘要已经跟上了。"
+        : `已压缩：摘要现在覆盖 ${answer.coveredTurns} 轮（${answer.summaryTokens} token）。`;
+    const usage = await fetchContextUsage(current);
+    contextUsage = usage.usage;
+    memError = null;
+  } catch (error) {
+    memError = error;
+  }
+  paintMemory();
 }
 
 /**
@@ -474,6 +763,7 @@ async function boot(): Promise<void> {
   for (const [button, tab] of [
     [dom.capSkills, "skills"],
     [dom.capMcp, "mcp"],
+    [dom.capSchedules, "schedule"],
   ] as const) {
     button.addEventListener("click", () => switchTab(tab));
   }
@@ -481,8 +771,21 @@ async function boot(): Promise<void> {
     [dom.tabOverview, "overview"],
     [dom.tabSkills, "skills"],
     [dom.tabMcp, "mcp"],
+    [dom.tabMemory, "memory"],
   ] as const) {
     button.addEventListener("click", () => switchTab(tab));
+  }
+
+  for (const [button, seg] of [
+    [dom.memSegLedger, "ledger"],
+    [dom.memSegWiki, "wiki"],
+    [dom.memSegContext, "context"],
+  ] as const) {
+    button.addEventListener("click", () => {
+      memSeg = seg;
+      memNote = null;
+      void loadMemory();
+    });
   }
 
   dom.composer.addEventListener("submit", (event) => {
@@ -629,9 +932,10 @@ async function refresh(): Promise<void> {
  * keep their last value, and an open panel shows the error in place.
  */
 async function refreshCapabilities(): Promise<void> {
-  const [skills, mcp] = await Promise.all([
+  const [skills, mcp, schedules] = await Promise.all([
     fetchSkills().catch(() => null),
     fetchMcp().catch(() => null),
+    fetchSchedules().catch(() => null),
   ]);
   if (skills !== null) {
     skillsView = skills;
@@ -642,6 +946,11 @@ async function refreshCapabilities(): Promise<void> {
     mcpView = mcp;
     dom.capMcpCount.textContent = String(mcp.servers.length);
     if (!dom.panelMcp.hidden) paintMcp();
+  }
+  if (schedules !== null) {
+    schedulesView = schedules;
+    dom.capSchedulesCount.textContent = String(schedules.jobs.length);
+    if (!dom.panelSchedule.hidden) paintSchedules();
   }
 }
 
@@ -985,6 +1294,86 @@ async function mcpAddOverlay(): Promise<void> {
     el("div", { class: "row" }, save, cancel),
   );
   name.focus();
+}
+
+/**
+ * Add a scheduled job: when it fires (cron) and what it does (one prompt).
+ *
+ * This form writes `<home>/schedules.json` and nothing else — it does not start a scheduler.
+ * The panel's closing note says that out loud; a form that quietly needed a resident process
+ * would be the kind of UI that looks finished and does nothing.
+ */
+async function scheduleAddOverlay(): Promise<void> {
+  const panel = el("div", {
+    class: "fspanel cap-form",
+    role: "dialog",
+    "aria-label": "添加定时任务",
+  });
+  const close = openOverlay(panel);
+
+  const name = el("input", {
+    placeholder: "morning-news（小写字母、数字、连字符）",
+    "aria-label": "名称",
+  });
+  const cron = el("input", {
+    class: "sched-cron",
+    placeholder: "0 8 * * 1-5",
+    "aria-label": "cron 表达式",
+  });
+  const prompt = el("textarea", {
+    class: "cap-textarea",
+    rows: 4,
+    placeholder: "到点让 Joy 做的事，比如：给我一份今天的科技简报，中文，三条以内",
+    "aria-label": "触发时做什么",
+  });
+  const delivery = el(
+    "select",
+    { "aria-label": "投递方式" },
+    el("option", { value: "outbox", text: "outbox —— 写进 <home>/outbox/" }),
+    el("option", { value: "notify", text: "notify —— 写文件，同时推送通知" }),
+    el("option", { value: "quiet", text: "quiet —— 只记日志（高频任务）" }),
+  );
+
+  const save = el("button", { class: "approve", text: "保存", type: "button" });
+  save.addEventListener("click", () => {
+    const spec: ScheduleSpec = {
+      name: name.value.trim(),
+      cron: cron.value.trim(),
+      prompt: prompt.value.trim(),
+      delivery: delivery.value,
+    };
+    save.disabled = true;
+    void capabilityWrite(() => saveSchedule(spec), dom.schedulesBody).then((ok) => {
+      // A refusal keeps the form open: the sentence says what to fix.
+      if (ok) close();
+      else save.disabled = false;
+    });
+  });
+  const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+  cancel.addEventListener("click", close);
+
+  panel.append(
+    el("p", {
+      class: "hint",
+      text: "cron 五段：分 时 日 月 周。`0 8 * * 1-5` 是工作日八点，`30 19 * * *` 是每天十九点半。触发时会在自己的会话里跑一轮。",
+    }),
+    el("label", { class: "cap-field" }, el("span", { text: "名称" }), name),
+    el("label", { class: "cap-field" }, el("span", { text: "时间" }), cron),
+    el("label", { class: "cap-field" }, el("span", { text: "做什么" }), prompt),
+    el("label", { class: "cap-field" }, el("span", { text: "投递" }), delivery),
+    el("div", { class: "row" }, save, cancel),
+  );
+  name.focus();
+}
+
+/// Deleting a job from the file: the row disappears from the list at once, and the scheduler
+/// stops seeing it on its next tick. Result files already written are left alone.
+function removeScheduleAsk(job: ScheduleJob): void {
+  const ok = window.confirm(
+    `删除定时任务「${job.name}」？schedules.json 里那一行会被移掉，joy schedule 下次触发前就读不到它。已经写出的 outbox 文件不动。`,
+  );
+  if (!ok) return;
+  void capabilityWrite(() => removeSchedule(job.name), dom.schedulesBody);
 }
 
 async function submit(): Promise<void> {

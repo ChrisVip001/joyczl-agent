@@ -30,8 +30,9 @@
           <ul class="session-list" id="sessions"></ul>
         </div>
 
-        <!-- 能力中心：两个入口对应抽屉里的两个面板。随 Joy 内置分发的技能/连接器
-             在那里置灰（只读），用户自己的（<home>/skills、mcp.json）才能加和删。 -->
+        <!-- 能力中心：三个入口对应抽屉里的三个面板。随 Joy 内置分发的技能/连接器
+             在那里置灰（只读），用户自己的（<home>/skills、mcp.json）才能加和删；
+             定时任务写的是 <home>/schedules.json，技能带的 schedule 行只读。 -->
         <div class="rail-block cap-block">
           <p class="rail-label">能力中心</p>
           <button
@@ -51,6 +52,15 @@
           >
             <span class="cap-entry-name">MCP 连接器</span>
             <span class="cap-count" id="cap-mcp-count">0</span>
+          </button>
+          <button
+            class="cap-entry"
+            id="cap-schedules"
+            type="button"
+            title="定时任务：到点在自己的会话里跑一轮"
+          >
+            <span class="cap-entry-name">定时任务</span>
+            <span class="cap-count" id="cap-schedules-count">0</span>
           </button>
         </div>
 
@@ -161,6 +171,24 @@
             >
               MCP
             </button>
+            <button
+              class="drawer-tab"
+              id="tab-memory"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              记忆
+            </button>
+            <button
+              class="drawer-tab"
+              id="tab-schedule"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              定时
+            </button>
           </div>
           <button class="ghost" id="drawer-close" type="button" aria-label="收起">×</button>
         </div>
@@ -172,6 +200,47 @@
         </section>
         <section class="panel" id="panel-mcp" role="tabpanel" hidden>
           <div class="body" id="mcp-body"></div>
+        </section>
+        <!-- 记忆中心：三个只读视图，一次只看一段。账本是事实（一轮一行，点开看结构），
+             记忆库是派生知识（左目录右正文，出处可跳回账本），上下文是代价（一条分层条）。 -->
+        <section class="panel" id="panel-memory" role="tabpanel" hidden>
+          <div class="mem-segs" role="tablist" aria-label="记忆视图">
+            <button
+              class="mem-seg active"
+              id="mem-seg-ledger"
+              type="button"
+              role="tab"
+              aria-selected="true"
+            >
+              账本
+            </button>
+            <button
+              class="mem-seg"
+              id="mem-seg-wiki"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              记忆库
+            </button>
+            <button
+              class="mem-seg"
+              id="mem-seg-context"
+              type="button"
+              role="tab"
+              aria-selected="false"
+            >
+              上下文
+            </button>
+          </div>
+          <div class="body" id="mem-ledger"></div>
+          <div class="body" id="mem-wiki" hidden></div>
+          <div class="body" id="mem-context" hidden></div>
+        </section>
+        <!-- 定时任务：声明（文件 + 技能）与运行状态合在一张表里。它是「我让它按点做什么」，
+             和能力中心另外两块同属一个抽屉：都是人能加、能删的东西。 -->
+        <section class="panel" id="panel-schedule" role="tabpanel" hidden>
+          <div class="body" id="schedules-body"></div>
         </section>
       </aside>
     </div>

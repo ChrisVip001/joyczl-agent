@@ -7,9 +7,15 @@
 import type {
   ApprovalRespondParams,
   ApprovalRespondResponse,
+  ContextUsageResponse,
   DashboardData,
   ErrorObject,
+  MemoryIndexResponse,
+  MemoryLedgerResponse,
+  MemoryPageResponse,
   ServerNotification,
+  SessionCompactResponse,
+  SkillStatsResponse,
   InboxSummarizeResponse,
   SessionMessagesResponse,
   SessionGetResponse,
@@ -414,6 +420,37 @@ function dataOf(frame: string): ServerNotification | null {
  * blocked, or the service isn't up), a comprehensible line is still needed — throwing the
  * JSON parse exception straight to the UI would show the user a stack of English.
  */
+/**
+ * Parse a body that should be JSON, and name the failure that actually happened.
+ *
+ * `response.json()` throws a DOM `SyntaxError` on an empty body, which reaches the panel as
+ * "Failed to execute 'json' on 'Response': Unexpected end of JSON input" — a stack trace
+ * about the browser instead of a sentence about the problem. An empty body has one common
+ * cause: **the address does not exist on the server that answered**, i.e. the page is newer
+ * than the binary (the dashboard reads `dist/` from disk at startup, so a rebuilt bundle
+ * next to an old process produces exactly this). Worth saying out loud — the fix is a
+ * rebuild, not a retry.
+ */
+async function jsonBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (text.trim() === "") {
+    throw new ApiError({
+      code: response.status,
+      message:
+        `服务端什么都没回（HTTP ${response.status} ${response.statusText || "无状态说明"}）` +
+        " —— 多半是页面比二进制新：重新 `cargo build -p joyczl-cli` 再启动一次驾驶舱。",
+    });
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new ApiError({
+      code: response.status,
+      message: `服务端的回答不是 JSON（HTTP ${response.status}）：${text.slice(0, 140)}`,
+    });
+  }
+}
+
 async function errorOf(response: Response): Promise<ErrorObject> {
   const text = await response.text();
   try {
@@ -582,7 +619,7 @@ export interface Outcome {
  * four call sites guessing.
  */
 async function outcomeOf(response: Response): Promise<Outcome> {
-  const body = (await response.json()) as Partial<Outcome> & Partial<ErrorObject>;
+  const body = (await jsonBody(response)) as Partial<Outcome> & Partial<ErrorObject>;
   if (body.ok !== true) {
     throw new ApiError({
       code: typeof body.code === "number" ? body.code : response.status,
@@ -668,5 +705,148 @@ export async function removeMcpServer(name: string): Promise<Outcome> {
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return outcomeOf(response);
+}
+
+// ---- Scheduled jobs -----------------------------------------------------------------
+//
+// Declarations (`<home>/schedules.json` + skill frontmatter) merged with the scheduler's
+// state. The panel is not an editor for the runtime: `joy schedule` is what fires, and the
+// copy says so — a UI that looks like it schedules work but needs a resident process would
+// be worse than no UI.
+
+export interface ScheduleJob {
+  name: string;
+  cron: string;
+  prompt: string;
+  delivery: string;
+  catchUp: boolean;
+  /** `file` (writable here) or `skill` (read-only here). */
+  source: string;
+  skill: string | null;
+  lastFiredMinute: string | null;
+  claimedMinute: string | null;
+  nextRun: string | null;
+  /** Why `nextRun` is null, when the reason is worth saying. */
+  nextRunNote: string | null;
+}
+
+export interface SchedulesView {
+  jobs: ScheduleJob[];
+  error: string | null;
+}
+
+export async function fetchSchedules(): Promise<SchedulesView> {
+  const response = await apiFetch("/api/schedules/jobs", {
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await jsonBody(response)) as SchedulesView;
+}
+
+export interface ScheduleSpec {
+  name: string;
+  cron: string;
+  prompt: string;
+  delivery: string;
+  catchUp?: boolean;
+}
+
+export async function saveSchedule(spec: ScheduleSpec): Promise<Outcome> {
+  const response = await apiFetch("/api/schedules/save", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(spec),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return outcomeOf(response);
+}
+
+export async function removeSchedule(name: string): Promise<Outcome> {
+  const response = await apiFetch("/api/schedules/remove", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return outcomeOf(response);
+}
+
+// ---- The memory center --------------------------------------------------------------
+//
+// Six reads and one human action. Every read answers either the protocol type or an
+// `ErrorObject` at HTTP 200 — the same convention the capability center uses, so `errorOf`
+// below is the single decoding point for both.
+
+/**
+ * Decode a memory-center answer.
+ *
+ * Refusals arrive as **200 + `ErrorObject`** (the `/api/task` convention), so the status
+ * alone cannot tell "done" from "refused" — `code` is the discriminator, and it has to be
+ * checked in one place or four call sites will each guess differently.
+ */
+async function decode<T>(response: Response): Promise<T> {
+  const body = (await jsonBody(response)) as T & Partial<ErrorObject>;
+  if (!response.ok || typeof body.code === "number") {
+    throw new ApiError({
+      code: typeof body.code === "number" ? body.code : response.status,
+      message: body.message ?? `HTTP ${response.status} ${response.statusText}`,
+    });
+  }
+  return body as T;
+}
+
+async function readJson<T>(path: string): Promise<T> {
+  return decode<T>(await apiFetch(path, { headers: { accept: "application/json" } }));
+}
+
+/** One session's ledger: newest turns first, no entries (that is `fetchLedgerTurn`). */
+export function fetchLedger(sessionId: string, limit = 30): Promise<MemoryLedgerResponse> {
+  const query = new URLSearchParams({ sessionId, limit: String(limit) });
+  return readJson<MemoryLedgerResponse>(`/api/ledger/turns?${query}`);
+}
+
+/** The turn list plus one turn's structured entries. */
+export function fetchLedgerTurn(
+  sessionId: string,
+  turnId: string,
+): Promise<MemoryLedgerResponse> {
+  const query = new URLSearchParams({ sessionId, turnId });
+  return readJson<MemoryLedgerResponse>(`/api/ledger/turn?${query}`);
+}
+
+/** The memory bundle's catalog — the same text a new session carries. */
+export function fetchMemoryIndex(): Promise<MemoryIndexResponse> {
+  return readJson<MemoryIndexResponse>("/api/memory/index");
+}
+
+/** One page, body and provenance. `page: null` = the bundle has no such page. */
+export function fetchMemoryPage(page: string): Promise<MemoryPageResponse> {
+  const query = new URLSearchParams({ page });
+  return readJson<MemoryPageResponse>(`/api/memory/page?${query}`);
+}
+
+/** How the last turn spent the window; `usage: null` = nothing measured yet. */
+export function fetchContextUsage(sessionId: string): Promise<ContextUsageResponse> {
+  const query = new URLSearchParams({ sessionId });
+  return readJson<ContextUsageResponse>(`/api/context?${query}`);
+}
+
+/** How often each skill's body actually entered a prompt. */
+export function fetchSkillStats(): Promise<SkillStatsResponse> {
+  return readJson<SkillStatsResponse>("/api/skills/stats");
+}
+
+/** Compact now: fold the older turns into the rolling summary, keeping the newest few. */
+export async function compactSession(
+  sessionId: string,
+  focus?: string,
+): Promise<SessionCompactResponse> {
+  const query = new URLSearchParams({ sessionId });
+  if (focus !== undefined && focus.trim() !== "") query.set("focus", focus.trim());
+  const response = await apiFetch(`/api/compact?${query}`, {
+    method: "POST",
+    headers: { accept: "application/json" },
+  });
+  return decode<SessionCompactResponse>(response);
 }
 
