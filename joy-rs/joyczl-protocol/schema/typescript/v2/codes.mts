@@ -1,6 +1,6 @@
 // Assembled from the ts-rs generated files — do not edit by hand.
 // Generation logic: write_consts in joyczl-protocol/src/export.rs.
-// Inventory at `rpc::codes`.key 跟 Rust 侧常量同名，好让两边 grep 得到同一处。
+// Inventory at `rpc::codes`.the keys match the Rust constants, so one grep finds both sides.
 export const CODES = {
   PARSE_ERROR: -32700,
   INVALID_REQUEST: -32600,

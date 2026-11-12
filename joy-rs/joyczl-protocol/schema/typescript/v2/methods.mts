@@ -1,6 +1,6 @@
 // Assembled from the ts-rs generated files — do not edit by hand.
 // Generation logic: write_consts in joyczl-protocol/src/export.rs.
-// Inventory at `protocol::v2::methods`.值就是线上传的方法名。
+// Inventory at `protocol::v2::methods`.the values are the method names that travel on the wire.
 export const METHODS = {
   TURN_START: "turn/start",
   TURN_INTERRUPT: "turn/interrupt",

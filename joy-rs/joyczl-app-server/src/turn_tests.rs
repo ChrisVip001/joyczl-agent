@@ -1243,15 +1243,19 @@ async fn a_symlinked_attachment_outside_home_is_refused() {
 #[tokio::test]
 async fn the_session_working_directory_is_used_when_the_turn_names_none() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
+    // "/tmp" is Unix-only: on Windows it is not a directory, so session_cwd() correctly
+    // drops it and the assertion below fails. Use a directory that exists everywhere.
+    let cwd = std::env::temp_dir();
+    let cwd_text = cwd.to_string_lossy().into_owned();
     server
         .chat
-        .create_session("s1", None, Some("/tmp"))
+        .create_session("s1", None, Some(cwd_text.as_str()))
         .await
         .expect("建会话");
 
     assert_eq!(
         crate::turn::session_cwd(&server, "s1").await.as_deref(),
-        Some(std::path::Path::new("/tmp")),
+        Some(cwd.as_path()),
         "会话记着的目录就是这一轮的可写范围根"
     );
     assert_eq!(

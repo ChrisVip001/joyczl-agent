@@ -37,7 +37,7 @@ echo "$OUTPUT" | grep -q '"id":2,"result":{"episodes":\[\],"facts":\[{"content":
 echo "$OUTPUT" | grep -q '"id":3,"result":{"removed":1}'     || fail "memory/forget 没删掉"
 echo "$OUTPUT" | grep -q '"id":4,"result":{"config":'        || fail "config/read 没返回配置"
 echo "$OUTPUT" | grep -q '"id":5,"error":{"code":-32000'     || fail "没配 key 时 turn/start 应当报 PROVIDER_ERROR"
-echo "$OUTPUT" | grep -q '缺 API key'                        || fail "PROVIDER_ERROR 应当说明怎么办"
+echo "$OUTPUT" | grep -qE 'no API key|缺 API key'      || fail "PROVIDER_ERROR 应当说明怎么办"
 echo "$OUTPUT" | grep -q '"id":6,"error":{"code":-32601'     || fail "未知方法应当报 METHOD_NOT_FOUND"
 echo "$OUTPUT" | grep -q '"code":-32700'                     || fail "坏 JSON 应当报 PARSE_ERROR"
 

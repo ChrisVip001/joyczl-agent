@@ -381,8 +381,12 @@ async fn a_remembered_write_directory_needs_no_answer() {
         .await;
     assert!(out.starts_with("Wrote"), "{out}");
     assert!(path.exists(), "真写了");
+    // settings.json is JSON, so on Windows the backslashes of a path are escaped ("C:\\...").
+    // Comparing against the raw path would fail there; compare the escaped form instead.
+    let escaped = serde_json::to_string(workspace.to_string_lossy().as_ref())
+        .expect("workspace path is valid UTF-8");
     assert!(
-        settings_json(&settings.home).contains(workspace.to_string_lossy().as_ref()),
+        settings_json(&settings.home).contains(escaped.trim_matches('"')),
         "目录进了 settings.json"
     );
 }
