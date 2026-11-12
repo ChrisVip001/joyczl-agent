@@ -38,7 +38,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::{Datelike, Local, NaiveDateTime, Timelike};
+use chrono::{Local, NaiveDateTime};
 use joyczl_app_server::{run_turn, EventSink, Frame, Server};
 use joyczl_protocol::{RequestId, ServerNotification, TurnStartParams};
 
@@ -147,49 +147,12 @@ pub fn load_jobs(home: &Path) -> Vec<Job> {
     jobs
 }
 
-/// Five-field cron match (min hour day month weekday; Sunday is 0, also accepts 7).
-pub fn cron_matches(cron: &str, at: NaiveDateTime) -> bool {
-    let fields: Vec<&str> = cron.split_whitespace().collect();
-    if fields.len() != 5 {
-        return false;
-    }
-    let weekday = at.weekday().num_days_from_sunday();
-    field_matches(fields[0], at.minute(), 0, 59)
-        && field_matches(fields[1], at.hour(), 0, 23)
-        && field_matches(fields[2], at.day(), 1, 31)
-        && field_matches(fields[3], at.month(), 1, 12)
-        && field_matches(fields[4], weekday, 0, 6)
-}
-
-fn field_matches(field: &str, value: u32, min: u32, max: u32) -> bool {
-    if field == "*" {
-        return true;
-    }
-    // List: any segment hit counts.
-    field.split(',').any(|part| {
-        let part = part.trim();
-        if let Some(step) = part.strip_prefix("*/") {
-            return match step.parse::<u32>() {
-                Ok(step) if step > 0 => value.is_multiple_of(step),
-                _ => false,
-            };
-        }
-        if let Some((from, to)) = part.split_once('-') {
-            return match (from.trim().parse::<u32>(), to.trim().parse::<u32>()) {
-                (Ok(from), Ok(to)) => value >= from && value <= to,
-                _ => false,
-            };
-        }
-        // Single number. Sunday's 7 normalizes to 0.
-        match part.parse::<u32>() {
-            Ok(n) => {
-                let n = if min == 0 && max == 6 && n == 7 { 0 } else { n };
-                n == value
-            }
-            Err(_) => false,
-        }
-    })
-}
+/// Five-field cron match — **implemented in `joyczl-app-server`** and re-exported here.
+///
+/// The capability center shows "next run" for the same patterns this process fires on, and
+/// two matchers would drift into "the panel says 08:00, nothing ran at 08:00". One copy, two
+/// callers; the tests below test the shared one.
+pub use joyczl_schedule::matches as cron_matches;
 
 /// Which jobs should fire this minute. `fired` maps "job → minute last fired";
 /// the same job is handed out only once per minute.

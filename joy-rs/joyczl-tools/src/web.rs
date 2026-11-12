@@ -774,7 +774,15 @@ pub(crate) fn html_to_text(html: &str) -> String {
                 i = end + 1;
             }
             b'&' => {
-                let window_end = (i + 12).min(bytes.len());
+                // Entity names are ASCII, but the 12-byte lookahead is not a character
+                // window: `&` followed by Chinese puts `i + 12` inside a 3-byte character
+                // and slicing panics ("byte index 29899 is not a char boundary"). Walk back
+                // to a boundary — worst case we look at fewer bytes than we could, which
+                // only ever means "no entity found", the answer we already handle.
+                let mut window_end = (i + 12).min(lower.len());
+                while window_end > i + 1 && !lower.is_char_boundary(window_end) {
+                    window_end -= 1;
+                }
                 match lower[i + 1..window_end].find(';') {
                     Some(semi) if semi > 0 => {
                         let entity = &lower[i + 1..i + 1 + semi];

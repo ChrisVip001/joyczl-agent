@@ -45,6 +45,25 @@ type FactWithEmbedding = (
     Option<String>,
 );
 
+/// The provenance/freshness sidecar of a fact (migration 0020).
+///
+/// Kept **outside** `FactRow` on purpose: `FactRow` is the memory itself and every
+/// reader selects its six columns; bolting four more onto it would rewrite every query
+/// for information only the writer and the memory center need.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct FactMeta {
+    pub id: i64,
+    /// Where this fact lives in the plaintext bundle (`<home>/memory/…`), once mirrored.
+    pub page_path: Option<String>,
+    /// The page's digest at mirror time; a mismatch means a human edited the file.
+    pub digest: Option<String>,
+    /// Last time this fact was written or re-observed. `None` = never (old rows).
+    pub last_confirmed_at: Option<String>,
+    /// How many times it has been observed. A fact seen once is a claim; seen five
+    /// times across months is a belief.
+    pub confirm_count: i64,
+}
+
 #[derive(Clone)]
 pub struct Facts {
     pool: SqlitePool,
@@ -71,7 +90,8 @@ impl Facts {
         kind: &str,
     ) -> Result<(FactRow, bool)> {
         let inserted = sqlx::query_as::<_, FactRow>(
-            "INSERT INTO facts (subject, content, source, kind) VALUES (?, ?, ?, ?)
+            "INSERT INTO facts (subject, content, source, kind, last_confirmed_at, confirm_count)
+             VALUES (?, ?, ?, ?, datetime('now'), 1)
              ON CONFLICT DO NOTHING
              RETURNING id, subject, content, source, kind, created_at",
         )
@@ -96,7 +116,98 @@ impl Facts {
         .bind(content)
         .fetch_one(&self.pool)
         .await?;
+        // Being written again is a weak confirmation — the model re-derived the same
+        // statement, or the human repeated it. Counted as such, never as a new fact.
+        self.confirm(existing.id).await?;
         Ok((existing, false))
+    }
+
+    /// Mark a fact as still true: bump its count and stamp the moment.
+    ///
+    /// This is the only freshness signal the store has. Without it a six-month-old
+    /// claim and yesterday's look identical to both the retriever and the human.
+    pub async fn confirm(&self, id: i64) -> Result<()> {
+        sqlx::query(
+            "UPDATE facts
+             SET confirm_count = confirm_count + 1, last_confirmed_at = datetime('now')
+             WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The provenance/freshness sidecar of one fact, or `None` if the id is gone.
+    pub async fn meta(&self, id: i64) -> Result<Option<FactMeta>> {
+        let row = sqlx::query_as::<_, FactMeta>(
+            "SELECT id, page_path, digest, last_confirmed_at, confirm_count
+             FROM facts WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Record that a fact is mirrored at `page_path` with `digest` — the index side of
+    /// "the file is authoritative, the row is the pointer".
+    pub async fn set_page(&self, id: i64, page_path: &str, digest: &str) -> Result<()> {
+        sqlx::query("UPDATE facts SET page_path = ?, digest = ? WHERE id = ?")
+            .bind(page_path)
+            .bind(digest)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Every fact of one subject, oldest first — the mirror's page content.
+    pub async fn for_subject(&self, subject: &str) -> Result<Vec<FactRow>> {
+        let rows = sqlx::query_as::<_, FactRow>(
+            "SELECT id, subject, content, source, kind, created_at
+             FROM facts WHERE subject = ? ORDER BY id",
+        )
+        .bind(subject)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// How many facts exist in total — the worker's "did anything change?" probe.
+    pub async fn count(&self) -> Result<i64> {
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM facts")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(total)
+    }
+
+    /// Every subject that still has facts, with its count — the mirror's walk order.
+    /// Ordered by subject so a re-run produces the same file order (small git diffs).
+    pub async fn subjects(&self) -> Result<Vec<(String, i64)>> {
+        let rows = sqlx::query_as::<_, (String, i64)>(
+            "SELECT subject, COUNT(*) FROM facts GROUP BY subject ORDER BY subject",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Facts nobody has confirmed for `days` days, newest-first ignored — what the
+    /// memory center marks as "getting stale" and what the retriever can hedge on.
+    pub async fn stale(&self, days: u32, limit: u32) -> Result<Vec<FactRow>> {
+        sqlx::query_as::<_, FactRow>(
+            "SELECT id, subject, content, source, kind, created_at
+             FROM facts
+             WHERE last_confirmed_at IS NULL
+                OR last_confirmed_at < datetime('now', ?)
+             ORDER BY COALESCE(last_confirmed_at, created_at) LIMIT ?",
+        )
+        .bind(format!("-{days} days"))
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Into::into)
     }
 
     /// Store a fact's vector (JSON array text). If it can't be computed, skip — this column

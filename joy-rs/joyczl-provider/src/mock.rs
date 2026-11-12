@@ -77,6 +77,7 @@ impl Mock {
             usage: Usage {
                 input_tokens: 10,
                 output_tokens: 5,
+                ..Usage::default()
             },
             content: vec![ContentBlock::Text {
                 text: text.to_string(),
@@ -91,6 +92,7 @@ impl Mock {
             usage: Usage {
                 input_tokens: 20,
                 output_tokens: 8,
+                ..Usage::default()
             },
             content: vec![ContentBlock::ToolUse {
                 id: id.to_string(),

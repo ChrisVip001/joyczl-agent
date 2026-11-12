@@ -170,7 +170,15 @@ struct RecordingProvider {
 }
 
 fn render(request: &CreateRequest) -> String {
-    let mut text = request.system.clone().unwrap_or_default();
+    // `system_text` is the stable prefix **plus** the per-turn tail: providers assemble the
+    // same two halves, so reading only `system` would assert on a prompt the model never saw.
+    let mut text = request.system_text().unwrap_or_default();
+    // The tool table is part of what the model reads (name + description is how it chooses),
+    // and `JOY_TOOL_POLICY=deferred` is exactly a claim about this list. Recording it here is
+    // what makes "the schema was not in the request" a deterministic assertion.
+    for tool in &request.tools {
+        text.push_str(&format!("\n[tool {} {}]", tool.name, tool.description));
+    }
     for message in &request.messages {
         text.push('\n');
         for block in &message.content {
@@ -241,6 +249,20 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         exec_allow: scenario.settings.exec_allow.clone().unwrap_or_default(),
         tool_result_total_chars: scenario.settings.tool_result_total_chars.unwrap_or(200_000),
         tool_result_max_chars: scenario.settings.tool_result_max_chars.unwrap_or(30_000),
+        tool_result_keep_recent: scenario.settings.tool_result_keep_recent.unwrap_or(3),
+        soul_mode: scenario
+            .settings
+            .soul_mode
+            .clone()
+            .unwrap_or_else(|| "auto".to_string()),
+        tool_policy: scenario
+            .settings
+            .tool_policy
+            .clone()
+            .unwrap_or_else(|| "eager".to_string()),
+        skill_index_tokens: scenario.settings.skill_index_tokens.unwrap_or(200),
+        skill_body_tokens: scenario.settings.skill_body_tokens.unwrap_or(1_200),
+        context_warn_ratio: scenario.settings.context_warn_ratio.unwrap_or(85),
         ..joyczl_config::Settings::default()
     };
     settings.ensure_home()?;

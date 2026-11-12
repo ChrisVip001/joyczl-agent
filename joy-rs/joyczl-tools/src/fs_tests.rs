@@ -12,6 +12,8 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm
     ToolCtx {
+        activate: None,
+        embedder: None,
         cwd: None,
         approval: None,
         jobs: None,

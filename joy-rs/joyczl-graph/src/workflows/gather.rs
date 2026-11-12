@@ -237,6 +237,7 @@ pub fn synth_request(model: &str, state: &State) -> CreateRequest {
         .replace("{cal_text}", &fill("cal_text"))
         .replace("{mem_text}", &fill("mem_text"));
     CreateRequest {
+        cache_prefix: None,
         model: model.to_string(),
         system: None,
         messages: vec![Message::user_text(prompt)],

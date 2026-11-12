@@ -54,6 +54,7 @@ pub async fn judge(
     let response = resolved
         .client
         .create(CreateRequest {
+            cache_prefix: None,
             model: resolved.small_model.clone(),
             system: Some(system.to_string()),
             messages: vec![Message::user_text(user)],

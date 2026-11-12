@@ -51,6 +51,8 @@ pub(crate) struct Delegated {
 
 /// What gets fed to the subagent this time.
 struct Prompt {
+    /// The stable half, passed through to the loop untouched so the cache boundary holds.
+    system_prefix: Option<String>,
     system: String,
     history: Vec<joyczl_provider::Message>,
     user_message: String,
@@ -67,6 +69,7 @@ async fn run_child(
     budget: joyczl_loop::budget::ToolResultBudget,
 ) -> anyhow::Result<joyczl_loop::LoopResult> {
     joyczl_loop::run(joyczl_loop::Turn {
+        system_prefix: prompt.system_prefix,
         client: resolved.client.as_ref(),
         model: &resolved.model,
         system: prompt.system,
@@ -132,19 +135,35 @@ impl SubagentRunner for Delegated {
             // The event payload uses a short head of the task: it may be long, and the hook wants "what is being done".
             let task_preview: String = task.chars().take(400).collect();
 
-            let soul = crate::turn::load_soul(&home);
-            let system = crate::turn::build_system(
-                &soul,
-                &resolved.model,
-                &resolved.provider_id,
-                "",
-                "",
+            let soul = crate::turn::load_soul(
+                &home,
+                crate::turn::thin_soul_for(&settings.soul_mode, &resolved.provider_id),
+            );
+            let prompt = crate::turn::build_system(crate::turn::PromptParts {
+                soul: &soul,
+                model: &resolved.model,
+                provider: &resolved.provider_id,
+                memory: "",
+                // No catalog and no memory: the subagent's contract is "the task in, the
+                // conclusion out" — a shared library would blur who said what.
+                memory_index: None,
+                skill_index: None,
+                skills: "",
                 // The subagent has no todo list: that board belongs to the parent turn's task line, and it must not write it.
-                None,
-                None,
-            ) + "\n\nYou are a subagent: do the one task below and answer with the \
-                 conclusion only. Whoever asked cannot see your steps, and you cannot ask \
-                 follow-up questions.";
+                todo: None,
+                summary: None,
+                // Same machine, same gaps: a subagent that does not know there is no shell
+                // burns its budget the same way the parent did.
+                capabilities: crate::turn::capability_note(&settings).as_deref(),
+            });
+            // Same stable prefix as the parent (soul + model identity), so the provider's
+            // cache serves both; the subagent's own contract rides in the tail — it is not
+            // the same instructions, and pretending otherwise would be a lie to the cache.
+            let system_prefix = Some(prompt.stable);
+            let system = prompt.tail
+                + "\n\nYou are a subagent: do the one task below and answer with the \
+                   conclusion only. Whoever asked cannot see your steps, and you cannot ask \
+                   follow-up questions.";
 
             // The tool table is the **parent turn's copy**, just without delegate_task — so recursive
             // delegation is not "denied", it is an option that does not exist at all.
@@ -205,6 +224,7 @@ impl SubagentRunner for Delegated {
                 &child_tools,
                 ctx.clone(),
                 Prompt {
+                    system_prefix: system_prefix.clone(),
                     system: system.clone(),
                     // Empty history: the point of delegation is to leave the context burden on the parent turn's side.
                     history: Vec::new(),
@@ -246,6 +266,7 @@ impl SubagentRunner for Delegated {
                             &child_tools,
                             ctx,
                             Prompt {
+                                system_prefix: system_prefix.clone(),
                                 system,
                                 history: result.messages.clone(),
                                 user_message: nudge,

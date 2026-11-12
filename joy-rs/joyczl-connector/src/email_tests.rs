@@ -28,6 +28,8 @@ impl Fixture {
         let home = self.dir.path().to_path_buf();
         let pool = joyczl_state_open(&home).await;
         ToolCtx {
+            activate: None,
+            embedder: None,
             cwd: None,
             approval,
             jobs: None,

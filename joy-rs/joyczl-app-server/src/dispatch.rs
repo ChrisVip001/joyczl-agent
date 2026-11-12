@@ -564,11 +564,17 @@ async fn dispatch(
             respond(ApprovalRespondResponse { accepted })
         }
 
-        other => Err(ErrorObject {
-            code: codes::METHOD_NOT_FOUND,
-            message: format!("未知方法 '{other}'"),
-            data: None,
-        }),
+        // The memory center's windows: ledger, bundle, context meter, skill hits, and the
+        // human-only `/compact`. Its own module keeps this match from growing a fifth
+        // hundred-line arm.
+        other => match crate::memory_center::handle(server, other, params).await {
+            Some(result) => result.map(Outcome::Value),
+            None => Err(ErrorObject {
+                code: codes::METHOD_NOT_FOUND,
+                message: format!("未知方法 '{other}'"),
+                data: None,
+            }),
+        },
     }
 }
 

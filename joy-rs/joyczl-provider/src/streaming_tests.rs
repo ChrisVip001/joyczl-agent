@@ -74,6 +74,7 @@ async fn anthropic_stream_yields_deltas_over_a_real_socket() {
     let response = client
         .stream(
             crate::CreateRequest {
+                cache_prefix: None,
                 model: "claude-sonnet-5".to_string(),
                 system: None,
                 messages: vec![crate::Message::user_text("hi")],
@@ -109,6 +110,7 @@ async fn openai_stream_yields_deltas_over_a_real_socket() {
     let response = client
         .stream(
             crate::CreateRequest {
+                cache_prefix: None,
                 model: "gpt-5.5".to_string(),
                 system: None,
                 messages: vec![crate::Message::user_text("hi")],
@@ -156,6 +158,7 @@ fn thought_signature_round_trips_through_the_openai_wire() {
 
     // In the next message, the signature must appear on the outgoing extra_content.
     let request = crate::CreateRequest {
+        cache_prefix: None,
         model: "gemini-3.5-flash".to_string(),
         system: None,
         messages: vec![

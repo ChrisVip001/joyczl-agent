@@ -27,6 +27,8 @@ impl Fixture {
             .await
             .expect("打开库");
         ToolCtx {
+            activate: None,
+            embedder: None,
             cwd: None,
             approval,
             jobs: None,

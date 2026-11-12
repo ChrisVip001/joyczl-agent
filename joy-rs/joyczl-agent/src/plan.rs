@@ -79,6 +79,7 @@ pub async fn make(
     let response = resolved
         .client
         .create(CreateRequest {
+            cache_prefix: None,
             model: resolved.model.clone(),
             system: Some(system.to_string()),
             messages: vec![Message::user_text(user)],

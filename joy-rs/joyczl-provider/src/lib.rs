@@ -123,15 +123,42 @@ pub enum StopReason {
 pub struct Usage {
     pub input_tokens: i64,
     pub output_tokens: i64,
+    /// Tokens this call read **from** the provider's prompt cache (billed at a fraction of
+    /// the input price). OpenAI spells it `prompt_tokens_details.cached_tokens`, Anthropic
+    /// `cache_read_input_tokens`; both land here, so a turn's real cost is one subtraction.
+    #[serde(default)]
+    pub cache_read_input_tokens: i64,
+    /// Tokens this call **wrote into** the cache (Anthropic only, billed at a premium).
+    /// Zero elsewhere — the reason to record it is that a cache miss is not free either.
+    #[serde(default)]
+    pub cache_creation_input_tokens: i64,
 }
 
 #[derive(Debug, Clone)]
 pub struct CreateRequest {
     pub model: String,
+    /// The part of the prompt that does not change within a session — soul, model
+    /// identity, the method paragraph. Kept apart from `system` because Anthropic needs an
+    /// explicit `cache_control` boundary: a prefix marked once is read back at a fraction
+    /// of the input price on every later turn. Other wires simply concatenate it: a prefix
+    /// that never changes already hits their automatic cache.
+    pub cache_prefix: Option<String>,
     pub system: Option<String>,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSchema>,
     pub max_tokens: i32,
+}
+
+impl CreateRequest {
+    /// The system prompt as one string, prefix first — what wires without a cache
+    /// boundary send.
+    pub fn system_text(&self) -> Option<String> {
+        match (&self.cache_prefix, &self.system) {
+            (Some(prefix), Some(tail)) if !tail.is_empty() => Some(format!("{prefix}\n\n{tail}")),
+            (Some(prefix), _) => Some(prefix.clone()),
+            (None, tail) => tail.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

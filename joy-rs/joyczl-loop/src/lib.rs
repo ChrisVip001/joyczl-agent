@@ -14,7 +14,8 @@
 //!
 //! Two guardrails (exit conditions):
 //!   1. the model stops requesting tools → the turn ends naturally
-//!   2. `max_iterations` reached → hard stop, never spin idle
+//!   2. `max_iterations` reached → **one wrap-up call with the tools taken away**, so the turn
+//!      ends with "what I did / where I am stuck / what I need", not with a canned apology
 //!
 //! The observer is an enum of events, not a `(kind, dict)` — fields have types,
 //! so a misspelled key is a compile-time error.
@@ -216,9 +217,27 @@ pub struct LoopResult {
     pub observed_input_tokens: usize,
 }
 
+/// What the model is told on its last allowed iteration, once the tools are gone.
+///
+/// Written as an instruction the model can *follow*, not as an apology: three sentences, no
+/// pretending, no invented results. The failure this answers was a turn that spent its whole
+/// budget and then handed the human 「试试把请求拆小一点」.
+const WRAP_UP: &str = "（预算提示：这是本轮的最后一次模型调用，工具已经收起。）\
+用三句话收尾：已经完成的、卡在哪、下一步需要我做什么。\
+没查证的事直接说不确定，不要编造结果。";
+
 pub struct Turn<'a> {
     pub client: &'a dyn Provider,
     pub model: &'a str,
+    /// The **stable prefix** of the system prompt: soul, model identity, the method
+    /// paragraph. Identical turn after turn within a session, so the provider's prompt
+    /// cache can serve it at a fraction of the input price (Anthropic needs the explicit
+    /// `cache_control` boundary; the wires with automatic caching just need it not to move).
+    /// `None` = one undivided system prompt.
+    pub system_prefix: Option<String>,
+    /// The per-turn tail: clock (day granularity), todo list, memory hits, skill bodies,
+    /// the rolling summary. It changes every turn by nature, so it stays outside the cache
+    /// boundary — marking it would invalidate the prefix on every write.
     pub system: String,
     /// History from previous turns (sliding-window trimmed). The new message is appended at the end.
     pub history: Vec<Message>,
@@ -330,6 +349,26 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             }
         }
 
+        // ---- The last allowed iteration is a **wrap-up**, not a failure.
+        //
+        // Claude Code's shape, borrowed deliberately: its interactive loop has no turn cap at
+        // all — it ends when the model stops calling tools, and the budget that bites is the
+        // context window (auto-compact). We keep a cap (a local model on a laptop should not be
+        // able to spend a night), but the cap must not be a cliff: before the budget runs out,
+        // the tools are taken away and the model is asked to say what it did.
+        //
+        // What this replaces: a hard stop whose whole answer was 「我还没做完就到了迭代上限」
+        // — after 10 calls and 210k input tokens, the human learned nothing they could act on.
+        let wrapping_up = iteration == turn.max_iterations && turn.max_iterations > 1;
+        if wrapping_up {
+            messages.push(Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: WRAP_UP.to_string(),
+                }],
+            });
+        }
+
         // ---- Intra-turn tool-result budget: stub oversized results before assembling the request.
         //
         // Placed here rather than after tool execution: stubbing should only affect the **text
@@ -343,13 +382,25 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         );
 
         // ---- reason: call the model once with the current working memory
-        let schemas = turn.tools.schemas();
+        // No tools on the wrap-up call: the point is a summary, and a tool call there would
+        // buy another round the budget no longer has.
+        let schemas = if wrapping_up {
+            Vec::new()
+        } else {
+            turn.tools.schemas()
+        };
         // Estimate = messages + system + tool schemas. Paired with the provider-reported usage
         // to calibrate the next turn's budget (a skewed estimate only shifts compaction earlier/later).
         last_estimate = joyczl_provider::tokens::estimate_messages(&messages)
             + joyczl_provider::tokens::estimate_text(&turn.system)
+            + turn
+                .system_prefix
+                .as_deref()
+                .map(joyczl_provider::tokens::estimate_text)
+                .unwrap_or(0)
             + joyczl_provider::tokens::estimate_tools(&schemas);
         let request = CreateRequest {
+            cache_prefix: turn.system_prefix.clone(),
             model: turn.model.to_string(),
             system: Some(turn.system.clone()),
             messages: messages.clone(),
@@ -541,9 +592,15 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         }
     }
 
-    // ---- Guardrail 2: iterations exhausted
+    // ---- Guardrail 2: iterations exhausted (the wrap-up call is the normal exit; this is the
+    // residue: `max_iterations == 1`, or a provider that keeps emitting tool calls with an empty
+    // tool table). Say what happened and how to continue — never "ask smaller".
     Ok(LoopResult {
-        reply: "（我还没做完就到了迭代上限——试试把请求拆小一点。）".to_string(),
+        reply: format!(
+            "（这一轮用完了 {} 步预算，没能收尾。上面每步的工具调用与结果都还在，\
+             说一声「接着做」我就从断的地方继续；想一次做完的话，也可以把它拆成两步说。）",
+            turn.max_iterations
+        ),
         tool_calls,
         iterations: turn.max_iterations,
         usage,

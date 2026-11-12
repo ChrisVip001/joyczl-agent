@@ -15,6 +15,8 @@ doctest = false
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 sqlx = { workspace = true }
+# 账本的行摘要与轮摘要（sha256）；workspace 里已有，不新增依赖。
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

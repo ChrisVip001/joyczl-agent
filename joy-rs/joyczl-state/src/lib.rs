@@ -7,9 +7,10 @@
 //!
 //! Layers:
 //!   * `db`        open / migrate
+//!   * `ledger`    the append-only record of every turn (the rebuild source)
 //!   * `facts`     semantic memory (FTS5 retrieval)
 //!   * `episodes`  episodic memory
-//!   * `chat`      raw conversation log + sessions (a session is just a tag on chat_log)
+//!   * `chat`      the conversation *view* + sessions (a session is just a tag on chat_log)
 //!   * `fts`       turn human input into a safe FTS5 query string
 
 pub mod approvals;
@@ -25,6 +26,7 @@ pub mod facts;
 pub mod fts;
 pub mod inbox;
 pub mod jobs;
+pub mod ledger;
 pub mod queue;
 pub mod runs;
 pub mod schedules;
@@ -41,9 +43,11 @@ pub use checkpoints::{CheckpointRow, Checkpoints};
 pub use db::open;
 pub use episodes::{EpisodeRow, Episodes};
 pub use events::{EventRow, Events};
-pub use facts::{FactRow, Facts};
+pub use facts::{FactMeta, FactRow, Facts};
 pub use inbox::{Inbox, InboxItem};
 pub use jobs::{JobRow, Jobs};
+pub use ledger::BackfillReport;
+pub use ledger::{EntryRow, Ledger, NewEntry, TurnRow};
 pub use queue::{Queue, QueuedMessage};
 pub use runs::{RunRow, RunStatus, Runs};
 pub use schedules::{ScheduleRow, Schedules};

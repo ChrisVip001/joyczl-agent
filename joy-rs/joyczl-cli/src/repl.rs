@@ -16,6 +16,7 @@ use joyczl_protocol::{RequestId, ServerNotification, TurnStartParams, TurnStarte
 const HELP: &str = "\
 命令:
   /memory [词]   看最近记住的东西（带词就是搜索）
+  /compact [重点] 现在就把较早的轮次折进摘要（最近两轮留在上下文里）
   /sessions      列出历史会话
   /new           开一个新会话
   /quit          退出（/exit 也行）
@@ -54,6 +55,7 @@ pub async fn run(server: Server) -> Result<()> {
             }
             "/sessions" => list_sessions(&server).await,
             s if s.starts_with("/memory") => show_memory(&server, s).await,
+            s if s.starts_with("/compact") => compact(&server, &session_id, s).await,
             s if s.starts_with("/goal") => set_goal(&server, &session_id, s).await,
             s if s.starts_with("/cwd") => cwd = set_cwd(cwd, s),
             s if s.starts_with("/model") => models(&server, s),
@@ -64,6 +66,9 @@ pub async fn run(server: Server) -> Result<()> {
             message => chat_turn(&server, &session_id, cwd.as_ref(), message).await,
         }
     }
+    // A memory run in flight gets a few seconds; whatever it does not finish stays
+    // claimed and the next process picks it up (see memory_worker.rs).
+    server.stop_memory_worker().await;
     println!("再见。");
     Ok(())
 }
@@ -615,6 +620,31 @@ fn end_streamed_line(streamed: &mut usize) {
 }
 
 /// `/memory [word]`: no word lists recent ones; a word searches (facts + episodes).
+/// `/compact [focus]` — fold the older turns in **now**.
+///
+/// The same body the dashboard's button uses (`memory_center::compact_session`): a second
+/// implementation would drift, and "compacted here but not there" is exactly the kind of
+/// difference nobody reports until a long session is already broken.
+async fn compact(server: &Server, session_id: &str, input: &str) {
+    let focus = input.trim_start_matches("/compact").trim();
+    match joyczl_app_server::memory_center::compact_session(
+        server,
+        session_id,
+        (!focus.is_empty()).then_some(focus),
+    )
+    .await
+    {
+        Ok(answer) if answer.covered_turns == 0 => {
+            println!("没有更早的轮次可折 —— 摘要已经跟上了。")
+        }
+        Ok(answer) => println!(
+            "已压缩：摘要现在覆盖 {} 轮（约 {} token）。",
+            answer.covered_turns, answer.summary_tokens
+        ),
+        Err(error) => println!("压缩没成：{}", error.message),
+    }
+}
+
 async fn show_memory(server: &Server, input: &str) {
     let query = input.trim_start_matches("/memory").trim();
     let facts = if query.is_empty() {

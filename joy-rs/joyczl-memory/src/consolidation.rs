@@ -67,6 +67,7 @@ pub async fn consolidate_if_due(
         .join("\n");
 
     let request = CreateRequest {
+        cache_prefix: None,
         model: small_model.to_string(),
         system: None,
         messages: vec![Message::user_text(SUMMARIZER_PROMPT.replace("{log}", &log))],

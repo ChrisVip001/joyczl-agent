@@ -149,6 +149,23 @@ pub struct SettingsOverrides {
     pub tool_result_total_chars: Option<i64>,
     #[serde(default)]
     pub tool_result_max_chars: Option<i64>,
+    /// Prompt shape: how many of the newest tool results are never stubbed.
+    #[serde(default)]
+    pub tool_result_keep_recent: Option<i32>,
+    /// `auto` / `thin` / `full` (`JOY_SOUL_MODE`).
+    #[serde(default)]
+    pub soul_mode: Option<String>,
+    /// `eager` / `deferred` (`JOY_TOOL_POLICY`).
+    #[serde(default)]
+    pub tool_policy: Option<String>,
+    /// Skill catalog budget and one body's cap.
+    #[serde(default)]
+    pub skill_index_tokens: Option<i32>,
+    #[serde(default)]
+    pub skill_body_tokens: Option<i32>,
+    /// The meter's warning threshold (`JOY_CONTEXT_WARN_RATIO`).
+    #[serde(default)]
+    pub context_warn_ratio: Option<i32>,
 }
 
 impl Scenario {

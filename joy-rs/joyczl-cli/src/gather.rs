@@ -196,6 +196,8 @@ async fn bind_web(home: &std::path::Path) -> WebScanFn {
         .await
         .expect("打开库");
     let ctx = ToolCtx {
+        activate: None,
+        embedder: None,
         approval: None,
         jobs: None,
         hooks: None,

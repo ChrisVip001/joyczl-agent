@@ -117,6 +117,17 @@ grep -q 'main.js' "$WORK/index.html"  || fail "首页没引到 main.js"
 curl -sS -o "$WORK/main.js" -w '%{http_code}' "$BASE/main.js" | grep -q '^200$' \
   || fail "main.js 拿不到"
 
+# The stylesheet must keep the **global** `[hidden]` rule. `display: flex` beats the UA's
+# `[hidden] { display: none }`, and two components in this file set `display: flex` on elements
+# that are toggled with `hidden`. When the rule went missing, the memory center's three views all
+# rendered at once and every segment appeared to show the ledger — the data was fine, the picture
+# was not. A CSS assertion is a blunt instrument, but this failure mode is invisible to every
+# other check here.
+curl -sS -o "$WORK/style.css" -w '%{http_code}' "$BASE/style.css" | grep -q '^200$' \
+  || fail "style.css 拿不到"
+grep -qz '\[hidden\] {[[:space:]]*display: none !important;' "$WORK/style.css" \
+  || fail "style.css 缺全局 [hidden] 规则 —— 用 hidden 切换的视图会同时显示"
+
 # The page names its bundle with a build stamp. index.html is network-first and main.js is
 # cache-first, so without the stamp a service-worker cache pairs a new page with an old bundle —
 # the page then misses ids the bundle grabs and goes blank (it happened: the whole screen, session
@@ -141,6 +152,17 @@ grep -q '"/api/skills/remove"' "$WORK/main.js" || fail "main.js 里没有 /api/s
 grep -q '"/api/mcp"' "$WORK/main.js" || fail "main.js 里没有 /api/mcp"
 grep -q '"/api/mcp/save"' "$WORK/main.js" || fail "main.js 里没有 /api/mcp/save"
 grep -q '"/api/mcp/remove"' "$WORK/main.js" || fail "main.js 里没有 /api/mcp/remove"
+# 记忆中心的六个只读端点 + 一个手动压缩：少一个 = 那一页点开是空的。
+grep -q '/api/ledger/turns' "$WORK/main.js" || fail "main.js 里没有 /api/ledger/turns"
+grep -q '/api/ledger/turn' "$WORK/main.js" || fail "main.js 里没有 /api/ledger/turn"
+grep -q '"/api/memory/index"' "$WORK/main.js" || fail "main.js 里没有 /api/memory/index"
+grep -q '/api/memory/page' "$WORK/main.js" || fail "main.js 里没有 /api/memory/page"
+grep -q '/api/context' "$WORK/main.js" || fail "main.js 里没有 /api/context"
+grep -q '"/api/skills/stats"' "$WORK/main.js" || fail "main.js 里没有 /api/skills/stats"
+grep -q '/api/compact' "$WORK/main.js" || fail "main.js 里没有 /api/compact"
+grep -q '/api/schedules/jobs' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/jobs"
+grep -q '/api/schedules/save' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/save"
+grep -q '/api/schedules/remove' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/remove"
 
 # Every id the JS grabs must exist in the page — one missing means a blank screen. That error only
 # shows in the browser console, invisible to curl, so pin it here. (`must("x")` is the helper in
@@ -434,5 +456,43 @@ FOLLOW_ERR="$(curl -sS -X POST "$BASE/api/turn/follow-up" -H 'content-type: appl
 grep -q '没有在跑的回合' <<<"$FOLLOW_ERR" \
   || fail "空闲时 turn/follow-up 该明说没有在跑的回合：$FOLLOW_ERR"
 echo "  ✓ turn/follow-up：没有在跑的回合就不假装排上队"
+
+# ---- 记忆中心：只读窗口真的答得上来 ---------------------------------------------------
+# 读端点都必须回 JSON 而不是 500。`/api/context` 在没有跑过回合时是 `usage: null` ——
+# 那是「还没测量」，不是「零占用」，前端据此显示空态。
+curl -sS "$BASE/api/ledger/turns?sessionId=default" >"$WORK/ledger.json" \
+  || fail "GET /api/ledger/turns 没通"
+grep -q '"turns"' "$WORK/ledger.json" || fail "账本该回 turns"
+grep -q '"entries":\[\]' "$WORK/ledger.json" \
+  || fail "没点开某一轮时不该带条目"
+curl -sS "$BASE/api/memory/index" | grep -q '"catalog"' || fail "/api/memory/index 该回目录"
+curl -sS "$BASE/api/memory/page?page=definitely-not-a-page" \
+  | grep -q '"page":null' || fail "不存在的页该是 page:null（不假装是空页）"
+curl -sS "$BASE/api/context?sessionId=default" | grep -q '"usage"' \
+  || fail "/api/context 该回 usage（可以是 null）"
+curl -sS "$BASE/api/skills/stats" | grep -q '"data"' || fail "/api/skills/stats 该回 data"
+# 缺参数要被明确拒绝，而不是拿空字符串去查库。
+curl -sS "$BASE/api/ledger/turns" | grep -q '缺少参数 sessionId' \
+  || fail "缺 sessionId 该明说缺什么"
+echo "  ✓ 记忆中心：账本 / 目录 / 记忆页 / 占用率 / 技能命中都答得上来"
+
+# ---- 能力中心的定时任务：声明与状态一张表 -------------------------------------------
+# 新建的是一条**声明**（schedules.json 里的一行），不是立刻触发；这里验证的是「写得进去、
+# 列得出来、错得明白、删得掉」，触发归 joy schedule。
+curl -sS "$BASE/api/schedules/jobs" | grep -q '"jobs"' \
+  || fail "/api/schedules/jobs 该回 jobs"
+printf '%s' '{"name":"smoke-digest","cron":"0 8 * * *","prompt":"写一份简报","delivery":"outbox"}' \
+  >"$WORK/sched.json"
+curl -sS -X POST -H 'content-type: application/json' --data @"$WORK/sched.json" \
+  "$BASE/api/schedules/save" | grep -q '"ok":true' || fail "新建定时任务失败"
+curl -sS "$BASE/api/schedules/jobs" | grep -q 'smoke-digest' \
+  || fail "新建的任务没出现在列表里"
+# 坏 cron 要被当成一句话拒绝，而不是 500 或者静默保存。
+curl -sS -X POST -H 'content-type: application/json' \
+  --data '{"name":"smoke-digest","cron":"0 8 * *","prompt":"x"}' \
+  "$BASE/api/schedules/save" | grep -q '五段' || fail "cron 写错该明说五段"
+curl -sS -X POST -H 'content-type: application/json' --data '{"name":"smoke-digest"}' \
+  "$BASE/api/schedules/remove" | grep -q '"ok":true' || fail "删除定时任务失败"
+echo "  ✓ 定时任务：新建 → 列表可见 → 拒绝坏 cron → 删除"
 
 echo "✓ 驾驶舱冒烟测试通过"

@@ -119,6 +119,25 @@ pub(crate) fn anthropic_messages(messages: &[Message]) -> Vec<Value> {
         .collect()
 }
 
+/// The system prompt as Anthropic wants it: a plain string, or two text blocks when there is
+/// a stable prefix. The boundary between them is where `cache_control` goes — the soul and
+/// the method paragraph are paid for once per session and read back at a fraction of the
+/// price on every later turn. A tail that changes every turn stays outside the marked block.
+fn anthropic_system(request: &CreateRequest) -> Option<Value> {
+    let Some(prefix) = request.cache_prefix.as_ref().filter(|p| !p.is_empty()) else {
+        return request.system.as_ref().map(|s| json!(s));
+    };
+    let mut blocks = vec![json!({
+        "type": "text",
+        "text": prefix,
+        "cache_control": { "type": "ephemeral" },
+    })];
+    if let Some(tail) = request.system.as_ref().filter(|t| !t.is_empty()) {
+        blocks.push(json!({ "type": "text", "text": tail }));
+    }
+    Some(Value::Array(blocks))
+}
+
 impl Client {
     async fn create_inner(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
         let mut body = json!({
@@ -126,8 +145,8 @@ impl Client {
             "max_tokens": request.max_tokens,
             "messages": anthropic_messages(&request.messages),
         });
-        if let Some(system) = &request.system {
-            body["system"] = json!(system);
+        if let Some(system) = anthropic_system(&request) {
+            body["system"] = system;
         }
         // Some endpoints reject an empty tools array, so the key is simply omitted.
         if !request.tools.is_empty() {
@@ -154,8 +173,8 @@ impl Client {
             "messages": anthropic_messages(&request.messages),
             "stream": true,
         });
-        if let Some(system) = &request.system {
-            body["system"] = json!(system);
+        if let Some(system) = anthropic_system(&request) {
+            body["system"] = system;
         }
         if !request.tools.is_empty() {
             body["tools"] = json!(request.tools);
@@ -180,6 +199,17 @@ impl Client {
                 Some("message_start") => {
                     usage.input_tokens = value
                         .pointer("/message/usage/input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    // A cache hit is reported here and nowhere else: drop it and every turn
+                    // looks as expensive as the first, which is exactly the number the
+                    // cache is supposed to change.
+                    usage.cache_read_input_tokens = value
+                        .pointer("/message/usage/cache_read_input_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    usage.cache_creation_input_tokens = value
+                        .pointer("/message/usage/cache_creation_input_tokens")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
                 }

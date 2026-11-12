@@ -75,6 +75,15 @@ jobs:
           node-version: 22
       - run: python3 scripts/write_schema.py --check
 
+  docs:
+    name: Tool docs (drift check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The tool count lives in the code, in 06-tools.md §6.0 and in both READMEs.
+      # Three copies drift; this is the one that notices. No build needed: it reads text.
+      - run: python3 scripts/check_tool_docs.py
+
   ts:
     name: TypeScript (typecheck / test)
     runs-on: ubuntu-latest

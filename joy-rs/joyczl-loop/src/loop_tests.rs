@@ -21,6 +21,8 @@ async fn ctx() -> joyczl_tools::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     joyczl_tools::ToolCtx {
+        activate: None,
+        embedder: None,
         cwd: None,
         approval: None,
         jobs: None,
@@ -42,6 +44,7 @@ async fn turn<'a>(
     observer: Option<crate::Observer>,
 ) -> crate::LoopResult {
     run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client,
         model: "test-model",
@@ -87,6 +90,7 @@ async fn words_added_mid_turn_join_the_next_model_call_and_do_not_rerun_tools() 
     };
 
     let result = run(Turn {
+        system_prefix: None,
         client: &mock,
         model: "test-model",
         system: "你是 Joy".to_string(),
@@ -222,16 +226,21 @@ async fn unknown_tool_name_is_surfaced_not_fatal() {
 }
 
 #[tokio::test]
-async fn iteration_limit_stops_the_loop() {
-    // The model keeps calling tools and never speaks — the guardrail must hard-stop, not spin forever.
+async fn the_last_iteration_is_a_wrap_up_not_a_cliff() {
+    // 预算用尽时不再硬停：最后一次调用把工具收起，让模型用三句话收尾。
+    //
+    // 这条规则来自一次真实的浪费：10 步、21 万输入 token 之后，用户只拿到
+    // 「我还没做完就到了迭代上限——试试把请求拆小一点」。Claude Code 的循环根本没有
+    // 交互式上限（模型不调工具就结束），所以我们也把「上限」从失败改成收尾。
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "current_time", json!({})),
-        Mock::tool_use("tu_2", "current_time", json!({})),
+        Mock::text("读到了时间；没做完的是清理；需要你确认删哪些。"),
     ]);
     let tools = handlers::build_default();
     let ctx = ctx().await;
 
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -240,7 +249,7 @@ async fn iteration_limit_stops_the_loop() {
         user_message: "现在几点".to_string(),
         tools: &tools,
         ctx,
-        max_iterations: 2, // deliberately stuck on two tool replies
+        max_iterations: 2,
         max_tokens: 1024,
         tool_result_budget: Default::default(),
         observer: None,
@@ -251,15 +260,24 @@ async fn iteration_limit_stops_the_loop() {
         resume: None,
     })
     .await
-    .expect("护栏应当接住，而不是报错");
+    .expect("收尾轮不该报错");
 
     assert_eq!(result.iterations, 2);
-    assert!(
-        result.reply.contains("迭代上限"),
-        "护栏消息要说清楚发生了什么：{}",
-        result.reply
+    assert_eq!(
+        result.reply, "读到了时间；没做完的是清理；需要你确认删哪些。",
+        "收尾轮的话要原样交给用户，而不是被换成一句模板"
     );
-    assert_eq!(result.tool_calls.len(), 2);
+
+    // 最后一次请求必须**没有工具**，并且带上收尾指令（否则模型会继续调工具）。
+    let requests = mock.received.lock().expect("锁");
+    let last = requests.last().expect("至少要请求一次");
+    assert!(
+        last.tools.is_empty(),
+        "收尾轮不该再给工具：{} 个",
+        last.tools.len()
+    );
+    let tail = serde_json::to_string(&last.messages).expect("序列化");
+    assert!(tail.contains("预算提示"), "收尾指令要进上下文：{tail:.200}");
 }
 
 #[tokio::test]
@@ -332,6 +350,7 @@ async fn streaming_emits_text_deltas_in_order() {
 
     let ctx = ctx().await;
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -396,6 +415,7 @@ async fn streaming_works_across_tool_rounds() {
 
     let ctx = ctx().await;
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -437,6 +457,7 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
     interrupt.cancel();
 
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -492,6 +513,7 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
     });
 
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -576,6 +598,8 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         .await
         .expect("打开库");
     let ctx = joyczl_tools::ToolCtx {
+        activate: None,
+        embedder: None,
         cwd: None,
         approval: None,
         jobs: None,
@@ -607,6 +631,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
     ]);
 
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -620,6 +645,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         tool_result_budget: crate::budget::ToolResultBudget {
             total_chars: 10_000,
             per_result_chars: 5_000,
+            keep_recent: 0,
         },
         observer: None,
         on_text: None,
@@ -688,6 +714,7 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
     };
 
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -755,6 +782,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
     ];
 
     let result = run(Turn {
+        system_prefix: None,
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
@@ -777,6 +805,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
             usage: Usage {
                 input_tokens: 100,
                 output_tokens: 20,
+                ..Usage::default()
             },
         }),
     })

@@ -1090,6 +1090,7 @@ dependencies = [
  "joyczl-ops",
  "joyczl-protocol",
  "joyczl-provider",
+ "joyczl-schedule",
  "joyczl-state",
  "joyczl-tools",
  "reqwest",
@@ -1199,6 +1200,7 @@ dependencies = [
  "joyczl-state",
  "reqwest",
  "serde_json",
+ "sha2",
  "sqlx",
  "tempfile",
  "tokio",
@@ -1218,6 +1220,7 @@ dependencies = [
  "joyczl-mcp",
  "joyczl-memory",
  "joyczl-protocol",
+ "joyczl-schedule",
  "reqwest",
  "ring",
  "serde",
@@ -1260,11 +1263,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "joyczl-schedule"
+version = "0.16.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "joyczl-state"
 version = "0.16.0"
 dependencies = [
  "anyhow",
  "serde_json",
+ "sha2",
  "sqlx",
  "tempfile",
  "tokio",
@@ -1280,6 +1294,7 @@ dependencies = [
  "joyczl-config",
  "joyczl-memory",
  "joyczl-provider",
+ "joyczl-schedule",
  "joyczl-state",
  "jsonschema",
  "reqwest",

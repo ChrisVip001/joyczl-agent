@@ -105,5 +105,8 @@ pub async fn run_stdio(server: Server) -> Result<()> {
     // The request loop is over (stdin closed): let go and let the writer finish the remaining frames before exiting.
     drop(tx);
     let _ = writer.await;
+    // A memory run in flight gets its few seconds; what it does not finish stays claimed and
+    // is picked up by the next process after the backoff (see memory_worker.rs).
+    server.stop_memory_worker().await;
     Ok(())
 }

@@ -29,6 +29,7 @@ pub mod memory_admin;
 pub mod messages;
 pub mod notify;
 pub mod report;
+pub mod schedules;
 pub mod spill;
 pub mod subagent;
 pub mod todo;
@@ -113,6 +114,12 @@ pub struct ToolCtx {
     /// and shared by every clone of the ctx, so the counter survives across the
     /// turn's tool calls; a fresh turn gets a fresh budget.
     pub turn_limits: Arc<crate::web::TurnLimits>,
+    /// How `find_tools` widens this session's tool table (`JOY_TOOL_POLICY=deferred`).
+    /// `None` = the table is complete already, and the tool says so.
+    pub activate: Option<Activator>,
+    /// The vector leg of hybrid retrieval. `None` = keywords only (`JOY_EMBEDDINGS` off, or
+    /// the embedder was not configured) — search then degrades instead of failing.
+    pub embedder: Option<Arc<joyczl_provider::embed::Embedder>>,
 }
 
 pub type BoxFut = Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;
@@ -137,6 +144,47 @@ impl Tool {
     }
 }
 
+/// Tools that **never** hide behind `find_tools`.
+///
+/// Two reasons to be on this list. The gated ones (`run_command`, `write_file`, `edit`,
+/// `delegate_task`) are capabilities a human switched on — burying them behind a discovery
+/// step would make the switch look broken, and hiding them behind a *different* search than
+/// the switch is how a permission model rots. The rest are the handful every turn plausibly
+/// needs; deferring them costs more in discovery turns than it saves in schema tokens.
+pub const ALWAYS_ON: &[&str] = &[
+    "run_command",
+    "write_file",
+    "edit",
+    "delegate_task",
+    "todo_write",
+    "find_tools",
+    "current_time",
+    "save_note",
+    "search_memory",
+    "read_memory_page",
+    "read_skill",
+    "read_file",
+    "list_dir",
+    // Scheduling is something people ask for in a sentence ("每天八点给我一份简报"). If the
+    // model has to discover these first, the answer to that sentence is "先让我找找工具" —
+    // and before they existed, it was "请选择工作目录", which is worse: a file outside every
+    // workspace that `write_file` is right to refuse.
+    "schedule_job",
+    "list_schedules",
+    "cancel_schedule",
+];
+
+/// One session's deferred-tool activation set (`JOY_TOOL_POLICY=deferred`).
+///
+/// A named type because the shape is genuinely nested (session map → set) and the nesting
+/// says nothing at the use site: `Arc<Mutex<BTreeSet<String>>>` four times in a signature
+/// reads as punctuation, not meaning.
+pub type ActivationSet = Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>;
+
+/// Activates deferred tools for one session, by search query. The registry hands it out;
+/// `find_tools` calls it. Returns the names it opened (empty = nothing matched).
+pub type Activator = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
+
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
     /// Lifecycle hooks (see `hooks.rs`). Loaded on the app-server side (it knows home).
@@ -149,6 +197,16 @@ pub struct ToolRegistry {
     /// a broken remote schema must not make a tool unusable (but say so in the startup log;
     /// silently skipping validation makes people think arguments were checked).
     validators: BTreeMap<String, Option<jsonschema::Validator>>,
+    /// `JOY_TOOL_POLICY=deferred`: names whose schema stays out of the request until this
+    /// session activates them. Empty = eager, every schema rides (the default).
+    ///
+    /// Hiding a schema is a **token** decision, never a permission one: an activated tool is
+    /// still subject to its switch and its approval gate, and a deferred tool is still
+    /// callable by name — the table is what the model is shown, not what it may do.
+    deferred: std::collections::BTreeSet<String>,
+    /// Activated names. Per session, hence a shared cell rather than a set on the registry:
+    /// the loop holds `&ToolRegistry` while `find_tools` must mutate this through `ToolCtx`.
+    activated: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl ToolRegistry {
@@ -208,8 +266,98 @@ impl ToolRegistry {
         self.tools.keys().map(String::as_str).collect()
     }
 
+    /// Defer every tool not on `ALWAYS_ON` (`JOY_TOOL_POLICY=deferred`).
+    ///
+    /// Called once, after the table is assembled: the policy is a shape of the request, not
+    /// a property of each registration.
+    pub fn defer_all_but_always(&mut self) {
+        for name in self.tools.keys() {
+            if !ALWAYS_ON.contains(&name.as_str()) {
+                self.deferred.insert(name.clone());
+            }
+        }
+    }
+
+    /// A per-session copy: same tools, fresh activation set.
+    ///
+    /// Per session on purpose — "I showed the model the calendar schema" is a fact about
+    /// this conversation, and one session's discovery must not quietly widen another's request.
+    pub fn session_view(&self) -> Self {
+        self.session_view_with(Arc::new(std::sync::Mutex::new(Default::default())))
+    }
+
+    /// A view over an **existing** activation set.
+    ///
+    /// `find_tools` is called in one turn and its result lands in the next, so the set has
+    /// to outlive a single turn. The caller (app-server) owns the per-session cell; a fresh
+    /// registry on every turn would make the model rediscover the same tool every message —
+    /// strictly worse than the eager table it replaced.
+    pub fn session_view_with(&self, activated: ActivationSet) -> Self {
+        let mut view = self.clone();
+        view.activated = activated;
+        view
+    }
+
+    /// Hand `find_tools` the ability to activate, without giving it the whole registry.
+    ///
+    /// Matching is deliberately plain: lowercase substring of the query in the name or the
+    /// description. A semantic search over twelve tool descriptions would need a model call
+    /// to save a few hundred tokens — the trade is backwards, and "why did this not match"
+    /// must stay answerable by reading the code.
+    pub fn activator(&self) -> Activator {
+        let catalogue: Vec<(String, String)> = self
+            .tools
+            .values()
+            .map(|tool| (tool.name.clone(), tool.description.to_lowercase()))
+            .collect();
+        let deferred = self.deferred.clone();
+        let activated = self.activated.clone();
+        Arc::new(move |query: &str| {
+            let Ok(mut set) = activated.lock() else {
+                return Vec::new();
+            };
+            // Hidden tools first — an already-visible one needs no activation, and saying so
+            // would spend a round teaching the model nothing.
+            let hidden: Vec<&(String, String)> = catalogue
+                .iter()
+                .filter(|(name, _)| deferred.contains(name) && !set.contains(name))
+                .collect();
+            let needle = query.to_lowercase();
+            let words: Vec<&str> = needle.split_whitespace().collect();
+            let mut hit: Vec<String> = hidden
+                .iter()
+                .filter(|(name, desc)| {
+                    words
+                        .iter()
+                        .any(|word| name.to_lowercase().contains(word) || desc.contains(word))
+                })
+                .map(|(name, _)| name.clone())
+                .collect();
+            if hit.is_empty() {
+                // No keyword landed: hand over the whole hidden shelf rather than a dead end.
+                // The model asked because it needs *something*, and one round of reading
+                // twelve names beats three rounds of guessing words.
+                hit = hidden.iter().map(|(name, _)| name.clone()).collect();
+            }
+            for name in &hit {
+                set.insert(name.clone());
+            }
+            hit
+        })
+    }
+
+    /// What the model sees: everything in eager mode, `ALWAYS_ON` + activated in deferred.
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        self.tools.values().map(Tool::schema).collect()
+        let activated = self
+            .activated
+            .lock()
+            .map(|set| set.clone())
+            .unwrap_or_default();
+        self.tools
+            .values()
+            .filter(|tool| !self.deferred.contains(&tool.name) || activated.contains(&tool.name))
+            .map(Tool::schema)
+            .collect()
     }
 
     /// Run one call. **Never returns Err** — errors become text the model can read.

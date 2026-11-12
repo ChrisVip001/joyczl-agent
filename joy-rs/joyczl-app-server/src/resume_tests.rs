@@ -16,14 +16,16 @@ use tokio::sync::mpsc;
 
 use crate::{resume, EventSink, Frame, Server};
 
-/// A server with the scripted fake provider swapped in (same recipe as turn_tests).
-async fn server(mock: Option<Arc<Mock>>) -> Server {
+/// A server with the scripted fake provider swapped in (same recipe as turn_tests),
+/// plus its home — the age-limit tests need a second connection to back-date a row.
+async fn server_with_path(mock: Option<Arc<Mock>>) -> (Server, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("临时目录");
-    let pool = joyczl_state::open(&dir.path().join("state.db"))
+    let home = dir.path().to_path_buf();
+    let pool = joyczl_state::open(&home.join("state.db"))
         .await
         .expect("打开库");
     let settings = Settings {
-        home: dir.path().to_path_buf(),
+        home: home.clone(),
         ..Settings::default()
     };
     let _ = dir.keep(); // sqlite still writes -wal/-shm
@@ -38,7 +40,24 @@ async fn server(mock: Option<Arc<Mock>>) -> Server {
             small_model: "test-small".to_string(),
         }));
     }
-    server
+    (server, home)
+}
+
+async fn server(mock: Option<Arc<Mock>>) -> Server {
+    server_with_path(mock).await.0
+}
+
+/// Back-date a checkpoint without waiting two days.
+async fn back_date(home: &std::path::Path, turn_id: &str, modifier: &str) {
+    let pool = joyczl_state::open(&home.join("state.db"))
+        .await
+        .expect("打开库");
+    sqlx::query("UPDATE turn_checkpoints SET updated_at = datetime('now', ?) WHERE turn_id = ?")
+        .bind(modifier)
+        .bind(turn_id)
+        .execute(&pool)
+        .await
+        .expect("改时间戳");
 }
 
 /// The working memory a killed process would have left behind: user asked, assistant
@@ -243,4 +262,103 @@ async fn a_turn_error_marks_its_checkpoint_abandoned() {
         .await
         .expect("读台账")
         .is_empty());
+}
+
+/// 两天前留下的回合**不**自动续跑：标 abandoned，而不是每次启动都替人再答一遍。
+///
+/// 这条规则来自一次真实的误答：用户 11-10 问「给我一份今天科技新闻的简报」，11-12 启动时
+/// 被续跑，「今天」变成了另一个今天，还花了四万多输入 token 去抓新闻。checkpoint 是崩溃
+/// 恢复，窗口是秒到分钟；跨天之后它已经不是「同一个回合接着跑」了。
+#[tokio::test]
+async fn a_checkpoint_past_the_age_limit_is_abandoned_not_resumed() {
+    let (server, home) = server_with_path(None).await;
+    server
+        .checkpoints
+        .save(
+            "t-stale",
+            "test",
+            "给我一份今天科技新闻的简报",
+            "[]",
+            1,
+            "{}",
+            None,
+        )
+        .await
+        .expect("写 checkpoint");
+    back_date(&home, "t-stale", "-2 days").await;
+
+    let (tx, _rx) = mpsc::unbounded_channel();
+    resume::reconcile(&server, &EventSink::new(tx)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let row = server
+        .checkpoints
+        .get("t-stale")
+        .await
+        .expect("读")
+        .expect("在");
+    assert_eq!(row.status, "abandoned", "超龄的回合不该被自动续跑");
+    assert!(
+        server.checkpoints.open_rows().await.expect("读").is_empty(),
+        "标完 abandoned 之后就没有可续的了 —— 下次启动不该再打印同一行"
+    );
+}
+
+/// 上限设成 0 = 关掉这条规则：回归到「一律续上」，超龄行仍然 `open` 等下一轮。
+#[tokio::test]
+async fn a_zero_limit_keeps_the_old_resume_everything_behaviour() {
+    let (server, home) = server_with_path(None).await;
+    server.set_settings(Settings {
+        home: home.clone(),
+        resume_max_age_minutes: 0,
+        ..Settings::default()
+    });
+    server
+        .checkpoints
+        .save("t-old", "test", "两天前的事", "[]", 1, "{}", None)
+        .await
+        .expect("写 checkpoint");
+    back_date(&home, "t-old", "-2 days").await;
+
+    let (tx, _rx) = mpsc::unbounded_channel();
+    resume::reconcile(&server, &EventSink::new(tx)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let row = server
+        .checkpoints
+        .get("t-old")
+        .await
+        .expect("读")
+        .expect("在");
+    assert_eq!(row.status, "open", "0 是「不设上限」，不是「一律不续」");
+}
+
+/// 时间戳读不出来时按「不知道」处理：照旧续跑，并把话说在 stderr 上。
+/// 拒绝续跑会让人白问一遍；续跑最多是把旧行为重放一次。
+#[test]
+fn an_unreadable_stamp_is_not_evidence_of_age() {
+    let now = chrono::NaiveDateTime::parse_from_str("2026-11-12 06:00:00", "%Y-%m-%d %H:%M:%S")
+        .expect("解析");
+    assert_eq!(super::resume::age_minutes("不是时间", now), None);
+    assert_eq!(
+        super::resume::age_minutes("2026-11-12 05:30:00", now),
+        Some(30)
+    );
+    // 时钟往回跳（未来时间戳）得到负数，也不该被判成超龄。
+    assert_eq!(
+        super::resume::age_minutes("2026-11-12 07:00:00", now),
+        Some(-60)
+    );
+}
+
+/// 人话的粒度：从分钟到天，向下取整 —— 「2 天前」不能读成 1 天。
+#[test]
+fn ages_read_as_minutes_hours_and_days() {
+    assert_eq!(super::resume::humanize(0), "0 分钟");
+    assert_eq!(super::resume::humanize(59), "59 分钟");
+    assert_eq!(super::resume::humanize(60), "1 小时");
+    assert_eq!(super::resume::humanize(119), "1 小时");
+    assert_eq!(super::resume::humanize(1_439), "23 小时");
+    assert_eq!(super::resume::humanize(1_440), "1 天");
+    assert_eq!(super::resume::humanize(2_880), "2 天");
 }

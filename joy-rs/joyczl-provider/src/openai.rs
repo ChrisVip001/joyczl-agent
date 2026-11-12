@@ -157,6 +157,10 @@ impl Client {
                         .get("completion_tokens")
                         .and_then(|v| v.as_i64())
                         .unwrap_or(0);
+                    usage.cache_read_input_tokens = u
+                        .pointer("/prompt_tokens_details/cached_tokens")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
                 }
             }
 
@@ -242,7 +246,10 @@ struct PartialCall {
 /// Anthropic shape → OpenAI shape.
 pub fn to_openai(request: &CreateRequest) -> Value {
     let mut messages: Vec<Value> = Vec::new();
-    if let Some(system) = &request.system {
+    // The stable prefix goes first and never moves: that is what makes the provider's
+    // automatic prefix cache hit. No `cache_control` here — this wire has no such field,
+    // and inventing one is a 400 on some gateways.
+    if let Some(system) = request.system_text() {
         messages.push(json!({ "role": "system", "content": system }));
     }
 
@@ -435,6 +442,11 @@ pub fn from_openai(text: &str) -> Result<CreateResponse, ProviderError> {
             .pointer("/usage/completion_tokens")
             .and_then(|v| v.as_i64())
             .unwrap_or(0),
+        cache_read_input_tokens: value
+            .pointer("/usage/prompt_tokens_details/cached_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        cache_creation_input_tokens: 0,
     };
 
     Ok(CreateResponse {

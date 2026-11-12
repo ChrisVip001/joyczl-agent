@@ -43,6 +43,21 @@ pub async fn roll_forward(
     previous: Option<(i32, String)>,
     newly_evicted: &[(String, String)],
 ) -> (i32, String) {
+    roll_forward_with(client, model, previous, newly_evicted, None).await
+}
+
+/// Same, with a human's emphasis (`/compact 盯住迁移方案`).
+///
+/// The focus is one extra sentence in the material, not a different prompt: "keep this in
+/// mind while summarizing" is exactly what a person means, and rewriting the summarizer
+/// prompt per request would make summaries incomparable turn to turn.
+pub async fn roll_forward_with(
+    client: &dyn Provider,
+    model: &str,
+    previous: Option<(i32, String)>,
+    newly_evicted: &[(String, String)],
+    focus: Option<&str>,
+) -> (i32, String) {
     let (covered_before, previous_summary) = match previous {
         Some((covered, summary)) => (covered, summary),
         None => (0, String::new()),
@@ -51,6 +66,9 @@ pub async fn roll_forward(
 
     // Material for the model: the previous summary plus this batch of newly evicted turns.
     let mut material = String::new();
+    if let Some(focus) = focus.map(str::trim).filter(|f| !f.is_empty()) {
+        material.push_str(&format!("Keep this in mind especially: {focus}\n\n"));
+    }
     if !previous_summary.trim().is_empty() {
         material.push_str("Earlier summary:\n");
         material.push_str(&previous_summary);
@@ -61,6 +79,7 @@ pub async fn roll_forward(
     }
 
     let request = CreateRequest {
+        cache_prefix: None,
         model: model.to_string(),
         system: Some(SUMMARIZER_PROMPT.to_string()),
         messages: vec![Message::user_text(material.clone())],

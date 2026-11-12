@@ -45,6 +45,7 @@ pub async fn grade(
         .replace("{criteria}", &scenario.judge.criteria);
     let response = client
         .create(CreateRequest {
+            cache_prefix: None,
             model: model.to_string(),
             system: None,
             messages: vec![Message::user_text(prompt)],

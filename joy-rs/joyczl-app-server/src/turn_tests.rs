@@ -618,7 +618,10 @@ async fn a_bad_patch_is_rejected_without_touching_anything() {
         other => panic!("非法补丁必须被拒绝：{other:?}"),
     }
     // Nothing changed: memory still holds the defaults, and no patch file is on disk.
-    assert_eq!(server.settings().max_iterations, 10);
+    assert_eq!(
+        server.settings().max_iterations,
+        joyczl_config::Settings::default().max_iterations
+    );
     assert!(!home.join("settings.json").exists());
 }
 
@@ -1445,4 +1448,195 @@ async fn a_queued_message_becomes_its_own_turn_when_the_session_frees_up() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(released, "跑完就该把会话放回去");
+}
+
+/// 一轮跑完，账本里就有这一轮：请求、回复各一行，保真度 exact，轮摘要验得过。
+///
+/// 这是「可重建」的入口断言 —— 没有它，账本只是又一个没人读的表。
+#[tokio::test]
+async fn a_finished_turn_lands_in_the_ledger() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
+        Mock::text("四。"),
+    ]));
+    let server = server(mock, false).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sink = EventSink::new(tx);
+    let _ = crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            attachments: None,
+            session_id: Some("test".to_string()),
+            message: "2+2 等于几？".to_string(),
+            stream: Some(true),
+            cwd: None,
+            tier: None,
+        },
+        RequestId::Number(1),
+        &sink,
+    )
+    .await;
+    while rx.try_recv().is_ok() {}
+
+    let turns = server.ledger.turns("test", 10).await.expect("列账");
+    assert_eq!(turns.len(), 1, "一轮就是一轮");
+    assert_eq!(turns[0].fidelity, "exact", "这一轮是现场记的，不是回填");
+    assert!(turns[0].preview.contains("2+2"), "预览要能认出这一轮");
+
+    let entries = server
+        .ledger
+        .entries("test", &turns[0].turn_id)
+        .await
+        .expect("读账");
+    assert!(
+        entries.iter().any(|entry| entry.kind == "user"),
+        "请求要入账"
+    );
+    assert!(
+        entries.iter().any(|entry| entry.kind == "assistant"),
+        "回复要入账"
+    );
+    assert!(
+        server
+            .ledger
+            .verify("test", &turns[0].turn_id)
+            .await
+            .expect("验账"),
+        "刚写完就该验得过"
+    );
+}
+
+/// 系统提示里带「记忆库目录」，但不带正文；目录为空时一个字都不多占。
+#[test]
+fn the_system_prompt_carries_the_catalog_not_the_pages() {
+    let catalog = "# 记忆目录\n\n2 页 · 最后更新 2026-11-12T00:00:00Z\n\n- [Alex](alex.md) · person — 喜欢早会\n";
+    let with = crate::turn::build_system(crate::turn::PromptParts {
+        soul: "你是 Joy。",
+        model: "test-model",
+        provider: "mock",
+        memory: "",
+        memory_index: Some(catalog),
+        skill_index: None,
+        skills: "",
+        todo: None,
+        summary: None,
+        capabilities: None,
+    })
+    .full();
+    assert!(with.contains("Memory library"), "{with}");
+    assert!(with.contains("[Alex](alex.md)"), "目录要进去：{with}");
+    assert!(
+        with.contains("read_memory_page"),
+        "要告诉模型按需读页：{with}"
+    );
+    assert!(!with.contains("Alice 喜欢"), "正文不该常驻：{with}");
+
+    let without = crate::turn::build_system(crate::turn::PromptParts {
+        soul: "你是 Joy。",
+        model: "test-model",
+        provider: "mock",
+        memory: "",
+        memory_index: Some(""),
+        skill_index: None,
+        skills: "",
+        todo: None,
+        summary: None,
+        capabilities: None,
+    })
+    .full();
+    assert!(
+        !without.contains("Memory library"),
+        "空目录不占提示：{without}"
+    );
+    assert!(without.len() < with.len(), "有目录才更长");
+}
+
+/// 薄 SOUL 是给强模型的：同样的三条纪律，去掉脚手架；用户动过文件之后，文件说了算。
+#[test]
+fn the_thin_soul_trades_scaffolding_for_tokens_and_a_user_edit_wins() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let home = dir.path().to_path_buf();
+
+    let thin = crate::turn::load_soul(&home, true);
+    assert!(thin.contains("简洁、温暖、主动"), "薄版该保留身份：{thin}");
+    assert!(
+        !thin.contains("先征得同意"),
+        "薄版不该带长脚手架的细则：{thin}"
+    );
+
+    // 默认文本可以随模式互换 —— 那是「用户没动过」这一种情况。
+    let full = crate::turn::load_soul(&home, false);
+    assert!(full.contains("先征得同意"), "全版该有完整规则：{full}");
+
+    // 用户写过的 SOUL.md 是权威：任何模式都不覆盖。
+    std::fs::write(home.join("SOUL.md"), "只叫我船长。").expect("写 SOUL.md");
+    assert_eq!(crate::turn::load_soul(&home, true), "只叫我船长。");
+    assert_eq!(crate::turn::load_soul(&home, false), "只叫我船长。");
+}
+
+/// 稳定前缀与会变的尾巴必须分开：同一会话里前缀逐字节不变，时间只到日。
+#[test]
+fn the_stable_prefix_does_not_move_between_turns() {
+    let parts = |todo: Option<&'static str>| crate::turn::PromptParts {
+        soul: "你是 Joy。",
+        model: "test-model",
+        provider: "mock",
+        memory: "Alex 喜欢早上的会议",
+        memory_index: Some("- [Alex](alex.md) — 人"),
+        skill_index: Some("- demo — 一段流程"),
+        skills: "",
+        todo,
+        summary: None,
+        capabilities: None,
+    };
+    let first = crate::turn::build_system(parts(None));
+    let second = crate::turn::build_system(parts(Some("## 待办清单\n- [ ] 写测试")));
+
+    assert_eq!(first.stable, second.stable, "前缀跨轮必须逐字节相同");
+    assert_ne!(first.tail, second.tail, "待办变了，尾巴就该变");
+    assert!(first.tail.contains("Right now it is"), "日期在尾巴里");
+    // 日粒度：带时分就意味着每小时失效一次缓存。
+    let now = chrono::Local::now();
+    assert!(first.tail.contains(&now.format("%Y-%m-%d").to_string()));
+    assert!(!first.tail.contains(&now.format("%H:%M").to_string()));
+}
+
+/// 本机缺什么要写进提示。
+///
+/// 没有这句时，模型分不清「这个工具不存在」和「我还没找到合适的工具」—— 一次「清理日历」
+/// 的请求因此在 10 步里读了 4 篇本仓库文档。Codex 把自己的沙箱权限写进 developer 消息，
+/// Claude Code 把权限模式写进系统提示，同一个理由：能力边界属于上下文，不属于试错。
+#[test]
+fn the_prompt_says_what_the_machine_cannot_do() {
+    let off = joyczl_config::Settings::default();
+    assert!(
+        !off.exec_enabled && !off.write_enabled,
+        "两个开关默认都是关的"
+    );
+
+    let note = crate::turn::capability_note(&off).expect("都关着就该出现");
+    assert!(note.contains("JOY_EXEC"), "{note}");
+    assert!(note.contains("JOY_WRITE"), "{note}");
+    assert!(note.contains("say so"), "要说的是「做不到就直说」：{note}");
+
+    // 只缺一样就只说一样：提示不是固定文案，它跟着开关走。
+    let half = joyczl_config::Settings {
+        exec_enabled: true,
+        ..joyczl_config::Settings::default()
+    };
+    let note = crate::turn::capability_note(&half).expect("缺写文件");
+    assert!(
+        note.contains("JOY_WRITE") && !note.contains("JOY_EXEC"),
+        "{note}"
+    );
+
+    let full = joyczl_config::Settings {
+        exec_enabled: true,
+        write_enabled: true,
+        ..joyczl_config::Settings::default()
+    };
+    assert!(
+        crate::turn::capability_note(&full).is_none(),
+        "都开着就不该占提示"
+    );
 }

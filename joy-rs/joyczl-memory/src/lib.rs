@@ -9,10 +9,13 @@
 //! Both of the first two deliberately **fail open**: if gate errors, retrieve as usual
 //! (stale beats lost); if consolidation errors, logs stay undistilled (raw records stay).
 
+pub mod bundle;
 pub mod compaction;
 pub mod consolidation;
+pub mod frontmatter;
 pub mod gate;
 pub mod install;
+pub mod mirror;
 pub mod retrieval;
 pub mod skills;
 

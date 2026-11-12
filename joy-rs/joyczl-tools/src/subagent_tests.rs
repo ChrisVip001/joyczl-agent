@@ -63,6 +63,8 @@ async fn ctx() -> super::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     super::ToolCtx {
+        activate: None,
+        embedder: None,
         cwd: None,
         approval: None,
         jobs: None,

@@ -14,6 +14,8 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm
     ToolCtx {
+        activate: None,
+        embedder: None,
         cwd: None,
         approval: None,
         jobs: None,
@@ -338,4 +340,20 @@ fn turn_limits_start_empty() {
     assert_eq!(limits.search_max, 20);
     assert_eq!(TurnLimits::new(0).search_max, 1, "0 钳到下界，永不为负预算");
     assert_eq!(TurnLimits::new(99_999).search_max, 200, "上界钳制");
+}
+
+/// `&` 后面紧跟宽字符时，那 12 字节的前瞻窗口会落在字符中间。
+///
+/// 这不是「没找到实体」，是一个 panic：`byte index 29899 is not a char boundary`，
+/// 真在驾驶舱启动后的第一轮抓取里炸过。窗口必须退到边界，认不出的实体原样留着。
+#[test]
+fn an_ampersand_before_a_wide_character_does_not_panic() {
+    let text = "&中文中文中文中文中文中文";
+    let out = html_to_text(text);
+    assert!(out.contains('&'), "认不出的实体要原样留着：{out}");
+    assert!(out.contains("中文"), "正文不该被吃掉：{out}");
+
+    // 边界修好之后，正常实体仍要解出来（`html_to_text` 会在末尾补一个块分隔换行）。
+    assert_eq!(html_to_text("&amp;中文").trim(), "&中文");
+    assert_eq!(html_to_text("&#20013;").trim(), "中");
 }

@@ -27,7 +27,8 @@ fn anthropic_parse_handles_text_and_tool_use() {
         response.usage,
         Usage {
             input_tokens: 100,
-            output_tokens: 40
+            output_tokens: 40,
+            ..Usage::default()
         }
     );
     assert_eq!(response.tool_uses().len(), 1);
@@ -57,6 +58,7 @@ fn stop_reason_unknown_value_becomes_other() {
 #[test]
 fn openai_conversion_round_trips_tool_calls() {
     let request = CreateRequest {
+        cache_prefix: None,
         model: "gpt-5.5".to_string(),
         system: Some("你是 Joy".to_string()),
         messages: vec![
@@ -405,6 +407,7 @@ async fn a_rate_limit_is_retried_and_announced() {
     let response = crate::retry::with_note_sink(
         sink,
         resolved.client.create(crate::CreateRequest {
+            cache_prefix: None,
             model: "test-model".to_string(),
             system: None,
             messages: Vec::new(),
@@ -437,6 +440,7 @@ async fn retries_can_be_switched_off() {
     let error = crate::retry::with_note_sink(
         sink,
         resolved.client.create(crate::CreateRequest {
+            cache_prefix: None,
             model: "test-model".to_string(),
             system: None,
             messages: Vec::new(),
@@ -462,6 +466,7 @@ async fn a_client_error_is_not_retried() {
     let error = crate::retry::with_note_sink(
         sink,
         resolved.client.create(crate::CreateRequest {
+            cache_prefix: None,
             model: "test-model".to_string(),
             system: None,
             messages: Vec::new(),
@@ -644,6 +649,7 @@ fn a_profile_vision_declaration_beats_the_vendor_default() {
 #[test]
 fn openai_wire_sends_images_as_data_uris_in_array_content() {
     let request = CreateRequest {
+        cache_prefix: None,
         model: "gpt-5.5".to_string(),
         system: None,
         messages: vec![Message {
@@ -673,6 +679,7 @@ fn openai_wire_sends_images_as_data_uris_in_array_content() {
 
     // 无图消息保持纯字符串 content（对既有客户端/测试零扰动）。
     let plain = CreateRequest {
+        cache_prefix: None,
         model: "gpt-5.5".to_string(),
         system: None,
         messages: vec![Message::user_text("纯文本")],

@@ -16,6 +16,8 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     ToolCtx {
+        activate: None,
+        embedder: None,
         cwd: None,
         approval: None,
         jobs: None,
@@ -36,17 +38,23 @@ async fn default_registry_has_the_expected_tools() {
     assert_eq!(
         registry.names(),
         vec![
+            "cancel_schedule",
             "create_event",
             "create_skill",
             "current_time",
             "fetch_url",
+            "find_tools",
             "forget_note",
             "list_dir",
             "list_events",
             "list_memory",
+            "list_schedules",
             "manage_memory",
             "read_file",
+            "read_memory_page",
+            "read_skill",
             "save_note",
+            "schedule_job",
             "search_memory",
             "search_web",
             "send_message"
@@ -598,4 +606,155 @@ fn tool(name: &str, answer: &str) -> super::Tool {
                 >
         }),
     }
+}
+
+/// 记忆页：模型按目录读页，读到正文与出处；没有的页给一句话而不是空。
+#[tokio::test]
+async fn reading_a_memory_page_carries_its_sources() {
+    let ctx = ctx().await;
+    let bundle = joyczl_memory::bundle::Bundle::new(&ctx.home);
+    let mut page = joyczl_memory::bundle::Page::new(
+        "alex",
+        "person",
+        "Alex",
+        "alex",
+        "喜欢早会",
+        "Alice 喜欢早上七点的会。",
+    );
+    page.sources = vec!["fact:1".to_string(), "ledger:s1/t3".to_string()];
+    bundle.write(&page).expect("写页");
+
+    let registry = handlers::build_default();
+    let out = registry
+        .execute(
+            ctx.clone(),
+            "read_memory_page",
+            serde_json::json!({"page": "alex"}),
+        )
+        .await;
+    assert!(out.contains("Alex"), "{out}");
+    assert!(out.contains("早上七点的会"), "{out}");
+    assert!(out.contains("fact:1"), "出处要带出来：{out}");
+
+    let missing = registry
+        .execute(
+            ctx,
+            "read_memory_page",
+            serde_json::json!({"page": "nobody"}),
+        )
+        .await;
+    assert!(missing.contains("没有「nobody」这一页"), "{missing}");
+}
+
+/// `JOY_TOOL_POLICY=deferred`：工具表先窄，`find_tools` 打开后下一轮才宽。
+///
+/// 两条边界一起钉住：受开关与审批约束的工具**永远不会**被藏起来（发现步骤不能跑到
+/// 授权前面），而隐藏只影响「模型看到什么」，不影响它能调什么。
+#[test]
+fn deferred_hides_the_shelf_until_find_tools_opens_it() {
+    let mut view = handlers::build_default().session_view();
+    view.defer_all_but_always();
+    let names = |registry: &ToolRegistry| -> Vec<String> {
+        registry
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect()
+    };
+
+    assert!(
+        !names(&view).contains(&"list_memory".to_string()),
+        "deferred 下没激活的工具不该进请求"
+    );
+    for always in [
+        "current_time",
+        "find_tools",
+        "save_note",
+        "search_memory",
+        "read_file",
+    ] {
+        assert!(
+            names(&view).contains(&always.to_string()),
+            "{always} 是常驻工具，不该被藏"
+        );
+    }
+
+    let opened = view.activator()("记住的几条");
+    assert_eq!(
+        opened,
+        vec!["list_memory".to_string()],
+        "查询该只落在目标的描述上"
+    );
+    assert!(
+        names(&view).contains(&"list_memory".to_string()),
+        "打开之后下一轮该出现在工具表里"
+    );
+}
+
+/// 一句话建任务：声明落在 `<home>`，模型不必让用户去挑工作目录。
+///
+/// 这条来自一次真实的卡住：用户说「帮我做一个定时任务」，模型去写 `schedules.json`，
+/// 而那是工作区之外的文件 —— `write_file` 拒绝得对，界面却只好问「请选择目录」。
+/// 定时任务是 Joy 自己的状态，不是项目内容，该由工具直接写。
+#[tokio::test]
+async fn schedule_job_writes_the_declaration_into_home() {
+    let registry = handlers::build_default();
+    let ctx = ctx().await;
+
+    let out = registry
+        .execute(
+            ctx.clone(),
+            "schedule_job",
+            json!({"name": "morning-news", "cron": "0 8 * * 1-5", "prompt": "给我一份科技简报"}),
+        )
+        .await;
+    assert!(out.contains("已保存"), "{out}");
+    assert!(out.contains("下次触发"), "要告诉人什么时候跑：{out}");
+    assert!(
+        out.contains("joy schedule"),
+        "谁在触发必须说清楚，否则它看起来像已经排好了：{out}"
+    );
+    assert!(
+        ctx.home.join("schedules.json").exists(),
+        "声明该落在 home 里，不是工作目录"
+    );
+
+    let listed = registry
+        .execute(ctx.clone(), "list_schedules", json!({}))
+        .await;
+    assert!(listed.contains("morning-news"), "{listed}");
+
+    let gone = registry
+        .execute(
+            ctx.clone(),
+            "cancel_schedule",
+            json!({"name": "morning-news"}),
+        )
+        .await;
+    assert!(gone.contains("已删除"), "{gone}");
+    let after = registry
+        .execute(ctx.clone(), "list_schedules", json!({}))
+        .await;
+    assert!(after.contains("还没有"), "{after}");
+}
+
+/// 坏输入变成一句可执行的话（`Error:` 文本回给模型），且不留下半个文件。
+#[tokio::test]
+async fn a_bad_cron_comes_back_as_a_sentence() {
+    let registry = handlers::build_default();
+    let ctx = ctx().await;
+
+    let error = registry
+        .execute(
+            ctx.clone(),
+            "schedule_job",
+            json!({"name": "x", "cron": "0 8 * *", "prompt": "y"}),
+        )
+        .await;
+    assert!(error.starts_with("Error"), "{error}");
+    assert!(error.contains("五段"), "{error}");
+    assert!(
+        !ctx.home.join("schedules.json").exists(),
+        "被拒绝时不该留下文件"
+    );
 }

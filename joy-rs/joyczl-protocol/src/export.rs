@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::protocol::memory_center::*;
 use crate::protocol::v2::*;
 use crate::rpc::*;
 
@@ -48,6 +49,24 @@ macro_rules! protocol_types {
             GateDecision,
             GraphRouteKind,
             GraphInfo,
+            // ---- Memory center
+            LedgerEntryView,
+            LedgerTurnView,
+            MemoryLedgerParams,
+            MemoryLedgerResponse,
+            MemoryPageSummary,
+            MemoryIndexResponse,
+            MemoryPageParams,
+            MemoryPageView,
+            MemoryPageResponse,
+            ContextPart,
+            ContextUsage,
+            ContextUsageParams,
+            ContextUsageResponse,
+            SkillStat,
+            SkillStatsResponse,
+            SessionCompactParams,
+            SessionCompactResponse,
             ToolStatus,
             ToolCallRecord,
             TurnMeta,

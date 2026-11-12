@@ -49,6 +49,7 @@ impl Decision {
 pub async fn should_retrieve(client: &dyn Provider, small_model: &str, message: &str) -> Decision {
     let prompt = GATE_PROMPT.replace("{message}", message);
     let request = CreateRequest {
+        cache_prefix: None,
         model: small_model.to_string(),
         system: None,
         messages: vec![Message::user_text(prompt)],

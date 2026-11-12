@@ -17,6 +17,8 @@ async fn test_ctx(approval: Option<Arc<dyn ApprovalBroker>>) -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     ToolCtx {
+        activate: None,
+        embedder: None,
         // The suite writes under `home`; treat it as the human's chosen workspace.
         cwd: Some(home.clone()),
         approval,

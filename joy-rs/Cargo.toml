@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "joyczl-protocol",
+    "joyczl-schedule",
     "joyczl-protocol-noop-macros",
     "joyczl-config",
     "joyczl-provider",
@@ -59,6 +60,7 @@ tiktoken-rs = { version = "0.12", default-features = false }
 # 这样协议 crate 不必把 ts-rs / schemars 打进线上二进制。
 joyczl-protocol-noop-macros = { path = "joyczl-protocol-noop-macros" }
 joyczl-protocol = { path = "joyczl-protocol" }
+joyczl-schedule = { path = "joyczl-schedule" }
 joyczl-state = { path = "joyczl-state" }
 joyczl-config = { path = "joyczl-config" }
 joyczl-provider = { path = "joyczl-provider" }

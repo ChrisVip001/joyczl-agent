@@ -1,0 +1,14 @@
+# 工具表策略（JOY_TOOL_POLICY）：
+#   - eager（默认）：每个注册的工具 schema 都在请求里 —— 这是老行为，先钉住它不被改坏；
+#   - deferred：只留 ALWAYS_ON（受开关与审批约束的那几个 + 每轮都可能用到的），
+#     其余靠 find_tools 打开，**下一轮**才进工具表；
+#   - 打开之后真的能调 —— 只把 schema 藏起来是不可见的坑，这里连调用一起断言。
+#
+# 为什么这两条要成对存在：deferred 的第一价值是「省固定开销」，第二才是「模型自己找」。
+# 只测第二条，就会漏掉「省」；只测第一条，就会漏掉「找得到」。
+
+{"id":"tool-policy/deferred-hides-the-shelf","description":"deferred：list_memory 的 schema 不进第一轮请求，find_tools 自己在","message":"你好","settings":{"tool_policy":"deferred"},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"你好。"}],"expect":{"last_prompt_contains":["find_tools"],"last_prompt_not_contains":["列出最近记住的几条事实"]}}
+
+{"id":"tool-policy/eager-keeps-every-schema","description":"eager（默认）：同样的消息也能看到 list_memory 的 schema，不需要先找","message":"你好","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"你好。"}],"expect":{"last_prompt_contains":["列出最近记住的几条事实","find_tools"]}}
+
+{"id":"tool-policy/find-tools-opens-the-shelf","description":"find_tools 打开 list_memory：下一轮的请求里有它的 schema，并且真的调得动","settings":{"tool_policy":"deferred"},"turns":[{"message":"看看你都记了什么","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"tool_use":{"name":"find_tools","args":{"query":"记住的几条"}}},{"text":"找到了，下一轮就能用。"}]},{"message":"继续","gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"tool_use":{"name":"list_memory","args":{"limit":5}}},{"text":"现在还没记什么。"}]}],"expect":{"tools_used":["find_tools","list_memory"],"tool_output_contains":["已打开 1 个工具"],"last_prompt_contains":["列出最近记住的几条事实"],"reply_contains":["没记"]}}

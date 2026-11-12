@@ -22,6 +22,14 @@ write-app-server-schema *args:
 check-app-server-schema:
     {{ python }} {{ justfile_directory() }}/scripts/write_schema.py --check
 
+# ---- Docs: one number, three places ------------------------------------------------------
+# The tool count appears in the code, in docs/internals/06-tools.md §6.0 (list + heading) and
+# in both READMEs. Three copies drift; this is the one that notices. Why a script and not a
+# cargo test: these Markdown files are not inside a crate, and a packaged crate should not go
+# red because a repository document was reworded.
+check-tool-docs:
+    {{ python }} {{ justfile_directory() }}/scripts/check_tool_docs.py
+
 # ---- Rust ------------------------------------------------------------------
 fmt:
     cd {{ rust_dir }} && cargo fmt --all
@@ -174,6 +182,6 @@ smoke-sdk-python: build
 
 # ---- Run all checks in one command ----------------------------------------------
 # gate sits last: beyond green tests and lint, the deterministic eval must also pass 100%.
-check: fmt-check check-app-server-schema ts-check py-check eval
+check: fmt-check check-app-server-schema check-tool-docs ts-check py-check eval
     cd {{ rust_dir }} && cargo clippy --workspace --all-targets -- -D warnings
     cd {{ rust_dir }} && cargo test --workspace

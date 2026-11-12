@@ -1,4 +1,5 @@
-//! Intra-turn budget rules: big ones only, largest first, idempotent, self-budgeted untouched.
+//! Intra-turn budget rules: big ones only, oldest first (newest kept), idempotent,
+//! self-budgeted untouched.
 
 use joyczl_provider::{ContentBlock, Message, Role};
 
@@ -30,6 +31,8 @@ fn budget(total: usize, per_result: usize) -> ToolResultBudget {
     ToolResultBudget {
         total_chars: total,
         per_result_chars: per_result,
+        // Old tests keep the historical "no free pass" shape; `keep_recent` has its own test.
+        keep_recent: 0,
     }
 }
 
@@ -38,6 +41,48 @@ fn result_text(messages: &[Message], index: usize) -> &str {
         ContentBlock::ToolResult { content, .. } => content,
         _ => panic!("不是工具结果"),
     }
+}
+
+/// Trimming walks oldest-first and never touches the newest results: those are the ones
+/// the model is reasoning about right now.
+#[test]
+fn the_newest_results_survive_and_the_oldest_go_first() {
+    let mut messages = vec![
+        call("1", "mcp__x__a"),
+        result("1", 400),
+        call("2", "mcp__x__b"),
+        result("2", 400),
+        call("3", "mcp__x__c"),
+        result("3", 400),
+    ];
+    let budget = ToolResultBudget {
+        total_chars: 500,
+        per_result_chars: 100,
+        keep_recent: 2,
+    };
+
+    let report = trim_tool_results(&mut messages, None, &budget, "s");
+
+    assert_eq!(report.trimmed, 1, "只该换最旧的一条");
+    assert!(
+        result_text(&messages, 1).chars().count() < 400,
+        "最旧的一条该换桩：{}",
+        result_text(&messages, 1)
+    );
+    assert_eq!(
+        result_text(&messages, 3).chars().count(),
+        400,
+        "次新的一条不动"
+    );
+    assert_eq!(
+        result_text(&messages, 5).chars().count(),
+        400,
+        "最新的一条不动"
+    );
+    assert!(
+        report.still_over_budget,
+        "保留最新导致仍超预算时要如实说出来"
+    );
 }
 
 #[test]

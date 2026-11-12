@@ -18,6 +18,8 @@ joyczl-state = { workspace = true }
 # `joy skill install <url>` 抓 SKILL.md 原文；reqwest 早已在依赖树里（provider 就在用），
 # 不是新编译物。
 reqwest = { workspace = true }
+# 记忆页与账本的行摘要（sha256），workspace 里已有。
+sha2 = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

@@ -71,6 +71,14 @@ pub const BOUNDS: &[Bound] = &[
         max: 1_000,
     },
     Bound {
+        // env-only: "how long a crashed turn stays resumable" is not a tuning knob a
+        // settings.json patch should quietly change under a running dashboard.
+        patch_name: None,
+        env_name: "JOY_RESUME_MAX_AGE",
+        min: 0,
+        max: 10_080,
+    },
+    Bound {
         patch_name: Some("consolidateEvery"),
         env_name: "JOY_CONSOLIDATE_EVERY",
         min: 1,
@@ -81,6 +89,14 @@ pub const BOUNDS: &[Bound] = &[
         env_name: "JOY_RETRIEVAL_TOP_K",
         min: 1,
         max: 100,
+    },
+    // Below 1 KiB the ledger would spill nearly every tool result (pointers everywhere,
+    // files everywhere); above 1 MiB a single row starts to bloat the database again.
+    Bound {
+        patch_name: None,
+        env_name: "JOY_LEDGER_INLINE_MAX",
+        min: 1_024,
+        max: 1_048_576,
     },
     Bound {
         patch_name: None,
@@ -93,6 +109,33 @@ pub const BOUNDS: &[Bound] = &[
         env_name: "JOY_TOOL_RESULT_MAX_CHARS",
         min: 0,
         max: 1_000_000,
+    },
+    // The skill index rides in every prompt, the bodies only when a skill is selected: the
+    // index cap is deliberately small (a catalog nobody prunes becomes the context problem
+    // it was meant to solve), the body cap is one page of instructions.
+    Bound {
+        patch_name: None,
+        env_name: "JOY_TOOL_RESULT_KEEP_RECENT",
+        min: 0,
+        max: 50,
+    },
+    Bound {
+        patch_name: None,
+        env_name: "JOY_SKILL_INDEX_TOKENS",
+        min: 32,
+        max: 2_000,
+    },
+    Bound {
+        patch_name: None,
+        env_name: "JOY_SKILL_BODY_TOKENS",
+        min: 64,
+        max: 8_000,
+    },
+    Bound {
+        patch_name: None,
+        env_name: "JOY_CONTEXT_WARN_RATIO",
+        min: 50,
+        max: 99,
     },
     Bound {
         patch_name: None,
@@ -218,10 +261,56 @@ pub struct Settings {
     /// blow the window while the turn count still looks "safe".
     pub compact_threshold: f64,
 
+    // ---- Turn engine
+    /// `JOY_RESUME_MAX_AGE`: how old an `open` checkpoint may be, in **minutes**, before
+    /// startup stops resuming it on its own. `0` = never stop (the old unconditional rule).
+    ///
+    /// A checkpoint exists for crash recovery, so the honest window is seconds to minutes.
+    /// Past an hour it stops being "the same turn continued": "today", "just now" and
+    /// "this week" have moved, the human's intent has usually cooled, and the resume spends
+    /// a real model call to answer a question they no longer have. The stale row is marked
+    /// `abandoned` with one line on stderr — asking again is one sentence.
+    pub resume_max_age_minutes: i32,
+
     // ---- Memory
     /// Distill facts only once every N turns of new conversation.
     pub consolidate_every: i32,
+    /// `JOY_LEDGER_INLINE_MAX`: how large one ledger payload may be before it is spilled
+    /// to `<home>/ledger/`. The record keeps a pointer + digest instead of the bytes —
+    /// big enough that ordinary messages stay inline, small enough that a 200 KB tool
+    /// output never lands in the database.
+    pub ledger_inline_max: i32,
     pub retrieval_top_k: i32,
+
+    // ---- Prompt shape (see turn.rs's build_system)
+    /// `JOY_SOUL_MODE`: how much of the built-in soul scaffolding wraps `SOUL.md`.
+    ///
+    /// * `auto` (default) — thin for models that need no hand-holding, full for local
+    ///   small models (see `PROVIDERS` / catalog: reasoning-class ids get the thin one).
+    /// * `thin` — the user's `SOUL.md` plus one paragraph of method; no examples, no rules
+    ///   the strong model already follows.
+    /// * `full` — the original long scaffolding, unchanged.
+    ///
+    /// The reasoning: a strong model follows ten rules as well as forty, and every extra
+    /// line is paid for on every turn. A 7B local model needs the forty.
+    pub soul_mode: String,
+    /// `JOY_SKILL_INDEX_TOKENS`: cap on the always-present skill catalog
+    /// (name + one-line description per skill).
+    pub skill_index_tokens: i32,
+    /// `JOY_SKILL_BODY_TOKENS`: cap on one selected skill's body. Beyond it the text is
+    /// truncated with an honest marker, never silently dropped.
+    pub skill_body_tokens: i32,
+    /// `JOY_TOOL_POLICY`: which tool schemas ride on every request.
+    ///
+    /// * `eager` (default) — every registered tool, as before.
+    /// * `deferred` — only the always-there few; the rest are activated in-session by
+    ///   `find_tools`. Tools gated by a switch or by approval (`run_command`,
+    ///   `write_file`, `edit`, `delegate_task`) are **never** deferred: they stay exactly
+    ///   where the switch put them.
+    pub tool_policy: String,
+    /// `JOY_CONTEXT_WARN_RATIO`: percentage of the window at which the turn emits a
+    /// context-pressure notice (default 85). A notice, not a dialog: it never interrupts.
+    pub context_warn_ratio: i32,
 
     // ---- Cockpit HTTP surface (see joyczl-ops)
     /// `JOY_OPS_HOST`: address the cockpit binds to. Default 127.0.0.1 — a personal assistant
@@ -250,6 +339,10 @@ pub struct Settings {
     /// `JOY_TOOL_RESULT_MAX_CHARS`: a result must exceed this to qualify for stubbing.
     /// Default 30000 (about 8k tokens). Set 0 to disable.
     pub tool_result_max_chars: i64,
+    /// `JOY_TOOL_RESULT_KEEP_RECENT`: how many of the **newest** results are never stubbed
+    /// (default 3). Trimming goes oldest-first: the model is reasoning about the last few
+    /// results, and stubbing one of those answers a question it just asked.
+    pub tool_result_keep_recent: i32,
 
     // ---- Lifecycle hooks (see hooks.rs in joyczl-tools)
     /// `JOY_HOOKS`: only when enabled does Joy read `<home>/hooks.json` and run its commands.
@@ -324,13 +417,25 @@ impl Default for Settings {
             plan_enabled: false,
             llm_retries: 2,
             llm_timeout_secs: 120,
-            max_iterations: 10,
+            // A **budget**, not a limit on competence: 10 was small enough that an honest
+            // exploration (read the file, check the schema, retry once) could hit it. The loop
+            // now spends the last step on a wrap-up instead of a canned apology, so the number
+            // bounds cost rather than success. Claude Code does not cap interactive turns at
+            // all; 32 is the compromise for a laptop agent.
+            max_iterations: 32,
             max_tokens: 8192,
             history_turns: 12,
             context_window: None,
             compact_threshold: 0.8,
+            resume_max_age_minutes: 60,
             consolidate_every: 6,
+            ledger_inline_max: 32_768,
             retrieval_top_k: 4,
+            soul_mode: "auto".to_string(),
+            skill_index_tokens: 200,
+            skill_body_tokens: 1_200,
+            tool_policy: "eager".to_string(),
+            context_warn_ratio: 85,
             ops_host: "127.0.0.1".to_string(),
             ops_token: None,
             notify_enabled: false,
@@ -340,6 +445,7 @@ impl Default for Settings {
             delegate_enabled: false,
             tool_result_total_chars: 200_000,
             tool_result_max_chars: 30_000,
+            tool_result_keep_recent: 3,
             hooks_enabled: false,
             hub_max_open: 32,
             hub_idle_secs: 900,
@@ -385,8 +491,15 @@ impl Settings {
             history_turns: env_int("JOY_HISTORY_TURNS", d.history_turns),
             context_window: env("JOY_CONTEXT_WINDOW").and_then(|v| v.parse().ok()),
             compact_threshold: env_float("JOY_COMPACT_THRESHOLD", d.compact_threshold),
+            resume_max_age_minutes: env_int("JOY_RESUME_MAX_AGE", d.resume_max_age_minutes),
             consolidate_every: env_int("JOY_CONSOLIDATE_EVERY", d.consolidate_every),
+            ledger_inline_max: env_int("JOY_LEDGER_INLINE_MAX", d.ledger_inline_max),
             retrieval_top_k: env_int("JOY_RETRIEVAL_TOP_K", d.retrieval_top_k),
+            soul_mode: env("JOY_SOUL_MODE").unwrap_or(d.soul_mode),
+            skill_index_tokens: env_int("JOY_SKILL_INDEX_TOKENS", d.skill_index_tokens),
+            skill_body_tokens: env_int("JOY_SKILL_BODY_TOKENS", d.skill_body_tokens),
+            tool_policy: env("JOY_TOOL_POLICY").unwrap_or(d.tool_policy),
+            context_warn_ratio: env_int("JOY_CONTEXT_WARN_RATIO", d.context_warn_ratio),
             ops_host: env("JOY_OPS_HOST").unwrap_or(d.ops_host),
             ops_token: env("JOY_OPS_TOKEN"),
             notify_enabled: env_bool("JOY_NOTIFY"),
@@ -402,6 +515,10 @@ impl Settings {
                 "JOY_TOOL_RESULT_MAX_CHARS",
                 d.tool_result_max_chars as i32,
             ) as i64,
+            tool_result_keep_recent: env_int(
+                "JOY_TOOL_RESULT_KEEP_RECENT",
+                d.tool_result_keep_recent,
+            ),
             hooks_enabled: env_bool("JOY_HOOKS"),
             hub_max_open: env_int("JOY_HUB_MAX_OPEN", d.hub_max_open as i32) as i64,
             hub_idle_secs: env_int("JOY_HUB_IDLE_SECS", d.hub_idle_secs as i32) as i64,
@@ -451,6 +568,8 @@ impl Settings {
         check_bound("JOY_MAX_TOKENS", self.max_tokens as i64)?;
         check_bound("JOY_HISTORY_TURNS", self.history_turns as i64)?;
         check_bound("JOY_CONSOLIDATE_EVERY", self.consolidate_every as i64)?;
+        check_bound("JOY_RESUME_MAX_AGE", self.resume_max_age_minutes as i64)?;
+        check_bound("JOY_LEDGER_INLINE_MAX", self.ledger_inline_max as i64)?;
         check_bound("JOY_RETRIEVAL_TOP_K", self.retrieval_top_k as i64)?;
         check_bound("JOY_GOAL_MAX_ROUNDS", self.goal_max_rounds as i64)?;
         check_bound("JOY_LLM_RETRIES", self.llm_retries as i64)?;
@@ -462,10 +581,31 @@ impl Settings {
         check_bound("JOY_APPROVAL_TIMEOUT", self.approval_timeout_secs)?;
         check_bound("JOY_TOOL_RESULT_TOTAL_CHARS", self.tool_result_total_chars)?;
         check_bound("JOY_TOOL_RESULT_MAX_CHARS", self.tool_result_max_chars)?;
+        check_bound(
+            "JOY_TOOL_RESULT_KEEP_RECENT",
+            self.tool_result_keep_recent as i64,
+        )?;
+        check_bound("JOY_SKILL_INDEX_TOKENS", self.skill_index_tokens as i64)?;
+        check_bound("JOY_SKILL_BODY_TOKENS", self.skill_body_tokens as i64)?;
+        check_bound("JOY_CONTEXT_WARN_RATIO", self.context_warn_ratio as i64)?;
         if !matches!(self.approval.as_str(), "never" | "on-request") {
             return Err(format!(
                 "JOY_APPROVAL 只能是 never 或 on-request，收到 '{}'",
                 self.approval
+            ));
+        }
+        // Enumerations are checked here, not in BOUNDS: a typo must fail at startup, not
+        // silently fall back to the default (that is the failure mode this table exists for).
+        if !matches!(self.soul_mode.as_str(), "auto" | "thin" | "full") {
+            return Err(format!(
+                "JOY_SOUL_MODE 只能是 auto / thin / full，收到 '{}'",
+                self.soul_mode
+            ));
+        }
+        if !matches!(self.tool_policy.as_str(), "eager" | "deferred") {
+            return Err(format!(
+                "JOY_TOOL_POLICY 只能是 eager / deferred，收到 '{}'",
+                self.tool_policy
             ));
         }
 
@@ -661,11 +801,13 @@ mod config_tests {
     fn defaults_match_the_documented_values() {
         let s = Settings::default();
         assert_eq!(s.provider, "anthropic");
-        assert_eq!(s.max_iterations, 10);
+        assert_eq!(s.max_iterations, 32);
         assert_eq!(s.max_tokens, 8192);
         assert_eq!(s.history_turns, 12);
         assert_eq!(s.consolidate_every, 6);
         assert_eq!(s.retrieval_top_k, 4);
+        // 崩溃恢复的窗口是一小时：再久就不是「同一个回合接着跑」了（见 resume.rs）。
+        assert_eq!(s.resume_max_age_minutes, 60);
         assert_eq!(s.home, PathBuf::from(".joy"));
     }
 

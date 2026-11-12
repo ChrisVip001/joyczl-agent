@@ -5,11 +5,17 @@
 //! goal loop's rule already covers the spirit — continuing is not the model assigning itself
 //! work. Finished tools are never re-run; the loop continues from the checkpointed boundary.
 //!
-//! What is **not** resumed: turns the human interrupted, and turns that failed inside their
-//! process (resuming a failed model call fails the same way again) — both are `abandoned`.
-//! After a crash there is nothing else `open` can mean, which is the invariant reconcile
-//! stands on. New tool executions still pass the approval gate (default-deny) — resuming
+//! What is **not** resumed: turns the human interrupted, turns that failed inside their
+//! process (resuming a failed model call fails the same way again), and turns older than
+//! `JOY_RESUME_MAX_AGE` (default one hour) — all three are `abandoned`, each with one line
+//! on stderr. New tool executions still pass the approval gate (default-deny) — resuming
 //! re-enters approved territory, it never widens it.
+//!
+//! The age limit is not caution for its own sake. A checkpoint exists for crash recovery,
+//! so its honest window is seconds to minutes; a turn left `open` for two days is not "the
+//! same turn continued". "Give me today's tech news" answered two days later answers a
+//! question nobody is asking any more, and it spends a real model call plus a real fetch to
+//! do it. Asking again costs one sentence.
 
 use joyczl_protocol::{ServerNotification, TurnResumedNotification, TurnStartedNotification};
 use joyczl_provider::{Message, Resolved, Usage};
@@ -28,7 +34,25 @@ pub async fn reconcile(server: &Server, sink: &EventSink) {
             return;
         }
     };
+    let max_age = server.settings().resume_max_age_minutes;
+    let now = chrono::Utc::now().naive_utc();
     for row in rows {
+        if let Some(age) = age_minutes(&row.updated_at, now) {
+            if max_age > 0 && age > i64::from(max_age) {
+                eprintln!(
+                    "(joy) 对账：回合 {} 停在 {}前（上限 {}），没有自动续跑 —— 要接着做，把那句话再说一遍",
+                    row.turn_id,
+                    humanize(age),
+                    humanize(i64::from(max_age)),
+                );
+                // Marked, not left `open`: otherwise every boot prints the same line again,
+                // and the ledger's status column would keep calling it unfinished forever.
+                if let Err(error) = server.checkpoints.finish(&row.turn_id, "abandoned").await {
+                    eprintln!("(joy) 对账：回合 {} 没能标 abandoned：{error}", row.turn_id);
+                }
+                continue;
+            }
+        }
         eprintln!(
             "(joy) 对账：发现未完成的回合 {}（已完成 {} 轮），自动续跑",
             row.turn_id, row.iterations
@@ -36,6 +60,28 @@ pub async fn reconcile(server: &Server, sink: &EventSink) {
         let server = server.clone();
         let sink = sink.clone();
         tokio::spawn(async move { resume_turn(&server, &sink, row).await });
+    }
+}
+
+/// How long ago the checkpoint was written, in minutes — `None` when the stamp is unreadable.
+///
+/// `updated_at` comes from SQLite's `datetime('now')`: UTC, second resolution, no zone
+/// marker. A stamp we cannot parse is **not** treated as stale: refusing to resume costs
+/// the human work they asked for, while resuming is exactly what the old rule did. Unknown
+/// is a reason to be loud on stderr, not a reason to throw a turn away.
+pub(crate) fn age_minutes(updated_at: &str, now: chrono::NaiveDateTime) -> Option<i64> {
+    let at = chrono::NaiveDateTime::parse_from_str(updated_at.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+    Some((now - at).num_minutes())
+}
+
+/// 90 → `1 小时`, 3000 → `2 天`. Rounded down on purpose: "2 天前" must not read as 1.
+pub(crate) fn humanize(minutes: i64) -> String {
+    if minutes >= 1_440 {
+        format!("{} 天", minutes / 1_440)
+    } else if minutes >= 60 {
+        format!("{} 小时", minutes / 60)
+    } else {
+        format!("{} 分钟", minutes.max(0))
     }
 }
 

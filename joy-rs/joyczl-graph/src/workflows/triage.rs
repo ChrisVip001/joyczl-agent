@@ -69,6 +69,7 @@ pub async fn classify_message(
     message: &str,
 ) -> (String, String) {
     let request = CreateRequest {
+        cache_prefix: None,
         model: small_model.to_string(),
         system: None,
         messages: vec![Message::user_text(

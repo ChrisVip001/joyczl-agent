@@ -15,6 +15,8 @@ async fn ctx(session: &str) -> super::ToolCtx {
         .expect("打开库");
     let _ = dir.keep();
     super::ToolCtx {
+        activate: None,
+        embedder: None,
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),
         chat: joyczl_state::Chat::new(pool.clone()),

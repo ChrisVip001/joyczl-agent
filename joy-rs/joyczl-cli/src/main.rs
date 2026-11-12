@@ -163,7 +163,9 @@ async fn main() -> Result<()> {
             // REPL holds its own in-process, see module header comment).
             let _daemon =
                 joyczl_app_server::lock::acquire(&settings.home).map_err(|e| anyhow::anyhow!(e))?;
-            let server = joyczl_app_server::open(&settings).await?;
+            let mut server = joyczl_app_server::open(&settings).await?;
+            // 常驻进程同样自己拥有后台整理（驾驶舱经它连上来）。
+            server.attach_memory_worker();
             joyczl_app_server::run_stdio(server).await
         }
         Some("memory") => {
@@ -208,7 +210,9 @@ async fn main() -> Result<()> {
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
             settings.ensure_home()?;
-            let server = joyczl_app_server::open(&settings).await?;
+            let mut server = joyczl_app_server::open(&settings).await?;
+            // 交互进程自己拥有后台整理：记忆工作不再占用户对话的收尾时间。
+            server.attach_memory_worker();
             repl::run(server).await
         }
     }

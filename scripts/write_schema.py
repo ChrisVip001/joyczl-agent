@@ -60,20 +60,30 @@ def run_cargo_export(out_dir: Path, cargo_args: list[str]) -> int:
     return subprocess.run(cmd, cwd=RUST_DIR, env=env).returncode
 
 
-def format_typescript(ts_dir: Path) -> None:
-    """用 prettier 排版生成物。
+def format_typescript(ts_dir: Path) -> bool:
+    """用 prettier 排版生成物，返回「这次到底排没排」。
 
     ts-rs 不开 `format` feature（会拖进与 serde 1.0.229 不兼容的 swc_common），
     所以排版交给 node 的 prettier。
     排不出来只影响 diff 观感，不影响正确性，所以失败只警告。
+
+    返回值的意义在 `--check` 里：没排版就不能拿临时产物和仓库里的已排版产物比，
+    否则会报一堆「内容不一致」的假漂移。命令不存在也要走告警那条路 ——
+    承诺了「失败只警告」，就得连 `FileNotFoundError` 一起接住。
     """
     if not (ts_dir / "v2").is_dir():
-        return
+        return False
     # `.mts` 也要排 —— 常量文件（codes / methods）是 `.mts`，见 export.rs 的 write_consts。
     cmd = ["npx", "--yes", "prettier@3", "--write", str(ts_dir / "v2" / "*.{ts,mts}")]
     print("›", " ".join(cmd))
-    if subprocess.run(cmd, cwd=REPO_ROOT).returncode != 0:
+    try:
+        ok = subprocess.run(cmd, cwd=REPO_ROOT).returncode == 0
+    except FileNotFoundError:
+        print("⚠ 找不到 npx，这次不排版", file=sys.stderr)
+        return False
+    if not ok:
         print("⚠ prettier 不可用，生成物保持未排版（不影响正确性）", file=sys.stderr)
+    return ok
 
 
 def snapshot(dirpath: Path) -> dict[str, str]:
@@ -225,7 +235,7 @@ def main() -> int:
             return rc
 
         # 排版必须在比对之前 —— 两边都排版过才可比。
-        format_typescript(out_dir / "typescript")
+        formatted = format_typescript(out_dir / "typescript")
 
         if args.check:
             print(SEPARATOR)
@@ -235,7 +245,14 @@ def main() -> int:
                       file=sys.stderr)
                 return 1
 
-            problems = diff_snapshots(committed_ts, snapshot(out_dir / "typescript"))
+            if formatted:
+                problems = diff_snapshots(committed_ts, snapshot(out_dir / "typescript"))
+            else:
+                # 没排版就比不出「漂移」还是「没排版」—— 报一堆假差异比不报更坏。
+                # JSON 与 Python 两侧不依赖 prettier，照常比。
+                print("⚠ 没有可用的 prettier：跳过 TypeScript 排版比对（JSON / Python 仍然比）",
+                      file=sys.stderr)
+                problems = []
 
             # JSON 侧有两份：v2.json 是**类型**，consts.json 是**值**。
             for name in ("v2.json", "consts.json"):

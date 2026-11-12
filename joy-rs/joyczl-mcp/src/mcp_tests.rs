@@ -569,6 +569,8 @@ async fn tool_ctx() -> joyczl_tools::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     joyczl_tools::ToolCtx {
+        activate: None,
+        embedder: None,
         cwd: None,
         approval: None,
         jobs: None,

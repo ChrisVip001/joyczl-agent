@@ -82,6 +82,23 @@ pub mod methods {
     /// Schedule state snapshot (migration 0012): per-job last_fired/claimed/catch_up/delivery.
     /// Zero-arg method. Feeds the dashboard's schedule panel — the second consumer beyond the CLI.
     pub const SCHEDULE_LIST: &str = "schedule/list";
+
+    // ---- Memory center: read-only surfaces for the dashboard. Every one of them is a
+    // window onto state the model cannot write from here — the ledger is append-only and
+    // the memory pages are the bundle's business.
+    /// One session's ledger: the turn list, plus one turn's entries when `turnId` is given.
+    pub const MEMORY_LEDGER: &str = "memory/ledger";
+    /// The bundle's catalog (`index.md`, the same text the prompt carries).
+    pub const MEMORY_INDEX: &str = "memory/index";
+    /// One memory page, body and provenance included.
+    pub const MEMORY_PAGE: &str = "memory/page";
+    /// How the context is spent right now, per section.
+    pub const CONTEXT_USAGE: &str = "context/usage";
+    /// How often each skill actually fired (the hit log, aggregated).
+    pub const SKILL_STATS: &str = "skill/stats";
+    /// Compact on demand (`/compact [focus]`): summarize the older turns now, not at the
+    /// next natural boundary. Human-triggered, so it is not exposed to the model.
+    pub const SESSION_COMPACT: &str = "session/compact";
 }
 
 // ===========================================================================

@@ -20,6 +20,8 @@ mod capabilities;
 mod client;
 mod freshness;
 pub mod hub;
+mod memory_api;
+mod schedules;
 mod webhooks;
 
 #[cfg(test)]
@@ -326,6 +328,11 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/usage", get(api::usage))
         .route("/api/approvals", get(api::approvals))
         .route("/api/schedules", get(api::schedules))
+        // The capability center's third list: declarations (file + skills) with runtime state,
+        // and the two writes a human owns (`schedules.json` only — skill jobs stay read-only).
+        .route("/api/schedules/jobs", get(api::schedule_jobs))
+        .route("/api/schedules/save", post(api::schedule_save))
+        .route("/api/schedules/remove", post(api::schedule_remove))
         // File upload: single octet-stream file, 20MB cap (axum default 2MB; raised explicitly).
         .route("/api/upload", post(api::upload))
         // Directory browsing: for the dashboard to pick a working directory (read-only, dirs).
@@ -351,6 +358,15 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/mcp", get(api::mcp))
         .route("/api/mcp/save", post(api::mcp_save))
         .route("/api/mcp/remove", post(api::mcp_remove))
+        // The memory center: ledger, memory pages, the context meter, skill hits — all
+        // read-only — plus `/api/compact`, the human's own compaction button.
+        .route("/api/ledger/turns", get(memory_api::ledger_turns))
+        .route("/api/ledger/turn", get(memory_api::ledger_turn))
+        .route("/api/memory/index", get(memory_api::memory_index))
+        .route("/api/memory/page", get(memory_api::memory_page))
+        .route("/api/context", get(memory_api::context))
+        .route("/api/skills/stats", get(memory_api::skill_stats))
+        .route("/api/compact", post(memory_api::compact))
         // The task API: one turn in, one JSON answer out (no SSE) — for programs, not people.
         .route("/api/run", post(api::run))
         // The token layer only covers the /api/* routes above (route_layer does not affect

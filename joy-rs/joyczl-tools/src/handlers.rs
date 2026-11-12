@@ -89,7 +89,16 @@ pub fn memory_tools() -> Vec<Tool> {
                 Box::pin(async move {
                     let query = require_str(&args, "query")?;
                     let top_k = opt_u32(&args, "top_k", 4)?;
-                    let hits = ctx.facts.search(&query, top_k).await?;
+                    // Same hybrid path the turn's own retrieval uses (`search_hybrid`), so a
+                    // keyword that never appears in the wording but is close in meaning still
+                    // lands — and with no embedder configured it *is* the keyword search.
+                    let hits = joyczl_memory::retrieval::search_hybrid(
+                        &ctx.facts,
+                        ctx.embedder.as_deref(),
+                        &query,
+                        top_k,
+                    )
+                    .await;
                     if hits.is_empty() {
                         return Ok(format!("记忆里没有关于「{query}」的东西。"));
                     }
@@ -98,6 +107,86 @@ pub fn memory_tools() -> Vec<Tool> {
                         .map(|f| format!("- **{}**: {}（来源 {}）", f.subject, f.content, f.source))
                         .collect();
                     Ok(format!("找到 {} 条：\n{}", hits.len(), lines.join("\n")))
+                })
+            }),
+        },
+        Tool {
+            name: "read_memory_page".to_string(),
+            description: "读记忆库里的一页（系统提示里给的目录中，`[标题](页面名.md)` 那个名字）。\
+                          目录只有一句话摘要；要细节、要出处、要核对原话时读页。"
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "page": {"type": "string", "description": "页面名，例如 alex（不带 .md）"}
+                },
+                "required": ["page"]
+            }),
+            handler: Arc::new(|ctx: ToolCtx, args: Value| {
+                Box::pin(async move {
+                    let page = require_str(&args, "page")?;
+                    let bundle = joyczl_memory::bundle::Bundle::new(&ctx.home);
+                    match bundle.read(&page)? {
+                        Some(found) => {
+                            // Provenance rides along: a page without its sources is a claim
+                            // the model cannot check, and this project does not ship those.
+                            let sources = if found.sources.is_empty() {
+                                "（这页没有记出处）".to_string()
+                            } else {
+                                found.sources.join("、")
+                            };
+                            Ok(format!(
+                                "# {}（{}）\n\n{}\n\n出处：{}",
+                                found.title, found.kind, found.body, sources
+                            ))
+                        }
+                        None => Ok(format!(
+                            "记忆库里没有「{page}」这一页。可读的页面见系统提示里的目录。"
+                        )),
+                    }
+                })
+            }),
+        },
+        Tool {
+            name: "read_skill".to_string(),
+            description: "读一个技能的完整正文（系统提示里的技能目录给出名字）。\
+                          目录只有一句话说明；正文里才是步骤、命令和注意事项。"
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "技能名，目录里 `- 名字 — 说明` 的那个名字"}
+                },
+                "required": ["name"]
+            }),
+            handler: Arc::new(|ctx: ToolCtx, args: Value| {
+                Box::pin(async move {
+                    let name = require_str(&args, "name")?;
+                    let mut loader = joyczl_memory::skills::SkillLoader::new(
+                        joyczl_memory::skills::SkillLoader::dirs_for(&ctx.home),
+                    );
+                    // Deliberately uncapped: this text was asked for on purpose, one skill at
+                    // a time — the cap in the prompt exists for text nobody asked for.
+                    match loader.body_of(&name) {
+                        Some(body) => Ok(format!("### {name}\n{body}")),
+                        None => {
+                            let known: Vec<String> = loader
+                                .index_text(usize::MAX)
+                                .lines()
+                                .filter_map(|line| line.strip_prefix("- "))
+                                .filter_map(|rest| rest.split(" — ").next())
+                                .map(str::to_string)
+                                .collect();
+                            Ok(format!(
+                                "没有叫「{name}」的技能。现有技能：{}",
+                                if known.is_empty() {
+                                    "（一个都没有）".to_string()
+                                } else {
+                                    known.join("、")
+                                }
+                            ))
+                        }
+                    }
                 })
             }),
         },
@@ -135,6 +224,50 @@ pub fn memory_tools() -> Vec<Tool> {
     ]
 }
 
+/// Widens the session's tool table (`JOY_TOOL_POLICY=deferred`).
+///
+/// The model sees `find_tools` plus the tools every turn needs; everything else is one
+/// search away. It is a **token** knob: nothing becomes permitted here, and a switch-gated
+/// tool never hides (`ALWAYS_ON`), so discovery cannot outrun consent.
+pub fn find_tools() -> Tool {
+    Tool {
+        name: "find_tools".to_string(),
+        description: "工具表里没有某个能力时，用这个工具按关键词找出来并打开（下一轮就能用）。\
+                      例如「日历」「邮件」「表格」「截图」。"
+            .to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "要找什么能力，例如「日历 事件」"}
+            },
+            "required": ["query"]
+        }),
+        handler: Arc::new(|ctx: ToolCtx, args: Value| {
+            Box::pin(async move {
+                let query = require_str(&args, "query")?;
+                let Some(activate) = ctx.activate else {
+                    // Eager mode: the table is already complete. Saying "found nothing" here
+                    // would send the model looking for another search tool that does not exist.
+                    return Ok(
+                        "工具表已经是完整的，没有隐藏的工具 —— 直接用现有的就好。".to_string()
+                    );
+                };
+                let opened = activate(&query);
+                if opened.is_empty() {
+                    return Ok(format!(
+                        "没有找到「{query}」相关的额外工具。要么名字不对，要么这个能力没装在这里。"
+                    ));
+                }
+                Ok(format!(
+                    "已打开 {} 个工具，下一轮就能用：{}",
+                    opened.len(),
+                    opened.join("、")
+                ))
+            })
+        }),
+    }
+}
+
 /// Lets the model know what time it is. Without it, the model can only guess "what day is today" —
 /// and a wrong guess makes the schedule wrong too.
 pub fn current_time() -> Tool {
@@ -166,7 +299,13 @@ pub fn build_default() -> crate::ToolRegistry {
         registry.register(tool);
     }
     registry.register(current_time());
+    // Present in eager mode too: it costs one line of schema and answers "is there more"
+    // without a round trip. In deferred mode it is the door to everything else.
+    registry.register(find_tools());
     registry.register(crate::memory_admin::manage_memory());
+    for tool in crate::schedules::schedule_tools() {
+        registry.register(tool);
+    }
     registry.register(crate::memory_admin::create_skill());
     registry.register(crate::calendar::create_event());
     registry.register(crate::calendar::list_events());

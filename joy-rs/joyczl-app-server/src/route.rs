@@ -95,6 +95,7 @@ async fn classify_tier(cheap: &Resolved, message: &str) -> Option<String> {
     let response = cheap
         .client
         .create(CreateRequest {
+            cache_prefix: None,
             model: cheap.small_model.clone(),
             system: Some(system.to_string()),
             messages: vec![Message::user_text(format!(

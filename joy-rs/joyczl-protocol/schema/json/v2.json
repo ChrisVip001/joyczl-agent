@@ -477,6 +477,91 @@
       "title": "ConsolidationCompletedNotification",
       "type": "object"
     },
+    "ContextPart": {
+      "description": "One section of the context: soul, memory, skills, tools, history, summary.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "tokens"
+      ],
+      "title": "ContextPart",
+      "type": "object"
+    },
+    "ContextUsage": {
+      "description": "How the window is spent this turn. `ratio` is `used / budget`, already computed: the frontend must not have to guess which denominator was meant.",
+      "properties": {
+        "budgetTokens": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "notice": {
+          "description": "Set once `ratio` crosses `JOY_CONTEXT_WARN_RATIO`: one honest sentence, no dialog.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/definitions/ContextPart"
+          },
+          "type": "array"
+        },
+        "ratio": {
+          "format": "double",
+          "type": "number"
+        },
+        "usedTokens": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "budgetTokens",
+        "parts",
+        "ratio",
+        "usedTokens"
+      ],
+      "title": "ContextUsage",
+      "type": "object"
+    },
+    "ContextUsageParams": {
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "ContextUsageParams",
+      "type": "object"
+    },
+    "ContextUsageResponse": {
+      "properties": {
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ContextUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` = no turn has run in this session yet."
+        }
+      },
+      "title": "ContextUsageResponse",
+      "type": "object"
+    },
     "DashboardData": {
       "description": "Everything the dashboard's first screen needs, fetched in one shot.\n\nIt is not the response to any RPC but the payload of the `joy dashboard` HTTP endpoint (`GET /api/data`). **Why it lives in the protocol crate**: the only criterion is that it crosses languages. The browser side type-checks against it, and hand-copying it would drift again — exactly what this whole effort exists to eliminate.\n\nFields reuse protocol types directly: the dashboard does no second modeling — it is just a view over these data.",
       "properties": {
@@ -1113,6 +1198,70 @@
       "title": "JsonRpcResponse",
       "type": "object"
     },
+    "LedgerEntryView": {
+      "description": "One ledger row as the dashboard shows it: kind, a short preview, and whether the full bytes still exist (`exact`) or only a folded summary came through the backfill.",
+      "properties": {
+        "bytes": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "fidelity": {
+          "description": "`exact` | `folded` — a folded entry is honest about being a summary.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "preview": {
+          "description": "First line(s) of the payload, already trimmed for a list row.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bytes",
+        "fidelity",
+        "kind",
+        "preview"
+      ],
+      "title": "LedgerEntryView",
+      "type": "object"
+    },
+    "LedgerTurnView": {
+      "description": "One turn in the ledger list: what happened, and how much of it is still recoverable.",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "consolidated": {
+          "type": "boolean"
+        },
+        "entries": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "fidelity": {
+          "description": "`exact` when every row is exact; `folded` when the backfill touched it.",
+          "type": "string"
+        },
+        "preview": {
+          "description": "One line: the user's first sentence.",
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "consolidated",
+        "entries",
+        "fidelity",
+        "preview",
+        "turnId"
+      ],
+      "title": "LedgerTurnView",
+      "type": "object"
+    },
     "MemoryForgetParams": {
       "properties": {
         "subject": {
@@ -1137,6 +1286,76 @@
         "removed"
       ],
       "title": "MemoryForgetResponse",
+      "type": "object"
+    },
+    "MemoryIndexResponse": {
+      "properties": {
+        "catalog": {
+          "description": "The generated catalog, byte-for-byte the text the prompt carries.",
+          "type": "string"
+        },
+        "pages": {
+          "items": {
+            "$ref": "#/definitions/MemoryPageSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "catalog",
+        "pages"
+      ],
+      "title": "MemoryIndexResponse",
+      "type": "object"
+    },
+    "MemoryLedgerParams": {
+      "properties": {
+        "limit": {
+          "description": "Newest-first cap. Defaults to 30.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "description": "Present = also return this turn's entries.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "MemoryLedgerParams",
+      "type": "object"
+    },
+    "MemoryLedgerResponse": {
+      "properties": {
+        "entries": {
+          "description": "Empty unless `turnId` was asked for.",
+          "items": {
+            "$ref": "#/definitions/LedgerEntryView"
+          },
+          "type": "array"
+        },
+        "turns": {
+          "items": {
+            "$ref": "#/definitions/LedgerTurnView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries",
+        "turns"
+      ],
+      "title": "MemoryLedgerResponse",
       "type": "object"
     },
     "MemoryListEpisodesParams": {
@@ -1214,6 +1433,105 @@
         "data"
       ],
       "title": "MemoryListResponse",
+      "type": "object"
+    },
+    "MemoryPageParams": {
+      "properties": {
+        "page": {
+          "description": "Page slug, no `.md` (`alex`, not `alex.md`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page"
+      ],
+      "title": "MemoryPageParams",
+      "type": "object"
+    },
+    "MemoryPageResponse": {
+      "properties": {
+        "page": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MemoryPageView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`None` = no such page (the dashboard shows the path and says so, not an empty page)."
+        }
+      },
+      "title": "MemoryPageResponse",
+      "type": "object"
+    },
+    "MemoryPageSummary": {
+      "description": "One row of the catalog (`index.md`): enough to choose a page, not enough to replace it.",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "slug",
+        "summary",
+        "title",
+        "updated"
+      ],
+      "title": "MemoryPageSummary",
+      "type": "object"
+    },
+    "MemoryPageView": {
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "sources": {
+          "description": "Provenance: the ledger rows this page was distilled from (`ledger:12345`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "body",
+        "kind",
+        "slug",
+        "sources",
+        "summary",
+        "title",
+        "updated"
+      ],
+      "title": "MemoryPageView",
       "type": "object"
     },
     "MemoryRememberParams": {
@@ -2537,6 +2855,44 @@
       ],
       "title": "ServerNotification"
     },
+    "SessionCompactParams": {
+      "properties": {
+        "focus": {
+          "description": "What to keep in the summary (\"the migration plan\"), optional.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "SessionCompactParams",
+      "type": "object"
+    },
+    "SessionCompactResponse": {
+      "properties": {
+        "coveredTurns": {
+          "description": "How many turns the new summary covers.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "summaryTokens": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "coveredTurns",
+        "summaryTokens"
+      ],
+      "title": "SessionCompactResponse",
+      "type": "object"
+    },
     "SessionGetParams": {
       "description": "Read one session's record. Same shape as a list entry — one type, no second modeling.",
       "properties": {
@@ -2896,6 +3252,45 @@
         "smallModel"
       ],
       "title": "SettingsView",
+      "type": "object"
+    },
+    "SkillStat": {
+      "description": "One skill's turn count: how often its body actually entered a prompt.",
+      "properties": {
+        "hits": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "lastHit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hits",
+        "name"
+      ],
+      "title": "SkillStat",
+      "type": "object"
+    },
+    "SkillStatsResponse": {
+      "properties": {
+        "data": {
+          "items": {
+            "$ref": "#/definitions/SkillStat"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "title": "SkillStatsResponse",
       "type": "object"
     },
     "SpentView": {

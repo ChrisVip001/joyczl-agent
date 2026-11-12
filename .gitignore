@@ -40,3 +40,7 @@ desktop/src-tauri/gen/
 
 # 浏览器验证的截图与快照（工具产物，不是源码）
 .playwright-cli/
+
+# 编辑器/助手的本地状态（和其他 agent 的 .claude/ 同类）：里面是本机会话数据，
+# 不是项目内容，也不该因为「有个目录没被忽略」就被顺手提交。
+.codebuddy/

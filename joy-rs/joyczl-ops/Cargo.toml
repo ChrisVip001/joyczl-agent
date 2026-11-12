@@ -16,6 +16,7 @@ axum = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 joyczl-config = { workspace = true }
+joyczl-schedule = { workspace = true }
 joyczl-connector = { workspace = true }
 joyczl-mcp = { workspace = true }
 joyczl-memory = { workspace = true }

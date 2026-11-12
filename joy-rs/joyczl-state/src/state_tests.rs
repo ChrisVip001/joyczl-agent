@@ -595,3 +595,215 @@ async fn the_follow_up_queue_is_fifo_per_session_and_pops_once() {
         "启动对账要知道还欠谁一条"
     );
 }
+
+// ---- 会话账本 ---------------------------------------------------------------
+
+fn entry(kind: &'static str, text: &str) -> crate::NewEntry {
+    crate::NewEntry::exact(kind, format!(r#"{{"text":"{text}"}}"#))
+}
+
+/// 一轮写进去、按原序读回来 —— 重建的全部前提。
+#[tokio::test]
+async fn a_turn_round_trips_in_append_order() {
+    let ledger = crate::Ledger::new(temp_db("ledger_roundtrip").await);
+    let entries = vec![
+        entry("user", "帮我看看这个报错"),
+        entry("assistant", "先读日志"),
+        entry("tool_use", "read_file"),
+        entry("tool_result", "no such file"),
+    ];
+
+    let digest = ledger
+        .append("s1", "t1", &entries, "帮我看看这个报错")
+        .await
+        .expect("写账");
+    assert_eq!(digest.len(), 64, "摘要是 sha256 的小写十六进制");
+
+    let rows = ledger.entries("s1", "t1").await.expect("读账");
+    assert_eq!(
+        rows.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(),
+        vec!["user", "assistant", "tool_use", "tool_result"],
+        "顺序就是发生顺序"
+    );
+    assert_eq!(rows[3].payload, r#"{"text":"no such file"}"#);
+    assert!(
+        ledger.verify("s1", "t1").await.expect("验"),
+        "刚写完就该验得过"
+    );
+}
+
+/// 同一个 turn 重写一次是幂等的：崩溃重试不能让记录翻倍。
+#[tokio::test]
+async fn appending_the_same_turn_twice_writes_once() {
+    let ledger = crate::Ledger::new(temp_db("ledger_idempotent").await);
+    let entries = vec![entry("user", "只此一句")];
+
+    let first = ledger
+        .append("s1", "t1", &entries, "只此一句")
+        .await
+        .expect("第一次");
+    let second = ledger
+        .append("s1", "t1", &entries, "只此一句")
+        .await
+        .expect("第二次");
+    assert_eq!(first, second, "第二次返回第一次的摘要，不再写");
+    assert_eq!(
+        ledger.entries("s1", "t1").await.expect("读").len(),
+        1,
+        "只有一行"
+    );
+    assert_eq!(ledger.count().await.expect("数"), 1, "一轮只记一次");
+}
+
+/// 内容被改一个字节，轮摘要就对不上 —— 这就是「可核验」的意思。
+#[tokio::test]
+async fn editing_a_row_breaks_the_turn_digest() {
+    let ledger = crate::Ledger::new(temp_db("ledger_tamper").await);
+    ledger
+        .append("s1", "t1", &[entry("user", "原始内容")], "原始内容")
+        .await
+        .expect("写账");
+    assert!(ledger.verify("s1", "t1").await.expect("验"));
+
+    // 模拟篡改：直接改库里的一行（应用层没有这条路，这正是要证明的）。
+    sqlx::query("UPDATE ledger SET payload = '{\"text\":\"改过了\"}' WHERE turn_id = 't1'")
+        .execute(ledger.pool())
+        .await
+        .expect("篡改");
+
+    assert!(
+        !ledger.verify("s1", "t1").await.expect("验"),
+        "内容变了，轮摘要必须对不上"
+    );
+}
+
+/// `chat_log` 回填的行标 `folded`：那一轮的工具输出本来就只剩 200 字符。
+#[tokio::test]
+async fn a_folded_turn_is_declared_as_such() {
+    let ledger = crate::Ledger::new(temp_db("ledger_folded").await);
+    ledger
+        .append(
+            "s1",
+            "t0",
+            &[
+                crate::NewEntry::folded("user", r#"{"text":"旧的一句话"}"#),
+                crate::NewEntry::folded(
+                    "assistant",
+                    r#"{"text":"旧回复\n[tools used: read_file(…)]"}"#,
+                ),
+            ],
+            "旧的一句话",
+        )
+        .await
+        .expect("回填");
+
+    let turns = ledger.turns("s1", 10).await.expect("列");
+    assert_eq!(turns[0].fidelity, "folded", "保真度如实标注");
+    assert_eq!(turns[0].events, 2);
+    assert_eq!(turns[0].preview, "旧的一句话");
+}
+
+/// 待整理的一轮只会被一个赢家拿走（两个进程共享同一个库时的唯一保证）。
+#[tokio::test]
+async fn claiming_pending_turns_has_one_winner() {
+    let ledger = crate::Ledger::new(temp_db("ledger_claim").await);
+    for turn in ["t1", "t2"] {
+        ledger
+            .append("s1", turn, &[entry("user", "…")], "…")
+            .await
+            .expect("写账");
+    }
+
+    assert_eq!(ledger.pending(10).await.expect("待办").len(), 2);
+    let claimed = ledger.claim_pending(10).await.expect("认领");
+    assert_eq!(claimed.len(), 2, "一次认领全部");
+    assert!(
+        ledger.pending(10).await.expect("待办").is_empty(),
+        "认领走了就不再待办"
+    );
+    assert!(
+        ledger.claim_pending(10).await.expect("再认领").is_empty(),
+        "别人拿不到"
+    );
+
+    // 失败交还，并按退避排到未来 —— 不会立刻被重试。
+    ledger.mark_failed("s1", "t1").await.expect("交还");
+    assert!(
+        ledger.pending(10).await.expect("待办").is_empty(),
+        "退避期内不该重新出现"
+    );
+}
+
+/// 新事实自带新鲜度：写进去就有 `confirm_count=1`，重复写会加分而不是多一行。
+#[tokio::test]
+async fn a_fact_carries_its_freshness() {
+    let facts = Facts::new(temp_db("facts_freshness").await);
+    let (fact, is_new) = facts
+        .add("alex", "喜欢早会", "user", "user")
+        .await
+        .expect("写");
+    assert!(is_new);
+
+    let meta = facts.meta(fact.id).await.expect("查").expect("有");
+    assert_eq!(meta.confirm_count, 1);
+    assert!(meta.last_confirmed_at.is_some(), "写入即确认一次");
+    assert!(meta.page_path.is_none(), "还没镜像到明文库");
+
+    let (again, is_new) = facts
+        .add("alex", "喜欢早会", "user", "user")
+        .await
+        .expect("再写");
+    assert!(!is_new, "重复不新增行");
+    assert_eq!(again.id, fact.id);
+    let meta = facts.meta(fact.id).await.expect("查").expect("有");
+    assert_eq!(meta.confirm_count, 2, "再观察到一次就是更可信一点");
+
+    facts
+        .set_page(fact.id, "memory/alex.md", "abc123")
+        .await
+        .expect("记页");
+    let meta = facts.meta(fact.id).await.expect("查").expect("有");
+    assert_eq!(meta.page_path.as_deref(), Some("memory/alex.md"));
+    assert_eq!(meta.digest.as_deref(), Some("abc123"));
+}
+
+/// 回填：把 chat_log 的折叠视图变成账本行，并如实标成 folded。
+#[tokio::test]
+async fn backfilling_marks_history_as_folded() {
+    let pool = temp_db("ledger_backfill").await;
+    let chat = Chat::new(pool.clone());
+    chat.append_exchange_for("旧问题一", "旧回答一", "默认", "app-server", None, None)
+        .await
+        .expect("写一问一答");
+    chat.append_exchange_for("旧问题二", "旧回答二", "默认", "app-server", None, None)
+        .await
+        .expect("写第二问");
+
+    let report = crate::ledger::backfill_from_chat(&pool)
+        .await
+        .expect("回填");
+    assert_eq!(report.sessions, 1);
+    assert_eq!(report.turns, 2, "一问一答算一轮");
+    assert_eq!(report.rows, 4, "两句用户 + 两句助手");
+
+    let turns = crate::Ledger::new(pool.clone())
+        .turns("默认", 10)
+        .await
+        .expect("列账");
+    assert_eq!(turns.len(), 2);
+    assert!(
+        turns.iter().all(|turn| turn.fidelity == "folded"),
+        "历史只能是折叠保真度"
+    );
+
+    // 再跑一次是幂等的：轮次翻倍就说明去重坏了。
+    let again = crate::ledger::backfill_from_chat(&pool)
+        .await
+        .expect("再回填");
+    assert_eq!(again.turns, 2);
+    assert_eq!(
+        crate::Ledger::new(pool).count().await.expect("数"),
+        2,
+        "回填不该写出第二轮"
+    );
+}

@@ -17,6 +17,7 @@
 mod protocol;
 pub mod rpc;
 
+pub use protocol::memory_center::*;
 pub use protocol::v2::*;
 pub use rpc::*;
 

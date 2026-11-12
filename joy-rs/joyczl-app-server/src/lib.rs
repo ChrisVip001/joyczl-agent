@@ -21,8 +21,13 @@ mod goal;
 mod image_meta;
 mod inbox;
 mod jobs;
+mod ledger_writer;
 /// Guardian lock: only one app-server per home (`joyczl_app_server::lock`).
 pub mod lock;
+pub mod memory_center;
+#[cfg(test)]
+mod memory_center_tests;
+mod memory_worker;
 pub mod models;
 mod resume;
 mod route;
@@ -172,6 +177,13 @@ pub struct Server {
     pub(crate) facts: Facts,
     pub(crate) episodes: Episodes,
     pub(crate) chat: Chat,
+    /// The append-only turn ledger (migration 0020): the record `chat_log` is a view of.
+    /// Written at finalize time; read back by the memory worker and the memory center.
+    pub(crate) ledger: joyczl_state::Ledger,
+    /// The background memory worker (`open()` attaches it; tests and embedders may not).
+    /// Its absence is not a degradation: `finalize_turn` falls back to doing the same
+    /// work inline, so a library user who never starts a runtime still gets memory.
+    pub(crate) memory_worker: Option<Arc<memory_worker::MemoryWorker>>,
     /// Usage ledger (migration 0010): bookkeeping only, never enforced.
     pub(crate) usage: joyczl_state::Usage,
     /// Turn checkpoints (migration 0013): a running turn's working memory, durable at each
@@ -233,9 +245,49 @@ pub struct Server {
     /// into holding two different locks.
     pub(crate) session_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
     pub(crate) pool: SqlitePool,
+    /// The last turn's context breakdown per session — the memory center's meter.
+    ///
+    /// Written at assembly time (that is the only moment every section is in hand), read by
+    /// `context/usage`. Absent = no turn has run yet, which the meter shows as "not measured"
+    /// rather than a fake zero.
+    pub(crate) context_usage: Arc<Mutex<HashMap<String, joyczl_protocol::ContextUsage>>>,
+    /// Deferred-tool activations, per session (`JOY_TOOL_POLICY=deferred`).
+    ///
+    /// A session-scoped cell, not a per-turn one: `find_tools` runs in one turn and its
+    /// result is read in the next, so a fresh set every turn would make the model rediscover
+    /// the same tool on every message. In memory on purpose — a restarted server asks the
+    /// model to search again, which is honest and cheap; a stale table on disk is neither.
+    pub(crate) activations: Arc<Mutex<HashMap<String, joyczl_tools::ActivationSet>>>,
 }
 
 impl Server {
+    /// Start the background memory worker on this server (idempotent).
+    ///
+    /// **The process owns the worker, not the library**: the CLI (REPL and the stdio
+    /// daemon) calls this; `open()` does not, so the eval harness and assembly tests stay
+    /// deterministic (a background model call must never race an assertion). Without a
+    /// worker, `finalize_turn` does the same memory work inline — one function, two callers.
+    pub fn attach_memory_worker(&mut self) {
+        if self.memory_worker.is_some() {
+            return;
+        }
+        let worker = memory_worker::MemoryWorker::spawn(memory_worker::Deps {
+            chat: self.chat.clone(),
+            facts: self.facts.clone(),
+            episodes: self.episodes.clone(),
+            settings: self.settings.clone(),
+            resolved: self.resolved.clone(),
+        });
+        self.memory_worker = Some(worker);
+    }
+
+    /// Stop the worker, waiting briefly for a run in flight. Called on orderly shutdown.
+    pub async fn stop_memory_worker(&self) {
+        if let Some(worker) = self.memory_worker.as_ref() {
+            worker.stop().await;
+        }
+    }
+
     /// Assembled from state.db. A provider-resolution failure is not fatal — record the reason and report it at turn time.
     /// Set or clear the goal on this session's task. **Only a human can reach here** — the model
     /// has no task tool, and the REPL's `/goal` is the only caller.
@@ -382,6 +434,20 @@ impl Server {
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
         let chat = Chat::new(pool.clone());
+        // One-shot: an existing home starts with an empty ledger. Fill it from the folded
+        // view once, and say so — a memory center that shows nothing on day one looks
+        // broken, and pretending old turns are rebuildable would be worse.
+        let ledger = joyczl_state::Ledger::new(pool.clone());
+        if let Ok(0) = ledger.count().await {
+            match joyczl_state::ledger::backfill_from_chat(&pool).await {
+                Ok(report) if report.turns > 0 => eprintln!(
+                    "(joy) 首次启动：把 {} 个会话的 {} 轮历史回填进账本（标为 folded —— 当时的工具输出只剩摘要）",
+                    report.sessions, report.turns
+                ),
+                Ok(_) => {}
+                Err(e) => eprintln!("(joy) 账本回填失败（不影响启动，可稍后跑 `joy memory backfill`）：{e}"),
+            }
+        }
         let usage = joyczl_state::Usage::new(pool.clone());
         let checkpoints = joyczl_state::Checkpoints::new(pool.clone());
         let calendar = Calendar::new(pool.clone());
@@ -419,6 +485,8 @@ impl Server {
             facts,
             episodes,
             chat,
+            ledger,
+            memory_worker: None,
             usage,
             checkpoints,
             notifier,
@@ -445,6 +513,8 @@ impl Server {
             session_locks: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             pool,
+            context_usage: Arc::new(Mutex::new(HashMap::new())),
+            activations: Arc::new(Mutex::new(HashMap::new())),
         };
         server.restore_tasks().await;
         server
@@ -684,6 +754,20 @@ impl Server {
 
     pub fn chat(&self) -> &Chat {
         &self.chat
+    }
+
+    /// This session's deferred-tool activation set, minted on first use.
+    ///
+    /// Shared with the turn's tool view (`session_view_with`) so `find_tools` in one turn and
+    /// `schemas()` in the next read the same cell.
+    pub(crate) fn activation_set(&self, session_id: &str) -> joyczl_tools::ActivationSet {
+        let mut sets = match self.activations.lock() {
+            Ok(sets) => sets,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        sets.entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(std::sync::Mutex::new(Default::default())))
+            .clone()
     }
 
     /// A snapshot of the current provider resolution (None when no key is configured).
@@ -1115,6 +1199,7 @@ pub(crate) fn tool_result_budget(settings: &Settings) -> joyczl_loop::budget::To
     joyczl_loop::budget::ToolResultBudget {
         total_chars: settings.tool_result_total_chars.max(0) as usize,
         per_result_chars: settings.tool_result_max_chars.max(0) as usize,
+        keep_recent: settings.tool_result_keep_recent.max(0) as usize,
     }
 }
 
@@ -1141,6 +1226,8 @@ pub(crate) fn tool_ctx(
     injected: Injections,
 ) -> ToolCtx {
     ToolCtx {
+        activate: None,
+        embedder: None,
         facts: facts.clone(),
         episodes: episodes.clone(),
         chat: chat.clone(),

@@ -46,7 +46,7 @@ const DEFAULT_SOUL: &str = "\
 
 规则：
 - 想安排日程、解释「今天」「明天」之前，先用 current_time 确认现在几点。
-- 用户说了值得长期记住的事（关于人、项目、偏好），用 save_note 存起来。
+- 关于人、项目和偏好的长期事实由后台整理进记忆库；用户明确说「记住这个」时才用 save_note。
 - 用户问起过去的事、某个人，用 search_memory 查；想知道你都记了什么，用 list_memory。
 - 用户明确说「忘掉…」，用 forget_note。
 - 用户教你一套想复用的工作流程时，先征得同意，再用 create_skill 写成 SKILL.md。
@@ -55,14 +55,60 @@ const DEFAULT_SOUL: &str = "\
 - [tools used: ...] 是你过去几轮实际做过的事；已经做过的不要重复做。\
 ";
 
-/// SOUL.md is the user-editable persona file, created on first run.
-/// Editing it changes who Joy is — the plainest form of procedural memory.
-pub(crate) fn load_soul(home: &std::path::Path) -> String {
-    let path = home.join("SOUL.md");
-    if !path.exists() {
-        let _ = std::fs::write(&path, DEFAULT_SOUL);
+/// The thin soul: for models that already know how to be an assistant.
+///
+/// Same three commitments as the long one — check the clock, memory is the library's job,
+/// tell the truth about where output landed — without the examples and the per-tool
+/// recital a frontier model does not need. Every line here is paid for on every turn.
+const THIN_SOUL: &str = "\
+你是 Joy，一个跑在用户自己电脑上的本地个人助手。简洁、温暖、主动。
+
+- 需要现在几点、安排日程时先用 current_time，不要凭猜。
+- 关于人、项目和偏好的长期事实由后台整理进记忆库；用户明确说「记住这个」时才用 save_note。
+- 问起过去的事用 search_memory；想知道记了什么用 list_memory；说「忘掉」用 forget_note。
+- 工具输出写明了结果落在哪儿 —— 如实转述，别声称同步到了别处。
+- [tools used: ...] 是你过去几轮真做过的事；做过的不要重复做。\
+";
+
+/// Does this model get the thin soul?
+///
+/// `auto` treats the hosted vendors as strong and the local ones (ollama / LM Studio) as
+/// the ones that need scaffolding — the honest ceiling of what we know without asking the
+/// catalog for a parameter count it does not carry. `thin` / `full` override it outright,
+/// and `Settings::validate` rejects anything else at startup.
+pub(crate) fn thin_soul_for(mode: &str, provider: &str) -> bool {
+    match mode {
+        "thin" => true,
+        "full" => false,
+        _ => !matches!(provider, "ollama" | "lmstudio"),
     }
-    std::fs::read_to_string(&path).unwrap_or_else(|_| DEFAULT_SOUL.to_string())
+}
+
+/// SOUL.md is the user-editable persona file, created on first run.
+///
+/// Editing it changes who Joy is — the plainest form of procedural memory. So the file
+/// wins: a soul the user wrote is returned as-is, whatever the mode says. The mode only
+/// decides which built-in text seeds the file and what an **untouched** default becomes —
+/// detecting the default by content, because "you never edited this" is exactly the case
+/// where a shorter prompt is a pure win, and overwriting an edited file would be theft.
+pub(crate) fn load_soul(home: &std::path::Path, thin: bool) -> String {
+    let path = home.join("SOUL.md");
+    let seed = if thin { THIN_SOUL } else { DEFAULT_SOUL };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(_) => {
+            let _ = std::fs::write(&path, seed);
+            return seed.to_string();
+        }
+    };
+    // Untouched default: swap in the seed for this mode. Anything else is the user talking.
+    if text.trim() == DEFAULT_SOUL.trim() || text.trim() == THIN_SOUL.trim() {
+        if text.trim() != seed.trim() {
+            let _ = std::fs::write(&path, seed);
+        }
+        return seed.to_string();
+    }
+    text
 }
 
 /// Media types we accept for attachments, by file extension — the extension wins over the
@@ -196,6 +242,20 @@ pub async fn run_turn(
         .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "default".to_string());
+
+    // ---- Memory distilled in the background since the last turn is reported here.
+    //
+    // The worker does its work off the clock, so this is the moment the client hears about
+    // it: the same `consolidationCompleted` notification, one turn later than before, at
+    // the point where the user can actually act on it ("记住了 3 条新事实").
+    if let Some(worker) = server.memory_worker.as_ref() {
+        let pending = worker.take_pending();
+        if pending > 0 {
+            sink.notification(ServerNotification::ConsolidationCompleted(
+                ConsolidationCompletedNotification { new_facts: pending },
+            ));
+        }
+    }
 
     // ---- Long task: if the session has an active one, this turn carries it. The heartbeat
     // (`current_turn_id`) is what `task/suspend`, `task/resume` and the boot reconcile hang on.
@@ -1253,6 +1313,29 @@ pub(crate) async fn finalize_turn(
             data: None,
         })?;
 
+    // ---- The ledger: the record that `chat_log` above is a *view* of. Same moment, same
+    // lock. A failure here is a reporting loss — the reply is already persisted — so it
+    // shouts on stderr and the turn carries on, exactly like a tool error.
+    let ledger_sink = super::ledger_writer::LedgerSink::new(
+        &settings.home,
+        settings.ledger_inline_max.max(0) as usize,
+    );
+    let ledger_entries = super::ledger_writer::entries_for_turn(
+        &ledger_sink,
+        &session_id,
+        &turn_id,
+        user_message,
+        &result.messages,
+        &reply,
+    );
+    if let Err(e) = server
+        .ledger
+        .append(&session_id, &turn_id, &ledger_entries, user_message)
+        .await
+    {
+        eprintln!("(joy) 账本没记上（对话已落库，不影响这一轮）：{e}");
+    }
+
     // ---- Calibrate estimates with measurements: save this turn's last request's (measured prefill, local estimate);
     // next turn's budget math corrects by the ratio. Failure only shouts — calibration is an optimization, not this turn's ledger.
     if let Err(e) = server
@@ -1267,32 +1350,37 @@ pub(crate) async fn finalize_turn(
         eprintln!("(joy) 记上下文实测值失败（不影响这一轮）：{e}");
     }
 
-    // ---- Consolidate when enough has accumulated. Failure never loses data — consolidation guarantees that internally.
-    let new_facts = joyczl_memory::consolidation::consolidate_if_due(
-        &server.chat,
-        &server.facts,
-        &server.episodes,
-        resolved.client.as_ref(),
-        &resolved.small_model,
-        settings.consolidate_every,
-    )
-    .await
-    .unwrap_or(0);
-    if new_facts > 0 {
-        sink.notification(ServerNotification::ConsolidationCompleted(
-            ConsolidationCompletedNotification {
-                new_facts: new_facts as i32,
-            },
-        ));
-    }
-
-    // ---- MEMORY.md mirror: refresh a human-readable view every turn.
-    // It is a generated view, not the source of truth; a write failure only warns — a mirror must not
-    // make the whole turn error out.
-    if let Err(e) =
-        joyczl_memory::export_markdown(&server.facts, &server.episodes, &settings.home).await
-    {
-        eprintln!("(joy) MEMORY.md 镜像失败（记忆本身不受影响）：{e}");
+    // ---- Memory work is the worker's job now: the turn ends when the reply is on disk.
+    //
+    // The worker decides whether distillation is due (its trigger is unchanged: enough new
+    // rows) and mirrors the plaintext library afterwards. Nudging it is all that happens on
+    // this clock — no model call, no file rewrite, no held lock. `boot()` without a worker
+    // (tests, embedders) keeps the old synchronous path: one function, two callers.
+    if let Some(worker) = server.memory_worker.as_ref() {
+        worker.wake();
+    } else {
+        let new_facts = joyczl_memory::consolidation::consolidate_if_due(
+            &server.chat,
+            &server.facts,
+            &server.episodes,
+            resolved.client.as_ref(),
+            &resolved.small_model,
+            settings.consolidate_every,
+        )
+        .await
+        .unwrap_or(0);
+        if new_facts > 0 {
+            sink.notification(ServerNotification::ConsolidationCompleted(
+                ConsolidationCompletedNotification {
+                    new_facts: new_facts as i32,
+                },
+            ));
+        }
+        if let Err(e) =
+            joyczl_memory::export_markdown(&server.facts, &server.episodes, &settings.home).await
+        {
+            eprintln!("(joy) MEMORY.md 镜像失败（记忆本身不受影响）：{e}");
+        }
     }
     // Write section ends here: notifications and the response are not writes — don't let the
     // lock linger a step longer.
@@ -1793,6 +1881,23 @@ pub(crate) async fn full_turn(
     } = frame;
     let settings = server.settings();
 
+    // The vector leg is assembled once per turn and shared: the gate's retrieval and
+    // `search_memory` must see the same embedder, or the two disagree about what "similar"
+    // means. Assembly failure (no model configured, provider lacks a default endpoint)
+    // warns once and both fall back to keywords — one misconfigured knob must not keep the
+    // whole conversation from starting.
+    let embedder = if settings.embeddings_enabled {
+        match joyczl_provider::embed::Embedder::from_settings(&settings) {
+            Ok(embedder) => Some(Arc::new(embedder)),
+            Err(why) => {
+                eprintln!("(joy) 向量检索没配好，这次只用关键词：{why}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // ---- Retrieval gate: does this turn consult memory?
     //
     // A resumed turn skips the gate: the memory context that mattered is already baked into the
@@ -1827,26 +1932,12 @@ pub(crate) async fn full_turn(
                 decision: gate_decision.clone(),
             }));
             let memory_context = if decision.retrieve {
-                // The hybrid-retrieval leg: the embedder is assembled only when the switch is on. Assembly failure
-                // (no model configured, provider lacks a default endpoint) warns once and retrieval falls back to
-                // pure keywords — one misconfigured knob must not keep the whole conversation from starting.
-                let embedder = if settings.embeddings_enabled {
-                    match joyczl_provider::embed::Embedder::from_settings(&settings) {
-                        Ok(embedder) => Some(embedder),
-                        Err(why) => {
-                            eprintln!("(joy) 向量检索没配好，这次只用关键词：{why}");
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
                 joyczl_memory::retrieve_context(
                     &server.facts,
                     &server.episodes,
                     &decision.query,
                     settings.retrieval_top_k.max(1) as u32,
-                    embedder.as_ref(),
+                    embedder.as_deref(),
                 )
                 .await
                 .unwrap_or_default()
@@ -1862,8 +1953,14 @@ pub(crate) async fn full_turn(
     let mut skill_loader = joyczl_memory::skills::SkillLoader::new(
         joyczl_memory::skills::SkillLoader::dirs_for(&settings.home),
     );
-    let skill_hits = skill_loader.hits(message);
+    // The body cap is a prompt-shape knob: a 6 KB SKILL.md dropped in whole because the
+    // message said "deploy" is the same context problem as an unpruned memory catalog.
+    let skill_hits = skill_loader.hits_capped(message, settings.skill_body_tokens.max(1) as usize);
     let skills = skill_hits.section;
+    // The catalog is the other half of progressive disclosure: names and one-liners ride
+    // along every turn, bodies only when chosen (by keyword here, by `read_skill` when the
+    // model decides for itself).
+    let skill_index = skill_loader.index_text(settings.skill_index_tokens.max(1) as usize);
     // Explicit references (`$skill-name`) are stripped before sending to the model — references are for
     // the loader; the body text is enough for it. A reference to a nonexistent skill appends a hint, so it
     // can reply instead of pretending not to see. The persisted history remains **the user's original words** (run_turn's business).
@@ -1879,11 +1976,23 @@ pub(crate) async fn full_turn(
     // window while the turn count still looks "safe". The budget is "context window × JOY_COMPACT_THRESHOLD"
     // minus the parts already committed to spend (system prefix, tool declarations, this turn's answer, the summary section).
     // Estimation is approximate (cl100k), so slack is deliberately left wide.
-    let soul = load_soul(&settings.home);
+    let soul = load_soul(
+        &settings.home,
+        thin_soul_for(&settings.soul_mode, &resolved.provider_id),
+    );
+    // Per-session tool table: deferred activation is a property of this conversation, and
+    // the loop re-reads `schemas()` every round, so an activation lands on the next round.
+    // Eager mode (`JOY_TOOL_POLICY=eager`, the default) leaves the table exactly as built.
+    let mut turn_tools = server
+        .tools
+        .session_view_with(server.activation_set(session_id));
+    if settings.tool_policy == "deferred" {
+        turn_tools.defer_all_but_always();
+    }
     let reserve = joyczl_provider::tokens::estimate_text(&soul)
         + joyczl_provider::tokens::estimate_text(&memory_context)
         + joyczl_provider::tokens::estimate_text(&skills)
-        + joyczl_provider::tokens::estimate_tools(&server.tools.schemas())
+        + joyczl_provider::tokens::estimate_tools(&turn_tools.schemas())
         + settings.max_tokens.max(0) as usize
         + SUMMARY_RESERVE_TOKENS;
     // Last turn's measured/estimated ratio: use it to calibrate this estimate (no record, no calibration).
@@ -1915,15 +2024,68 @@ pub(crate) async fn full_turn(
             .await
         }
     };
-    let mut system = build_system(
-        &soul,
-        &resolved.model,
-        &resolved.provider_id,
-        &memory_context,
-        &skills,
-        server.todo.render(session_id).as_deref(),
-        summary.as_deref(),
+    // The catalog a new session carries (index layer). Read once per turn — it is a small
+    // regenerated file, and the cost of a stat + read is far below a single prompt token.
+    let memory_index = joyczl_memory::bundle::Bundle::new(&settings.home)
+        .index_text()
+        .unwrap_or_default();
+
+    let mut prompt = build_system(PromptParts {
+        soul: &soul,
+        model: &resolved.model,
+        provider: &resolved.provider_id,
+        memory: &memory_context,
+        memory_index: Some(memory_index.as_str()),
+        skill_index: Some(skill_index.as_str()),
+        skills: &skills,
+        todo: server.todo.render(session_id).as_deref(),
+        summary: summary.as_deref(),
+        capabilities: capability_note(&settings).as_deref(),
+    });
+
+    // ---- The meter: what this turn's prompt actually costs, section by section.
+    //
+    // Measured here because this is the only place all six sections exist at once; read by
+    // the memory center. It is an estimate (cl100k) — the same one the budget uses, so the
+    // meter and the compaction trigger never disagree about how full the window is.
+    let usage = crate::memory_center::usage_of(
+        vec![
+            (
+                "soul",
+                joyczl_provider::tokens::estimate_text(&prompt.stable),
+            ),
+            (
+                "memory",
+                joyczl_provider::tokens::estimate_text(&memory_context)
+                    + joyczl_provider::tokens::estimate_text(&memory_index),
+            ),
+            (
+                "skills",
+                joyczl_provider::tokens::estimate_text(&skill_index)
+                    + joyczl_provider::tokens::estimate_text(&skills),
+            ),
+            (
+                "tools",
+                joyczl_provider::tokens::estimate_tools(&turn_tools.schemas()),
+            ),
+            (
+                "history",
+                joyczl_provider::tokens::estimate_messages(&history),
+            ),
+            (
+                "summary",
+                summary
+                    .as_deref()
+                    .map(joyczl_provider::tokens::estimate_text)
+                    .unwrap_or(0),
+            ),
+        ],
+        budget_tokens(resolved, &settings, factor),
+        settings.context_warn_ratio,
     );
+    if let Ok(mut map) = server.context_usage.lock() {
+        map.insert(session_id.to_string(), usage);
+    }
 
     // Streaming outlet: push model text deltas to the client as soon as they arrive.
     let delta_sink = sink.clone();
@@ -1938,7 +2100,9 @@ pub(crate) async fn full_turn(
     // ---- THE LOOP
     // The tool environment is constructed in exactly one place (see tool_ctx in lib.rs) — the subagent uses
     // the same one (it passes None). The approval channel is built per turn: None in `never` mode, actions needing approval are rejected.
-    let ctx = server.tool_ctx(session_id, turn_cwd, server.approval_bridge(turn_id, sink));
+    let mut ctx = server.tool_ctx(session_id, turn_cwd, server.approval_bridge(turn_id, sink));
+    ctx.activate = Some(turn_tools.activator());
+    ctx.embedder = embedder;
 
     // The tool **start** notification must go out before execution: the client can then draw "calling X".
     // If the graph's node event outlet (inner) is also present, call both — neither blocks the other.
@@ -1974,15 +2138,16 @@ pub(crate) async fn full_turn(
     let mut retried = false;
     let result: LoopResult = loop {
         let attempt = joyczl_loop::run(joyczl_loop::Turn {
+            system_prefix: Some(prompt.stable.clone()),
             client: resolved.client.as_ref(),
             model: &resolved.model,
-            system: system.clone(),
+            system: prompt.tail.clone(),
             // Fresh start (history + user message) or resume (the checkpointed working memory
             // as-is, `user_message` ignored): both end up as the same `joyczl_loop::Turn`.
             history: history.clone(),
             user_message: prompt_message.clone(),
             user_images: user_images.clone(),
-            tools: &server.tools,
+            tools: &turn_tools,
             ctx: ctx.clone(),
             max_iterations: settings.max_iterations,
             max_tokens: settings.max_tokens,
@@ -2016,15 +2181,20 @@ pub(crate) async fn full_turn(
                 };
                 history = forced_history;
                 summary = forced_summary;
-                system = build_system(
-                    &soul,
-                    &resolved.model,
-                    &resolved.provider_id,
-                    &memory_context,
-                    &skills,
-                    server.todo.render(session_id).as_deref(),
-                    summary.as_deref(),
-                );
+                // Only the tail changes after a forced compaction — the stable prefix is the
+                // same bytes as before, so the cache still serves it.
+                prompt = build_system(PromptParts {
+                    soul: &soul,
+                    model: &resolved.model,
+                    provider: &resolved.provider_id,
+                    memory: &memory_context,
+                    memory_index: Some(memory_index.as_str()),
+                    skill_index: Some(skill_index.as_str()),
+                    skills: &skills,
+                    todo: server.todo.render(session_id).as_deref(),
+                    summary: summary.as_deref(),
+                    capabilities: capability_note(&settings).as_deref(),
+                });
             }
             Err(e) => {
                 return Err(ErrorObject {
@@ -2103,6 +2273,7 @@ async fn graph_route(
                     .replace("{message}", state.str("message").unwrap_or(""));
                 let response = client
                     .create(CreateRequest {
+                        cache_prefix: None,
                         model,
                         system: None,
                         messages: vec![Message::user_text(prompt)],
@@ -2313,32 +2484,131 @@ fn graph_event(sink: &EventSink, event: GraphEvent) {
     }
 }
 
-pub(crate) fn build_system(
-    soul: &str,
-    model: &str,
-    provider: &str,
-    memory: &str,
-    skills: &str,
-    todo: Option<&str>,
-    summary: Option<&str>,
-) -> String {
+/// Every section the system prompt can carry, in one place.
+///
+/// A struct, not nine positional arguments: the order used to be the only thing keeping
+/// "memory" and "memory_index" apart, and the split below turns on knowing exactly which
+/// sections are stable — a named field makes that a refactor, not a hunting trip through
+/// call sites.
+pub(crate) struct PromptParts<'a> {
+    pub soul: &'a str,
+    pub model: &'a str,
+    pub provider: &'a str,
+    pub memory: &'a str,
+    pub memory_index: Option<&'a str>,
+    /// Every skill's name plus its one-line description — small enough to ride along on
+    /// every turn, so the model **chooses** a skill instead of hoping a keyword hits.
+    pub skill_index: Option<&'a str>,
+    /// The bodies of the skills whose trigger fired this turn (`$name` or a keyword match).
+    pub skills: &'a str,
+    pub todo: Option<&'a str>,
+    pub summary: Option<&'a str>,
+    /// What this machine **cannot** do right now (no shell, no file writes). Said once per
+    /// turn, in the prompt, because the alternative is the model discovering it by trial:
+    /// a turn asked to clean up calendar events had no shell and no delete tool, so it spent
+    /// eight iterations reading this repository's docs to find out where events live.
+    pub capabilities: Option<&'a str>,
+}
+
+/// The system prompt cut in two at the cache boundary.
+///
+/// `stable` is byte-identical for the whole session (soul + model identity); `tail` is
+/// everything that moves — the day, the todo list, memory hits, the skill catalog, the
+/// rolling summary. Providers that want an explicit cache boundary (Anthropic) mark the
+/// end of `stable`; the ones with automatic prefix caching simply need `stable` never to
+/// move. Putting the clock in `tail` is the whole reason it is day-granular there: a
+/// minute-level timestamp would invalidate the prefix sixty times an hour.
+pub(crate) struct SystemPrompt {
+    pub stable: String,
+    pub tail: String,
+}
+
+impl SystemPrompt {
+    /// One string, prefix first — for anyone who only wants to assert on the whole text
+    /// (`full_turn` and the subagent pass the two halves through separately, so the cache
+    /// boundary survives).
+    #[cfg(test)]
+    pub fn full(&self) -> String {
+        if self.tail.is_empty() {
+            self.stable.clone()
+        } else {
+            format!("{}\n{}", self.stable, self.tail)
+        }
+    }
+}
+
+/// What this machine cannot do right now, phrased as an instruction.
+///
+/// Two switches decide it, and both are off by default: `JOY_EXEC` (shell) and `JOY_WRITE`
+/// (files). Without a line like this the model has no way to tell "the tool is missing" from
+/// "I have not found the right tool yet" — it reads directories, greps docs and spends the
+/// budget. Both Claude Code and Codex put their permission scope in the prompt for the same
+/// reason; the difference is that theirs usually says *what is allowed*.
+///
+/// `None` when nothing is missing: the common case stays free.
+pub(crate) fn capability_note(settings: &joyczl_config::Settings) -> Option<String> {
+    let mut missing: Vec<&str> = Vec::new();
+    if !settings.exec_enabled {
+        missing.push("- running commands (shell) — off until the user sets `JOY_EXEC=1`");
+    }
+    if !settings.write_enabled {
+        missing.push("- writing or editing files — off until the user sets `JOY_WRITE=1`");
+    }
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "What this machine cannot do right now:\n{}\n\
+         If a request needs one of these, say so in one sentence and stop — \
+         do not approximate it with the tools you do have, and do not go reading \
+         source code to find a workaround.",
+        missing.join("\n")
+    ))
+}
+
+pub(crate) fn build_system(parts_in: PromptParts<'_>) -> SystemPrompt {
+    let PromptParts {
+        soul,
+        model,
+        provider,
+        memory,
+        memory_index,
+        skill_index,
+        skills,
+        todo,
+        summary,
+        capabilities,
+    } = parts_in;
     let now = Local::now();
+    // Stable half: what Joy is and what it runs on. Nothing here depends on the turn.
+    let stable = format!(
+        "{soul}\n\
+         Your model: you are running on '{model}' via the '{provider}' provider, \
+         inside Joy, a local-first open-source agent harness."
+    );
+
+    // Dynamic half, in the order the model should read it: what time it is, what this run
+    // is doing, what it remembers, what it could load.
+    //
+    // The clock is day-granular on purpose. `current_time` answers "what time is it" exactly;
+    // a minute-stamped system prompt would break the cache boundary every turn to say
+    // something the tool says better.
     let mut parts = vec![
-        soul.to_string(),
         // The agent runs on the user's machine, so it should know the user machine's clock —
         // include the timezone name, or "in 30 minutes" has no answer.
         format!(
             "\nRight now it is {} ({}, UTC{})",
-            now.format("%A, %Y-%m-%d %H:%M"),
+            now.format("%A, %Y-%m-%d"),
             now.format("%Z"),
             now.format("%:z")
         ),
-        // "What model are you" is every curious user's first question.
-        format!(
-            "Your model: you are running on '{model}' via the '{provider}' provider, \
-             inside Joy, a local-first open-source agent harness."
-        ),
     ];
+    // Capability scope first: what is *missing* shapes every plan that follows. Codex puts its
+    // sandbox permissions in the prompt for the same reason — a model that knows "no shell here"
+    // says so in one sentence instead of burning a turn finding out.
+    if let Some(capabilities) = capabilities {
+        parts.push(format!("\n{capabilities}"));
+    }
     // The todo list comes before memory and methods: it is **what this run is doing**, which should be seen
     // before background knowledge. And it is injected, not in history — compaction and sliding windows cannot wash it away.
     if let Some(todo) = todo {
@@ -2347,13 +2617,36 @@ pub(crate) fn build_system(
     if !memory.is_empty() {
         parts.push(format!("\nRelevant memory:\n{memory}"));
     }
+    // The library's catalog: one line per page (title · kind — one-line summary), bodies on
+    // demand via `read_memory_page`. This is the index layer: a new session carries the
+    // table of contents, not the encyclopedia. Capped, because a catalog nobody prunes
+    // becomes the context problem it was meant to solve.
+    if let Some(index) = memory_index {
+        if !index.trim().is_empty() {
+            parts.push(format!(
+                "\nMemory library (catalog only — call read_memory_page for a page):\n{index}"
+            ));
+        }
+    }
+    // The skill catalog always rides along; the bodies only for the skills this message
+    // reached. Same rule as the memory catalog: the table of contents, not the book.
+    if let Some(index) = skill_index {
+        if !index.trim().is_empty() {
+            parts.push(format!(
+                "\nSkills (catalog only — call read_skill for a body when one fits):\n{index}"
+            ));
+        }
+    }
     if !skills.is_empty() {
         parts.push(format!("\nRelevant skill instructions:\n{skills}"));
     }
     if let Some(section) = summary.and_then(joyczl_memory::compaction::summary_section) {
         parts.push(section);
     }
-    parts.join("\n")
+    SystemPrompt {
+        stable,
+        tail: parts.join("\n"),
+    }
 }
 
 /// The transcript for the judge: the session's recent turns, with this turn's reply appended.

@@ -46,54 +46,22 @@ pub struct Skill {
 /// ```
 /// No `name` or `description` in the frontmatter → not a skill.
 pub fn parse_skill_text(text: &str) -> Option<Skill> {
-    // Line-ending normalization: skill files edited by Windows users are CRLF, and so
-    // is what git checks out on Windows — hard-matching \"---\n\" fails them all (a
-    // CI Windows job caught this). CRLF → LF in one line; the body is unaffected.
-    let text = text.replace("\r\n", "\n");
-    let rest = text.strip_prefix("---\n")?;
-    let (front, body) = rest.split_once("\n---\n")?;
-    let mut name = None;
-    let mut description = None;
-    let mut schedule = None;
-    let mut version = None;
-    let mut allow_model_invocation = true;
-    let mut dependencies: Vec<String> = Vec::new();
-    for line in front.lines() {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim().trim_matches(['\'', '"']);
-        match key.trim() {
-            "name" => name = Some(value.to_string()),
-            "description" => description = Some(value.to_string()),
-            // An empty value equals unwritten — a bare `schedule:` is not a job.
-            "schedule" if !value.is_empty() => schedule = Some(value.to_string()),
-            "version" if !value.is_empty() => version = Some(value.to_string()),
-            // Both spellings accepted: an underscore form silently doing nothing is a bug you'd need the source to find.
-            "allow-model-invocation" | "allow_model_invocation" => {
-                allow_model_invocation =
-                    !matches!(value.to_lowercase().as_str(), "false" | "no" | "0");
-            }
-            "dependencies" => {
-                dependencies = value
-                    .split([',', ' '])
-                    .map(str::trim)
-                    .filter(|d| !d.is_empty())
-                    .map(str::to_string)
-                    .collect();
-            }
-            _ => {}
-        }
-    }
+    // The header rules (CRLF, quotes, "empty means absent") live in `frontmatter` so the
+    // memory pages and the skills cannot drift apart.
+    let parsed = crate::frontmatter::split(text)?;
+    // Both spellings accepted: an underscore form silently doing nothing is a bug you'd
+    // need the source to find.
+    let allow_model_invocation =
+        parsed.flag("allow-model-invocation", true) && parsed.flag("allow_model_invocation", true);
     Some(Skill {
-        name: name?,
-        description: description?,
-        body: body.trim().to_string(),
+        name: parsed.get("name")?.to_string(),
+        description: parsed.get("description")?.to_string(),
+        body: parsed.body.trim().to_string(),
         path: PathBuf::new(),
-        schedule,
-        version,
+        schedule: parsed.get("schedule").map(str::to_string),
+        version: parsed.get("version").map(str::to_string),
         allow_model_invocation,
-        dependencies,
+        dependencies: parsed.list("dependencies"),
     })
 }
 
@@ -232,8 +200,81 @@ impl SkillLoader {
             .collect()
     }
 
+    /// The catalog that rides along on every turn: one line per skill, `name — description`,
+    /// until the token budget runs out.
+    ///
+    /// Why a catalog and not keyword triggering alone: overlap scoring only fires when the
+    /// user happens to use the words in the description. A model that can *see* the shelf
+    /// picks the right folder even when the phrasing is new. The budget is the guard rail —
+    /// a catalog nobody prunes becomes the context problem it was meant to solve.
+    ///
+    /// Two marks worth carrying: a skill whose author said "explicit `$name` only", and one
+    /// whose dependencies are missing. Offering a skill the model cannot actually use costs
+    /// a turn to discover.
+    pub fn index_text(&mut self, max_tokens: usize) -> String {
+        if self.scan_sig() != self.sig {
+            self.refresh();
+        }
+        let loaded: Vec<String> = self.skills.iter().map(|s| s.name.clone()).collect();
+        let mut out = String::new();
+        let mut spent = 0usize;
+        let mut omitted = 0usize;
+        for skill in &self.skills {
+            let mut marks = Vec::new();
+            if !skill.allow_model_invocation {
+                marks.push("explicit $name only".to_string());
+            }
+            if let Some(missing) = missing_dependency(skill, &loaded) {
+                marks.push(format!("needs {missing}"));
+            }
+            let line = if marks.is_empty() {
+                format!("- {} — {}", skill.name, skill.description)
+            } else {
+                format!(
+                    "- {} — {} ({})",
+                    skill.name,
+                    skill.description,
+                    marks.join(", ")
+                )
+            };
+            let cost = joyczl_provider::tokens::estimate_text(&line) + 1;
+            if spent + cost > max_tokens {
+                omitted += 1;
+                continue;
+            }
+            spent += cost;
+            out.push_str(&line);
+            out.push('\n');
+        }
+        if omitted > 0 {
+            out.push_str(&format!("({omitted} more skills not listed)\n"));
+        }
+        out
+    }
+
+    /// One skill's body, for the `read_skill` tool. `None` = no such skill.
+    pub fn body_of(&mut self, name: &str) -> Option<String> {
+        if self.scan_sig() != self.sig {
+            self.refresh();
+        }
+        self.skills
+            .iter()
+            .find(|skill| skill.name == name)
+            .map(|skill| skill.body.clone())
+    }
+
     /// The result of building the skill section.
     pub fn hits(&mut self, message: &str) -> SkillHits {
+        self.hits_capped(message, usize::MAX)
+    }
+
+    /// Same, with a ceiling on one body's text (`JOY_SKILL_BODY_TOKENS`).
+    ///
+    /// Truncation is by whole lines and always says so: a body cut mid-sentence teaches the
+    /// model a broken procedure and it never learns why. Over the cap, the model is told to
+    /// call `read_skill` for the rest — which returns the body in full, because a request it
+    /// made on purpose is not the same as text forced into every turn.
+    pub fn hits_capped(&mut self, message: &str, body_tokens: usize) -> SkillHits {
         if self.scan_sig() != self.sig {
             self.refresh();
         }
@@ -271,9 +312,12 @@ impl SkillLoader {
         let section = chosen
             .iter()
             .filter_map(|name| self.skills.iter().find(|skill| &skill.name == name))
-            .map(|s| format!("### {}\n{}", s.name, s.body))
+            .map(|s| format!("### {}\n{}", s.name, cap_body(&s.body, body_tokens)))
             .collect::<Vec<_>>()
             .join("\n\n");
+        // The hit log feeds the memory center's "how often did this skill actually fire" —
+        // the only honest way to answer "is this skill worth keeping".
+        self.record_hits(&chosen);
 
         SkillHits {
             section,
@@ -285,6 +329,34 @@ impl SkillLoader {
                 stripped
             },
             hints,
+        }
+    }
+
+    /// Append one line per hit to `<home>/skill-hits.jsonl`.
+    ///
+    /// A file rather than a table: this is telemetry, it never gates anything, and a bad
+    /// line costs one datapoint instead of a failed turn. Each append is a single small
+    /// write, so two processes sharing a home interleave lines but never split one.
+    fn record_hits(&self, names: &[String]) {
+        if names.is_empty() {
+            return;
+        }
+        // `dirs[0]` is always `<home>/skills` (see `dirs_for`), so its parent is the home.
+        let Some(home) = self.dirs.first().and_then(|dir| dir.parent()) else {
+            return;
+        };
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(home.join("skill-hits.jsonl"))
+        else {
+            return;
+        };
+        use std::io::Write;
+        let at = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        for name in names {
+            let quoted = serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_string());
+            let _ = writeln!(file, "{{\"name\":{quoted},\"at\":\"{at}\"}}");
         }
     }
 
@@ -312,6 +384,33 @@ pub struct SkillHits {
     pub message: String,
     /// Hints for explicit references to nonexistent skills, for the model to reply to.
     pub hints: Vec<String>,
+}
+
+/// Cut one skill body at a whole-line boundary when it exceeds `max_tokens`, and say so.
+///
+/// Whole lines, not characters: a procedure cut mid-sentence teaches a broken recipe and
+/// never says why. The marker names the tool that returns the rest — and `read_skill`
+/// deliberately does not apply this cap, because text the model asked for on purpose is not
+/// the same as text forced into every turn.
+fn cap_body(body: &str, max_tokens: usize) -> String {
+    if max_tokens == usize::MAX || joyczl_provider::tokens::estimate_text(body) <= max_tokens {
+        return body.to_string();
+    }
+    let mut out = String::new();
+    let mut spent = 0usize;
+    for line in body.lines() {
+        let cost = joyczl_provider::tokens::estimate_text(line) + 1;
+        if spent + cost > max_tokens {
+            break;
+        }
+        spent += cost;
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "[body truncated at {max_tokens} tokens — call read_skill for the rest]"
+    ));
+    out
 }
 
 /// Which of this skill's dependencies is absent.

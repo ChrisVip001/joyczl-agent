@@ -7,11 +7,14 @@
 //! The agreed conclusion on ordering: **handle tool results first, then talk summarization**.
 //! Tool results alone can be spilled for later lookup, re-run, and trimmed without a model call.
 //!
-//! Three rules:
+//! Four rules:
 //!
 //! * **Only touch the big ones**: only results over `per_result_chars`. When a hundred small
 //!   results together exceed the cap, a file per result costs more than the context it saves —
 //!   in that case just log one honest line and change nothing.
+//! * **Oldest first, newest kept**: the model is *working* with the last few results; stubbing
+//!   one of those answers a question it just asked. Ordering by size (the old rule) could gut
+//!   the freshest result while an old settled one stayed whole. Age is the honest axis.
 //! * **No reprocessing**: anything already a stub (carrying the spill marker or the truncation
 //!   marker, as matched by `is_stub`) is skipped, so running once per turn is idempotent.
 //! * **Self-budgeted tools untouched**: `run_command` already spills itself; another wrapper
@@ -32,6 +35,9 @@ pub struct ToolResultBudget {
     pub total_chars: usize,
     /// A result must exceed this to be eligible for stubbing.
     pub per_result_chars: usize,
+    /// How many of the newest results are never stubbed (`JOY_TOOL_RESULT_KEEP_RECENT`,
+    /// default 3). Recent results are what the model is reasoning about right now.
+    pub keep_recent: usize,
 }
 
 impl Default for ToolResultBudget {
@@ -46,6 +52,7 @@ impl ToolResultBudget {
         Self {
             total_chars: 0,
             per_result_chars: 0,
+            keep_recent: 0,
         }
     }
 
@@ -94,9 +101,13 @@ pub fn trim_tool_results(
         return report;
     }
 
-    // Start with the largest — the fewest stubs to get under the cap.
-    let mut candidates: Vec<(usize, usize, usize, Option<&str>)> = blocks
+    // Oldest first; the newest `keep_recent` results are off limits. `collect_results`
+    // already walks messages in order, so the position in that vector *is* the age order.
+    let keep = budget.keep_recent.min(blocks.len());
+    let stubbable = blocks.len() - keep;
+    let candidates: Vec<(usize, usize, usize, Option<&str>)> = blocks
         .iter()
+        .take(stubbable)
         .map(|(message, block)| {
             let len = result_len(messages, *message, *block);
             let name = name_of(messages, *message, *block, &names);
@@ -108,7 +119,6 @@ pub fn trim_tool_results(
                 && !name.is_some_and(|name| SELF_BUDGETED.contains(&name))
         })
         .collect();
-    candidates.sort_by_key(|(_, _, len, _)| std::cmp::Reverse(*len));
 
     for (message, block, len, _) in candidates {
         if report.total_chars <= budget.total_chars {
@@ -145,8 +155,15 @@ pub fn trim_tool_results(
         // Not silent: when everything big enough is stubbed and we are still over, this is a pile
         // of medium-sized results — a file per result costs more than the context saved, so stop.
         eprintln!(
-            "(joy) [{session_id}] 轮内工具结果仍然超出预算（{} > {}）：剩下的单条都没超过 {} 字符",
-            report.total_chars, budget.total_chars, budget.per_result_chars
+            "(joy) [{session_id}] 轮内工具结果仍然超出预算（{} > {}）：剩下的单条都没超过 {} 字符{}",
+            report.total_chars,
+            budget.total_chars,
+            budget.per_result_chars,
+            if keep > 0 {
+                format!("，最新的 {keep} 条按策略保留")
+            } else {
+                String::new()
+            }
         );
     }
     report
