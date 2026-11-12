@@ -30,6 +30,7 @@ Joy — 本地优先的个人助手
     joy mcp …          看 MCP 服务器列表；login 跑浏览器 OAuth；serve 把记忆暴露成 MCP 服务器
     joy skill …        技能：list / export --to claude,codex / install <url>
     joy eval [路径]    确定性评测（离线 0/1，必须 100% 通过 = release gate）
+    joy eval --replay  回放评测：录制对话 + 期望事件序列（默认读 evals/replay/）
     joy judge [路径]   真模型答一轮 + 裁判打分（需要 key，出分不拦发版）
     joy bench [路径]   长任务基准：成功率与中断续跑率（只记录，不拦发版）
     joy dashboard      起网页驾驶舱（http://localhost:7777）
@@ -114,21 +115,31 @@ async fn main() -> Result<()> {
         }
         Some("eval") | Some("judge") => {
             let mut args: Vec<String> = std::env::args().skip(2).collect();
-            // No path given: fall back to repo convention evals/deterministic/ and evals/judge/.
+            // `joy eval --replay [path]`: same command, different suite. A flag rather than a new
+            // subcommand because everything downstream (temp home, scoring, report) is identical —
+            // the only difference is which loader feeds the runner.
+            let replay = command.as_deref() == Some("eval")
+                && matches!(args.first().map(String::as_str), Some("--replay"));
+            if replay {
+                args.remove(0);
+            }
+            // No path given: fall back to the repo conventions.
             if args.is_empty() {
-                let default = if command.as_deref() == Some("eval") {
-                    "evals/deterministic"
-                } else {
-                    "evals/judge"
+                let default = match (command.as_deref(), replay) {
+                    (Some("eval"), true) => "evals/replay",
+                    (Some("eval"), false) => "evals/deterministic",
+                    _ => "evals/judge",
                 };
                 args.push(default.to_string());
             }
             let paths: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
             let report_home = home();
-            let code = if command.as_deref() == Some("eval") {
-                joyczl_eval::run_deterministic(&paths, &report_home).await?
-            } else {
-                joyczl_eval::run_judge(&paths, &report_home).await?
+            let code = match (command.as_deref(), replay) {
+                (Some("eval"), true) => joyczl_eval::run_replay(&paths, &report_home).await?,
+                (Some("eval"), false) => {
+                    joyczl_eval::run_deterministic(&paths, &report_home).await?
+                }
+                _ => joyczl_eval::run_judge(&paths, &report_home).await?,
             };
             std::process::exit(code);
         }

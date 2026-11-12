@@ -27,6 +27,7 @@ async fn ctx() -> ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home,
+        on_delta: None,
     }
 }
 

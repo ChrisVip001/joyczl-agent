@@ -1,21 +1,24 @@
 //! Write tools: `write_file` (whole-file write) and `edit` (one exact-match replacement).
 //!
 //! **Off by default** (`JOY_WRITE=1` registers them; off, the model can't even see the names).
-//! The trust boundary is the **writable roots** — the working directory, the Joy home, and
-//! `JOY_EXEC_WRITABLE_ROOTS`: the same roots the exec sandbox may write. There is no process
-//! sandbox here (the write happens in-process), so the containment check is the hard gate:
-//! outside the roots is refused before approval is ever consulted — approval only ever unlocks
-//! a write that is already inside the boundary, never one outside it.
+//! The trust boundary is `crate::roots` — the chosen workspace plus
+//! `JOY_EXEC_WRITABLE_ROOTS`, **the same definition the exec sandbox uses**. There is no
+//! process sandbox here (the write happens in-process), so the containment check is the hard
+//! gate: outside the roots is refused before approval is ever consulted — approval only ever
+//! unlocks a write that is already inside the boundary, never one outside it.
+//!
+//! The Joy home is deliberately **not** a root: an assistant with a workspace must not wander
+//! into its own control plane (`settings.json`, `hooks.json`, memory, skills).
 //!
 //! Like every tool: **refusals and failures are `Error: …` text, never Err** — the loop keeps going.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use crate::approval::ApprovalBroker;
+use crate::approval::{ApprovalBroker, RememberTarget};
 use crate::{require_str, Tool, ToolCtx};
 
 /// Raw string argument — **no trimming**. `require_str` trims, which is right for
@@ -50,6 +53,14 @@ pub struct WritePolicy {
     /// Extra writable roots (`JOY_EXEC_WRITABLE_ROOTS` — shared with the exec sandbox:
     /// one variable, one meaning — "where Joy may put bytes").
     pub extra_roots: Vec<PathBuf>,
+    /// Directories a human answered "always"/"this session" to: writes inside them are not asked
+    /// about again. The persisted ones (`settings.json` `write_allow_dirs`) are loaded into this
+    /// same cell at startup, and a fresh yes is pushed here at once — an approval that only takes
+    /// effect after a restart is not what the click promised.
+    ///
+    /// This **never widens the boundary**: `contained` still runs first, so an approved directory
+    /// outside the writable roots unlocks nothing.
+    pub approved_dirs: Arc<Mutex<Vec<PathBuf>>>,
 }
 
 /// "Someone already said yes" — same trick as exec.rs: a `PermissionRequest` hook that
@@ -60,22 +71,6 @@ impl ApprovalBroker for AlreadyApproved {
     fn request(&self, _request: crate::approval::ApprovalRequest) -> crate::approval::ApprovalFut {
         Box::pin(async { true })
     }
-}
-
-/// Writable roots for this call: **the working directory the human picked**, plus the
-/// policy's explicitly added roots. Nothing else.
-///
-/// `ctx.cwd` is `Some` only when the turn declared one (see `resolve_turn_cwd`) — that act is
-/// the capability switch: no chosen workspace ⇒ no writable root ⇒ no write at all. The Joy
-/// home and the process cwd are deliberately *not* roots: an assistant with a workspace must
-/// not be able to wander into memory, skills or wherever the server happened to be started.
-fn writable_roots(ctx: &ToolCtx, policy: &WritePolicy) -> Vec<PathBuf> {
-    let Some(workspace) = &ctx.cwd else {
-        return Vec::new();
-    };
-    let mut roots = vec![workspace.clone()];
-    roots.extend(policy.extra_roots.iter().cloned());
-    roots
 }
 
 /// **The single containment rule** — see `joyczl_agent::paths`. Re-exported here so the write
@@ -102,12 +97,24 @@ fn contained(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
         .join(", ");
     Err(format!(
         "{path:?} 在可写范围之外（{listed}）。write_file / edit 只能写这些目录里的文件；\
-         范围外的写入请走 run_command（需 JOY_EXEC=1）或让用户自己来。"
+         要放开别的目录，让用户把它加进 JOY_EXEC_WRITABLE_ROOTS，或先把它选成工作目录。"
     ))
 }
 
+/// Already covered by a directory someone said yes to ("本会话总是允许" / "记住这条")?
+///
+/// A poisoned lock reads as "nothing approved" — asking once more is a safe fallback, skipping the
+/// question is not.
+fn covered_by_approval(policy: &WritePolicy, path: &Path) -> bool {
+    let dirs = match policy.approved_dirs.lock() {
+        Ok(dirs) => dirs,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    dirs.iter().any(|dir| inside_workspace(path, dir).is_ok())
+}
+
 /// Ask once when `JOY_APPROVAL=on-request`. Silence, timeout, no broker — all refusals.
-async fn pass_write_gate(
+pub(crate) async fn pass_write_gate(
     tool: &str,
     path: &Path,
     preview: &str,
@@ -115,8 +122,9 @@ async fn pass_write_gate(
     roots: &[PathBuf],
     approval: Option<Arc<dyn ApprovalBroker>>,
 ) -> Result<(), String> {
+    // Hard gate first: an approved directory outside the boundary unlocks nothing.
     contained(path, roots)?;
-    if !policy.approval {
+    if covered_by_approval(policy, path) || !policy.approval {
         return Ok(());
     }
     let Some(broker) = approval else {
@@ -131,6 +139,10 @@ async fn pass_write_gate(
         args_preview: preview.to_string(),
         reason: format!("写入 {path:?}（可写范围内；on-request 模式每次写入都会确认）"),
         timeout_secs: policy.approval_timeout_secs,
+        // "记住这条" records the **directory**: the human approved this folder, not this file name.
+        remember: path
+            .parent()
+            .map(|dir| RememberTarget::Directory(dir.to_path_buf())),
     };
     if broker.request(request).await {
         Ok(())
@@ -141,7 +153,7 @@ async fn pass_write_gate(
 
 /// Fire the `PermissionRequest` hook: it may refuse outright, or allow on the user's behalf.
 /// Returns the (possibly upgraded) approval to use for the gate, or a refusal reason.
-async fn permission_hook(
+pub(crate) async fn permission_hook(
     ctx: &ToolCtx,
     tool: &str,
     tool_input: Value,
@@ -172,7 +184,7 @@ async fn permission_hook(
 
 /// Shared checks for content the model hands us: no NUL bytes (binary in a text tool),
 /// no oversized payloads. `what` names the argument in the error text.
-fn check_content(content: &str, what: &str) -> Result<()> {
+pub(crate) fn check_content(content: &str, what: &str) -> Result<()> {
     if content.contains('\0') {
         return Err(anyhow!(
             "{what} 含 NUL 字节（可能是二进制内容）—— write_file / edit 只写文本；\
@@ -190,7 +202,7 @@ fn check_content(content: &str, what: &str) -> Result<()> {
 }
 
 /// Read an existing file as text for `edit`, with the same honesty rules as `read_file`.
-fn read_text(path: &Path) -> Result<String> {
+pub(crate) fn read_text(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::InvalidData {
             anyhow!("{path:?} 不是 UTF-8 文本（可能是二进制文件）—— edit 只改文本文件。")
@@ -276,7 +288,7 @@ pub fn write_file(policy: WritePolicy) -> Tool {
     let policy = Arc::new(policy);
     Tool {
         name: "write_file".to_string(),
-        description: "把整段文本写进一个文件（覆盖原内容）。只能写工作目录、Joy 的 home、\
+        description: "把整段文本写进一个文件（覆盖原内容）。只能写工作目录，\
                       以及 JOY_EXEC_WRITABLE_ROOTS 列出的目录；范围外会被拒绝。\
                       要改现有文件的一小段，用 edit（更省 token）。"
             .to_string(),
@@ -307,15 +319,9 @@ pub fn write_file(policy: WritePolicy) -> Tool {
                         "Error: {why}（PermissionRequest hook 拒绝了这次写入）"
                     ));
                 }
-                if let Err(why) = pass_write_gate(
-                    "write_file",
-                    &path,
-                    &raw,
-                    &policy,
-                    &writable_roots(&ctx, &policy),
-                    approval,
-                )
-                .await
+                let roots = crate::roots::workspace_roots(&ctx, &policy.extra_roots).workspaces;
+                if let Err(why) =
+                    pass_write_gate("write_file", &path, &raw, &policy, &roots, approval).await
                 {
                     return Ok(format!("Error: {why}"));
                 }
@@ -360,7 +366,7 @@ pub fn edit(policy: WritePolicy) -> Tool {
         name: "edit".to_string(),
         description: "把文件里的一段文本精确替换成另一段（old_string 必须在文件里恰好出现 \
                       一次：0 次或多次都会被拒绝，多带上前后几行让它唯一）。只能改工作目录、\
-                      Joy 的 home、以及 JOY_EXEC_WRITABLE_ROOTS 列出的目录下的文本文件。"
+                      以及 JOY_EXEC_WRITABLE_ROOTS 列出的目录下的文本文件。"
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -402,15 +408,9 @@ pub fn edit(policy: WritePolicy) -> Tool {
                         "Error: {why}（PermissionRequest hook 拒绝了这次编辑）"
                     ));
                 }
-                if let Err(why) = pass_write_gate(
-                    "edit",
-                    &path,
-                    &raw,
-                    &policy,
-                    &writable_roots(&ctx, &policy),
-                    approval,
-                )
-                .await
+                let roots = crate::roots::workspace_roots(&ctx, &policy.extra_roots).workspaces;
+                if let Err(why) =
+                    pass_write_gate("edit", &path, &raw, &policy, &roots, approval).await
                 {
                     return Ok(format!("Error: {why}"));
                 }

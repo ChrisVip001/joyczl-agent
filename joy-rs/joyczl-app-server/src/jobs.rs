@@ -274,9 +274,10 @@ impl JobRegistry for Jobs {
         let notifier = self.notify.clone();
         let id = format!("j{}", self.next.fetch_add(1, Ordering::SeqCst));
 
-        // Writable roots: the explicitly given working directory (or the process cwd) + home — exactly the
-        // same three sources as foreground `run_command` (plus the policy's extra_roots, merged in by
-        // `spawn_sandboxed` internally).
+        // Writable roots: the explicitly given working directory (or the process cwd) — exactly
+        // the same sources as foreground `run_command` (plus the policy's extra_roots, merged
+        // and filtered by `spawn_sandboxed`). Home is not a root any more: it is the control
+        // plane, and "background it" must not be a side door into it.
         let mut writable: Vec<std::path::PathBuf> = Vec::new();
         if let Some(cwd) = cwd
             .map(std::path::PathBuf::from)
@@ -285,7 +286,6 @@ impl JobRegistry for Jobs {
         {
             writable.push(cwd);
         }
-        writable.push(home.clone());
 
         let job_id = id.clone();
         Box::pin(async move {

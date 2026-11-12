@@ -111,7 +111,8 @@ for iteration in 1..=max_iterations.max(1):
   messages.push(Message{role: User, content: results})     ← 工具结果作为一轮 User
 
 护栏 2：仍跑满（只有 max_iterations == 1，或收尾轮仍硬要调工具才会走到）
-       → reply = 一句兜底说明：用满了几步、上面的记录还在、说「接着做」就续
+       → reply = 一句兜底说明：用满了几步、上面的记录还在；上层有额度时它会自己
+         接着跑（第 24 步），没有额度才轮到人说「接着做」
 ```
 
 **四种流式组合**（`:198-229`），这张表解释了「为什么流式与非流式的后续逻辑完全
@@ -163,6 +164,11 @@ fn interrupted_result(streamed, tool_calls, iterations, usage, messages) -> Loop
 
 护栏 2 刻意不返回「最后一条模型文本」：那句通常是「我接下来要……」而不是答案，
 把它当答案交出去是撒谎。宁可说清楚「没做完」。
+
+护栏 2 是**这一段的结束**，不是这一轮的结束：loop 只负责如实收尾，是否再买一片预算由
+上面那层决定（`JOY_AUTO_CONTINUE_MAX` / `JOY_TURN_STEP_SLICE`，见 09 的第 24 步）。
+loop 不应该知道「续跑」这件事——它连自己是不是第一次跑都不该关心，否则
+「预算用尽」和「任务完成」在同一个函数里会搅成一团。
 
 ## 5.6b 循环护栏：`guard.rs`
 

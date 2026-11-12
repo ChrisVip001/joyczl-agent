@@ -3,7 +3,26 @@
 
 use joyczl_provider::{ContentBlock, Message, Role};
 
-use super::budget::{trim_tool_results, ToolResultBudget};
+use super::budget::{should_wrap_up, trim_tool_results, ToolResultBudget};
+
+/// 关掉的两个写法都得真的关掉：`None`（没配）和 0（配成 0）是同一个意思。
+#[test]
+fn no_budget_never_wraps_up() {
+    assert!(!should_wrap_up(None, 1_000_000, 1_000_000));
+    assert!(!should_wrap_up(Some(0), 1_000_000, 1_000_000));
+}
+
+/// 阈值是 80%，而且要把「下一轮大概还要花多少」算进去 —— 否则「80%」实际会在 95% 才停。
+#[test]
+fn the_horizon_is_eighty_percent_of_the_budget() {
+    assert!(!should_wrap_up(Some(1000), 700, 99), "79.9% 还继续");
+    assert!(should_wrap_up(Some(1000), 700, 100), "800 = 80%，收尾");
+    assert!(should_wrap_up(Some(1000), 900, 0), "已经过线");
+    assert!(
+        should_wrap_up(Some(1000), 0, 800),
+        "一轮都没花但下一轮就要 800：预判也要算"
+    );
+}
 
 fn call(id: &str, name: &str) -> Message {
     Message {

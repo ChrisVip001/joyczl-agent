@@ -9,8 +9,9 @@
 
 | 层 | 位置 | 形态 | 最新全量 |
 |---|---|---|---|
-| 单元测试 | 各 crate 的 `*_tests.rs` | 进程内、离线、确定性 | 202 通过 / 15 套件 |
-| 确定性 eval | `evals/deterministic/*.jsonl` | scripted 模型驱动**真的** `run_turn` | 19/19，exit 0 |
+| 单元测试 | 各 crate 的 `*_tests.rs` | 进程内、离线、确定性 | 752 通过 / 19 套件 |
+| 确定性 eval | `evals/deterministic/*.jsonl` | scripted 模型驱动**真的** `run_turn` | 66/66，exit 0 |
+| 回放 eval | `evals/replay/*.jsonl` | 录制对话 + **期望事件序列**（同一套运行器） | 5/5，exit 0，同样进 `check` |
 | judge | `evals/judge/*.jsonl` | 真模型作答 + 裁判打分（0-10） | 出分，不拦发版 |
 | 冒烟 | `scripts/smoke*.sh` | 真进程、真 stdio、真 HTTP | 4 套全通 |
 
@@ -37,7 +38,7 @@
 |---|---|
 | `message` / `gate` / `responses` | 单轮便捷写法 |
 | `turns[]` | 多轮：每轮有自己的 `message` / `session_id` / `gate` / `responses` / `apply_patch` / `interrupt_after_deltas` |
-| `settings` | 用例级旋钮覆盖：`history_turns`、`consolidate_every`、`retrieval_top_k`、`max_iterations`、`graph_workflows`、`exec_enabled`、`exec_allow` |
+| `settings` | 用例级旋钮覆盖：`history_turns`、`consolidate_every`、`retrieval_top_k`、`max_iterations`、`graph_workflows`、`exec_enabled`、`exec_allow`、`approval` / `approval_timeout_secs`、`auto_continue_max` / `turn_step_slice` |
 | `files` | 开跑前写进 home 的文件（内容里可用 `{{home}}` 占位，展开成正斜杠路径） |
 | `prereq` | `"python3"` / `"sh"` / `"sandbox"`：前置不满足就**跳过**（计为跳过，绝不计为通过） |
 | `expect` | 断言集合，见下 |
@@ -110,6 +111,28 @@
 | `mcp` | 起假 MCP 服务器，工具注入与调用 |
 | `compaction` | 摘要替换被挤出的轮次；摘要失败退化为确定性摘录（**原文不丢**） |
 | `exec` | 默认关（工具不存在）、空放行表拒绝、硬拒名单压过 `*`、放行后**真在沙箱里跑**（`prereq: sandbox`） |
+
+## 12.2b 回放 eval：钉住「谁在谁之前」
+
+确定性 eval 问「这个行为还对吗」；回放 eval 问「**这次运行还会不会产生同一串事件**」。
+`evals/replay/*.jsonl` 的每一行是一份录制（人说的话 + 脚本化应答）加一条 `expect.events`，
+加载时被转成同一个 `Scenario` —— 所以运行器、断言、报告全是共用的那份，多出来的只有
+loader 与一条事件断言。**不做第二套框架**是这一层的设计约束：两套运行器一定会漂。
+
+三件事值得记：
+
+* **事件按有序子序列匹配**，不精确匹配。一次流式回答会吐几十个 `textDelta`，精确匹配会让
+  「多吐一个 delta」变成红灯 —— 那是噪声。每项既能写事件名（`toolStarted`），也能写限定名
+  （`toolStarted:run_command`、`toolCompleted:run_command:ok`）。
+* **`toolStarted` 是边跑边发的，`toolCompleted` 在收尾时按结果统一发**。所以一轮里有两个
+  工具时，事件序读起来是「先两个 started，再两个 completed」，写期望值时按这个顺序写
+  （`continuation.jsonl` 就是范本）。
+* **`expect.events` 为空的行在加载时就被拒**：一条不声明事件的「回放」只是在重复确定性用例，
+  放它过就是把绿灯当装饰。
+
+现在五条，各钉一个边界：压缩（窗口与 token 门同时命中）、审批超时（没人回答 → 拒绝且能
+收尾）、增量输出（`toolDelta` 在 `toolCompleted` 之前）、MCP 断线（重建传输 → 重放握手 →
+重试一次）、步数用尽但待办没写完（自动续一片，且续跑**带着**前一段的步骤）。
 
 ## 12.3 judge：真模型 + 裁判
 

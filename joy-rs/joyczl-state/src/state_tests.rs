@@ -807,3 +807,70 @@ async fn backfilling_marks_history_as_folded() {
         "回填不该写出第二轮"
     );
 }
+
+// ---- Fork: a branch is a copy of the last exchanges, the original is untouched ----------
+
+#[tokio::test]
+async fn forking_copies_the_last_turns_and_leaves_the_original_alone() {
+    let chat = Chat::new(temp_db("fork.db").await);
+    for i in 1..=4 {
+        chat.append_exchange(
+            &format!("问 {i}"),
+            &format!("答 {i}"),
+            "src",
+            "dashboard",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    chat.create_session("src", Some("原会话"), Some("/tmp/work"))
+        .await
+        .unwrap();
+
+    let copied = chat.fork_session("src", "branch", 2).await.unwrap();
+    assert_eq!(copied, 4, "两轮 = 四行（user/assistant 成对）");
+
+    let branch = chat.session_history("branch").await.unwrap();
+    let texts: Vec<&str> = branch.iter().map(|(_, text)| text.as_str()).collect();
+    assert_eq!(texts, vec!["答 3", "答 4"], "只复制最近两轮，且顺序不变");
+    assert_eq!(
+        chat.session("branch").await.unwrap().unwrap().messages,
+        4,
+        "四行原始记录（两问两答）"
+    );
+
+    let original = chat.session_history("src").await.unwrap();
+    assert_eq!(original.len(), 4, "原会话一轮都不能少");
+    assert_eq!(
+        chat.session("src").await.unwrap().unwrap().messages,
+        8,
+        "原会话四行原始记录一行都不能少"
+    );
+
+    let meta = chat.session("branch").await.unwrap().expect("分支有元数据");
+    assert_eq!(meta.forked_from.as_deref(), Some("src"), "记下来源");
+    assert_eq!(meta.cwd.as_deref(), Some("/tmp/work"), "工作目录要继承");
+    assert!(meta.title.contains("分支"), "标题带后缀：{}", meta.title);
+}
+
+#[tokio::test]
+async fn forking_an_unknown_session_is_an_error_not_an_empty_branch() {
+    let chat = Chat::new(temp_db("fork_missing.db").await);
+    let result = chat.fork_session("nope", "branch", 2).await;
+    assert!(result.is_err(), "源会话不存在时不能造一个空分支");
+    assert!(
+        chat.session("branch").await.unwrap().is_none(),
+        "失败不留半成品"
+    );
+}
+
+#[tokio::test]
+async fn a_session_that_was_never_forked_has_no_source() {
+    let chat = Chat::new(temp_db("fork_none.db").await);
+    chat.append_exchange("hi", "hello", "plain", "cli", None)
+        .await
+        .unwrap();
+    let meta = chat.session("plain").await.unwrap().expect("有元数据");
+    assert_eq!(meta.forked_from, None);
+}

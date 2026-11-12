@@ -378,7 +378,7 @@ async fn set_goal(server: &Server, session_id: &str, input: &str) {
 async fn ask_approval(server: &Server, ask: joyczl_protocol::ApprovalRequestedNotification) {
     println!("…需要批准：{}", ask.args_preview);
     println!("  为什么问：{}", ask.reason);
-    print!("  批准执行？（y = 允许 / a = 允许并记住 / 其他 = 拒绝）: ");
+    print!("  批准执行？（y = 只这次 / s = 本会话总是允许 / a = 记住这条 / 其他 = 拒绝）: ");
     std::io::stdout().flush().ok();
 
     // A separate stdin handle: the main loop isn't reading at that moment, no fight.
@@ -386,8 +386,15 @@ async fn ask_approval(server: &Server, ask: joyczl_protocol::ApprovalRequestedNo
     let mut line = String::new();
     let _ = tokio::io::AsyncBufReadExt::read_line(&mut stdin, &mut line).await;
     let answer = line.trim().to_lowercase();
-    let approved = matches!(answer.as_str(), "y" | "yes" | "a" | "always");
-    let remember = matches!(answer.as_str(), "a" | "always");
+    let approved = matches!(
+        answer.as_str(),
+        "y" | "yes" | "s" | "session" | "a" | "always"
+    );
+    let remember = match answer.as_str() {
+        "s" | "session" => joyczl_protocol::RememberScope::Session,
+        "a" | "always" => joyczl_protocol::RememberScope::Always,
+        _ => joyczl_protocol::RememberScope::Once,
+    };
 
     let accepted = server.answer_approval(&ask.turn_id, &ask.request_id, approved, remember);
     if !accepted {
@@ -395,10 +402,10 @@ async fn ask_approval(server: &Server, ask: joyczl_protocol::ApprovalRequestedNo
     } else if approved {
         println!(
             "…批准了{}",
-            if remember {
-                "，并记住这条命令"
-            } else {
-                ""
+            match remember {
+                joyczl_protocol::RememberScope::Once => "",
+                joyczl_protocol::RememberScope::Session => "，本会话不再问这条",
+                joyczl_protocol::RememberScope::Always => "，并写进 settings.json",
             }
         );
     } else {
@@ -501,6 +508,9 @@ async fn chat_turn(
                     retry.reason, retry.delay_ms, retry.attempt
                 );
             }
+            // Live tool output is for a GUI that can repaint a row; a line-oriented REPL
+            // would interleave it with everything else, so it waits for the completion line.
+            ServerNotification::ToolDelta(_) => {}
             ServerNotification::ToolStarted(started) => {
                 end_streamed_line(&mut streamed);
                 println!("…正在调用 {}…", started.tool);

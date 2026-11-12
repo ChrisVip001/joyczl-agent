@@ -12,6 +12,7 @@ import type {
   LedgerTurnView,
   MemoryPageSummary,
   MemoryPageView,
+  RememberScope,
   TurnAttachment,
   TurnCompletedNotification,
   TurnView,
@@ -48,6 +49,7 @@ import {
   fetchRecents,
   fetchSessionMeta,
   fetchSkills,
+  forkSession,
   fetchTurns,
   followUpTurn,
   installSkill,
@@ -914,7 +916,14 @@ async function refresh(): Promise<void> {
         () => void handleInbox(),
       ),
     );
-    dom.sessions.replaceChildren(sessionList(data, current, (id) => void open(id)));
+    dom.sessions.replaceChildren(
+      sessionList(
+        data,
+        current,
+        (id) => void open(id),
+        (id) => void branchFrom(id),
+      ),
+    );
     dom.stamp.textContent = formatStamp(data.generatedAt);
   } catch (error) {
     // Failing to fetch data is normal (app-server just started, or the process died),
@@ -1585,7 +1594,7 @@ async function send(
           );
           const foot = el("div", { class: "ac-foot" });
           card.append(foot);
-          const settle = (approved: boolean, remember: boolean) => {
+          const settle = (approved: boolean, remember: RememberScope) => {
             card.querySelectorAll("button").forEach((button) => {
               (button as HTMLButtonElement).disabled = true;
             });
@@ -1601,9 +1610,11 @@ async function send(
                   chip(
                     response.accepted
                       ? approved
-                        ? remember
-                          ? "已允许，并记住这条命令"
-                          : "已允许"
+                        ? remember === "always"
+                          ? "已允许，并记住"
+                          : remember === "session"
+                            ? "已允许，本会话不再问"
+                            : "已允许（只这次）"
                         : "已拒绝"
                       : "回答得太晚，那一轮已经不等了",
                     "note",
@@ -1614,13 +1625,25 @@ async function send(
                 foot.replaceChildren(chip(`回答没送出去：${String(error)}`, "note"));
               });
           };
-          const allow = el("button", { class: "approve", text: "允许" });
-          const always = el("button", { class: "approve", text: "允许并记住" });
+          // Four answers, because "yes" is three different promises: this once, this session,
+          // or written into settings.json. The card says which is which instead of guessing.
+          const allow = el("button", { class: "approve", text: "只允许这次" });
+          const session = el("button", {
+            class: "approve",
+            text: "本会话总是允许",
+            title: "这次启动内不再问它（不写盘，重启就忘）",
+          });
+          const always = el("button", {
+            class: "approve",
+            text: "记住这条",
+            title: "写进 settings.json，下次启动也不再问",
+          });
           const deny = el("button", { class: "deny", text: "拒绝" });
-          allow.addEventListener("click", () => settle(true, false));
-          always.addEventListener("click", () => settle(true, true));
-          deny.addEventListener("click", () => settle(false, false));
-          foot.append(allow, always, deny);
+          allow.addEventListener("click", () => settle(true, "once"));
+          session.addEventListener("click", () => settle(true, "session"));
+          always.addEventListener("click", () => settle(true, "always"));
+          deny.addEventListener("click", () => settle(false, "once"));
+          foot.append(deny, allow, session, always);
           trace.append(card);
           break;
         }
@@ -1645,14 +1668,23 @@ async function send(
         case "toolStarted": {
           // Plain-language summary on the thread; the JSON args stay one hover away.
           showStatus("working", notification.tool);
-          timeline.toolStart(notification.tool, toolSummary(notification));
+          timeline.toolStart(notification.toolUseId, notification.tool, toolSummary(notification));
           scrollToEnd(true);
+          break;
+        }
+
+        case "toolDelta": {
+          // Live output while the command is still running. Progress only — toolCompleted
+          // below is the result; this keeps a two-minute build from looking like a hang.
+          timeline.toolDelta(notification.toolUseId, notification.chunk);
+          scrollToEnd(false);
           break;
         }
 
         case "toolCompleted": {
           // The end freezes the entry: status coloring + duration.
           timeline.toolEnd(
+            notification.toolUseId,
             notification.tool,
             notification.status === "ok",
             notification.durationMs,
@@ -1778,6 +1810,25 @@ async function newSession(): Promise<void> {
   await refresh();
   dom.input.focus();
   scrollToEnd();
+}
+
+/**
+ * Branch the conversation: the server copies the last few exchanges into a new session, and
+ * we switch to it. The original keeps its own thread — that is the whole point, so nothing
+ * is deleted or rewritten on this side.
+ */
+async function branchFrom(sessionId: string): Promise<void> {
+  try {
+    const result = await forkSession({ sessionId });
+    const target = result.session.id;
+    // The list is one poll behind; open() already tolerates a session the list does not know
+    // yet (it renders a placeholder row), so switching straight away is honest.
+    await open(target);
+    void refresh();
+  } catch (error) {
+    dom.messages.append(failureOf(error));
+    scrollToEnd();
+  }
 }
 
 async function open(sessionId: string): Promise<void> {

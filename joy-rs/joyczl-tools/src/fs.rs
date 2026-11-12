@@ -169,9 +169,24 @@ async fn execute_read(
     cache: &Mutex<HashMap<String, u64>>,
 ) -> Result<String> {
     let raw = crate::require_str(args, "path")?;
-    let path = resolve_against_cwd(ctx, expand_tilde(&raw));
+    let mut path = resolve_against_cwd(ctx, expand_tilde(&raw));
     let offset = crate::opt_u32(args, "offset", 1)?.max(1);
     let limit = crate::opt_u32(args, "limit", READ_MAX_LINES)?.clamp(1, READ_MAX_LINES);
+
+    // ---- Spill addresses are **relative to home**, and the model is told so by `spill.rs`.
+    //
+    // "全量在 spill/20261112/exec-….txt" is only a useful address if copying it works; resolving
+    // it against the turn's cwd fails whenever that cwd is somewhere else (usually). So: if the
+    // cwd-relative read misses and the text starts with `spill/`, try `<home>/<that>`.
+    //
+    // Deliberately narrow: only `spill/`, not "any relative path, guess home". A broad fallback
+    // would quietly turn every typo'd path into a probe of Joy's state directory.
+    if !path.is_file() && !PathBuf::from(&raw).is_absolute() && raw.starts_with("spill/") {
+        let candidate = ctx.home.join(&raw);
+        if candidate.is_file() {
+            path = candidate;
+        }
+    }
 
     if !path.is_file() {
         // Directories are blocked here too: with an honest "use that tool to list directories".

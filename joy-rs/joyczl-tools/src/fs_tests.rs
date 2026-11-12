@@ -25,6 +25,7 @@ async fn ctx() -> ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home,
+        on_delta: None,
     }
 }
 
@@ -341,4 +342,47 @@ async fn without_a_turn_cwd_relative_paths_still_use_process_cwd() {
     )
     .await;
     assert!(out.contains("旧行为"), "{out}");
+}
+
+// ---- spill 地址：模型照抄「全量在 spill/…」时真的能读到 ---------------------------------
+
+/// spill.rs 给模型的是**相对 home** 的地址；cwd 通常不在 home 下，所以 read_file 要认这个形状。
+#[tokio::test]
+async fn a_spill_address_resolves_against_home_not_only_the_cwd() {
+    let ctx = ctx().await;
+    let day = ctx.home.join("spill").join("20261112");
+    std::fs::create_dir_all(&day).expect("建 spill 目录");
+    std::fs::write(day.join("exec-120000-1.txt"), "完整输出在这里\n").expect("写 spill 文件");
+
+    // 目录故意选在 home 之外：这正是真实情形（本轮工作目录是某个项目）。
+    let elsewhere = tempfile::tempdir().expect("临时目录");
+    let ctx = ToolCtx {
+        cwd: Some(elsewhere.path().to_path_buf()),
+        ..ctx
+    };
+
+    let out = run(
+        &registry(),
+        &ctx,
+        "read_file",
+        json!({"path": "spill/20261112/exec-120000-1.txt"}),
+    )
+    .await;
+    assert!(out.contains("完整输出在这里"), "{out}");
+}
+
+/// 回落只认 `spill/` 前缀：普通相对路径找不到时**不能**去 home 下猜（那是无声扩权）。
+#[tokio::test]
+async fn a_plain_relative_path_never_falls_back_to_home() {
+    let ctx = ctx().await;
+    std::fs::write(ctx.home.join("notes.md"), "home 下的同名文件\n").expect("写文件");
+    let elsewhere = tempfile::tempdir().expect("临时目录");
+    let ctx = ToolCtx {
+        cwd: Some(elsewhere.path().to_path_buf()),
+        ..ctx
+    };
+
+    let out = run(&registry(), &ctx, "read_file", json!({"path": "notes.md"})).await;
+    assert!(out.starts_with("Error"), "不该在 home 下找到它：{out}");
+    assert!(!out.contains("home 下的同名文件"), "{out}");
 }

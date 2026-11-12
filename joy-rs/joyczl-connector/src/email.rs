@@ -100,6 +100,8 @@ async fn run(ctx: ToolCtx, config: EmailConfig, args: Value) -> Result<String> {
         args_preview: format!("发给 {}：{}", to.join(", "), summarize(&subject, &body)),
         reason: "连接器已开启 live，每次实际发送都会确认".to_string(),
         timeout_secs: APPROVAL_TIMEOUT_SECS,
+        // Nothing worth remembering: a live send is a one-off act, not a standing rule.
+        remember: None,
     };
     if !broker.request(request).await {
         bail!("这次发送没有被批准（或没人回答），已跳过。");

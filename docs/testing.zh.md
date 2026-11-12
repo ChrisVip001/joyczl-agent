@@ -15,7 +15,8 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 | 前端 | joy-ts（node --test + tsc） | 110 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |
 | Python SDK | sdk/python（pytest + mypy） | 13 通过 / 0 失败 | |
 | 端到端冒烟 | scripts/smoke*.sh | 真 app-server / 真网关 / 真驾驶舱 / 真 SDK | 4 套全通过 |
-| 确定性 eval | evals/deterministic/*.jsonl | scripted 模型驱动同一 run_turn | 53/53 通过，gate exit 0 |
+| 确定性 eval | evals/deterministic/*.jsonl | scripted 模型驱动同一 run_turn | 66/66 通过，gate exit 0 |
+| 回放 eval | evals/replay/*.jsonl | 录制对话 + **期望事件序列**（压缩/审批超时/增量输出/MCP 断线/步数用尽自动续片） | 5/5 通过，同样进 gate |
 | 长任务基准 | evals/long/*.jsonl | 同一装置，问「自主任务有没有变强」 | 11/11 达成（含一条开着计划器的），中断恢复 3/3；**不拦发版** |
 | judge | evals/judge/*.jsonl | 真模型答 + 裁判打分（0-10） | 10 例；出分不拦发版 |
 
@@ -81,6 +82,24 @@ eval 跑的是「一条消息进、一条消息出」的同一套 `run_turn`，�
 `deterministic/prompt-shape.jsonl`（薄/全灵魂、目录在但正文不在）。场景级 settings 也
 跟着长了对应的旋钮：`soul_mode`、`tool_policy`、`skill_index_tokens`、`skill_body_tokens`、
 `tool_result_keep_recent`、`context_warn_ratio`。
+
+## 回放 eval（`joy eval --replay`）
+
+确定性 eval 问「这个行为还对吗」，回放 eval 问「**这次运行还会不会产生同一串事件**」。
+`evals/replay/*.jsonl` 的录制格式是「人说的话 + 脚本化应答 + `expect.events`」，加载时被
+转成同一个 `Scenario`，因此运行器与断言完全与确定性 eval 共用 —— 差别只有 loader 与那条
+事件断言，不存在第二套框架。
+
+事件按**有序子序列**匹配：`["turnStarted", "toolStarted:run_command", "toolDelta",
+"toolCompleted:run_command:ok", "turnCompleted"]` 里的每项只要按顺序出现即可，中间多几个
+`textDelta` / `toolDelta` 不算失败（精确匹配会让「多吐一个 delta」变成红灯，那是噪声）。
+`expect.events` 为空的行在加载时就被拒绝：一条不声明事件的「回放」只是在重复确定性用例。
+
+五条用例各钉一个边界：压缩（窗口与 token 门同时命中）、审批超时（没人回答 → 拒绝且能收尾）、
+增量输出（`toolDelta` 必须在 `toolCompleted` 之前）、MCP 断线（重建传输 → 重放握手 → 重试一次）、
+步数用尽但待办没写完（自动续一片，且续跑**带着**前一段的步骤 —— 一条只可能来自消息历史的
+`last_prompt_contains` 就是这条的证词）。
+也是发版闸门的一部分（`just check` 里含 `eval-replay`）。
 
 ## 长任务基准（P1）
 

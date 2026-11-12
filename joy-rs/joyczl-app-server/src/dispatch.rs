@@ -12,13 +12,14 @@ use joyczl_protocol::{
     MemoryListParams, MemoryListResponse, MemoryRememberParams, MemoryRememberResponse,
     MemorySearchParams, MemorySearchResponse, MessageRole, ModelInfo, ModelListParams,
     ModelListResponse, ModelProfilesParams, ModelRemoveParams, ModelRoutesSaveParams,
-    ModelSaveParams, RequestId, ScheduleListParams, ServerNotification, SessionGetParams,
-    SessionGetResponse, SessionListParams, SessionListResponse, SessionMessagesParams,
-    SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionUpdateParams,
-    SessionUpdateResponse, SessionViewParams, TaskActionParams, TaskCreateParams, TaskGetParams,
-    TurnFollowUpParams, TurnFollowUpResponse, TurnInterruptParams, TurnInterruptResponse,
-    TurnListParams, TurnListResponse, TurnStartParams, TurnSteerParams, TurnSteerResponse,
-    TurnSteeredNotification, TurnView, UsageSummaryParams, JSONRPC_VERSION,
+    ModelSaveParams, RequestId, ScheduleListParams, ServerNotification, SessionForkParams,
+    SessionForkResponse, SessionGetParams, SessionGetResponse, SessionListParams,
+    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
+    SessionNewResponse, SessionUpdateParams, SessionUpdateResponse, SessionViewParams,
+    TaskActionParams, TaskCreateParams, TaskGetParams, TurnFollowUpParams, TurnFollowUpResponse,
+    TurnInterruptParams, TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams,
+    TurnSteerParams, TurnSteerResponse, TurnSteeredNotification, TurnView, UsageSummaryParams,
+    JSONRPC_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -205,6 +206,31 @@ async fn dispatch(
                     session: to_session(row),
                 }),
                 None => Err(no_such_session(&p.session_id)),
+            }
+        }
+
+        methods::SESSION_FORK => {
+            let p: SessionForkParams = parse(params, method)?;
+            let new_id = p
+                .new_session_id
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(new_session_id);
+            let turns = p.turns.map(|n| n as usize).unwrap_or(FORK_DEFAULT_TURNS);
+            let copied = server
+                .chat
+                .fork_session(&p.session_id, &new_id, turns)
+                .await
+                .map_err(|e| ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: format!("分叉失败：{e}"),
+                    data: None,
+                })?;
+            match server.chat.session(&new_id).await.map_err(internal)? {
+                Some(row) => respond(SessionForkResponse {
+                    session: to_session(row),
+                    copied: narrow(copied),
+                }),
+                None => Err(no_such_session(&new_id)),
             }
         }
 
@@ -666,6 +692,10 @@ fn to_episode(row: joyczl_state::EpisodeRow) -> joyczl_protocol::Episode {
     }
 }
 
+/// How many exchanges a fork copies when the caller did not say: enough to carry the thread
+/// of a conversation, small enough to stay cheap to rebuild into a prompt.
+const FORK_DEFAULT_TURNS: usize = 6;
+
 fn to_session(row: joyczl_state::SessionRow) -> joyczl_protocol::SessionSummary {
     joyczl_protocol::SessionSummary {
         id: row.id,
@@ -674,6 +704,7 @@ fn to_session(row: joyczl_state::SessionRow) -> joyczl_protocol::SessionSummary 
         started_at: iso_opt(row.started_at),
         last_at: iso_opt(row.last_at),
         cwd: row.cwd,
+        forked_from: row.forked_from,
     }
 }
 

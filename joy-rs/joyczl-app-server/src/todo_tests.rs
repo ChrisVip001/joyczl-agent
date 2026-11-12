@@ -11,7 +11,10 @@ use serde_json::json;
 use crate::{EventSink, Server};
 
 /// Run two turns on the same server: the board is **session-level**, so it must live on the server, not in any one turn.
-async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, String, String) {
+async fn run_twice(
+    first_message: &str,
+    second_message: &str,
+) -> (Arc<Mock>, String, String, String) {
     let dir = tempfile::tempdir().expect("临时目录");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
@@ -55,6 +58,7 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
 
     let mut tools_first = String::new();
     let mut system_second = String::new();
+    let mut reply_second = String::new();
     for (index, message) in [first_message, second_message].into_iter().enumerate() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = EventSink::new(tx);
@@ -75,13 +79,18 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
         .expect("这一轮该跑完");
 
         while let Ok(frame) = rx.try_recv() {
-            if let crate::Frame::Notification(joyczl_protocol::ServerNotification::ToolCompleted(
-                done,
-            )) = frame
-            {
-                if index == 0 {
+            match frame {
+                crate::Frame::Notification(joyczl_protocol::ServerNotification::ToolCompleted(
+                    done,
+                )) if index == 0 => {
                     tools_first = done.output.clone();
                 }
+                crate::Frame::Notification(joyczl_protocol::ServerNotification::TurnCompleted(
+                    done,
+                )) if index == 1 => {
+                    reply_second = done.reply;
+                }
+                _ => {}
             }
         }
     }
@@ -94,13 +103,13 @@ async fn run_twice(first_message: &str, second_message: &str) -> (Arc<Mock>, Str
     }
     drop(requests);
 
-    (mock, tools_first, system_second)
+    (mock, tools_first, system_second, reply_second)
 }
 
 /// The board is **visible on the very next turn** after being written, and it is injected (not via history).
 #[tokio::test]
 async fn a_todo_list_is_injected_into_the_next_turn() {
-    let (_mock, tool_output, system) = run_twice("列一下要做的事", "接着来").await;
+    let (_mock, tool_output, system, reply) = run_twice("列一下要做的事", "接着来").await;
 
     assert!(
         tool_output.contains("in_progress: 写测试"),
@@ -112,6 +121,14 @@ async fn a_todo_list_is_injected_into_the_next_turn() {
     );
     assert!(system.contains("in_progress: 写测试"), "{system}");
     assert!(system.contains("pending: 改文档"), "{system}");
+
+    // 这一轮是模型自己说完的（步数没用完），清单里还开着两项也**不**劫持结尾：
+    // 「列个计划」说完计划就算做完了，自动接着做等于替人决定去执行。要续跑得是**被截断**那种。
+    assert!(!reply.is_empty(), "第二轮该收到 TurnCompleted 的回复文本");
+    assert!(
+        !reply.contains("自动续跑"),
+        "自然结束的一轮不该被续跑接管：{reply}"
+    );
 }
 
 /// A session that never wrote a board gets no section (an empty header is worse than none: it would suggest the board is empty).

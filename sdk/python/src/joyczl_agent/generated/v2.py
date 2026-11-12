@@ -96,18 +96,6 @@ class ApprovalRequestedNotification(BaseModel):
     turnId: str
 
 
-class ApprovalRespondParams(BaseModel):
-    approved: bool
-    remember: Annotated[
-        bool | None,
-        Field(
-            description='Remember this decision: write the command itself into the allowlist in `<home>/settings.json` (no wildcards — the user approved this command, not this kind).'
-        ),
-    ] = False
-    requestId: str
-    turnId: str
-
-
 class ApprovalRespondResponse(BaseModel):
     accepted: Annotated[
         bool,
@@ -173,6 +161,35 @@ class ConsolidationCompletedNotification(BaseModel):
             description='How many new facts this batch distilled; 0 means not due yet or nothing surfaced.'
         ),
     ]
+
+
+class ContextPart(BaseModel):
+    name: str
+    tokens: int
+
+
+class ContextUsage(BaseModel):
+    budgetTokens: int
+    notice: Annotated[
+        str | None,
+        Field(
+            description='Set once `ratio` crosses `JOY_CONTEXT_WARN_RATIO`: one honest sentence, no dialog.'
+        ),
+    ] = None
+    parts: list[ContextPart]
+    ratio: float
+    usedTokens: int
+
+
+class ContextUsageParams(BaseModel):
+    sessionId: str
+
+
+class ContextUsageResponse(BaseModel):
+    usage: Annotated[
+        ContextUsage | None,
+        Field(description='`None` = no turn has run in this session yet.'),
+    ] = None
 
 
 class Episode(BaseModel):
@@ -314,6 +331,37 @@ class JsonRpcNotification(BaseModel):
     params: Any | None = None
 
 
+class LedgerEntryView(BaseModel):
+    bytes: int
+    fidelity: Annotated[
+        str,
+        Field(
+            description='`exact` | `folded` — a folded entry is honest about being a summary.'
+        ),
+    ]
+    kind: str
+    preview: Annotated[
+        str,
+        Field(
+            description='First line(s) of the payload, already trimmed for a list row.'
+        ),
+    ]
+
+
+class LedgerTurnView(BaseModel):
+    at: str
+    consolidated: bool
+    entries: int
+    fidelity: Annotated[
+        str,
+        Field(
+            description='`exact` when every row is exact; `folded` when the backfill touched it.'
+        ),
+    ]
+    preview: Annotated[str, Field(description="One line: the user's first sentence.")]
+    turnId: str
+
+
 class MemoryForgetParams(BaseModel):
     subject: str
 
@@ -325,6 +373,23 @@ class MemoryForgetResponse(BaseModel):
             description='How many were actually deleted. 0 means there was no memory of this subject to begin with.'
         ),
     ]
+
+
+class MemoryLedgerParams(BaseModel):
+    limit: Annotated[
+        int | None, Field(description='Newest-first cap. Defaults to 30.')
+    ] = None
+    sessionId: str
+    turnId: Annotated[
+        str | None, Field(description="Present = also return this turn's entries.")
+    ] = None
+
+
+class MemoryLedgerResponse(BaseModel):
+    entries: Annotated[
+        list[LedgerEntryView], Field(description='Empty unless `turnId` was asked for.')
+    ]
+    turns: list[LedgerTurnView]
 
 
 class MemoryListEpisodesParams(BaseModel):
@@ -344,6 +409,35 @@ class MemoryListParams(BaseModel):
 class MemoryListResponse(BaseModel):
     data: list[Fact]
     nextCursor: str | None = None
+
+
+class MemoryPageParams(BaseModel):
+    page: Annotated[
+        str, Field(description='Page slug, no `.md` (`alex`, not `alex.md`).')
+    ]
+
+
+class MemoryPageSummary(BaseModel):
+    kind: str
+    slug: str
+    summary: str
+    title: str
+    updated: str
+
+
+class MemoryPageView(BaseModel):
+    body: str
+    kind: str
+    slug: str
+    sources: Annotated[
+        list[str],
+        Field(
+            description='Provenance: the ledger rows this page was distilled from (`ledger:12345`).'
+        ),
+    ]
+    summary: str
+    title: str
+    updated: str
 
 
 class MemoryRememberParams(BaseModel):
@@ -503,6 +597,18 @@ class ModelSaveResponse(BaseModel):
         str,
         Field(
             description='Where the credential **actually** landed: `keychain` / `file` / `env:VAR` / `memory` / `none`. Fall back to a plaintext file and say so honestly — never let the user assume the keychain.'
+        ),
+    ]
+
+
+class RememberScope(
+    RootModel[Literal['once'] | Literal['session'] | Literal['always']]
+):
+    root: Annotated[
+        Literal['once'] | Literal['session'] | Literal['always'],
+        Field(
+            description='How long an approval answer lasts.\n\nThe distinction exists because "yes" is three different promises: *this time*, *until the process exits*, and *until revoked*. Conflating them either nags the human on every call or silently writes a standing rule they did not ask for.',
+            title='RememberScope',
         ),
     ]
 
@@ -672,11 +778,29 @@ class ServerNotification7(BaseModel):
         ),
     ]
     tool: str
+    toolUseId: Annotated[
+        str,
+        Field(
+            description='The id the model minted for this call — the same id its result comes back under. Clients key on it: several read-only calls can be in flight at once.'
+        ),
+    ]
     turnId: str
     type: Literal['toolStarted']
 
 
-class ServerNotification9(BaseModel):
+class ServerNotification8(BaseModel):
+    chunk: Annotated[
+        str,
+        Field(
+            description='A chunk of output, as it arrived. Chunk boundaries are not meaningful.'
+        ),
+    ]
+    toolUseId: str
+    turnId: str
+    type: Literal['toolDelta']
+
+
+class ServerNotification10(BaseModel):
     newFacts: Annotated[
         int,
         Field(
@@ -686,13 +810,13 @@ class ServerNotification9(BaseModel):
     type: Literal['consolidationCompleted']
 
 
-class ServerNotification10(BaseModel):
+class ServerNotification11(BaseModel):
     nodes: list[str]
     type: Literal['graphStarted']
     workflow: str
 
 
-class ServerNotification11(BaseModel):
+class ServerNotification12(BaseModel):
     node: str
     type: Literal['graphNodeStarted']
     visit: Annotated[
@@ -704,7 +828,7 @@ class ServerNotification11(BaseModel):
     workflow: str
 
 
-class ServerNotification12(BaseModel):
+class ServerNotification13(BaseModel):
     error: Annotated[
         str | None,
         Field(
@@ -720,7 +844,7 @@ class ServerNotification12(BaseModel):
     workflow: str
 
 
-class ServerNotification13(BaseModel):
+class ServerNotification14(BaseModel):
     error: str | None = None
     ms: int
     path: list[str]
@@ -729,7 +853,7 @@ class ServerNotification13(BaseModel):
     workflow: str
 
 
-class ServerNotification14(BaseModel):
+class ServerNotification15(BaseModel):
     iterations: Annotated[
         int,
         Field(
@@ -741,7 +865,7 @@ class ServerNotification14(BaseModel):
     type: Literal['turnCheckpointed']
 
 
-class ServerNotification15(BaseModel):
+class ServerNotification16(BaseModel):
     message: str
     sessionId: str
     ts: str
@@ -749,7 +873,7 @@ class ServerNotification15(BaseModel):
     type: Literal['turnSteered']
 
 
-class ServerNotification16(BaseModel):
+class ServerNotification17(BaseModel):
     fromIterations: Annotated[
         int,
         Field(description='How many iterations the checkpoint had already completed.'),
@@ -762,7 +886,7 @@ class ServerNotification16(BaseModel):
     type: Literal['turnResumed']
 
 
-class ServerNotification17(BaseModel):
+class ServerNotification18(BaseModel):
     reason: Annotated[
         str, Field(description='Why it was abandoned (`interrupted by user`, …).')
     ]
@@ -771,7 +895,7 @@ class ServerNotification17(BaseModel):
     type: Literal['turnSuspended']
 
 
-class ServerNotification18(BaseModel):
+class ServerNotification19(BaseModel):
     reason: str | None = None
     roundsUsed: int
     sessionId: Annotated[
@@ -782,7 +906,7 @@ class ServerNotification18(BaseModel):
     type: Literal['taskUpdated']
 
 
-class ServerNotification19(BaseModel):
+class ServerNotification20(BaseModel):
     added: Annotated[
         int, Field(description='How many messages this poll added (deduped by uid).')
     ]
@@ -790,11 +914,43 @@ class ServerNotification19(BaseModel):
     type: Literal['inboxReceived']
 
 
-class ServerNotification21(BaseModel):
+class ServerNotification22(BaseModel):
     code: int
     data: Any | None = None
     message: str
     type: Literal['error']
+
+
+class SessionCompactParams(BaseModel):
+    focus: Annotated[
+        str | None,
+        Field(
+            description='What to keep in the summary ("the migration plan"), optional.'
+        ),
+    ] = None
+    sessionId: str
+
+
+class SessionCompactResponse(BaseModel):
+    coveredTurns: Annotated[
+        int, Field(description='How many turns the new summary covers.')
+    ]
+    summaryTokens: int
+
+
+class SessionForkParams(BaseModel):
+    newSessionId: Annotated[
+        str | None,
+        Field(description="The new session's id. Absent = the server picks one."),
+    ] = None
+    sessionId: str
+    turns: Annotated[
+        int | None,
+        Field(
+            description="How many exchanges (user+assistant pairs) to copy. Absent = the server's default.",
+            ge=0,
+        ),
+    ] = None
 
 
 class SessionGetParams(BaseModel):
@@ -846,6 +1002,12 @@ class SessionSummary(BaseModel):
             description='The session\'s working directory: the **root of everything it may write** (tools refuse writes outside it). Absent = not chosen; the dashboard shows "选择工作目录".'
         ),
     ] = None
+    forkedFrom: Annotated[
+        str | None,
+        Field(
+            description='The session this one was forked from. Display only: the two are independent — deleting one must not affect the other.'
+        ),
+    ] = None
     id: str
     lastAt: str | None = None
     messages: int
@@ -890,6 +1052,12 @@ class SettingsPatch(BaseModel):
     maxIterations: int | None = None
     maxTokens: int | None = None
     retrievalTopK: int | None = None
+    writeAllowDirs: Annotated[
+        list[str] | None,
+        Field(
+            description='Whole-table replacement of the directories "remember this" accepted for **writes** (`write_file`/`edit` no longer ask inside them). Remembering a directory never widens the writable boundary — the containment check still runs first.'
+        ),
+    ] = None
 
 
 class SettingsView(BaseModel):
@@ -908,6 +1076,16 @@ class SettingsView(BaseModel):
     provider: str
     retrievalTopK: int
     smallModel: str
+
+
+class SkillStat(BaseModel):
+    hits: int
+    lastHit: str | None = None
+    name: str
+
+
+class SkillStatsResponse(BaseModel):
+    data: list[SkillStat]
 
 
 class SpentView(BaseModel):
@@ -1032,6 +1210,17 @@ class TokenUsage(BaseModel):
     outputTokens: int
 
 
+class ToolDeltaNotification(BaseModel):
+    chunk: Annotated[
+        str,
+        Field(
+            description='A chunk of output, as it arrived. Chunk boundaries are not meaningful.'
+        ),
+    ]
+    toolUseId: str
+    turnId: str
+
+
 class ToolStartedNotification(BaseModel):
     args: Annotated[
         Any,
@@ -1040,6 +1229,12 @@ class ToolStartedNotification(BaseModel):
         ),
     ]
     tool: str
+    toolUseId: Annotated[
+        str,
+        Field(
+            description='The id the model minted for this call — the same id its result comes back under. Clients key on it: several read-only calls can be in flight at once.'
+        ),
+    ]
     turnId: str
 
 
@@ -1278,6 +1473,18 @@ class AgentTaskView(BaseModel):
     title: str
 
 
+class ApprovalRespondParams(BaseModel):
+    approved: bool
+    remember: Annotated[
+        RememberScope,
+        Field(
+            description='How long the yes lasts: `once`, `session` (memory only), `always` (settings.json).\n\n**Required**, deliberately: no implicit default, so a client cannot forget to say how long a yes lasts and get `once` by accident. (It also keeps the generated Python model honest — an enum default comes out of `datamodel-codegen` as a bare string, a type error the SDK would then have to live with.)\n\nWhat gets remembered is decided by the asking tool and named on the card: for `run_command` it is the command itself (no wildcards — the human approved this line, not this kind), for `write_file`/`edit` it is the **directory** (never the file name). A remembered rule still meets hard-deny, the sandbox and the writable boundary.'
+        ),
+    ]
+    requestId: str
+    turnId: str
+
+
 class ConfigReadResponse(BaseModel):
     config: SettingsView
 
@@ -1406,6 +1613,25 @@ class JsonRpcResponse(BaseModel):
     ]
 
 
+class MemoryIndexResponse(BaseModel):
+    catalog: Annotated[
+        str,
+        Field(
+            description='The generated catalog, byte-for-byte the text the prompt carries.'
+        ),
+    ]
+    pages: list[MemoryPageSummary]
+
+
+class MemoryPageResponse(BaseModel):
+    page: Annotated[
+        MemoryPageView | None,
+        Field(
+            description='`None` = no such page (the dashboard shows the path and says so, not an empty page).'
+        ),
+    ] = None
+
+
 class ModelRoutesResponse(BaseModel):
     mode: Annotated[
         str,
@@ -1436,7 +1662,7 @@ class ServerNotification3(BaseModel):
     type: Literal['gateDecided']
 
 
-class ServerNotification8(BaseModel):
+class ServerNotification9(BaseModel):
     durationMs: int | None = None
     output: Annotated[
         str,
@@ -1446,8 +1672,24 @@ class ServerNotification8(BaseModel):
     ]
     status: ToolStatus
     tool: str
+    toolUseId: Annotated[
+        str,
+        Field(
+            description='Same id as the matching `toolStarted`, so a client can settle the right row.'
+        ),
+    ]
     turnId: str
     type: Literal['toolCompleted']
+
+
+class SessionForkResponse(BaseModel):
+    copied: Annotated[
+        int,
+        Field(
+            description='How many messages moved into the branch (0 = the source had nothing said in it yet).'
+        ),
+    ]
+    session: SessionSummary
 
 
 class SessionGetResponse(BaseModel):
@@ -1487,6 +1729,12 @@ class ToolCompletedNotification(BaseModel):
     ]
     status: ToolStatus
     tool: str
+    toolUseId: Annotated[
+        str,
+        Field(
+            description='Same id as the matching `toolStarted`, so a client can settle the right row.'
+        ),
+    ]
     turnId: str
 
 
@@ -1592,7 +1840,7 @@ class Message(BaseModel):
     role: MessageRole
 
 
-class ServerNotification20(BaseModel):
+class ServerNotification21(BaseModel):
     iterations: int
     meta: TurnMeta
     reply: str
@@ -1624,6 +1872,7 @@ class ServerNotification(
         | ServerNotification19
         | ServerNotification20
         | ServerNotification21
+        | ServerNotification22
     ]
 ):
     root: Annotated[
@@ -1647,7 +1896,8 @@ class ServerNotification(
         | ServerNotification18
         | ServerNotification19
         | ServerNotification20
-        | ServerNotification21,
+        | ServerNotification21
+        | ServerNotification22,
         Field(
             description='The full stream of events for one turn.\n\n`type` is the discriminant — the frontend switches on it, Python uses a pydantic discriminated union. **No failure here should crash the client**: this only describes "what happened".',
             title='ServerNotification',

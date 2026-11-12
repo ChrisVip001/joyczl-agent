@@ -134,9 +134,23 @@ pub enum LoopEvent {
     /// One delta of streamed text. Only appears when `on_text` is passed.
     Text { delta: String },
     /// One tool **started** (result not out yet — the Tool event comes later).
-    ToolStart { name: String, args: Value },
+    ///
+    /// `tool_use_id` is the id the model minted for this call. Several calls can be in flight
+    /// at once (read-only ones share a batch), so it — not the name — is what a client keys
+    /// on when it has to place an update on the right row.
+    ToolStart {
+        tool_use_id: String,
+        name: String,
+        args: Value,
+    },
+    /// Live output from a tool that is **still running** (`run_command` pipes its stdout).
+    ///
+    /// Progress only: the Tool event that follows carries the real, complete result, and that
+    /// is what the model sees. A consumer that ignores this event loses nothing but liveness.
+    ToolDelta { tool_use_id: String, chunk: String },
     /// One tool finished (output is exactly the text the model will see).
     Tool {
+        tool_use_id: String,
         name: String,
         args: Value,
         output: String,
@@ -176,10 +190,20 @@ pub struct Resume {
     pub completed_iterations: i32,
     /// Token usage already spent before the crash.
     pub usage: Usage,
+    /// The cap **for this resumed run**, when it differs from the session setting.
+    ///
+    /// A continuation after the step budget ran out is exactly that case: it resumes with
+    /// `completed_iterations` already at the old ceiling, so without a new cap it would get zero
+    /// steps and hand back a "budget spent" message — which is why continuations used to start a
+    /// brand-new loop (fresh history, no memory of the steps they were continuing).
+    pub max_iterations: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutcome {
+    /// The id the model minted for this call (matches its `tool_use` block) — what a client
+    /// uses to settle the row it opened on `ToolStart`.
+    pub tool_use_id: String,
     pub name: String,
     pub output: String,
     pub duration_ms: i64,
@@ -226,6 +250,15 @@ const WRAP_UP: &str = "（预算提示：这是本轮的最后一次模型调用
 用三句话收尾：已经完成的、卡在哪、下一步需要我做什么。\
 没查证的事直接说不确定，不要编造结果。";
 
+/// The same wrap-up, for the other budget: **this turn's tokens are (nearly) spent**.
+///
+/// It says *why* on purpose — "it was the wallet, not the work" is the one thing the human
+/// cannot infer from an answer that stops mid-task.
+const WRAP_UP_TOKENS: &str = "（预算提示：本轮的 token 预算到了，工具已经收起。）\
+用三句话收尾：已经完成的、卡在哪、下一步需要我做什么；\
+并说清这次停下是因为本轮的 token 预算（JOY_TURN_TOKEN_BUDGET），不是事情做完了。\
+没查证的事直接说不确定，不要编造结果。";
+
 pub struct Turn<'a> {
     pub client: &'a dyn Provider,
     pub model: &'a str,
@@ -250,6 +283,11 @@ pub struct Turn<'a> {
     pub ctx: ToolCtx,
     pub max_iterations: i32,
     pub max_tokens: i32,
+    /// Cost cap for this turn in tokens (`JOY_TURN_TOKEN_BUDGET`). `None`/0 = off.
+    ///
+    /// The step cap bounds **how many** rounds; this bounds **how much** they cost. Reaching it
+    /// takes the same exit as the step cap (tools away, one wrap-up call) — see `budget::should_wrap_up`.
+    pub token_budget: Option<usize>,
     /// Budget for intra-turn tool results (off by default; see `budget.rs`).
     pub tool_result_budget: ToolResultBudget,
     /// Every event passes through it — the gateway renders, trace persists.
@@ -267,6 +305,31 @@ pub struct Turn<'a> {
     /// Resume instead of starting fresh: `user_message`, `history` and `user_images` are
     /// ignored, the loop continues from the checkpointed working memory.
     pub resume: Option<Resume>,
+}
+
+/// Group one round's calls into batches that may run together.
+///
+/// A read-only call joins the batch before it; an exclusive call is its own single-call
+/// batch, which makes it a barrier in both directions. Request order is preserved — the
+/// round's results are assembled in that order regardless of completion order.
+fn plan_segments(
+    tools: &ToolRegistry,
+    uses: Vec<(&str, &str, &Value)>,
+) -> Vec<Vec<(String, String, Value)>> {
+    let mut segments: Vec<Vec<(String, String, Value)>> = Vec::new();
+    let mut open_shared = false;
+    for (id, name, input) in uses {
+        let exclusive = tools.is_exclusive(name);
+        if !exclusive && open_shared {
+            if let Some(last) = segments.last_mut() {
+                last.push((id.to_string(), name.to_string(), input.clone()));
+                continue;
+            }
+        }
+        segments.push(vec![(id.to_string(), name.to_string(), input.clone())]);
+        open_shared = !exclusive;
+    }
+    segments
 }
 
 pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
@@ -359,12 +422,22 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         //
         // What this replaces: a hard stop whose whole answer was 「我还没做完就到了迭代上限」
         // — after 10 calls and 210k input tokens, the human learned nothing they could act on.
-        let wrapping_up = iteration == turn.max_iterations && turn.max_iterations > 1;
+        // The token budget (`JOY_TURN_TOKEN_BUDGET`, off by default) ends a turn the same way,
+        // for the same reason: the step cap bounds rounds, this bounds what they cost. Spending
+        // is what the provider reported, plus the last request's own input estimate — the next
+        // call will cost about that again.
+        let spent = (usage.input_tokens.max(0) + usage.output_tokens.max(0)) as usize;
+        let last_round = iteration == turn.max_iterations && turn.max_iterations > 1;
+        let out_of_tokens = budget::should_wrap_up(turn.token_budget, spent, last_estimate);
+        let wrapping_up = last_round || out_of_tokens;
         if wrapping_up {
+            // Two budgets, two sentences: a human reading a half-finished answer deserves to know
+            // which one stopped it.
+            let text = if last_round { WRAP_UP } else { WRAP_UP_TOKENS };
             messages.push(Message {
                 role: Role::User,
                 content: vec![ContentBlock::Text {
-                    text: WRAP_UP.to_string(),
+                    text: text.to_string(),
                 }],
             });
         }
@@ -502,21 +575,26 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         }
 
         // ---- act: run each requested tool; observe: feed the results back
+        //
+        // Read-only calls in one round share a batch and run together; a write / exec /
+        // subagent call is a barrier of its own (see `ToolRegistry::register_exclusive`).
+        // Events and `tool_calls` stay in **request order** — what the model sees must not
+        // depend on which tool happened to finish first.
         let mut results = Vec::new();
-        for (id, name, input) in uses {
-            // Tool starting. Sent before the result — so the client can render "calling X".
-            if let Some(notify) = &notify {
-                notify(LoopEvent::ToolStart {
-                    name: name.to_string(),
-                    args: input.clone(),
-                });
+        for segment in plan_segments(turn.tools, uses) {
+            // Announced up front, in request order: the client can render "calling X" for
+            // each one without knowing how the batch is scheduled.
+            for (id, name, input) in &segment {
+                if let Some(notify) = &notify {
+                    notify(LoopEvent::ToolStart {
+                        tool_use_id: id.clone(),
+                        name: name.clone(),
+                        args: input.clone(),
+                    });
+                }
             }
-
-            let started = Instant::now();
-            // Tool execution also races "cancel": a half-run tool future is dropped, and its
-            // child processes/connections are cleaned up by their own Drop impls.
-            let output = match turn.interrupt.as_ref() {
-                Some(cancel) if cancel.is_cancelled() => {
+            if let Some(cancel) = turn.interrupt.as_ref() {
+                if cancel.is_cancelled() {
                     return Ok(interrupted_result(Scene {
                         streamed,
                         tool_calls,
@@ -528,52 +606,117 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                         observed_input_tokens: last_observed,
                     }));
                 }
-                Some(cancel) => {
-                    let fut = turn.tools.execute(turn.ctx.clone(), name, input.clone());
-                    tokio::select! {
-                        _ = cancel.wait() => {
-                                    return Ok(interrupted_result(Scene {
-                                        streamed,
-                                        tool_calls,
-                                        iterations: iteration - 1,
-                                        usage,
-                                        messages,
-                                        guard: GuardReport::close(&guard),
-                                        estimated_input_tokens: last_estimate,
-                                        observed_input_tokens: last_observed,
-                                    }));
-                        }
-                        output = fut => output,
-                    }
-                }
-                None => {
-                    turn.tools
-                        .execute(turn.ctx.clone(), name, input.clone())
-                        .await
-                }
-            };
-            let duration_ms = started.elapsed().as_millis() as i64;
+            }
 
-            if let Some(notify) = &notify {
-                notify(LoopEvent::Tool {
-                    name: name.to_string(),
-                    args: input.clone(),
-                    output: output.clone(),
+            let mut set = tokio::task::JoinSet::new();
+            for (position, (id, name, input)) in segment.iter().enumerate() {
+                let registry = turn.tools.clone();
+                let mut ctx = turn.ctx.clone();
+                // Live output goes out under this call's id, so the client can put it on the
+                // right row while several calls run side by side.
+                if let Some(notify) = &notify {
+                    let notify = notify.clone();
+                    let id = id.clone();
+                    ctx.on_delta = Some(Arc::new(move |chunk: &str| {
+                        notify(LoopEvent::ToolDelta {
+                            tool_use_id: id.clone(),
+                            chunk: chunk.to_string(),
+                        });
+                    }));
+                }
+                let name = name.clone();
+                let input = input.clone();
+                set.spawn(async move {
+                    let started = Instant::now();
+                    let output = registry.execute(ctx, &name, input).await;
+                    (position, output, started.elapsed().as_millis() as i64)
                 });
             }
-            tool_calls.push(ToolOutcome {
-                name: name.to_string(),
-                output: output.clone(),
-                duration_ms,
-            });
-            // The guard takes a look: on a hit, stub + append a reminder. **Only the fed-back
-            // text changes** — tool_calls and Tool events keep the real result.
-            let verdict = guard.observe(name, input, &output);
-            let for_model = guard::for_model(&output, name, input, &verdict);
-            results.push(ContentBlock::ToolResult {
-                tool_use_id: id.to_string(),
-                content: for_model,
-            });
+
+            // One slot per call, filled as tasks finish; the round is assembled from the
+            // slots afterwards, so completion order never reaches the model.
+            let mut slots: Vec<Option<(String, i64)>> = vec![None; segment.len()];
+            let mut panic_note: Option<String> = None;
+            loop {
+                let next = match turn.interrupt.as_ref() {
+                    Some(cancel) => tokio::select! {
+                        _ = cancel.wait() => {
+                            // Returning drops the JoinSet, which aborts every task still in
+                            // flight — same semantics as dropping a single tool future: child
+                            // processes/connections clean up in their own Drop impls. What
+                            // already finished is still reported honestly.
+                            for (position, slot) in slots.iter().enumerate() {
+                                if let (Some((output, duration_ms)), Some((id, name, _))) =
+                                    (slot, segment.get(position))
+                                {
+                                    tool_calls.push(ToolOutcome {
+                                        tool_use_id: id.clone(),
+                                        name: name.clone(),
+                                        output: output.clone(),
+                                        duration_ms: *duration_ms,
+                                    });
+                                }
+                            }
+                            return Ok(interrupted_result(Scene {
+                                streamed,
+                                tool_calls,
+                                iterations: iteration - 1,
+                                usage,
+                                messages,
+                                guard: GuardReport::close(&guard),
+                                estimated_input_tokens: last_estimate,
+                                observed_input_tokens: last_observed,
+                            }));
+                        }
+                        next = set.join_next() => next,
+                    },
+                    None => set.join_next().await,
+                };
+                match next {
+                    Some(Ok((position, output, duration_ms))) => {
+                        slots[position] = Some((output, duration_ms));
+                    }
+                    // A panicking tool is still a result the model can read — never a dead
+                    // turn. Its position died with the panic, so it fills the first gap: every
+                    // `tool_use` must have a `tool_result`, or the next request is rejected.
+                    Some(Err(e)) => panic_note = Some(format!("Error: 工具任务异常结束：{e}")),
+                    None => break,
+                }
+            }
+            if let Some(note) = panic_note {
+                if let Some(gap) = slots.iter_mut().find(|slot| slot.is_none()) {
+                    *gap = Some((note, 0));
+                }
+            }
+
+            for (position, slot) in slots.into_iter().enumerate() {
+                let Some((output, duration_ms)) = slot else {
+                    continue; // only reachable if a task vanished without a JoinError
+                };
+                let (id, name, input) = &segment[position];
+                if let Some(notify) = &notify {
+                    notify(LoopEvent::Tool {
+                        tool_use_id: id.clone(),
+                        name: name.clone(),
+                        args: input.clone(),
+                        output: output.clone(),
+                    });
+                }
+                tool_calls.push(ToolOutcome {
+                    tool_use_id: id.clone(),
+                    name: name.clone(),
+                    output: output.clone(),
+                    duration_ms,
+                });
+                // The guard takes a look: on a hit, stub + append a reminder. **Only the
+                // fed-back text changes** — tool_calls and Tool events keep the real result.
+                let verdict = guard.observe(name, input, &output);
+                let for_model = guard::for_model(&output, name, input, &verdict);
+                results.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: for_model,
+                });
+            }
         }
         messages.push(Message {
             role: Role::User,

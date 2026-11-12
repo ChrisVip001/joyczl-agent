@@ -28,6 +28,26 @@ use joyczl_provider::{ContentBlock, Message};
 /// Tools that manage themselves: they do not participate in intra-turn stubbing.
 const SELF_BUDGETED: &[&str] = &["run_command"];
 
+/// Is this turn's token budget spent enough that the **next** round should be the last one?
+///
+/// `spent` is what the provider reported so far (input + output), `next_input` the last request's
+/// own input estimate — the next call will cost about that again, so counting it is what keeps
+/// "80%" from meaning "we stop at 95%".
+///
+/// **One threshold**, at 80%. Hitting 80% and hitting 100% get the same response (tools away, one
+/// wrap-up call), so a second threshold would be a second name for the same branch; 80% exists to
+/// leave room for that wrap-up call, which is itself a request.
+///
+/// `None` and 0 both mean off — the step cap already bounds rounds, and a cap nobody asked for
+/// cuts honest work short.
+pub fn should_wrap_up(budget: Option<usize>, spent: usize, next_input: usize) -> bool {
+    let Some(budget) = budget.filter(|budget| *budget > 0) else {
+        return false;
+    };
+    let horizon = budget.saturating_mul(4) / 5;
+    spent.saturating_add(next_input) >= horizon
+}
+
 /// Budget for intra-turn tool results. Both 0 = off (off by default, matching "no behavior change").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolResultBudget {

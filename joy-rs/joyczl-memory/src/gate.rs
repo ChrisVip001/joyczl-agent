@@ -37,7 +37,10 @@ pub struct Decision {
 impl Decision {
     /// **Fail-open**: if the gate itself breaks, assume retrieval is needed.
     /// Stale memory beats lost memory — a deliberate choice, not an oversight.
-    fn fail_open(reason: impl Into<String>, message: &str) -> Self {
+    ///
+    /// Public so the caller can also fail open on a *timeout*: a gate that never answers is
+    /// the same fault as one that errored, and the turn should not lose memory over it.
+    pub fn fail_open(reason: impl Into<String>, message: &str) -> Self {
         Self {
             retrieve: true,
             query: message.to_string(),

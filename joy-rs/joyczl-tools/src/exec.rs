@@ -19,25 +19,36 @@
 //! * **Network off by default** (`JOY_EXEC_NETWORK=1` to allow): the sandbox really cuts it
 //!   (seatbelt's `(deny network*)` / bwrap's `--unshare-net`). A behavior change: earlier
 //!   versions only restricted write paths, and commands could still reach the network.
-//! * Writable roots beyond working dir and home can be appended via `JOY_EXEC_WRITABLE_ROOTS`
-//!   (build caches are the classic case). Nothing appended by default — fewer open dirs is better.
+//! * Writable roots are **the workspace + `JOY_EXEC_WRITABLE_ROOTS`, nothing else** — the
+//!   same definition `write_file`/`edit` use (see `crate::roots`). `<home>` is not a root:
+//!   it holds the control plane (`settings.json` = the allow table, `hooks.json` = commands
+//!   on lifecycle events), so a shell that could write it could grant itself more than it
+//!   had. Build caches are why `JOY_EXEC_WRITABLE_ROOTS` exists; the refusal text names it.
 //! * Hard-deny is **substring matching**: fancy evasions slip past; allowlist and sandbox are the real defense.
 //! * No interactive approval popup (the third gate is expressed by the allowlist).
 //! * Config is read once at startup (`config/write` changes need a process restart).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
+use crate::approval::RememberTarget;
 use crate::{require_str, Tool, ToolCtx};
 
 /// Output cap. Past it, truncate and **label honestly** — a `find /` can flood the context,
 /// and the model must know "this isn't everything".
 const MAX_OUTPUT_CHARS: usize = 8_000;
+
+/// Push a delta once this much unshipped output has piled up, regardless of time.
+const DELTA_MAX_CHARS: usize = 16 * 1024;
+
+/// And once this long a while has passed with the pipe quiet: a compile prints a line every
+/// few seconds and the human should not stare at nothing.
+const DELTA_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The execution policy fixed at startup (from `JOY_EXEC*`).
 #[derive(Debug, Clone, Default)]
@@ -59,9 +70,20 @@ pub struct ExecPolicy {
     /// Truncation is required (a `find /` can flood the context), but **what's dropped is gone**.
     /// Spilling the original keeps it reachable for model and human alike.
     pub spill_dir: Option<PathBuf>,
-    /// Extra writable roots (`JOY_EXEC_WRITABLE_ROOTS`): beyond working dir and home.
-    /// Build caches are the classic case — without it, `cargo build` can't write target/ in the sandbox.
+    /// Extra writable roots (`JOY_EXEC_WRITABLE_ROOTS`): beyond the working dir.
+    /// Build caches are the classic case — without it, `cargo build` can't write `~/.cargo`
+    /// in the sandbox. Entries that would hand back the control plane are dropped by
+    /// `crate::roots` (see [`spawn_sandboxed`]).
     pub extra_roots: Vec<PathBuf>,
+    /// Joy's home, carried so the sandbox can keep the **control plane** out of the writable
+    /// set (`crate::roots::HOME_CONTROL`). Empty = only the disk root is refused; a real
+    /// server always fills it in.
+    pub home: PathBuf,
+    /// Commands a human already said yes to **in this process** ("本会话总是允许"). Exact match,
+    /// no wildcards. Shared, so the very next call sees the answer — an approval that only takes
+    /// effect after a restart is not what the click promised. Never written to disk (that is
+    /// `settings.json`'s `exec_allow`, the "记住这条" answer).
+    pub session_allow: Arc<Mutex<Vec<String>>>,
 }
 
 /// Patterns that never run. Lowercased comparison, substring match — better to miss a
@@ -152,22 +174,33 @@ pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
     }
 
     // Gate 2: allowlist. Empty table = deny by default; with `on-request`, switch to "ask once".
-    if policy.allow.is_empty() {
-        let why = "执行工具没有放行任何命令。要允许一类命令，设 JOY_EXEC_ALLOW，\
-                   例如 JOY_EXEC_ALLOW='cargo test,git status,ls *'。"
-            .to_string();
-        return if policy.approval {
-            Gate::NeedsApproval { reason: why }
+    // A command approved "for this session" counts as a rule of its own (exact match, no wildcards).
+    // The session cell is read under a lock; a poisoned lock reads as "nothing approved" — an
+    // approval is a convenience, never a reason to fail a command.
+    let session_rules: Vec<String> = match policy.session_allow.lock() {
+        Ok(list) => list.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    let matched = policy.allow.iter().any(|rule| matches_rule(rule, command))
+        || session_rules
+            .iter()
+            .any(|remembered| remembered.trim() == command.trim());
+    if !matched {
+        let why = if policy.allow.is_empty() && session_rules.is_empty() {
+            "执行工具没有放行任何命令。要允许一类命令，设 JOY_EXEC_ALLOW，\
+             例如 JOY_EXEC_ALLOW='cargo test,git status,ls *'。"
+                .to_string()
         } else {
-            Gate::Deny(why)
+            // Name the session approvals too: a rule the human set that does not cover *this*
+            // command is exactly what makes "why is it asking again" answerable.
+            let mut known: Vec<String> = policy.allow.clone();
+            known.extend(session_rules.iter().map(|c| format!("{c}（本会话）")));
+            format!(
+                "没有匹配的放行规则。当前规则：{}。\
+                 要允许它，往 JOY_EXEC_ALLOW 里加一条（支持末尾的 * 通配）。",
+                known.join(", ")
+            )
         };
-    }
-    if !policy.allow.iter().any(|rule| matches_rule(rule, command)) {
-        let why = format!(
-            "没有匹配的放行规则。当前规则：{}。\
-             要允许它，往 JOY_EXEC_ALLOW 里加一条（支持末尾的 * 通配）。",
-            policy.allow.join(", ")
-        );
         return if policy.approval {
             Gate::NeedsApproval { reason: why }
         } else {
@@ -387,6 +420,8 @@ pub async fn pass_gate(
                 args_preview: command.to_string(),
                 reason,
                 timeout_secs: policy.approval_timeout_secs,
+                // "记住这条" records the command itself — what the human read, not its class.
+                remember: Some(RememberTarget::Command(command.trim().to_string())),
             };
             if broker.request(request).await {
                 Ok(())
@@ -400,6 +435,10 @@ pub async fn pass_gate(
 /// Turn the policy into a command that can be **spawned directly**: sandbox args, writable-root
 /// merge, and the network switch all in one spot, shared by foreground and background jobs —
 /// write the sandbox args twice and one path will sooner or later forget `--unshare-net`.
+///
+/// The writable set is filtered **here**, not at the call sites: `--bind /` and a home that
+/// holds the allow table are both one typo away, and a caller that forgot to filter would
+/// otherwise hand the sandbox a way to rewrite its own permissions.
 pub fn spawn_sandboxed(
     command: &str,
     policy: &ExecPolicy,
@@ -407,8 +446,7 @@ pub fn spawn_sandboxed(
 ) -> Result<tokio::process::Child, String> {
     let backend = sandbox_backend().ok_or_else(|| "这台机器上没有可用的沙箱".to_string())?;
 
-    let mut roots: Vec<PathBuf> = writable.to_vec();
-    roots.extend(policy.extra_roots.iter().cloned());
+    let roots = crate::roots::resolve_roots(writable, &policy.extra_roots, &policy.home).workspaces;
 
     let mut command_builder = sandbox_command(backend, command, &roots, policy.network);
     command_builder
@@ -420,17 +458,92 @@ pub fn spawn_sandboxed(
         .map_err(|e| format!("命令起不来：{e}"))
 }
 
+/// Read stdout in chunks, pushing deltas as they arrive and collecting the full text.
+///
+/// Takes over `read_to_string` so a long build shows progress. Chunk boundaries cut UTF-8
+/// characters in half, so the tail that does not decode yet is carried to the next chunk —
+/// decoding each read independently would scatter U+FFFD through Chinese output.
+async fn read_stdout(
+    stdout: &mut tokio::process::ChildStdout,
+    out: &mut String,
+    sink: Option<&crate::DeltaSink>,
+) -> std::io::Result<usize> {
+    let mut buf = [0u8; 4096];
+    let mut carry: Vec<u8> = Vec::new();
+    let mut total = 0usize;
+    let mut pending = String::new();
+    let mut last_emit = std::time::Instant::now();
+
+    loop {
+        let read = stdout.read(&mut buf).await?;
+        if read == 0 {
+            break;
+        }
+        total += read;
+        carry.extend_from_slice(&buf[..read]);
+
+        let (text, consumed) = match std::str::from_utf8(&carry) {
+            Ok(text) => (text.to_string(), text.len()),
+            Err(invalid) => match invalid.error_len() {
+                // A genuinely bad byte: replace it and move past it, or the loop never ends.
+                Some(len) => {
+                    let upto = invalid.valid_up_to();
+                    let mut text = String::from_utf8_lossy(&carry[..upto]).to_string();
+                    text.push('\u{FFFD}');
+                    (text, upto + len)
+                }
+                // Half a character at the end of the chunk: keep the bytes for the next read.
+                None => (
+                    String::from_utf8_lossy(&carry[..invalid.valid_up_to()]).to_string(),
+                    invalid.valid_up_to(),
+                ),
+            },
+        };
+        if consumed == 0 {
+            continue;
+        }
+        carry.drain(..consumed);
+        out.push_str(&text);
+
+        if let Some(sink) = sink {
+            pending.push_str(&text);
+            if pending.len() >= DELTA_MAX_CHARS || last_emit.elapsed() >= DELTA_INTERVAL {
+                sink(&pending);
+                pending.clear();
+                last_emit = std::time::Instant::now();
+            }
+        }
+    }
+
+    if !carry.is_empty() {
+        let text = String::from_utf8_lossy(&carry).to_string();
+        out.push_str(&text);
+        pending.push_str(&text);
+    }
+    if let Some(sink) = sink {
+        if !pending.is_empty() {
+            sink(&pending);
+        }
+    }
+    Ok(total)
+}
+
 /// Run a command. **Never returns Err** — refusals, timeouts, non-zero exits are all text.
 ///
-/// `writable` holds the roots the caller decides **dynamically** (working dir, home);
-/// `policy.extra_roots` (from config) is merged in here — merging inside execute keeps
-/// "what the policy says" true on every call path: scatter the merge across callers and
-/// one path will silently ignore the config.
+/// `writable` holds the roots the caller decides **dynamically** (the turn's working dir);
+/// `policy.extra_roots` (from config) is merged in by [`spawn_sandboxed`], which also filters
+/// the result (see `crate::roots`) — merging inside keeps "what the policy says" true on
+/// every call path: scatter the merge across callers and one path will silently ignore it.
+///
+/// `on_delta` (optional) receives stdout **while the command is still running**. It is a
+/// progress feed, not a result: the return value below remains the single source of truth, so
+/// a dropped chunk only costs a repaint.
 pub async fn execute(
     command: &str,
     policy: &ExecPolicy,
     writable: &[PathBuf],
     approval: Option<&dyn crate::approval::ApprovalBroker>,
+    on_delta: Option<crate::DeltaSink>,
 ) -> String {
     if let Err(why) = pass_gate(command, policy, approval).await {
         return format!("Error: {why}");
@@ -450,7 +563,7 @@ pub async fn execute(
         let mut out = String::new();
         let mut err = String::new();
         let (out_result, err_result) = tokio::join!(
-            stdout.read_to_string(&mut out),
+            read_stdout(&mut stdout, &mut out, on_delta.as_ref()),
             stderr.read_to_string(&mut err)
         );
         let status = child.wait().await;
@@ -556,7 +669,9 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 // Writable roots: resolve chain args.cwd > ctx.cwd (this turn's working dir) >
-                // process cwd, plus home (Joy's own state, like outbox, lives there).
+                // process cwd. Nothing under home: Joy's own state (outbox, spill, jobs) is
+                // written in-process by the app-server, not by a sandboxed command — and the
+                // rest of home is the control plane (`crate::roots::HOME_CONTROL`).
                 let cwd = args
                     .get("cwd")
                     .and_then(Value::as_str)
@@ -564,11 +679,21 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     .filter(|p| p.is_dir())
                     .or_else(|| ctx.cwd.clone())
                     .or_else(|| std::env::current_dir().ok());
+                // A model-chosen `cwd` decides where the sandbox's writable root lands, so it
+                // is held inside the workspace this turn is bound to. The workspace itself is
+                // the human's authorization; a path the model invented is not.
+                if let (Some(requested), Some(workspace)) = (&cwd, &ctx.cwd) {
+                    if crate::fs_write::inside_workspace(requested, workspace).is_err() {
+                        return Ok(format!(
+                            "Error: cwd {requested:?} 不在本轮工作目录 {workspace:?} 里 —— \
+                             run_command 只能在工作目录及其子目录下执行。"
+                        ));
+                    }
+                }
                 let mut writable: Vec<PathBuf> = Vec::new();
                 if let Some(cwd) = &cwd {
                     writable.push(cwd.clone());
                 }
-                writable.push(ctx.home.clone());
 
                 // PermissionRequest: give the hook a say **before asking the human** — it can
                 // approve on the user's behalf (no interruption), or refuse outright.
@@ -621,9 +746,16 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     );
                 }
 
-                // `JOY_EXEC_WRITABLE_ROOTS` is merged by execute itself (the policy holds on
-                // every call path; it doesn't rely on callers remembering to merge).
-                Ok(execute(&command, &policy, &writable, approval.as_deref()).await)
+                // `JOY_EXEC_WRITABLE_ROOTS` is merged (and filtered) by spawn_sandboxed, which
+                // both foreground and background paths go through — no caller has to remember.
+                Ok(execute(
+                    &command,
+                    &policy,
+                    &writable,
+                    approval.as_deref(),
+                    ctx.on_delta.clone(),
+                )
+                .await)
             })
         }),
     }

@@ -63,12 +63,18 @@ env_int(name, default) -> env(name).and_then(|v| v.parse().ok()).unwrap_or(defau
 | `tool_result_total_chars` | `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000`（一轮工具结果的字符总量；超了从**最旧**的换桩） |
 | `tool_result_max_chars` | `JOY_TOOL_RESULT_MAX_CHARS` | `30000`（单条够长才有资格换桩） |
 | `tool_result_keep_recent` | `JOY_TOOL_RESULT_KEEP_RECENT` | `3`（最新几条永不换桩） |
+| `auto_continue_max` | `JOY_AUTO_CONTINUE_MAX` | `2`（一轮最多自己续几次；`0` = 用完就收尾） |
+| `turn_step_slice` | `JOY_TURN_STEP_SLICE` | `12`（一次续跑买回的步数） |
 | `resume_max_age_minutes` | `JOY_RESUME_MAX_AGE` | `60`（更旧的 `open` checkpoint 启动时标 `abandoned`） |
 
 这几行合起来定义的是「一轮到底花多少」：`compact_threshold` 决定**什么时候压**，
 `tool_result_*` 决定**塞不进的东西怎么办**，`max_iterations` 决定**最多问几次**，
 `resume_max_age_minutes` 决定**崩溃之后还认不认那一轮**。四个数各自独立，别用一个去补另一个 ——
 10 步的上限曾经被当成「防跑偏」的手段，结果只是把跑偏的回合变成一句道歉（见 05-loop）。
+
+`auto_continue_max` 与 `turn_step_slice` 是**另一条轴**：前四个数决定「一段能花多少」，
+这两个决定「一段不够时还能不能再买一段」。分开放的理由和当初一样 —— 想跑得久，抬高
+`max_iterations` 会让**失控**的那一轮也更贵；加片只在被截断、且待办证明还没做完时才花。
 
 两个值得注意的：
 

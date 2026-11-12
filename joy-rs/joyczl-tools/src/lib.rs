@@ -28,7 +28,9 @@ pub mod jobs;
 pub mod memory_admin;
 pub mod messages;
 pub mod notify;
+pub mod patch;
 pub mod report;
+pub mod roots;
 pub mod schedules;
 pub mod spill;
 pub mod subagent;
@@ -42,6 +44,10 @@ mod tools_tests;
 #[cfg(test)]
 #[path = "exec_tests.rs"]
 mod exec_tests;
+
+#[cfg(test)]
+#[path = "roots_tests.rs"]
+mod roots_tests;
 
 #[cfg(test)]
 #[path = "subagent_tests.rs"]
@@ -78,6 +84,10 @@ mod fs_tests;
 #[cfg(test)]
 #[path = "fs_write_tests.rs"]
 mod fs_write_tests;
+
+#[cfg(test)]
+#[path = "patch_tests.rs"]
+mod patch_tests;
 
 #[cfg(test)]
 #[path = "web_tests.rs"]
@@ -120,7 +130,17 @@ pub struct ToolCtx {
     /// The vector leg of hybrid retrieval. `None` = keywords only (`JOY_EMBEDDINGS` off, or
     /// the embedder was not configured) — search then degrades instead of failing.
     pub embedder: Option<Arc<joyczl_provider::embed::Embedder>>,
+    /// Live output while a tool is still running (`run_command` pipes its stdout here).
+    ///
+    /// `None` = nobody is watching (CLI, eval, a background job) — the tool just collects and
+    /// returns. The final result is **always** the tool's return value; deltas are a progress
+    /// feed for a human, never the answer, so a dropped chunk costs nothing but a repaint.
+    pub on_delta: Option<DeltaSink>,
 }
+
+/// One chunk of live tool output. `Fn` and not a stream: the consumer is a notification sink
+/// (SSE) that must not block the tool, and backpressure on a human's screen is meaningless.
+pub type DeltaSink = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub type BoxFut = Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;
 pub type Handler = Arc<dyn Fn(ToolCtx, Value) -> BoxFut + Send + Sync>;
@@ -207,6 +227,10 @@ pub struct ToolRegistry {
     /// Activated names. Per session, hence a shared cell rather than a set on the registry:
     /// the loop holds `&ToolRegistry` while `find_tools` must mutate this through `ToolCtx`.
     activated: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+    /// Tools that must run **alone**. The loop turns each into a barrier: calls before it
+    /// finish first, calls after it wait. Writes, exec, subagents and approval-carrying tools
+    /// land here, so two writes never interleave and at most one approval card is up.
+    exclusive: std::collections::BTreeSet<String>,
 }
 
 impl ToolRegistry {
@@ -227,6 +251,28 @@ impl ToolRegistry {
         let mut copy = self.clone();
         copy.tools.remove(name);
         copy.validators.remove(name);
+        copy
+    }
+
+    /// A copy with every **exclusive** tool removed — the table a batched subagent gets.
+    ///
+    /// Why remove instead of serialize: four subagents run at once, each in its own loop, so the
+    /// parent's barrier cannot reach them. Two of them writing the same directory means the last
+    /// writer wins — silently. Taking the write/exec tools away makes "batch = read-only" a fact
+    /// of the tool table rather than a rule someone has to remember.
+    ///
+    /// Both maps are trimmed together: a validator without a tool (or the reverse) is a table
+    /// that half-exists, which is exactly the kind of inconsistency nobody debugs later.
+    pub fn readonly(&self) -> Self {
+        let mut copy = self.clone();
+        for name in &self.exclusive {
+            copy.tools.remove(name);
+            copy.validators.remove(name);
+        }
+        // The scheduling flags go with the tools: a barrier for something that cannot be called is
+        // a leftover that later reads as "this table still has an exclusive tool".
+        copy.exclusive.clear();
+        copy.deferred.retain(|name| copy.tools.contains_key(name));
         copy
     }
 
@@ -256,6 +302,24 @@ impl ToolRegistry {
         };
         self.validators.insert(tool.name.clone(), validator);
         self.tools.insert(tool.name.clone(), tool);
+    }
+
+    /// Register a tool that must run **alone** (write / exec / subagent / anything that asks
+    /// a human). A read-only tool registered normally may share a batch with other read-only
+    /// calls; this one is always a barrier.
+    ///
+    /// The flag lives on the registry rather than on `Tool` because it is a scheduling
+    /// property of this table, not of the implementation: the same MCP tool may be one or the
+    /// other depending on where it was mounted.
+    pub fn register_exclusive(&mut self, tool: Tool) {
+        self.exclusive.insert(tool.name.clone());
+        self.register(tool);
+    }
+
+    /// Must this call run alone? Unknown names are not exclusive — they fail fast as text,
+    /// and a made-up name must not change scheduling.
+    pub fn is_exclusive(&self, name: &str) -> bool {
+        self.exclusive.contains(name)
     }
 
     pub fn get(&self, name: &str) -> Option<&Tool> {

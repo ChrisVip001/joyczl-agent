@@ -507,6 +507,52 @@ async fn http_failure_reports_the_status_code() {
     assert!(error.len() < 200, "{error}");
 }
 
+/// A dead transport is **rebuilt from the spec** and the call replayed — the old behavior was
+/// "every call fails until you restart Joy", which hides a one-line recovery behind a restart.
+#[tokio::test]
+async fn a_dead_transport_is_rebuilt_and_the_call_retried() {
+    let reply = |body: &str| Reply {
+        status: 200,
+        content_type: "application/json",
+        body: body.to_string(),
+    };
+    let fake = fake_http(vec![
+        reply(r#"{"jsonrpc":"2.0","id":@id,"result":{"protocolVersion":"2025-06-18"}}"#),
+        Reply {
+            status: 202,
+            content_type: "application/json",
+            body: String::new(),
+        },
+        reply(r#"{"jsonrpc":"2.0","id":@id,"result":{"content":[{"type":"text","text":"活了"}]}}"#),
+    ])
+    .await;
+
+    // Stands in for a transport that died: a closed port fails at the first request.
+    let dead = crate::transport::Transport::Http(HttpSession::new("http://127.0.0.1:1/mcp", None));
+    let connection = crate::Connection::with_policy("x", dead, crate::BreakerPolicy::default())
+        .with_spec(TransportSpec::Http {
+            url: fake.url.clone(),
+            token: None,
+        });
+
+    let text = connection.call("echo", json!({})).await;
+    assert_eq!(text, "活了", "重连之后这一调用该真的跑起来：{text}");
+    assert_eq!(
+        fake.seen.lock().await.len(),
+        3,
+        "重建只需要握手两条（initialize + initialized）+ 这一条调用"
+    );
+}
+
+/// Without a spec there is nothing to rebuild from: say that, do not pretend to retry.
+#[tokio::test]
+async fn a_transport_without_a_spec_says_it_cannot_be_rebuilt() {
+    let dead = crate::transport::Transport::Http(HttpSession::new("http://127.0.0.1:1/mcp", None));
+    let connection = crate::Connection::with_policy("x", dead, crate::BreakerPolicy::default());
+    let text = connection.call("echo", json!({})).await;
+    assert!(text.contains("重建不了"), "{text}");
+}
+
 // ---- 3. A real subprocess server -------------------------------------------
 
 /// Fake MCP server: hand-written JSON-RPC, no SDK. Deliberately sends a dotted tool name.
@@ -582,6 +628,7 @@ async fn tool_ctx() -> joyczl_tools::ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home: std::path::PathBuf::from(".joy"),
+        on_delta: None,
     }
 }
 

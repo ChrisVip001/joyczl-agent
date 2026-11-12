@@ -4,6 +4,115 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### Running out of steps no longer means the task dies
+
+- When the **step cap cuts a turn off**, it passes a built-in completion gate: the todo list
+  still has `pending` / `in_progress` items, so it **continues itself**
+  (`JOY_AUTO_CONTINUE_MAX`, default 2). The list used to sit in the prompt decorating it; now it drives something. The gate opens
+  **only at the cut-off**: a turn that ends of its own accord (say, "here is the plan") is
+  finished work, and driving it on would execute a plan nobody asked to execute. Task acceptance
+  stays with the task loop's own verdict — the gate does not judge it twice.
+- A continuation **carries the working memory**: `Resume` (this segment's messages, steps spent,
+  tokens spent) plus a fresh slice of budget (`JOY_TURN_STEP_SLICE`, default 12). It used to start
+  a brand-new loop that reloaded history from `chat_log` — where this turn's tool results were not
+  written yet, so the model re-did work it had just finished.
+- When the budget is genuinely gone it says so: the reply ends with what is left, and
+  `traces/*.jsonl` carries `steps` / `continues` / `unfinished` — "why did it stop here" becomes a
+  number instead of an opinion.
+- Fixed a bug this exposed: a continuation **replaces** the turn's result, and `toolCompleted`
+  notifications are emitted from that result at finalize — so the earlier segment's tool calls
+  vanished (the client only saw the last segment). The calls are now re-attached in request order.
+
+### Several places at once: `apply_patch`### Replay evals: `joy eval --replay`
+
+- New suite `evals/replay/*.jsonl`: a recorded dialogue (what the human said, what the model
+  answered) plus the **expected event sequence**. The loader turns it into the same `Scenario`
+  deterministic cases use, so the runner, the assertions and the report are the shared ones — the
+  only additions are the loader and one event assertion. No second harness.
+- Events match as an **ordered subsequence** (qualified names like `toolStarted:run_command`
+  work), so a few extra deltas are not a failure; a line whose `expect.events` is empty is refused
+  on load, because a replay that asserts nothing is a deterministic case in disguise.
+- Four cases, one boundary each: compaction (window and token gate hitting together), approval
+  timeout (nobody answers → refusal, turn still finishes), streamed output (`toolDelta` before
+  `toolCompleted`), MCP disconnect (rebuild transport → replay handshake → retry once).
+  `just check` now includes `eval-replay`.
+
+### Batched subagents are read-only, and distinguishable
+
+- When `delegate_task` fans out, the children's tool table has **no** `run_command`, `write_file`,
+  `edit` or `apply_patch`: with four loops in flight the parent's "one write at a time" barrier
+  cannot reach them, and two writers on one directory means the last one silently wins. Single
+  delegations are unchanged.
+- Child session names carry a counter (`subagent:<millis>-<seq>`), so four children spawned in the
+  same millisecond no longer share a name; `SubagentStart` / `SubagentStop` payloads carry
+  `readonly`.
+
+### "Full output in spill/…" — now actually readable
+
+- `read_file` falls back to `<home>/<path>` when a `spill/…` address misses against the turn's
+  working directory. Before this, the address only worked when the cwd happened to be home; in
+  every other case it cost a wasted round.
+- The fallback deliberately only accepts the `spill/` prefix: a plain missing relative path never
+  probes home (that would be silent privilege widening).
+
+### Several places at once: `apply_patch`
+
+- New `apply_patch` tool (same switch, same boundary, same approval as `write_file` / `edit`): it
+  takes the `*** Begin Patch` text and changes several files and several hunks in one call, **all
+  or nothing** — one hunk that does not fit means not a byte is written. A half-applied patch is
+  the worst outcome, because it looks like it worked.
+- Matching advances from the previous hunk's end, so two identical contexts land in two different
+  places instead of both hitting the first; `Add File` refuses to overwrite an existing file.
+- Added a schema-consistency test over the tool table: description non-empty, top-level
+  `type: object`, every `required` name present in `properties`. The model reads exactly this
+  schema, and one wrong character costs a wasted round.
+
+### Four subagents at once
+
+- `delegate_task` accepts `tasks: [...]` (max 4): independent jobs run concurrently and their
+  conclusions are merged **in the order asked**; one failure does not sink the others. Depth stays
+  1 — a subagent still cannot spawn another.
+
+### Not just "how many rounds" — also "how much it costs"
+
+- New switch `JOY_TURN_TOKEN_BUDGET` (default `0` = off): when input + output for one turn reaches
+  it, the tools are taken away and the model wraps up in three sentences — the same exit as the
+  step cap. The wrap-up text says "it was this turn's token budget, not the work" because that is
+  the one thing a human cannot infer from an answer that stops mid-task.
+- 80% rather than 100%: the wrap-up is itself another request, and counting the next round's likely
+  cost is what keeps "80%" from actually meaning 95%.
+- `delegate_task` children carry their own 120k-token hard cap: ten rounds of a big context should
+  not be able to spend a whole night's bill on a side question.
+
+### MCP reconnects on its own
+
+- When an MCP connection dies mid-flight (the child exited, the HTTP session expired), the old
+  behavior was "every call fails until you restart Joy". Now the transport is rebuilt from the
+  same config, the handshake is replayed, and the call is retried once. A failed rebuild counts
+  against the breaker as usual (3 strikes → 60s), so a dead server is not rebuilt every turn.
+- **A timeout is not retried**: the server may still be working, and a tool with side effects
+  must not run twice. `Failure` is split into `Transport` and `Timeout` precisely so that
+  distinction cannot be forgotten.
+
+### How long a "yes" lasts is now your call
+
+- The approval answer is no longer a boolean: it carries a scope — `once` (this time),
+  `session` (remembered in memory, gone on restart), `always` (written into
+  `settings.json`). The card in the conversation has four buttons now (拒绝 / 只允许这次 /
+  本会话总是允许 / 记住这条); the terminal takes `y` / `s` / `a`.
+- **It takes effect immediately.** "Remember this" used to wait for the next start (the
+  exec policy was read once at startup) — saying "remembered" and then asking again is the
+  worst kind of honesty. The allow table now has an in-process cell, and the very next
+  command sees it.
+- Write approvals can be remembered too, but what is remembered is the **directory**, not
+  the file name: the human approved this folder, not this one write. Directories land in
+  `settings.json`'s `writeAllowDirs` (`JOY_WRITE_ALLOW_DIRS`) — a **"don't ask again" list,
+  not a writable root**: outside the boundary nothing lands.
+- A remembered command is still the command itself, no wildcards; hard-deny, the sandbox
+  and the writable boundary all still run first.
+- Fixed a real bug on the way: a patch carrying only `execAllow` counted as "empty", and
+  saving it deleted `settings.json` — i.e. the rule that was just remembered vanished.
+
 ### The tool count is checked, not remembered
 
 - `just check` now runs `scripts/check_tool_docs.py` (`check-tool-docs`). The number of

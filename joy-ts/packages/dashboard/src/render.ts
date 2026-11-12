@@ -485,6 +485,7 @@ export function sessionList(
   data: DashboardData,
   current: string,
   onPick: (id: string) => void,
+  onFork?: (id: string) => void,
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
   const sessions = [...data.sessions];
@@ -505,7 +506,7 @@ export function sessionList(
     return fragment;
   }
   for (const item of sessions) {
-    const li = sessionRow(item, current, onPick);
+    const li = sessionRow(item, current, onPick, onFork);
     arrowKeyNav(li);
     fragment.append(li);
   }
@@ -742,6 +743,7 @@ function sessionRow(
   item: SessionSummary,
   current: string,
   onPick: (id: string) => void,
+  onFork?: (id: string) => void,
 ): HTMLElement {
   const fresh = item.messages === 0;
   const button = el(
@@ -763,7 +765,30 @@ function sessionRow(
   );
   button.addEventListener("click", () => onPick(item.id));
   marqueeOnHover(button);
-  return el("li", {}, button);
+  const li = el("li", {}, button);
+  // A branch carries its origin as a quiet mark, not a separate list: the sidebar stays one
+  // flat list of conversations at one visual density.
+  if (item.forkedFrom !== undefined) {
+    li.classList.add("forked");
+    button.title = `${button.title} · 分支自「${item.forkedFrom}」`;
+  }
+  if (onFork !== undefined) {
+    // The entry point lives on the row (hover reveals it) instead of a permanent button: a
+    // sidebar where every row has two controls reads as a toolbar, not a list.
+    const fork = el("button", {
+      class: "session-fork",
+      type: "button",
+      text: "⑂",
+      title: item.forkedFrom === undefined ? "从这段对话开一个分支" : "再开一个分支",
+      "aria-label": `从「${item.title}」开一个分支`,
+    });
+    fork.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onFork(item.id);
+    });
+    li.append(fork);
+  }
+  return li;
 }
 
 /**

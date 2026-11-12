@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use joyczl_protocol::{ApprovalRequestedNotification, ServerNotification};
-use joyczl_tools::approval::{ApprovalBroker, ApprovalFut, ApprovalRequest};
+use joyczl_tools::approval::{ApprovalBroker, ApprovalFut, ApprovalRequest, RememberTarget};
 use tokio::sync::oneshot;
 
 use crate::{narrow, EventSink};
@@ -22,8 +22,11 @@ use crate::{narrow, EventSink};
 pub(crate) struct Waiting {
     /// The answer comes back here.
     pub(crate) tx: oneshot::Sender<bool>,
-    /// The command that was asked about — `remember` needs it for the allow table, so it is kept.
-    pub(crate) command: String,
+    /// What "记住这条" would record, as named by the asking tool (the command, or the directory).
+    ///
+    /// Kept **here**, not inferred from the preview text at answer time: parsing a human-facing
+    /// string to decide what gets a standing permission is how the wrong thing gets remembered.
+    pub(crate) remember: Option<RememberTarget>,
 }
 
 /// turn_id → request_id → the waiting question.
@@ -50,7 +53,7 @@ impl ApprovalBroker for Bridge {
                 request_id.clone(),
                 Waiting {
                     tx,
-                    command: request.args_preview.clone(),
+                    remember: request.remember.clone(),
                 },
             );
         }

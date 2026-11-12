@@ -34,6 +34,7 @@ async fn ctx() -> joyczl_tools::ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home: std::path::PathBuf::from(".joy"),
+        on_delta: None,
     }
 }
 
@@ -55,6 +56,7 @@ async fn turn<'a>(
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer,
         on_text: None,
@@ -101,6 +103,7 @@ async fn words_added_mid_turn_join_the_next_model_call_and_do_not_rerun_tools() 
         ctx: ctx().await,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer,
         on_text: None,
@@ -251,6 +254,7 @@ async fn the_last_iteration_is_a_wrap_up_not_a_cliff() {
         ctx,
         max_iterations: 2,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer: None,
         on_text: None,
@@ -278,6 +282,97 @@ async fn the_last_iteration_is_a_wrap_up_not_a_cliff() {
     );
     let tail = serde_json::to_string(&last.messages).expect("序列化");
     assert!(tail.contains("预算提示"), "收尾指令要进上下文：{tail:.200}");
+}
+
+#[tokio::test]
+async fn the_token_budget_also_turns_the_next_round_into_a_wrap_up() {
+    // 步数上限管「跑几轮」，token 预算管「跑多贵」。到了预算就走同一条收尾路径 ——
+    // 并且要说清是钱包到了，不是活儿干完了。
+    let mock = Mock::new(vec![
+        Mock::tool_use("tu_1", "current_time", json!({})),
+        Mock::text("预算到了，我先收尾：时间读到了，剩下的清理没做。"),
+    ]);
+    let tools = handlers::build_default();
+    let ctx = ctx().await;
+
+    let result = run(Turn {
+        system_prefix: None,
+        user_images: Vec::new(),
+        client: &mock,
+        model: "test-model",
+        system: "你是 Joy".to_string(),
+        history: vec![],
+        user_message: "现在几点".to_string(),
+        tools: &tools,
+        ctx,
+        // 步数还够（10 轮），钱包只够一轮半。
+        max_iterations: 10,
+        max_tokens: 1024,
+        token_budget: Some(20),
+        tool_result_budget: Default::default(),
+        observer: None,
+        on_text: None,
+        interrupt: None,
+        checkpoint: None,
+        steering: None,
+        resume: None,
+    })
+    .await
+    .expect("预算收尾不该报错");
+
+    assert_eq!(result.iterations, 2, "第一轮照常，第二轮直接收尾");
+    let requests = mock.received.lock().expect("锁");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1].tools.is_empty(),
+        "预算收尾那一轮不该再给工具：{} 个",
+        requests[1].tools.len()
+    );
+    let tail = serde_json::to_string(&requests[1].messages).expect("序列化");
+    assert!(
+        tail.contains("token 预算到了"),
+        "要明说是预算停的：{tail:.200}"
+    );
+}
+
+#[tokio::test]
+async fn without_a_token_budget_the_loop_keeps_its_tools() {
+    // 默认关掉：不设预算时第二轮仍然带着工具（否则「默认不变」这句话就不成立）。
+    let mock = Mock::new(vec![
+        Mock::tool_use("tu_1", "current_time", json!({})),
+        Mock::text("好了"),
+    ]);
+    let tools = handlers::build_default();
+    let ctx = ctx().await;
+
+    let _ = run(Turn {
+        system_prefix: None,
+        user_images: Vec::new(),
+        client: &mock,
+        model: "test-model",
+        system: "你是 Joy".to_string(),
+        history: vec![],
+        user_message: "现在几点".to_string(),
+        tools: &tools,
+        ctx,
+        max_iterations: 10,
+        max_tokens: 1024,
+        token_budget: None,
+        tool_result_budget: Default::default(),
+        observer: None,
+        on_text: None,
+        interrupt: None,
+        checkpoint: None,
+        steering: None,
+        resume: None,
+    })
+    .await
+    .expect("两轮就该结束");
+
+    let requests = mock.received.lock().expect("锁");
+    assert!(!requests[1].tools.is_empty(), "没有预算时第二轮照常带工具");
+    let tail = serde_json::to_string(&requests[1].messages).expect("序列化");
+    assert!(!tail.contains("预算提示"), "没预算就不该有收尾指令");
 }
 
 #[tokio::test]
@@ -310,6 +405,7 @@ async fn observer_sees_llm_and_tool_events_in_order() {
             }
             LoopEvent::Text { .. } => "text".to_string(),
             LoopEvent::ToolStart { name, .. } => format!("tool_start:{name}"),
+            LoopEvent::ToolDelta { chunk, .. } => format!("tool_delta:{chunk}"),
             LoopEvent::Tool { name, .. } => format!("tool:{name}"),
         };
         sink.lock().unwrap().0.push(name);
@@ -361,6 +457,7 @@ async fn streaming_emits_text_deltas_in_order() {
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer: Some(observer),
         on_text: Some(on_text),
@@ -426,6 +523,7 @@ async fn streaming_works_across_tool_rounds() {
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer: None,
         on_text: Some(on_text),
@@ -468,6 +566,7 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
         ctx: ctx().await,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer: None,
         on_text: None,
@@ -524,6 +623,7 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
         ctx,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer: Some(observer),
         on_text: None,
@@ -611,6 +711,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home: home.path().to_path_buf(),
+        on_delta: None,
     };
 
     // An "MCP-style" tool: nobody watches its output; it returns 100k characters.
@@ -642,6 +743,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         ctx,
         max_iterations: 4,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: crate::budget::ToolResultBudget {
             total_chars: 10_000,
             per_result_chars: 5_000,
@@ -725,6 +827,7 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
         ctx: ctx().await,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer: None,
         on_text: None,
@@ -793,6 +896,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
         ctx: ctx().await,
         max_iterations: 5,
         max_tokens: 1024,
+        token_budget: None,
         tool_result_budget: Default::default(),
         observer: None,
         on_text: None,
@@ -807,6 +911,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
                 output_tokens: 20,
                 ..Usage::default()
             },
+            max_iterations: None,
         }),
     })
     .await
@@ -819,4 +924,220 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
     // The request carried the checkpointed memory verbatim — no second user message appended.
     let sent = mock.received.lock().unwrap()[0].clone();
     assert_eq!(sent.messages.len(), 3);
+}
+
+// ---- One round, several calls: read-only together, writes alone ------------------------
+
+/// A tool that answers after `ms` — long enough that concurrency is measurable.
+fn slow_tool(name: &str, ms: u64, answer: &str) -> joyczl_tools::Tool {
+    let answer = answer.to_string();
+    joyczl_tools::Tool {
+        name: name.to_string(),
+        description: "测试用：睡一会儿再回答".to_string(),
+        input_schema: json!({"type": "object", "properties": {}, "required": []}),
+        handler: Arc::new(move |_ctx: joyczl_tools::ToolCtx, _args| {
+            let answer = answer.clone();
+            Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                Ok(answer)
+            })
+        }),
+    }
+}
+
+/// A model response that asks for two calls in the same round.
+fn two_calls(first: (&str, &str), second: (&str, &str)) -> joyczl_provider::CreateResponse {
+    use joyczl_provider::{ContentBlock, CreateResponse, StopReason, Usage};
+    CreateResponse {
+        stop_reason: StopReason::ToolUse,
+        usage: Usage::default(),
+        content: vec![
+            ContentBlock::ToolUse {
+                id: first.0.to_string(),
+                name: first.1.to_string(),
+                input: json!({}),
+                extra: None,
+            },
+            ContentBlock::ToolUse {
+                id: second.0.to_string(),
+                name: second.1.to_string(),
+                input: json!({}),
+                extra: None,
+            },
+        ],
+    }
+}
+
+async fn run_one_round(
+    mock: &Mock,
+    tools: &joyczl_tools::ToolRegistry,
+) -> (crate::LoopResult, std::time::Duration) {
+    run_with(mock, tools, None).await
+}
+
+async fn run_with(
+    mock: &Mock,
+    tools: &joyczl_tools::ToolRegistry,
+    observer: Option<crate::Observer>,
+) -> (crate::LoopResult, std::time::Duration) {
+    let ctx = ctx().await; // 建库不算进计时：测的是工具批次
+                           // tiktoken 的 BPE 词表是首次估算时才构造的（约 180ms，一次性）——这里预热掉，
+                           // 否则冷启动会被算进"工具批次"的耗时里，测出来的并发是假的。
+    joyczl_provider::tokens::estimate_text("warm");
+    let started = std::time::Instant::now();
+    let result = run(Turn {
+        system_prefix: None,
+        user_images: Vec::new(),
+        client: mock,
+        model: "test-model",
+        system: "你是 Joy".to_string(),
+        history: vec![],
+        user_message: "同时做两件事".to_string(),
+        tools,
+        ctx,
+        max_iterations: 5,
+        max_tokens: 1024,
+        token_budget: None,
+        tool_result_budget: Default::default(),
+        observer,
+        on_text: None,
+        interrupt: None,
+        checkpoint: None,
+        steering: None,
+        resume: None,
+    })
+    .await
+    .expect("loop 跑完");
+    (result, started.elapsed())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn read_only_tools_in_one_round_run_together() {
+    let mock = Mock::new(vec![
+        two_calls(("call-1", "slow_a"), ("call-2", "slow_b")),
+        Mock::text("都做完了。"),
+    ]);
+    let mut tools = joyczl_tools::ToolRegistry::new();
+    tools.register(slow_tool("slow_a", 200, "A"));
+    tools.register(slow_tool("slow_b", 200, "B"));
+
+    let (result, elapsed) = run_one_round(&mock, &tools).await;
+
+    assert_eq!(result.tool_calls.len(), 2);
+    assert!(
+        elapsed < std::time::Duration::from_millis(360),
+        "两个 200ms 的只读工具必须并发（串行要 400ms+）：{elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn results_are_reported_in_request_order_not_completion_order() {
+    let mock = Mock::new(vec![
+        // The slow one is asked for first and finishes last.
+        two_calls(("call-slow", "slow_a"), ("call-fast", "slow_b")),
+        Mock::text("都做完了。"),
+    ]);
+    let mut tools = joyczl_tools::ToolRegistry::new();
+    tools.register(slow_tool("slow_a", 120, "A"));
+    tools.register(slow_tool("slow_b", 5, "B"));
+
+    let (result, _) = run_one_round(&mock, &tools).await;
+
+    let names: Vec<&str> = result.tool_calls.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["slow_a", "slow_b"], "工具账按请求顺序记");
+    let sent = mock.received.lock().unwrap().pop().unwrap();
+    let blocks = &sent.messages.last().expect("最后一条是工具结果").content;
+    let ids: Vec<&str> = blocks
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, vec!["call-slow", "call-fast"], "回灌给模型的也保序");
+}
+
+#[tokio::test]
+async fn an_exclusive_tool_is_a_barrier() {
+    let mock = Mock::new(vec![
+        two_calls(("call-1", "reader"), ("call-2", "writer")),
+        two_calls(("call-3", "reader2"), ("call-4", "reader3")),
+        Mock::text("都做完了。"),
+    ]);
+    let mut tools = joyczl_tools::ToolRegistry::new();
+    tools.register(slow_tool("reader", 120, "R"));
+    tools.register_exclusive(slow_tool("writer", 120, "W"));
+    tools.register(slow_tool("reader2", 120, "R2"));
+    tools.register(slow_tool("reader3", 120, "R3"));
+
+    let (result, elapsed) = run_one_round(&mock, &tools).await;
+
+    assert_eq!(result.tool_calls.len(), 4);
+    // reader (120) → writer barrier (120) → reader2+reader3 together (120) ≈ 360ms.
+    // If the barrier were gone the two reader batches would overlap the writer: ~240ms.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(330),
+        "独占工具必须是把前后隔开的屏障：{elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_streaming_tool_emits_deltas_and_still_returns_the_real_result() {
+    use std::sync::Mutex;
+
+    let events: Arc<Mutex<Vec<crate::LoopEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let collected = events.clone();
+    let observer: crate::Observer = Arc::new(move |event| {
+        collected.lock().unwrap().push(event);
+    });
+
+    let mock = Mock::new(vec![
+        Mock::tool_use("call-1", "streamer", json!({})),
+        Mock::text("收到。"),
+    ]);
+    let mut tools = joyczl_tools::ToolRegistry::new();
+    tools.register(joyczl_tools::Tool {
+        name: "streamer".to_string(),
+        description: "边跑边报".to_string(),
+        input_schema: json!({"type": "object", "properties": {}, "required": []}),
+        handler: Arc::new(|ctx: joyczl_tools::ToolCtx, _args| {
+            Box::pin(async move {
+                // A real tool (run_command) writes stdout here; the fake just proves the
+                // wiring: the sink reaches the loop, the return value stays the answer.
+                if let Some(sink) = &ctx.on_delta {
+                    sink("第一段");
+                    sink("第二段");
+                }
+                Ok("完整结果".to_string())
+            })
+        }),
+    });
+
+    let (result, _) = run_with(&mock, &tools, Some(observer)).await;
+
+    let events = events.lock().unwrap();
+    let deltas: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            crate::LoopEvent::ToolDelta { chunk, .. } => Some(chunk.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deltas, vec!["第一段", "第二段"], "增量要按到达顺序发出去");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            crate::LoopEvent::ToolDelta { tool_use_id, .. } if tool_use_id == "call-1"
+        )),
+        "增量必须带 call id，否则并行时前端不知道更新哪一行"
+    );
+    let finished: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            crate::LoopEvent::Tool { output, .. } => Some(output.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finished, vec!["完整结果"], "Tool 事件仍然只发最终结果");
+    assert_eq!(result.tool_calls[0].output, "完整结果");
 }

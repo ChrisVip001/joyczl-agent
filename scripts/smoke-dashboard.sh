@@ -141,6 +141,7 @@ grep -q '"/api/data"' "$WORK/main.js" || fail "main.js 里没有 /api/data"
 # This one matches by path only: a template string with interpolation — backticks after bundling.
 grep -q '/api/session' "$WORK/main.js" || fail "main.js 里没有 /api/session"
 grep -q '"/api/session/new"' "$WORK/main.js" || fail "main.js 里没有 /api/session/new"
+grep -q '"/api/session/fork"' "$WORK/main.js" || fail "main.js 里没有 /api/session/fork"
 grep -q '/api/session/meta' "$WORK/main.js" || fail "main.js 里没有 /api/session/meta"
 grep -q '/api/turn/steer' "$WORK/main.js" || fail "main.js 里没有 /api/turn/steer"
 grep -q '/api/turn/follow-up' "$WORK/main.js" || fail "main.js 里没有 /api/turn/follow-up"
@@ -163,6 +164,14 @@ grep -q '/api/compact' "$WORK/main.js" || fail "main.js 里没有 /api/compact"
 grep -q '/api/schedules/jobs' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/jobs"
 grep -q '/api/schedules/save' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/save"
 grep -q '/api/schedules/remove' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/remove"
+# 审批卡片的四档回答：三档作用域各一个按钮。少一个，人要么只能每次都点、要么只能全放开。
+# 断言的是 ASCII 的 settle(...) 调用（esbuild 会把中文转成 \uXXXX 转义，按中文 grep 会永远不中）。
+grep -q 'settle(true, "once")' "$WORK/main.js" || fail "main.js 里没有「只允许这次」"
+grep -q 'settle(true, "session")' "$WORK/main.js" || fail "main.js 里没有「本会话总是允许」"
+grep -q 'settle(true, "always")' "$WORK/main.js" || fail "main.js 里没有「记住这条」"
+# 长命令的输出要**跑着就能看见**：toolDelta 通知必须接到时间线那一行上（P0-3）。
+# 少了它，工具行只会在整条命令跑完之后才出现。
+grep -q 'toolDelta' "$WORK/main.js" || fail "main.js 里没有处理 toolDelta（长命令的输出不会逐段出现）"
 
 # Every id the JS grabs must exist in the page — one missing means a blank screen. That error only
 # shows in the browser console, invisible to curl, so pin it here. (`must("x")` is the helper in
@@ -244,6 +253,25 @@ curl -sS -N -X POST "$BASE/api/turn" -H 'content-type: application/json' \
   -d "{\"sessionId\":\"$SID\",\"message\":\"你好\",\"stream\":false}" --max-time 20 \
   >"$WORK/turn2.sse" || fail "没有 cwd 的一轮没跑通（会话目录该兜底）"
 grep -q '"type":"turnCompleted"' "$WORK/turn2.sse" || fail "第二轮没有结束 —— 前端会一直等"
+
+# ---- 0.17：分叉 —— 复制最近几轮到新会话，原会话一行不动 ---------------------------
+messages_of() {
+  curl -sS "$BASE/api/data" | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print(next(s["messages"] for s in data["sessions"] if s["id"] == sys.argv[1]))
+' "$1"
+}
+BEFORE="$(messages_of "$SID")"
+FORK_JSON="$(curl -sS -X POST "$BASE/api/session/fork" -H 'content-type: application/json' \
+  -d "{\"sessionId\":\"$SID\"}")" || fail "session/fork 没通"
+grep -q '"copied":[1-9]' <<<"$FORK_JSON" || fail "分叉没复制任何消息：$FORK_JSON"
+grep -q "\"forkedFrom\":\"$SID\"" <<<"$FORK_JSON" || fail "分叉没记下来源：$FORK_JSON"
+grep -q "\"cwd\":\"$WORK\"" <<<"$FORK_JSON" || fail "分叉丢了工作目录：$FORK_JSON"
+FORK_ID="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' <<<"$FORK_JSON" | head -n1)"
+[[ -n "$FORK_ID" && "$FORK_ID" != "$SID" ]] || fail "分叉给出了坏 id：$FORK_JSON"
+AFTER="$(messages_of "$SID")"
+[[ "$BEFORE" == "$AFTER" ]] || fail "分叉改动了原会话（$BEFORE → $AFTER）"
 
 curl -sS "$BASE/api/data" >"$WORK/data-meta2.json"
 python3 - "$WORK/data-meta2.json" "$SID" <<'PY' || fail "清空标题的会话没有回退到首条用户消息"

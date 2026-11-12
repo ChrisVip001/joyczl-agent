@@ -2,6 +2,11 @@
 
 export type ToolStartedNotification = {
   turnId: string;
+  /**
+   * The id the model minted for this call — the same id its result comes back under.
+   * Clients key on it: several read-only calls can be in flight at once.
+   */
+  toolUseId: string;
   tool: string;
   /**
    * The model-supplied arguments; structure depends on the tool.

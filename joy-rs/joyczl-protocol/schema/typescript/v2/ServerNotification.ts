@@ -13,6 +13,7 @@ import type { RetryNotification } from "./RetryNotification";
 import type { TaskUpdatedNotification } from "./TaskUpdatedNotification";
 import type { TextDeltaNotification } from "./TextDeltaNotification";
 import type { ToolCompletedNotification } from "./ToolCompletedNotification";
+import type { ToolDeltaNotification } from "./ToolDeltaNotification";
 import type { ToolStartedNotification } from "./ToolStartedNotification";
 import type { TurnCheckpointedNotification } from "./TurnCheckpointedNotification";
 import type { TurnCompletedNotification } from "./TurnCompletedNotification";
@@ -35,6 +36,7 @@ export type ServerNotification =
   | ({ type: "approvalRequested" } & ApprovalRequestedNotification)
   | ({ type: "goalRound" } & GoalRoundNotification)
   | ({ type: "toolStarted" } & ToolStartedNotification)
+  | ({ type: "toolDelta" } & ToolDeltaNotification)
   | ({ type: "toolCompleted" } & ToolCompletedNotification)
   | ({ type: "consolidationCompleted" } & ConsolidationCompletedNotification)
   | ({ type: "graphStarted" } & GraphStartedNotification)

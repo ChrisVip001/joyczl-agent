@@ -15,7 +15,8 @@ passing 100% is the release gate** — one failure blocks the release.
 | Frontend | joy-ts (node --test + tsc) | 110 passed / 0 failed | |
 | Python SDK | sdk/python (pytest + mypy) | 13 passed / 0 failed; mypy clean on 8 files | |
 | End-to-end smokes | scripts/smoke*.sh | real app-server / gateways / dashboard / SDK | 4/4 pass |
-| Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 53/53 pass, gate exit 0 |
+| Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 66/66 pass, gate exit 0 |
+| Replay evals | evals/replay/*.jsonl | recorded dialogue + **expected event sequence** (compaction / approval timeout / streamed output / MCP reconnect / step-budget continuation) | 5/5 pass, also in the gate |
 | Long-task benchmarks | evals/long/*.jsonl | same harness, asks "did autonomous work get better" | 11/11 reached (one with the planner on), interrupt recovery 3/3; **never blocks** |
 | Judge | evals/judge/*.jsonl | real model answers, referee grades (0-10) | 10 cases; scores reported, not blocking |
 
@@ -89,6 +90,29 @@ absent, `find_tools` opens it, the next request has it) and
 Per-scenario settings grew the matching knobs: `soul_mode`, `tool_policy`,
 `skill_index_tokens`, `skill_body_tokens`, `tool_result_keep_recent`, `context_warn_ratio`.
 
+## Replay evals (`joy eval --replay`)
+
+Deterministic evals ask "is this behavior still correct". Replay evals ask "**does this run still
+produce the same sequence of events**". A file in `evals/replay/*.jsonl` is a recorded dialogue
+(what the human said, what the model answered) plus `expect.events`; the loader turns it into the
+same `Scenario`, so the runner and the assertions are shared — the only additions are the loader
+and the event assertion. There is no second harness.
+
+Events are matched as an **ordered subsequence**: every item in
+`["turnStarted", "toolStarted:run_command", "toolDelta", "toolCompleted:run_command:ok",
+"turnCompleted"]` must appear in order, but extra `textDelta` / `toolDelta` in between is fine
+(exact matching would make "one more delta" a red light — noise, not a regression). A line whose
+`expect.events` is empty is refused at load time: a replay that asserts nothing is just a
+deterministic case in disguise.
+
+Five cases, one boundary each: compaction (window and token gate hitting together), approval
+timeout (nobody answers → refusal, and the turn still finishes), streamed output (`toolDelta`
+before `toolCompleted`), MCP disconnect (rebuild transport → replay handshake → retry once), and
+the step budget running out with the todo list still open (it buys a slice, **carrying** the
+previous segment's steps — a `last_prompt_contains` that can only come from message history
+testifies to that).
+It is part of the release gate (`just check` runs `eval-replay`).
+
 ## Long-task benchmarks (P1)
 
 `joy bench` runs `evals/long/*.jsonl`: the same scripted harness, but it asks a different
@@ -118,6 +142,7 @@ The benchmarks already paid for themselves — two real defects, both fixed with
 ```bash
 just check            # fmt + schema drift + ts-check + py-check + clippy + test + eval
 just eval             # deterministic evals only (exit 0 = releasable)
+just eval-replay      # replay evals: recorded dialogue + expected event sequence
 just bench            # long-task benchmarks (records, never blocks)
 just judge            # judge scores (needs an API key)
 just smoke            # app-server end to end

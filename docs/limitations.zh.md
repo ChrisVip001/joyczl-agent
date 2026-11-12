@@ -67,15 +67,20 @@
 readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓取服务）。
 
 * **刻意** —— 沙箱内的命令默认**离线**（`JOY_EXEC_NETWORK=1` 才联网）；写权限
-  限制在工作目录、Joy 的 home 与临时目录，外加 `JOY_EXEC_WRITABLE_ROOTS` 里
-  列出的目录。要下载东西的命令得同时打开这两个开关。
-  → `joy-rs/joyczl-tools/src/exec.rs`（`sandbox_argv`）
+  限制在工作目录与临时目录，外加 `JOY_EXEC_WRITABLE_ROOTS` 里列出的目录。
+  Joy 的 home **不再可写**：里面是控制面（`settings.json` 就是执行放行表，
+  `hooks.json` 决定生命周期钩子跑什么命令），一个能写它的 shell 等于能给自己提权。
+  构建缓存（`~/.cargo`）走 `JOY_EXEC_WRITABLE_ROOTS` 显式放开；写 home、home 的祖先
+  或 `HOME_CONTROL` 里的条目会被丢掉，即便列了出来。要下载东西的命令得同时打开两个开关。
+  → `joy-rs/joyczl-tools/src/roots.rs`、`exec.rs`（`sandbox_argv`）
 * **刻意** —— 写入工具（`write_file` / `edit`，`JOY_WRITE=1`）**没有进程沙箱**：
-  写发生在进程内，所以硬闸是可写范围（本轮选的工作目录 + `JOY_EXEC_WRITABLE_ROOTS`，
-  逐跳解析符号链接）。**没选工作目录就一处也写不了**；Joy 的 home 和进程 cwd 都不在
-  范围里。范围外在审批之前就被拒绝——审批只可能放行一条本来就在范围内的写入。`require_str` 会 trim，所以写入工具的正文走不 trim 的取值
+  写发生在进程内，所以硬闸是可写范围——与 exec 沙箱**同一份定义**
+  （`joyczl-tools::roots`）：本轮选的工作目录 + `JOY_EXEC_WRITABLE_ROOTS`，
+  逐跳解析符号链接。**没选工作目录就一处也写不了**；Joy 的 home 不在范围里
+  （除非你亲手把它选成工作目录）。范围外在审批之前就被拒绝——审批只可能放行
+  一条本来就在范围内的写入。`require_str` 会 trim，所以写入工具的正文走不 trim 的取值
   ——尾部换行是数据，不是噪音。
-  → `joy-rs/joyczl-tools/src/fs_write.rs`（`contained`、`raw_str`）
+  → `joy-rs/joyczl-tools/src/roots.rs`、`fs_write.rs`（`contained`、`raw_str`）
 * **刻意** —— 落盘的命令输出只按**时间**清（`spill/` 保留 7 天，启动时打扫），
   不做容量配额。配额猜错了要么撑满磁盘、要么删掉你还想要的东西；按时间扫一遍
   是可预期的。`JOY_HOME` 里没有别的东西会轮转。
@@ -88,14 +93,30 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   `never`（默认）与 `on-request` 两档；更细的版本（执行要问、MCP 不问）没做，
   因为目前只有 exec 有那个「问」的闸门 —— 那种配置会是在描述一个不存在的东西。
   → `joy-rs/joyczl-config/src/lib.rs`（`approval`）
-* **刻意** —— 「记住这条命令」写进 `settings.json` 的是**被批准的那条命令本身**
-  （不加通配），而且要**下次启动**才生效：执行策略在启动时读一次。说了「记住了」
-  却悄悄把规则放宽，比不记更糟。
-  → `joy-rs/joyczl-app-server/src/lib.rs`（`remember_command`）
+* **刻意** —— 「记住这条」是三种作用域，不是一种：`once`（什么都不记）、
+  `session`（进程内一个格子，重启就忘）、`always`（写进 `settings.json`）。
+  记下的永远是**被批准的那件事本身** —— 命令原文、不加通配；写文件记的是**目录**，
+  从不记文件名。而且记住的规则不是围栏上的洞：硬拒、沙箱、可写边界照样先跑。
+  → `joy-rs/joyczl-app-server/src/lib.rs`（`remember`、`persist_exec_allow`、
+  `persist_write_dir`）
+* **刻意** —— `writeAllowDirs`（`JOY_WRITE_ALLOW_DIRS`）是**「别再问我」名单，
+  不是可写根**：把目录写进去，永远不会让写入落到工作目录或
+  `JOY_EXEC_WRITABLE_ROOTS` 之外。靠一次批准去放宽边界，边界就没有意义了。
+  → `joy-rs/joyczl-tools/src/fs_write.rs`（`pass_write_gate`）
 * **刻意** —— MCP 的反向请求（elicitation/sampling）会收到一个明确的「不支持」，
   而不是完整支持。要真的回答它们，得先有一套「服务器随便问什么都答得出来」的
   UI 契约。
   → `joy-rs/joyczl-mcp/src/transport.rs`
+* **刻意** —— 一条 MCP 连接上**同时只有一个在途请求**（`Connection` 里那层锁）。
+  按 JSON-RPC id 让多个请求重叠，要养一条读线程 + 一张 oneshot 表；换来的是
+  「同一个服务器上的两个工具调用能并行」—— 单机助手这点延迟不值得那个状态机。
+  跨服务器本来就是并行的（每个服务器一把锁，互不相干）。
+  → `joy-rs/joyczl-mcp/src/lib.rs`（`Connection::transport`）
+* **刻意** —— `notifications/tools/list_changed` **不重建工具表**：工具表在启动时
+  注册进 `ToolRegistry`，热更新它得让注册表可变，而现在每轮只是只读地看它。
+  已注册的工具照常可调（工具名是原样透传给服务器的），**新加**的工具要重启才
+  看得见。真要做，代价是给注册表加一层会话级视图 —— 那是另一件事。
+  → `joy-rs/joyczl-app-server/src/lib.rs`（`builtin_tools`）
 * **刻意** —— 沙箱不可用就什么都不跑。Linux 上这意味着 `bwrap` 既要存在、
   也要真的能建命名空间：Ubuntu 24.04 限制了非特权用户命名空间，所以可用性
   是**每个进程探测一次**（真跑一次 `bwrap`），不是查文件在不在。
@@ -125,6 +146,21 @@ readability 类库（真要高质量转换，走 run_command + curl 或 MCP 抓�
   它内部的事件也不外发；父轮只看到一次工具调用与结论。它用过的工具（含失败的
   调用）附在结论后面。
   → `joy-rs/joyczl-app-server/src/subagent.rs`
+* **刻意** —— 一轮最多自己续 2 次（`JOY_AUTO_CONTINUE_MAX`），不是无限循环。Codex /
+  Claude Code / pi 都不设步数硬顶，靠上下文窗口当刹车；它们跑在云端、花费由用户盯着，
+  而这个项目跑在用户自己的机器上。所以保留上限，但把「步数用完」从断崖改成一片新预算：
+  被截断且待办还有未完成项就再给一片（`JOY_TURN_STEP_SLICE`），到点才如实收尾并说清
+  还剩什么。**只在被截断时**续：模型自己说完的一轮不劫持。
+  → `joy-rs/joyczl-app-server/src/turn.rs`（`unfinished_work`）
+* **刻意** —— 完成闸只看**事实**（待办里的 `pending` / `in_progress`），不问模型
+  「你做完了吗」。问一句就等于给它一个说「做完了」的机会，而这样的回答恰恰是问题本身。
+  → 同上；`/goal` 那套判定器另算（人设了目标才启用）
+
+* **刻意** —— 批量子代理（`tasks` 一次最多 4 件）**只读**：工具表里没有
+  `run_command` / `write_file` / `edit` / `apply_patch`。四个循环并发时，「一次只写
+  一个」的屏障管不到它们，两个子代理写同一目录就是最后写的赢。要并发又想写，就把
+  写的那部分留在父轮里做；单件委派仍拿完整工具表。
+  → `joy-rs/joyczl-tools/src/lib.rs`（`ToolRegistry::readonly`）
 
 * **刻意** —— 记忆去重的键是 `(subject, 规范化 content)`（大小写与首尾空白不算
   区别），**不含 kind**：同一句话先以 `fact` 记下、后来被标成 `feedback` 时，留下

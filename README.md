@@ -65,8 +65,17 @@ persisted with the conversation.
 - **Plan as a graph**: the triage front door answers small talk cheaply; the
   gather workflow writes a morning brief
   ([docs/architecture.md](docs/architecture.md))
-- **Be examined**: deterministic evals gate every release; a judge grades
-  answer quality ([docs/testing.md](docs/testing.md))
+- **Follow the project's own rules**: `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` are
+  discovered upwards from the working directory, joined root-first into the per-turn tail
+  (32KB budget, outermost dropped first) with their source paths named
+  ([docs/internals/09-app-server.md](docs/internals/09-app-server.md))
+- **Never hand back half-finished work**: when the step budget runs out it reads the todo list it
+  wrote itself — if items are open it keeps going (carrying the steps so far, not starting over),
+  up to `JOY_AUTO_CONTINUE_MAX` continuations, then says plainly what is left
+  ([docs/configuration.md](docs/configuration.md))
+- **Be examined**: deterministic evals gate every release; `joy eval --replay` pins the event
+  order of compaction, approval timeouts, streamed output, MCP reconnects and step-budget
+  continuations; a judge grades answer quality ([docs/testing.md](docs/testing.md))
 - **Be observed**: every turn lands a trace line and a usage row
   ([docs/architecture.md](docs/architecture.md))
 
@@ -86,8 +95,9 @@ persisted with the conversation.
 | `todo_write` | keep a per-session todo list, re-injected every turn (whole-table replace; one `in_progress` at a time) |
 | `current_time` | local time with weekday and timezone |
 | `write_file` / `edit` | write a text file / one exact-match replacement with a change hunk — off unless `JOY_WRITE=1`; writable boundary = the working directory **bound to the session** (or named for this turn when the session has none) + `JOY_EXEC_WRITABLE_ROOTS` |
+| `apply_patch` | apply a patch: several files and several hunks in one call, **all or nothing** (one hunk that does not fit means nothing is written); same boundary and approval as `write_file` / `edit` |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
-| `delegate_task` | hand one self-contained job to a subagent — off unless `JOY_DELEGATE=1`, cannot delegate again; pass `result_schema` for a structured answer (retried once, then prose) |
+| `delegate_task` | hand one self-contained job to a subagent (`tasks: [...]` fans out up to 4 independent jobs concurrently, merged in order) — off unless `JOY_DELEGATE=1`, cannot delegate again; pass `result_schema` for a structured answer (retried once, then prose) |
 | `read_skill` | read one skill's full body — the always-present catalog carries only its name and one line; **on by default** |
 | `read_memory_page` | read one page of the memory bundle by name, with the `sources` it was distilled from; **on by default** |
 | `find_tools` | search the deferred shelf by keyword and open what it finds for **this session** (`JOY_TOOL_POLICY=deferred`); **on by default** |

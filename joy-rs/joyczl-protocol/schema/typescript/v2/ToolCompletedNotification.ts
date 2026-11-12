@@ -3,6 +3,10 @@ import type { ToolStatus } from "./ToolStatus";
 
 export type ToolCompletedNotification = {
   turnId: string;
+  /**
+   * Same id as the matching `toolStarted`, so a client can settle the right row.
+   */
+  toolUseId: string;
   tool: string;
   /**
    * The text the tool returned to the model. Failure details live here too — the turn is not aborted.

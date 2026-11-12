@@ -31,9 +31,9 @@ use joyczl_protocol::{
     GraphNodeEndedNotification, GraphNodeStartedNotification, GraphRouteKind,
     GraphStartedNotification, JsonRpcMessage, JsonRpcResponse, RequestId, RetryNotification,
     ServerNotification, TextDeltaNotification, TokenUsage, ToolCallRecord,
-    ToolCompletedNotification, ToolStartedNotification, ToolStatus, TurnCheckpointedNotification,
-    TurnCompletedNotification, TurnMeta, TurnStartParams, TurnStartResponse,
-    TurnStartedNotification, TurnSuspendedNotification, JSONRPC_VERSION,
+    ToolCompletedNotification, ToolDeltaNotification, ToolStartedNotification, ToolStatus,
+    TurnCheckpointedNotification, TurnCompletedNotification, TurnMeta, TurnStartParams,
+    TurnStartResponse, TurnStartedNotification, TurnSuspendedNotification, JSONRPC_VERSION,
 };
 use joyczl_provider::{ContentBlock, CreateRequest, Message, Resolved, Role, TextSink, Usage};
 use joyczl_state::{RunStatus, TaskRow, TaskStatus};
@@ -561,16 +561,44 @@ pub async fn run_turn(
         }
     };
 
-    // ---- Stop: this turn finished. If the hook demands continuation (exit 2 / decision: block), run one
-    // more turn, capped at 1. The generic "auto-continue" belongs to the goal loop (`/goal`); here we
-    // only honor "Stop can hold off the end", without building a second loop out of it.
+    // ---- Continuation: a turn may keep itself alive, a bounded number of times.
     //
-    // Stop continuations belong to the **same round**: same run, one continuous step order. The
-    // human asked for one thing and these passes are the model still working on it.
+    // Two sources, one budget (`JOY_AUTO_CONTINUE_MAX`):
+    //   * the human's Stop hook saying "not yet" (exit 2 / decision: block);
+    //   * the **built-in gate**: the step cap cut this turn off **and** the model's own todo list
+    //     still has `pending` / `in_progress` items. That list is the model's written statement of
+    //     what is left, so "your move" is a poor answer when the model itself wrote down the rest.
+    //
+    // The gate opens only at the cut-off. A turn that ends of its own accord with items left is a
+    // turn the model considers finished (a plan it just wrote, say) — driving it on would execute
+    // work nobody asked for.
+    //
+    // This is not a second loop: the goal loop (`/goal`) stays the only thing that auto-continues
+    // across rounds on a human-set condition. Both sources here mean "hold off the end".
+    //
+    // A continuation **carries the working memory** (`Resume`) and a **fresh step slice**. Before
+    // this, it started a brand-new loop: history was re-read from `chat_log`, which at that instant
+    // did not yet contain this turn's tool results — so the continuation began as if the last steps
+    // had never happened, and re-did them. That is the failure Codex's own loop write-up warns
+    // about ("continue without the steps and the agent restarts from step 1").
+    let settings = server.settings();
+    let goal_condition = task.as_ref().and_then(|row| row.goal_condition.clone());
+    let auto_continue_max = settings.auto_continue_max.max(0) as usize;
+
     let mut observation =
         joyczl_agent::observe::observe(&full.result.messages, &turn_id, 1, turn_cwd.as_deref());
-    let mut stop_rounds = 0usize;
-    loop {
+    let mut continues = 0usize;
+    // Steps from earlier passes. `full` is **replaced** by the continuation, and the turn's tool
+    // results (and their `toolCompleted` notifications, emitted at finalize from `result`) would
+    // otherwise cover only the last pass — the client would show a second pass of calls whose
+    // earlier results never arrived.
+    let mut earlier_calls: Vec<joyczl_loop::ToolOutcome> = Vec::new();
+    // The ceiling this pass ran under. A continuation raises it by one slice, and "were we cut
+    // off?" is `iterations >= cap` — not a guess about how the model felt about stopping.
+    let mut cap = settings.max_iterations.max(1);
+    // Set when the turn stops with work still open: either the continuation budget is gone, or the
+    // model chose to stop. Both belong in the trace — "stopped short" should be a fact, not a mood.
+    let unfinished: Option<String> = loop {
         let payload = serde_json::json!({
             "session_id": session_id,
             "turn_id": turn_id,
@@ -579,22 +607,55 @@ pub async fn run_turn(
         });
         let outcome =
             crate::fire_hook(&server.hooks, joyczl_tools::hooks::HookEvent::Stop, payload).await;
-        let Some(reason) = outcome.blocked else {
-            break;
+        let blocked = outcome.blocked;
+        // The hook is the human speaking, and it can always demand one more pass. Only when it says
+        // nothing does the built-in gate look at facts — and it opens **only when the turn was cut
+        // off** (`iterations >= cap`), because that is what "ran out of steps with work left" means.
+        //
+        // Why not on a natural stop too: a turn that writes a plan and answers "计划如下" is
+        // finished work, not unfinished work. Driving that one to keep going would execute a plan
+        // nobody asked to execute. A model that stops early with an open todo list is visible in
+        // the trace as `unfinished`, and one word from the human continues it.
+        //
+        // A goal-carrying turn is driven by the goal loop below — one driver per turn.
+        let open_todos = if goal_condition.is_none() {
+            unfinished_work(server, &session_id, &full.result)
+        } else {
+            None
         };
-        if stop_rounds >= MAX_STOP_CONTINUATIONS {
-            // Continuation demanded even after continuing: say so honestly, don't pretend it is satisfied.
-            full.result
-                .reply
-                .push_str(&format!("\n\n（Stop hook 仍要求继续：{reason}）"));
-            break;
+        let cut_off = full.result.iterations >= cap;
+        let reason = blocked.or_else(|| open_todos.clone().filter(|_| cut_off));
+        let Some(reason) = reason else {
+            // Stopped of its own accord; if work is still open, say so in the trace rather than
+            // hijack the ending.
+            break open_todos;
+        };
+        if continues >= auto_continue_max {
+            // Asked for more after we already continued: say so honestly rather than pretend the
+            // work is done.
+            full.result.reply.push_str(&format!(
+                "\n\n（还差一步没做完：{reason}。自动续跑的次数用完了 —— 说一声「接着做」我就从断的地方继续。）"
+            ));
+            break Some(reason);
         }
-        stop_rounds += 1;
-        eprintln!("(joy) Stop hook 要求继续（第 {stop_rounds} 次）：{reason}");
+        continues += 1;
+        eprintln!("(joy) 第 {continues} 次自动续跑（上限 {auto_continue_max}）：{reason}");
+        let nudge = format!(
+            "{reason}\n\n接着做：从刚才断的地方继续，不要重述已经做完的部分，也不要重新规划。"
+        );
+        // Slice, don't restart: one continuation buys `JOY_TURN_STEP_SLICE` more steps, counted
+        // on top of the ones already spent.
+        cap = full.result.iterations + settings.turn_step_slice.max(1);
+        let resume = joyczl_loop::Resume {
+            messages: full.result.messages.clone(),
+            completed_iterations: full.result.iterations,
+            usage: full.result.usage,
+            max_iterations: Some(cap),
+        };
         let continued = full_turn(
             server,
             &resolved,
-            &reason,
+            &nudge,
             Vec::new(),
             TurnFrame {
                 session_id: &session_id,
@@ -604,7 +665,7 @@ pub async fn run_turn(
                 turn_cwd: turn_cwd.clone(),
                 route_reason: turn_route.clone(),
                 steering: Some(steering.clone()),
-                resume: None,
+                resume: Some(resume),
                 checkpoint: Some(checkpoint.clone()),
             },
             None,
@@ -619,6 +680,7 @@ pub async fn run_turn(
                     base,
                     turn_cwd.as_deref(),
                 ));
+                earlier_calls.append(&mut full.result.tool_calls);
                 full = next;
             }
             Err(e) => {
@@ -634,6 +696,13 @@ pub async fn run_turn(
                 return Err(e);
             }
         }
+    };
+
+    // Re-attach the earlier passes' calls **before** the last pass's, so the turn reports one
+    // request order across the whole turn (and every `toolCompleted` finally has its row).
+    if !earlier_calls.is_empty() {
+        earlier_calls.append(&mut full.result.tool_calls);
+        full.result.tool_calls = earlier_calls;
     }
 
     // ---- The task loop: facts first, opinions second.
@@ -645,8 +714,8 @@ pub async fn run_turn(
     // entirely** — a model must not be asked to confirm a fact that is already false.
     //
     // The condition is read from the **task row** and nowhere else (0.17): there is no separate
-    // goal record left to disagree with it.
-    let goal_condition = task.as_ref().and_then(|row| row.goal_condition.clone());
+    // goal record left to disagree with it. It was already read up there for the continuation
+    // loop — which is why a turn with a goal never also self-continues: one driver per turn.
     if let Some(condition) = &goal_condition {
         eprintln!("(joy) 目标循环开始：{condition}（上限 {max_rounds} 轮）");
     }
@@ -968,7 +1037,11 @@ pub async fn run_turn(
         }
     };
 
-    let FullTurn { result, gate } = full;
+    let FullTurn {
+        result,
+        gate,
+        history,
+    } = full;
 
     finalize_turn(
         server,
@@ -985,9 +1058,12 @@ pub async fn run_turn(
             retries: retries.load(Ordering::Relaxed),
             goal_status,
             goal_rounds: round_no,
+            history,
             started,
             run_id,
             decision: Some(decision),
+            continues,
+            unfinished,
         },
     )
     .await?;
@@ -1018,6 +1094,8 @@ pub(crate) enum TaskDecision {
 /// Everything one finished turn leaves behind — shared by the fresh path and the resumed one,
 /// so "a resumed turn gets exactly the same accounting" holds by construction, not by copy-paste.
 pub(crate) struct FinishedTurn<'a> {
+    /// What history/compaction looked like — the trace writes the before/after in turns.
+    pub(crate) history: HistoryStats,
     pub(crate) session_id: String,
     pub(crate) turn_id: String,
     pub(crate) user_message: &'a str,
@@ -1034,6 +1112,11 @@ pub(crate) struct FinishedTurn<'a> {
     pub(crate) run_id: Option<String>,
     /// The verdict of this turn's rounds; `None` = nobody decided (a resumed turn).
     pub(crate) decision: Option<TaskDecision>,
+    /// How many times this turn continued itself (Stop hook or unfinished work).
+    pub(crate) continues: usize,
+    /// Why it could not continue further, when it stopped with work still open. `None` = it
+    /// stopped because it was done (or was not allowed to try).
+    pub(crate) unfinished: Option<String>,
 }
 
 /// The shared tail of every turn: notifications, the checkpoint ledger's closing entry, the
@@ -1057,9 +1140,12 @@ pub(crate) async fn finalize_turn(
         retries,
         goal_status,
         goal_rounds,
+        history,
         started,
         run_id,
         decision,
+        continues,
+        unfinished,
     } = t;
     let settings = server.settings();
 
@@ -1178,6 +1264,7 @@ pub(crate) async fn finalize_turn(
         sink.notification(ServerNotification::ToolCompleted(
             ToolCompletedNotification {
                 turn_id: turn_id.clone(),
+                tool_use_id: call.tool_use_id.clone(),
                 tool: call.name.clone(),
                 output: call.output.clone(),
                 status: if call.ok() {
@@ -1248,6 +1335,43 @@ pub(crate) async fn finalize_turn(
             "userMessage": user_message,
             "reply": reply,
             "meta": meta,
+            // ---- Flattened, so `jq` on a day's trace does not need to remember `meta`'s shape.
+            // `callIndex` is the **request** order: with read-only tools running in parallel that
+            // is the only order the caller cares about (the wall-clock order is in `durationMs`).
+            "tools": result
+                .tool_calls
+                .iter()
+                .enumerate()
+                .map(|(index, call)| serde_json::json!({
+                    "tool": call.name,
+                    "callIndex": index,
+                    "durationMs": call.duration_ms,
+                    "status": if call.ok() { "ok" } else { "error" },
+                }))
+                .collect::<Vec<_>>(),
+            "retries": retries,
+            "tokens": {
+                "input": result.usage.input_tokens,
+                "output": result.usage.output_tokens,
+                // Two numbers for the same request: dividing them is the estimate's error, which
+                // is what calibrates the next turn's budget.
+                "estimatedInput": result.estimated_input_tokens,
+                "observedInput": result.observed_input_tokens,
+                // The turn-level cost cap, when one is set (JOY_TURN_TOKEN_BUDGET; 0 = off).
+                "turnBudget": settings.turn_token_budget,
+            },
+            // Compaction is "before/after" in **turns**: how many the session had, how many survived.
+            "history": {
+                "turnsTotal": history.turns_total,
+                "turnsKept": history.turns_kept,
+                "compacted": history.compacted,
+            },
+            // Why it stopped: steps spent, how many times it continued itself, and — when it gave up
+            // with work still open — what was left. Without these three, "it stopped short" is an
+            // opinion; with them it is a number.
+            "steps": result.iterations,
+            "continues": continues,
+            "unfinished": unfinished,
         }),
     );
     trace::record_usage(
@@ -1408,6 +1532,8 @@ pub(crate) async fn finalize_turn(
 pub(crate) struct FullTurn {
     pub(crate) result: LoopResult,
     pub(crate) gate: Option<GateDecision>,
+    /// What history/compaction looked like for this turn — straight into the trace.
+    pub(crate) history: HistoryStats,
 }
 
 /// The checkpoint outlet, constructed once per turn (fresh or resumed): every tool-results
@@ -1859,6 +1985,34 @@ pub(crate) fn resolve_turn_cwd(
     Ok(Some(path))
 }
 
+/// The longest a pre-loop step (memory gate, retrieval, compaction) may take before Joy
+/// proceeds without it. Cancellation is the real protection — this only keeps a hung
+/// provider from holding the turn hostage.
+const PRELOOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Race a pre-loop step against the user's stop.
+///
+/// Gate, retrieval and compaction each make a model call *before* the loop starts, and the
+/// loop's own `select!` cannot help there: "stop" used to wait behind a summary. `None` means
+/// the turn was stopped, and the caller proceeds without that step instead of blocking —
+/// the loop sees the same cancellation on its first iteration and answers honestly.
+pub(crate) async fn interruptible<T>(
+    interrupt: Option<&Arc<joyczl_loop::Interrupt>>,
+    what: &str,
+    future: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    match interrupt {
+        Some(cancel) => tokio::select! {
+            _ = cancel.wait() => {
+                eprintln!("(joy) 已中断：{what}不等了");
+                None
+            }
+            value = future => Some(value),
+        },
+        None => Some(future.await),
+    }
+}
+
 pub(crate) async fn full_turn(
     server: &Server,
     resolved: &Resolved,
@@ -1912,39 +2066,80 @@ pub(crate) async fn full_turn(
             String::new(),
         ),
         None => {
-            let decision = joyczl_memory::gate::should_retrieve(
-                resolved.client.as_ref(),
-                &resolved.small_model,
-                message,
+            // The gate is a small-model call; a stop must not wait behind it. Stopped before
+            // the answer: skip retrieval and let the loop report the interruption.
+            let quick = interruptible(
+                interrupt.as_ref(),
+                "记忆门",
+                tokio::time::timeout(
+                    PRELOOP_TIMEOUT,
+                    joyczl_memory::gate::should_retrieve(
+                        resolved.client.as_ref(),
+                        &resolved.small_model,
+                        message,
+                    ),
+                ),
             )
             .await;
-            let gate_decision = GateDecision {
-                decision: if decision.retrieve {
-                    GateDecisionKind::Retrieve
-                } else {
-                    GateDecisionKind::Skip
-                },
-                reason: decision.reason.clone(),
-                query: decision.retrieve.then(|| decision.query.clone()),
-            };
-            sink.notification(ServerNotification::GateDecided(GateDecidedNotification {
-                turn_id: turn_id.to_string(),
-                decision: gate_decision.clone(),
-            }));
-            let memory_context = if decision.retrieve {
-                joyczl_memory::retrieve_context(
-                    &server.facts,
-                    &server.episodes,
-                    &decision.query,
-                    settings.retrieval_top_k.max(1) as u32,
-                    embedder.as_deref(),
-                )
-                .await
-                .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            (gate_decision, memory_context)
+            match quick {
+                Some(quick) => {
+                    let decision = match quick {
+                        Ok(decision) => decision,
+                        Err(_) => joyczl_memory::gate::Decision::fail_open(
+                            format!("记忆门超过 {} 秒没答，失败开放", PRELOOP_TIMEOUT.as_secs()),
+                            message,
+                        ),
+                    };
+                    let gate_decision = GateDecision {
+                        decision: if decision.retrieve {
+                            GateDecisionKind::Retrieve
+                        } else {
+                            GateDecisionKind::Skip
+                        },
+                        reason: decision.reason.clone(),
+                        query: decision.retrieve.then(|| decision.query.clone()),
+                    };
+                    sink.notification(ServerNotification::GateDecided(GateDecidedNotification {
+                        turn_id: turn_id.to_string(),
+                        decision: gate_decision.clone(),
+                    }));
+                    let memory_context = if decision.retrieve {
+                        // Retrieval is the expensive half: stopped mid-way, the turn continues
+                        // with no memory and the loop answers "interrupted" on its first round.
+                        interruptible(
+                            interrupt.as_ref(),
+                            "记忆检索",
+                            tokio::time::timeout(
+                                PRELOOP_TIMEOUT,
+                                joyczl_memory::retrieve_context(
+                                    &server.facts,
+                                    &server.episodes,
+                                    &decision.query,
+                                    settings.retrieval_top_k.max(1) as u32,
+                                    embedder.as_deref(),
+                                ),
+                            ),
+                        )
+                        .await
+                        .and_then(|inner| inner.ok())
+                        .and_then(|text| text.ok())
+                        .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    (gate_decision, memory_context)
+                }
+                // Stopped before the gate answered: no retrieval, no more model calls. The
+                // loop checks the same token on its first iteration and returns `interrupted`.
+                None => (
+                    GateDecision {
+                        decision: GateDecisionKind::Skip,
+                        reason: "已中断：跳过记忆门与检索".to_string(),
+                        query: None,
+                    },
+                    String::new(),
+                ),
+            }
         }
     };
 
@@ -2007,21 +2202,47 @@ pub(crate) async fn full_turn(
     // A resumed turn skips history assembly: its working memory IS the checkpoint — history,
     // user message and finished tool rounds are all already inside it. Compaction (a model
     // call) must not run just to produce a summary that gets discarded.
-    let (mut history, mut summary) = if resume.is_some() {
-        (Vec::new(), None)
+    let Loaded {
+        messages: mut history,
+        mut summary,
+        stats: mut history_stats,
+    } = if resume.is_some() {
+        Loaded::empty()
     } else {
         {
             let _compact_guard = session_write_lock.lock().await;
-            load_history(
-                &server.chat,
-                resolved,
-                session_id,
-                settings.history_turns,
-                history_budget,
-                None,
-                &server.hooks,
+            // Compaction calls the model too: it is raced against the stop and bounded, so
+            // "stop" never queues behind a summary.
+            let loaded = interruptible(
+                interrupt.as_ref(),
+                "压缩",
+                tokio::time::timeout(
+                    PRELOOP_TIMEOUT,
+                    load_history(
+                        &server.chat,
+                        resolved,
+                        session_id,
+                        settings.history_turns,
+                        history_budget,
+                        None,
+                        &server.hooks,
+                    ),
+                ),
             )
-            .await
+            .await;
+            match loaded {
+                Some(Ok(loaded)) => loaded,
+                Some(Err(_)) => {
+                    eprintln!(
+                        "(joy) 压缩超过 {} 秒，这一轮先不带历史",
+                        PRELOOP_TIMEOUT.as_secs()
+                    );
+                    Loaded::empty()
+                }
+                // Stopped while compacting: the loop will not run, and handing it a
+                // half-built history would be worse than an empty one.
+                None => Loaded::empty(),
+            }
         }
     };
     // The catalog a new session carries (index layer). Read once per turn — it is a small
@@ -2030,6 +2251,10 @@ pub(crate) async fn full_turn(
         .index_text()
         .unwrap_or_default();
 
+    // The repository's own conventions, read from the folder the human picked. No folder ⇒
+    // nothing to read (and no guessing at the process cwd, which is wherever the server
+    // happened to start — that is not the human's choice).
+    let instructions = turn_cwd.as_deref().and_then(crate::agents_md::discover);
     let mut prompt = build_system(PromptParts {
         soul: &soul,
         model: &resolved.model,
@@ -2040,6 +2265,7 @@ pub(crate) async fn full_turn(
         skills: &skills,
         todo: server.todo.render(session_id).as_deref(),
         summary: summary.as_deref(),
+        instructions: instructions.as_deref(),
         capabilities: capability_note(&settings).as_deref(),
     });
 
@@ -2110,14 +2336,29 @@ pub(crate) async fn full_turn(
     let tool_started: joyczl_loop::Observer = {
         let sink = sink.clone();
         let turn_id = turn_id.to_string();
-        Arc::new(move |event| {
-            if let LoopEvent::ToolStart { name, args } = event {
+        Arc::new(move |event| match event {
+            LoopEvent::ToolStart {
+                tool_use_id,
+                name,
+                args,
+            } => {
                 sink.notification(ServerNotification::ToolStarted(ToolStartedNotification {
                     turn_id: turn_id.clone(),
+                    tool_use_id,
                     tool: name,
                     args,
                 }));
             }
+            // Live progress from a running tool: forwarded as-is, never buffered — the
+            // `ToolCompleted` that follows is the real result.
+            LoopEvent::ToolDelta { tool_use_id, chunk } => {
+                sink.notification(ServerNotification::ToolDelta(ToolDeltaNotification {
+                    turn_id: turn_id.clone(),
+                    tool_use_id,
+                    chunk,
+                }));
+            }
+            _ => {}
         })
     };
     let observer: Option<joyczl_loop::Observer> = match inner {
@@ -2149,8 +2390,18 @@ pub(crate) async fn full_turn(
             user_images: user_images.clone(),
             tools: &turn_tools,
             ctx: ctx.clone(),
-            max_iterations: settings.max_iterations,
+            // A continuation carries its own ceiling: it resumes with the steps already spent, so
+            // the session cap would leave it zero room. `None` = the session setting, as always.
+            max_iterations: resume
+                .as_ref()
+                .and_then(|point| point.max_iterations)
+                .unwrap_or(settings.max_iterations),
             max_tokens: settings.max_tokens,
+            // 0 = off; the loop treats `None` and 0 the same, but converting here keeps the
+            // "off" decision in one place (the config).
+            token_budget: Some(settings.turn_token_budget)
+                .filter(|budget| *budget > 0)
+                .map(|budget| budget as usize),
             tool_result_budget: crate::tool_result_budget(&settings),
             observer: observer.clone(),
             on_text: Some(on_text.clone()),
@@ -2166,7 +2417,7 @@ pub(crate) async fn full_turn(
             Err(e) if !retried && is_context_overflow(&e) => {
                 eprintln!("(joy) 上下文超了，压缩后重试一次");
                 retried = true;
-                let (forced_history, forced_summary) = {
+                let forced = {
                     let _compact_guard = session_write_lock.lock().await;
                     load_history(
                         &server.chat,
@@ -2179,8 +2430,9 @@ pub(crate) async fn full_turn(
                     )
                     .await
                 };
-                history = forced_history;
-                summary = forced_summary;
+                history = forced.messages;
+                summary = forced.summary;
+                history_stats = forced.stats;
                 // Only the tail changes after a forced compaction — the stable prefix is the
                 // same bytes as before, so the cache still serves it.
                 prompt = build_system(PromptParts {
@@ -2193,6 +2445,7 @@ pub(crate) async fn full_turn(
                     skills: &skills,
                     todo: server.todo.render(session_id).as_deref(),
                     summary: summary.as_deref(),
+                    instructions: instructions.as_deref(),
                     capabilities: capability_note(&settings).as_deref(),
                 });
             }
@@ -2209,6 +2462,7 @@ pub(crate) async fn full_turn(
     Ok(FullTurn {
         result,
         gate: Some(gate_decision),
+        history: history_stats,
     })
 }
 
@@ -2398,6 +2652,8 @@ async fn graph_route(
             Some(reply) => Ok(Some(Routed {
                 info: info(GraphRouteKind::Quick),
                 turn: FullTurn {
+                    // The graph's quick path never loaded history: nothing to report.
+                    history: HistoryStats::default(),
                     // One model call, no tools — that is its entirety.
                     result: LoopResult {
                         reply: reply.to_string(),
@@ -2503,6 +2759,10 @@ pub(crate) struct PromptParts<'a> {
     pub skills: &'a str,
     pub todo: Option<&'a str>,
     pub summary: Option<&'a str>,
+    /// The repository's own conventions (`AGENTS.md` upwards from the working directory).
+    /// Sits in the dynamic half: it changes when the human switches project, not per turn,
+    /// but it must not be part of the cached stable prefix either.
+    pub instructions: Option<&'a str>,
     /// What this machine **cannot** do right now (no shell, no file writes). Said once per
     /// turn, in the prompt, because the alternative is the model discovering it by trial:
     /// a turn asked to clean up calendar events had no shell and no delete tool, so it spent
@@ -2577,6 +2837,7 @@ pub(crate) fn build_system(parts_in: PromptParts<'_>) -> SystemPrompt {
         skills,
         todo,
         summary,
+        instructions,
         capabilities,
     } = parts_in;
     let now = Local::now();
@@ -2640,6 +2901,11 @@ pub(crate) fn build_system(parts_in: PromptParts<'_>) -> SystemPrompt {
     if !skills.is_empty() {
         parts.push(format!("\nRelevant skill instructions:\n{skills}"));
     }
+    // Project conventions before memory: "how this repo works" outranks "what happened
+    // before", and both lose to the human's message (the section says so out loud).
+    if let Some(instructions) = instructions {
+        parts.push(instructions.to_string());
+    }
     if let Some(section) = summary.and_then(joyczl_memory::compaction::summary_section) {
         parts.push(section);
     }
@@ -2689,13 +2955,88 @@ fn notify_goal(
     }));
 }
 
-/// How many times a single turn may continue because of the Stop hook. The generic mechanism is the goal loop (`/goal`).
-const MAX_STOP_CONTINUATIONS: usize = 1;
+/// Is there work this turn itself declared unfinished?
+///
+/// The todo list is the model's **own** written statement of what is left, so it is the one
+/// "are you done?" signal that costs no model call and cannot be talked around. Three rules keep
+/// it from becoming a loop driver:
+///
+/// * `interrupted` means the human said "enough" — that is not unfinished work;
+/// * no tool call this turn means a conversation, and a stale board from an earlier turn must not
+///   drag a chat turn back to work it never reopened;
+/// * a goal-carrying turn is driven by the goal loop instead (checked by the caller).
+fn unfinished_work(
+    server: &Server,
+    session_id: &str,
+    result: &joyczl_loop::LoopResult,
+) -> Option<String> {
+    if result.interrupted || result.tool_calls.is_empty() {
+        return None;
+    }
+    let list = server.todo.read(session_id)?;
+    let open: Vec<&joyczl_tools::todo::TodoItem> = list
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.status,
+                joyczl_tools::todo::TodoStatus::Pending
+                    | joyczl_tools::todo::TodoStatus::InProgress
+            )
+        })
+        .collect();
+    if open.is_empty() {
+        return None;
+    }
+    let mut listed: Vec<String> = open
+        .iter()
+        .take(3)
+        .map(|item| format!("{}（{}）", item.content, item.status.as_str()))
+        .collect();
+    if open.len() > listed.len() {
+        listed.push(format!("等 {} 项", open.len()));
+    }
+    Some(format!(
+        "待办里还有 {} 项没完成：{}",
+        open.len(),
+        listed.join("；")
+    ))
+}
 
 /// Take only the most recent N turns, plus a rolling summary.
 ///
 /// Without a sliding window, a long session stuffs the entire history into the prompt every turn until
 /// the context explodes; with only a sliding window, the squeezed-out part equals amnesia. So: the squeezed-out
+/// What one turn's history (and its compaction) looked like — the numbers `traces/*.jsonl` wants.
+///
+/// All of them are "before/after" in **turns**, not tokens: what compaction actually decides is
+/// how many turns survive, and the token estimate that drove that decision is already recorded
+/// on the result (`estimatedInputTokens` / `observedInputTokens`).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct HistoryStats {
+    pub(crate) turns_total: usize,
+    pub(crate) turns_kept: usize,
+    pub(crate) compacted: bool,
+}
+
+/// The result of loading history: what goes into the prompt, the summary, and what it cost.
+pub(crate) struct Loaded {
+    pub(crate) messages: Vec<Message>,
+    pub(crate) summary: Option<String>,
+    pub(crate) stats: HistoryStats,
+}
+
+impl Loaded {
+    /// No history (first turn / resume / compaction failed). Stats are zero, which is honest.
+    fn empty() -> Self {
+        Self {
+            messages: Vec::new(),
+            summary: None,
+            stats: HistoryStats::default(),
+        }
+    }
+}
+
 /// old turns are handed to `compaction`, folded into one summary (fail-open; worst case a truncated excerpt),
 /// stored with the session, and spliced into the system prompt every turn. Returns `(working memory, summary)`.
 /// `token_budget` is the approximate token count this turn **may spend on history**; `window_override`
@@ -2709,7 +3050,7 @@ async fn load_history(
     token_budget: usize,
     window_override: Option<usize>,
     hooks: &Option<Arc<joyczl_tools::hooks::Hooks>>,
-) -> (Vec<Message>, Option<String>) {
+) -> Loaded {
     let pairs = chat.session_history(session_id).await.unwrap_or_default();
     let ceiling = history_turns.max(0) as usize;
     // The turn count is the ceiling; tokens are the gate.
@@ -2777,19 +3118,67 @@ async fn load_history(
             ]
         })
         .collect();
-    (messages, summary)
+    Loaded {
+        messages,
+        summary,
+        stats: HistoryStats {
+            turns_total: pairs.len(),
+            turns_kept: window,
+            compacted: will_compact,
+        },
+    }
 }
 
-fn fold_tool_activity(reply: &str, calls: &[joyczl_loop::ToolOutcome]) -> String {
+/// Fold what the tools did into the assistant text that gets written to `chat_log`.
+///
+/// This is the **only** trace of a tool call that survives into the next turn's history (the
+/// conversation is text-level; tool_use/tool_result blocks are rebuilt per turn). So the line
+/// has to carry three things: what ran, how much came back, and — when the output was spilled
+/// to disk — **where to read it again**. Without the address a long task re-reads the same
+/// files every turn, because the model can see it learned something but not what.
+pub(crate) fn fold_tool_activity(reply: &str, calls: &[joyczl_loop::ToolOutcome]) -> String {
     if calls.is_empty() {
         return reply.to_string();
     }
-    let summary = calls
-        .iter()
-        .map(|c| format!("{}({})", c.name, truncate(&c.output, 200)))
-        .collect::<Vec<_>>()
-        .join("; ");
+    let summary = calls.iter().map(fold_one).collect::<Vec<_>>().join("; ");
     format!("{reply}\n[tools used: {summary}]")
+}
+
+/// One call, one line: `name(1.2k 字, 全量在 spill/20261112/exec-….txt: 第一行…)`.
+fn fold_one(call: &joyczl_loop::ToolOutcome) -> String {
+    let chars = call.output.chars().count();
+    let first = call.output.lines().next().unwrap_or("").trim();
+    let head = truncate(first, 160);
+    match spill_address(&call.output) {
+        Some(address) => format!(
+            "{}({} 字, 全量在 {address}; 首行: {})",
+            call.name, chars, head
+        ),
+        None => format!("{}({} 字: {})", call.name, chars, head),
+    }
+}
+
+/// The spill address inside a tool result, if it carries one.
+///
+/// Parsed back out of the text instead of threaded through the loop: the text the model read
+/// is exactly the text folded here, so there is one source of truth and no second field to
+/// keep in sync (`joyczl_tools::spill` writes "...完整输出在 <path>）").
+fn spill_address(output: &str) -> Option<&str> {
+    const MARKERS: &[&str] = &["完整输出在 ", "全量输出在 ", "full output at "];
+    for marker in MARKERS {
+        let Some(start) = output.rfind(marker) else {
+            continue;
+        };
+        let rest = &output[start + marker.len()..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '）' || c == ')' || c == '，' || c == '。')
+            .unwrap_or(rest.len());
+        let address = rest[..end].trim();
+        if !address.is_empty() {
+            return Some(address);
+        }
+    }
+    None
 }
 
 fn truncate(text: &str, max: usize) -> String {

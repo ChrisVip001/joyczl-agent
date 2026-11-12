@@ -14,6 +14,7 @@
 //! — the same "ledger on disk" rule as trace/usage.
 
 pub mod judge;
+pub mod replay;
 pub mod report;
 pub mod scenario;
 
@@ -48,8 +49,16 @@ pub struct TurnOutput {
     pub gate: Option<String>,
     pub interrupted: bool,
     pub consolidation_new_facts: i32,
+    /// How many approval questions the case's turns asked in total (accumulated like `tools`).
+    pub approvals: usize,
     /// Raw output of each tool execution — for asserting "the tool really succeeded".
     pub tool_outputs: Vec<String>,
+    /// The wire events this run produced, in order (accumulated across turns).
+    ///
+    /// Two shapes are recorded on purpose: the plain name (`toolStarted`) and the qualified one
+    /// (`toolStarted:run_command`, `toolCompleted:run_command:error`). A case can then say "some
+    /// tool started" or "this tool failed" without a second assertion channel.
+    pub events: Vec<String>,
     /// Full text of each model request, in order — raw material for prompt assertions.
     pub prompts: Vec<String>,
     /// The task's final status, when the case created one (0.14).
@@ -113,6 +122,36 @@ fn score(expect: &Expectations, out: &TurnOutput) -> Verdict {
                 "consolidation 应提炼 {want} 条，实际 {} 条",
                 out.consolidation_new_facts
             ));
+        }
+    }
+    if let Some(want) = expect.approvals {
+        if out.approvals != want {
+            fails.push(format!("审批提问应为 {want} 次，实际 {} 次", out.approvals));
+        }
+    }
+    if !expect.events.is_empty() {
+        // Ordered subsequence: each expected item must appear after the previous match, but extra
+        // events in between are fine (a streamed turn emits many deltas; counting them is noise).
+        let mut cursor = 0usize;
+        for (index, want) in expect.events.iter().enumerate() {
+            let found = out.events[cursor..]
+                .iter()
+                .position(|actual| actual == want || actual.starts_with(&format!("{want}:")));
+            match found {
+                Some(offset) => cursor += offset + 1,
+                None => {
+                    fails.push(format!(
+                        "事件序列第 {} 个是 {want:?}，但第 {cursor} 个之后没再出现；实际：{}",
+                        index + 1,
+                        if out.events.is_empty() {
+                            "（一个事件都没有）".to_string()
+                        } else {
+                            out.events.join(" → ")
+                        }
+                    ));
+                    break;
+                }
+            }
         }
     }
     if let Some(want) = expect.interrupted {
@@ -247,6 +286,17 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         plan_enabled: scenario.settings.plan_enabled.unwrap_or(false),
         hooks_enabled: scenario.settings.hooks_enabled.unwrap_or(false),
         exec_allow: scenario.settings.exec_allow.clone().unwrap_or_default(),
+        // `never` is the honest default: the eval cases that need a human write it explicitly.
+        approval: scenario
+            .settings
+            .approval
+            .clone()
+            .unwrap_or_else(|| "never".to_string()),
+        approval_timeout_secs: scenario.settings.approval_timeout_secs.unwrap_or(120),
+        // A case is a script: continuing past its end would ask the mock for replies it never
+        // scripted. Only the cases that *assert* a continuation turn it on.
+        auto_continue_max: scenario.settings.auto_continue_max.unwrap_or(0),
+        turn_step_slice: scenario.settings.turn_step_slice.unwrap_or(12),
         tool_result_total_chars: scenario.settings.tool_result_total_chars.unwrap_or(200_000),
         tool_result_max_chars: scenario.settings.tool_result_max_chars.unwrap_or(30_000),
         tool_result_keep_recent: scenario.settings.tool_result_keep_recent.unwrap_or(3),
@@ -346,9 +396,13 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                 continue;
             };
             match notification {
-                ServerNotification::TurnStarted(started) => turn_id = started.turn_id.clone(),
+                ServerNotification::TurnStarted(started) => {
+                    turn_id = started.turn_id.clone();
+                    output.events.push("turnStarted".to_string());
+                }
                 ServerNotification::TextDelta(_) => {
                     deltas += 1;
+                    output.events.push("textDelta".to_string());
 
                     // Flip the token exactly at the Nth increment (is_some_and fires once).
                     if turn.interrupt_after_deltas.is_some_and(|n| deltas == n)
@@ -359,11 +413,60 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                 }
                 ServerNotification::ConsolidationCompleted(done) => {
                     output.consolidation_new_facts += done.new_facts;
+                    output.events.push("consolidationCompleted".to_string());
+                }
+                ServerNotification::ToolStarted(started) => {
+                    output.events.push("toolStarted".to_string());
+                    output.events.push(format!("toolStarted:{}", started.tool));
+                }
+                ServerNotification::ToolDelta(delta) => {
+                    // One entry per chunk would drown the sequence; the sequence only needs to know
+                    // "output arrived before the result did", which is the whole point of P0-3.
+                    if output.events.last().map(String::as_str) != Some("toolDelta") {
+                        output.events.push("toolDelta".to_string());
+                    }
+                    let _ = delta;
                 }
                 ServerNotification::ToolCompleted(done) => {
                     output.tool_outputs.push(done.output.clone());
+                    output.events.push("toolCompleted".to_string());
+                    let status = match done.status {
+                        joyczl_protocol::ToolStatus::Ok => "ok",
+                        joyczl_protocol::ToolStatus::Error => "error",
+                    };
+                    output
+                        .events
+                        .push(format!("toolCompleted:{}:{status}", done.tool));
+                }
+                ServerNotification::ApprovalRequested(ask) => {
+                    output.approvals += 1;
+                    output.events.push("approvalRequested".to_string());
+                    // `silence` answers nothing at all: the server's own timeout has to turn that
+                    // into a refusal, and the case then asserts the turn finished.
+                    if let Some(script) = &turn.approval {
+                        match script.answer.as_str() {
+                            "yes" | "no" => {
+                                let remember = match script.remember.as_deref() {
+                                    Some("session") => joyczl_protocol::RememberScope::Session,
+                                    Some("always") => joyczl_protocol::RememberScope::Always,
+                                    _ => joyczl_protocol::RememberScope::Once,
+                                };
+                                let approved = script.answer == "yes";
+                                if !server.answer_approval(
+                                    &ask.turn_id,
+                                    &ask.request_id,
+                                    approved,
+                                    remember,
+                                ) {
+                                    eprintln!("(joy) eval：这个问题已经过期了（不再等答案）");
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 ServerNotification::TurnCompleted(done) => {
+                    output.events.push("turnCompleted".to_string());
                     output.reply = done.reply;
                     output.iterations = done.iterations;
                     output.interrupted = done.meta.interrupted;
@@ -516,7 +619,37 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
     if scenarios.is_empty() {
         anyhow::bail!("没有加载到任何确定性用例 —— 检查路径（evals/deterministic/）");
     }
+    // The label stays byte-identical to what it has always been: other tooling greps this line.
+    run_suite(scenarios, report_home, "确定性 eval", "deterministic").await
+}
 
+/// Replay evals: recordings whose contract is the **event sequence**.
+///
+/// Same runner, same assertions, different loader — a replay case is a `Scenario` by the time it
+/// gets here (see `replay::ReplayCase::into_scenario`). What replay adds on top: the loader refuses
+/// a case that declares no events, so "a replay that asserts nothing" cannot pass silently.
+pub async fn run_replay(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
+    let cases = replay::load_all(paths)?;
+    if cases.is_empty() {
+        anyhow::bail!("没有加载到任何回放用例 —— 检查路径（evals/replay/）");
+    }
+    let scenarios: Vec<scenario::Scenario> = cases
+        .into_iter()
+        .map(replay::ReplayCase::into_scenario)
+        .collect();
+    run_suite(scenarios, report_home, "回放评测", "replay").await
+}
+
+/// The one loop both suites share: temp home per case → run → score → print → report.
+///
+/// Extracted when replay arrived, for the reason that always applies to a second copy: the two
+/// suites must fail the same way, print the same shapes, and write the same report schema.
+async fn run_suite(
+    scenarios: Vec<scenario::Scenario>,
+    report_home: &Path,
+    label: &str,
+    report_kind: &str,
+) -> Result<i32> {
     let mut tempdirs = Vec::new();
     let mut passed = 0usize;
     let mut skipped = 0usize;
@@ -564,7 +697,7 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
 
     let failed = scenarios.len() - passed - skipped;
     println!(
-        "确定性 eval：{} 通过 / {} 失败 / {} 跳过 / 共 {}",
+        "{label}：{} 通过 / {} 失败 / {} 跳过 / 共 {}",
         passed,
         failed,
         skipped,
@@ -572,7 +705,7 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
     );
     report::write(
         report_home,
-        "deterministic",
+        report_kind,
         serde_json::json!({
             "passed": passed, "failed": failed, "skipped": skipped,
             "total": scenarios.len(), "cases": results,

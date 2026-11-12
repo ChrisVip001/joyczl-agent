@@ -50,6 +50,8 @@ pub mod methods {
     /// Rename a session or rebind its working directory (`""` clears). **Human-only** —
     /// the model has no path here, exactly like `task/*`.
     pub const SESSION_UPDATE: &str = "session/update";
+    /// Copy the last few exchanges of a session into a new one ("try another path").
+    pub const SESSION_FORK: &str = "session/fork";
     /// Which turns are running right now, optionally narrowed to one session. The dashboard's
     /// "正在跑第几轮" and the CLI's "what is happening" both read from here.
     pub const TURN_LIST: &str = "turn/list";
@@ -200,6 +202,24 @@ pub struct ApprovalRequestedNotification {
     pub expires_in_ms: i32,
 }
 
+/// How long an approval answer lasts.
+///
+/// The distinction exists because "yes" is three different promises: *this time*, *until the
+/// process exits*, and *until revoked*. Conflating them either nags the human on every call or
+/// silently writes a standing rule they did not ask for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase", export_to = "v2/")]
+pub enum RememberScope {
+    /// Just this once (the default): the next identical action asks again.
+    #[default]
+    Once,
+    /// Until this process exits: kept in memory, never written to disk.
+    Session,
+    /// Until revoked: written into `<home>/settings.json` (`execAllow` / `writeAllowDirs`).
+    Always,
+}
+
 /// Parameters for `approval/respond`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -208,10 +228,18 @@ pub struct ApprovalRespondParams {
     pub turn_id: String,
     pub request_id: String,
     pub approved: bool,
-    /// Remember this decision: write the command itself into the allowlist in
-    /// `<home>/settings.json` (no wildcards — the user approved this command, not this kind).
-    #[serde(default)]
-    pub remember: bool,
+    /// How long the yes lasts: `once`, `session` (memory only), `always` (settings.json).
+    ///
+    /// **Required**, deliberately: no implicit default, so a client cannot forget to say how long
+    /// a yes lasts and get `once` by accident. (It also keeps the generated Python model honest —
+    /// an enum default comes out of `datamodel-codegen` as a bare string, a type error the SDK
+    /// would then have to live with.)
+    ///
+    /// What gets remembered is decided by the asking tool and named on the card: for
+    /// `run_command` it is the command itself (no wildcards — the human approved this line, not
+    /// this kind), for `write_file`/`edit` it is the **directory** (never the file name).
+    /// A remembered rule still meets hard-deny, the sandbox and the writable boundary.
+    pub remember: RememberScope,
 }
 
 // ===========================================================================
@@ -702,6 +730,11 @@ pub struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cwd: Option<String>,
+    /// The session this one was forked from. Display only: the two are independent — deleting
+    /// one must not affect the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub forked_from: Option<String>,
 }
 
 /// A message's role. A **closed set** — deliberately no "unknown" escape hatch.
@@ -791,10 +824,19 @@ pub struct SettingsPatch {
     /// Whole-table replacement of the allowlist (`JOY_EXEC_ALLOW`) — what "remember this command" writes.
     #[ts(optional = nullable)]
     pub exec_allow: Option<Vec<String>>,
+    /// Whole-table replacement of the directories "remember this" accepted for **writes**
+    /// (`write_file`/`edit` no longer ask inside them). Remembering a directory never widens the
+    /// writable boundary — the containment check still runs first.
+    #[ts(optional = nullable)]
+    pub write_allow_dirs: Option<Vec<String>>,
 }
 
 impl SettingsPatch {
     /// Not a single field to change.
+    ///
+    /// Every field counts — an `exec_allow`-only patch that reported "empty" would make
+    /// `save_patch` delete `settings.json`, i.e. throw away the very rule that was just
+    /// remembered.
     pub fn is_empty(&self) -> bool {
         let p = self;
         p.max_iterations.is_none()
@@ -803,6 +845,8 @@ impl SettingsPatch {
             && p.consolidate_every.is_none()
             && p.retrieval_top_k.is_none()
             && p.graph_workflows.is_none()
+            && p.exec_allow.is_none()
+            && p.write_allow_dirs.is_none()
     }
 
     /// Overwrite self with the non-null fields of `newer` — for accumulating patches:
@@ -829,6 +873,9 @@ impl SettingsPatch {
         }
         if p.exec_allow.is_some() {
             self.exec_allow = p.exec_allow.clone();
+        }
+        if p.write_allow_dirs.is_some() {
+            self.write_allow_dirs = p.write_allow_dirs.clone();
         }
     }
 }
@@ -1036,6 +1083,35 @@ pub struct SessionUpdateParams {
 #[ts(export_to = "v2/")]
 pub struct SessionUpdateResponse {
     pub session: SessionSummary,
+}
+
+/// Fork a session: a new one starts from a copy of the last few exchanges.
+///
+/// The original keeps running untouched — this is "try another path", not "rewrite history".
+/// Only the conversation is copied: tasks, checkpoints and the compaction summary stay with
+/// the source (a copied summary would describe text the branch never had).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionForkParams {
+    pub session_id: String,
+    /// How many exchanges (user+assistant pairs) to copy. Absent = the server's default.
+    #[ts(optional = nullable)]
+    pub turns: Option<u32>,
+    /// The new session's id. Absent = the server picks one.
+    #[ts(optional = nullable)]
+    pub new_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SessionForkResponse {
+    pub session: SessionSummary,
+    /// How many messages moved into the branch (0 = the source had nothing said in it yet).
+    pub copied: i32,
 }
 
 /// One turn that is running **right now** (in memory — a finished turn is simply gone).
@@ -1651,10 +1727,28 @@ pub struct GateDecidedNotification {
 #[ts(export_to = "v2/")]
 pub struct ToolStartedNotification {
     pub turn_id: String,
+    /// The id the model minted for this call — the same id its result comes back under.
+    /// Clients key on it: several read-only calls can be in flight at once.
+    pub tool_use_id: String,
     pub tool: String,
     /// The model-supplied arguments; structure depends on the tool.
     #[ts(type = "unknown")]
     pub args: serde_json::Value,
+}
+
+/// Live output from a tool that is **still running** (a long command's stdout).
+///
+/// Progress only: the `toolCompleted` that follows carries the real result, and that is what
+/// the model reads. A client that ignores this event loses liveness, not correctness.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ToolDeltaNotification {
+    pub turn_id: String,
+    pub tool_use_id: String,
+    /// A chunk of output, as it arrived. Chunk boundaries are not meaningful.
+    pub chunk: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
@@ -1663,6 +1757,8 @@ pub struct ToolStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct ToolCompletedNotification {
     pub turn_id: String,
+    /// Same id as the matching `toolStarted`, so a client can settle the right row.
+    pub tool_use_id: String,
     pub tool: String,
     /// The text the tool returned to the model. Failure details live here too — the turn is not aborted.
     pub output: String,
@@ -1766,6 +1862,8 @@ pub enum ServerNotification {
     ApprovalRequested(ApprovalRequestedNotification),
     GoalRound(GoalRoundNotification),
     ToolStarted(ToolStartedNotification),
+    /// A chunk of live output from a running tool. Progress, not a result.
+    ToolDelta(ToolDeltaNotification),
     ToolCompleted(ToolCompletedNotification),
     ConsolidationCompleted(ConsolidationCompletedNotification),
     GraphStarted(GraphStartedNotification),

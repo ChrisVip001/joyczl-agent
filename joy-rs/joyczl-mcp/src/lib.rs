@@ -103,8 +103,19 @@ impl Breaker {
 pub struct Connection {
     name: String,
     transport: Mutex<Transport>,
+    /// How to build a **new** transport when the old one dies. `None` = the connection was handed
+    /// in already built (tests); there is nothing to rebuild from.
+    spec: Option<TransportSpec>,
     breaker: Mutex<Breaker>,
     policy: BreakerPolicy,
+}
+
+/// Why one attempt failed. **The difference decides whether a retry is allowed**: a dead pipe can
+/// be rebuilt and replayed, a timeout must not be (the server may still be working, and a tool
+/// with side effects would then run twice).
+enum Failure {
+    Transport(String),
+    Timeout,
 }
 
 impl Connection {
@@ -113,9 +124,37 @@ impl Connection {
         Self {
             name: name.to_string(),
             transport: Mutex::new(transport),
+            spec: None,
             breaker: Mutex::new(Breaker::default()),
             policy,
         }
+    }
+
+    /// Remember the config this connection came from, so a dead transport can be rebuilt.
+    pub fn with_spec(mut self, spec: TransportSpec) -> Self {
+        self.spec = Some(spec);
+        self
+    }
+
+    /// One try on the current transport.
+    async fn attempt(&self, tool: &str, args: &Value) -> Result<String, Failure> {
+        let mut transport = self.transport.lock().await;
+        match tokio::time::timeout(TIMEOUT, transport.call_tool(tool, args.clone())).await {
+            Ok(Ok(text)) => Ok(text),
+            Ok(Err(error)) => Err(Failure::Transport(error)),
+            Err(_) => Err(Failure::Timeout),
+        }
+    }
+
+    /// Rebuild from the spec and handshake again (`initialize` + `notifications/initialized`).
+    async fn reconnect(&self) -> Result<(), String> {
+        let Some(spec) = &self.spec else {
+            return Err("这条连接没留下配置，重建不了（重启 Joy 会重新连）".to_string());
+        };
+        let mut fresh = Transport::connect(spec).await?;
+        fresh.initialize().await?;
+        *self.transport.lock().await = fresh;
+        Ok(())
     }
 
     /// Call a tool. **Never returns Err** — the failure text is for the model to read,
@@ -134,17 +173,31 @@ impl Connection {
             );
         }
 
-        let mut transport = self.transport.lock().await;
-        let outcome = tokio::time::timeout(TIMEOUT, transport.call_tool(tool, args)).await;
-        drop(transport);
+        let mut outcome = self.attempt(tool, &args).await;
+        if let Err(Failure::Transport(first)) = &outcome {
+            // The pipe died (the child exited, the HTTP session expired). Rebuild from the spec and
+            // replay once: at this point nothing has executed on the server, so retrying cannot
+            // double a side effect. Frequency is governed by the breaker below (3 strikes → 60s),
+            // which is also why there is no separate backoff clock here.
+            let first = first.clone();
+            match self.reconnect().await {
+                Ok(()) => {
+                    eprintln!("(joy) MCP 服务器 '{}' 断了，已重连并重试 {tool}", self.name);
+                    outcome = self.attempt(tool, &args).await;
+                }
+                Err(why) => {
+                    outcome = Err(Failure::Transport(format!("{first}；重连也没成：{why}")));
+                }
+            }
+        }
 
         let (ok, text) = match outcome {
-            Ok(Ok(text)) => (true, text),
-            Ok(Err(error)) => (
+            Ok(text) => (true, text),
+            Err(Failure::Transport(error)) => (
                 false,
                 format!("MCP 调用 {}_{tool} 失败：{error}", self.name),
             ),
-            Err(_) => (
+            Err(Failure::Timeout) => (
                 false,
                 format!(
                     "MCP 调用 {}_{tool} 失败：超过 {} 秒没有回话",
@@ -305,11 +358,11 @@ impl McpClient {
             return Err("一个工具都没报上来".to_string());
         }
         Ok((
-            Arc::new(Connection::with_policy(
-                name,
-                transport,
-                BreakerPolicy::default(),
-            )),
+            Arc::new(
+                Connection::with_policy(name, transport, BreakerPolicy::default())
+                    // Keep the config: a dead transport is rebuilt from it, not from a restart.
+                    .with_spec(target.clone()),
+            ),
             tools,
         ))
     }

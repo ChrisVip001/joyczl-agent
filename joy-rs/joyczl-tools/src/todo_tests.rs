@@ -28,6 +28,7 @@ async fn ctx(session: &str) -> super::ToolCtx {
         jobs: None,
         turn_limits: std::sync::Arc::new(crate::web::TurnLimits::default()),
         hooks: None,
+        on_delta: None,
     }
 }
 

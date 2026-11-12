@@ -202,6 +202,7 @@ async fn bind_web(home: &std::path::Path) -> WebScanFn {
         jobs: None,
         hooks: None,
         turn_limits: std::sync::Arc::new(joyczl_tools::web::TurnLimits::default()),
+        on_delta: None,
         session_id: "test".to_string(),
         facts: joyczl_state::Facts::new(pool.clone()),
         episodes: joyczl_state::Episodes::new(pool.clone()),

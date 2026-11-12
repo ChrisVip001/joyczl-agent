@@ -220,6 +220,9 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
             messages,
             completed_iterations: row.iterations,
             usage,
+            // A resume after a crash keeps the session cap: the human's `/resume` is not a
+            // step grant. (Continuations inside a turn pass their own slice.)
+            max_iterations: None,
         }),
         // Same outlet as a fresh turn: every further boundary is durable again.
         checkpoint: Some(crate::turn::checkpoint_outlet(
@@ -261,11 +264,16 @@ async fn resume_turn(server: &Server, sink: &EventSink, row: CheckpointRow) {
                     retries: 0,
                     goal_status: None,
                     goal_rounds: 0,
+                    // A resumed turn continues from the checkpoint: no history was loaded here.
+                    history: full.history,
                     started: std::time::Instant::now(),
                     run_id,
                     // A resumed turn decides nothing about acceptance: the next human turn
                     // measures again with fresh facts.
                     decision: None,
+                    // A resume is not a self-continuation: it is the human saying "go on".
+                    continues: 0,
+                    unfinished: None,
                 },
             )
             .await;

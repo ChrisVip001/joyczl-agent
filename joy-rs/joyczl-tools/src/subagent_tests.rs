@@ -13,6 +13,8 @@ struct Seen {
     task: String,
     max_iterations: Option<i32>,
     schema: Option<serde_json::Value>,
+    /// Whether this child was told "read only" (batch members are; single delegations are not).
+    readonly: bool,
 }
 
 /// A fake delegation: records the task received, returns a canned answer.
@@ -44,11 +46,13 @@ impl SubagentRunner for Fake {
         max_iterations: Option<i32>,
         result_schema: Option<serde_json::Value>,
         _parent_cwd: Option<std::path::PathBuf>,
+        readonly: bool,
     ) -> BoxFut {
         self.seen.lock().expect("锁").push(Seen {
             task,
             max_iterations,
             schema: result_schema,
+            readonly,
         });
         let answer = self.answer.clone();
         Box::pin(async move { answer.map_err(anyhow::Error::msg) })
@@ -76,6 +80,7 @@ async fn ctx() -> super::ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home,
+        on_delta: None,
     }
 }
 
@@ -164,4 +169,99 @@ async fn a_result_schema_is_passed_through_and_the_report_is_labelled() {
     );
     assert!(out.contains("转述"), "子代理的话必须标明是转述：{out}");
     assert!(out.contains("十点有会。"), "{out}");
+}
+
+// ---- Batch delegation ---------------------------------------------------------------------
+
+/// Echoes each task back, so "answer N belongs to question N" is checkable.
+struct Echo;
+
+impl SubagentRunner for Echo {
+    fn run(
+        &self,
+        task: String,
+        _max_iterations: Option<i32>,
+        _result_schema: Option<serde_json::Value>,
+        _parent_cwd: Option<std::path::PathBuf>,
+        _readonly: bool,
+    ) -> BoxFut {
+        Box::pin(async move { Ok(format!("结论：{task}")) })
+    }
+}
+
+#[tokio::test]
+async fn a_batch_runs_every_task_and_merges_in_the_order_asked() {
+    let mut reg = ToolRegistry::new();
+    reg.register(delegate_task(Arc::new(Echo)));
+    let out = reg
+        .execute(ctx().await, NAME, json!({"tasks": ["甲", "乙", "丙"]}))
+        .await;
+
+    for (index, task) in ["甲", "乙", "丙"].iter().enumerate() {
+        let header = format!("### 子任务 {}：{task}", index + 1);
+        assert!(out.contains(&header), "缺了 {header}：{out}");
+    }
+    // 顺序：结论跟着自己的标题，一问一答不会错位。
+    let first = out.find("### 子任务 1：甲").expect("第一段");
+    let second = out.find("### 子任务 2：乙").expect("第二段");
+    let third = out.find("### 子任务 3：丙").expect("第三段");
+    assert!(first < second && second < third, "顺序乱了：{out}");
+    assert!(out.contains("结论：甲"), "{out}");
+}
+
+#[tokio::test]
+async fn a_batch_beyond_the_cap_is_refused() {
+    let mut reg = ToolRegistry::new();
+    reg.register(delegate_task(Arc::new(Echo)));
+    let out = reg
+        .execute(
+            ctx().await,
+            NAME,
+            json!({"tasks": ["1", "2", "3", "4", "5"]}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    // 两道关：schema 的 maxItems 先拦（模型看得见），handler 里的 MAX_BATCH 兜底。
+    assert!(
+        out.contains("more than 4") || out.contains("最多派 4"),
+        "{out}"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_batch_is_refused() {
+    let mut reg = ToolRegistry::new();
+    reg.register(delegate_task(Arc::new(Echo)));
+    let out = reg.execute(ctx().await, NAME, json!({"tasks": []})).await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("空数组"), "{out}");
+}
+
+/// 单件委派拿全部工具（行为零变化）；批量委派必须显式告诉实现方「只读」。
+#[tokio::test]
+async fn only_a_batch_hands_the_child_a_readonly_table() {
+    let single = Fake::ok("结论");
+    let mut reg = ToolRegistry::new();
+    reg.register(delegate_task(single.clone()));
+    let _ = reg
+        .execute(ctx().await, NAME, json!({"task": "查一件事"}))
+        .await;
+    {
+        let seen = single.seen.lock().expect("锁");
+        assert_eq!(seen.len(), 1);
+        assert!(!seen[0].readonly, "单件委派不该被降级成只读");
+    }
+
+    let batch = Fake::ok("结论");
+    let mut reg = ToolRegistry::new();
+    reg.register(delegate_task(batch.clone()));
+    let _ = reg
+        .execute(ctx().await, NAME, json!({"tasks": ["甲", "乙"]}))
+        .await;
+    let seen = batch.seen.lock().expect("锁");
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen.iter().all(|call| call.readonly),
+        "批量的每个子代理都必须只读：多个循环同时在跑，写同一目录会互相覆盖"
+    );
 }

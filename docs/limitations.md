@@ -86,19 +86,25 @@ extraction use `run_command` + curl or an MCP fetching service.
 
 * **Deliberate** — Sandboxed commands run **offline** by default
   (`JOY_EXEC_NETWORK=1` to allow network); writes are confined to the working
-  directory, the Joy home and temp, plus anything listed in
-  `JOY_EXEC_WRITABLE_ROOTS`. Commands that need to download something need
-  both switches.
-  → `joy-rs/joyczl-tools/src/exec.rs` (`sandbox_argv`)
+  directory, temp, and anything listed in `JOY_EXEC_WRITABLE_ROOTS`. The Joy
+  home is **not** writable: it holds the control plane (`settings.json` is the
+  exec allow table, `hooks.json` decides what lifecycle hooks run), so a shell
+  that could write it could grant itself more than it had. Build caches
+  (`~/.cargo`) are why `JOY_EXEC_WRITABLE_ROOTS` exists; entries that are home,
+  an ancestor of home, or one of `HOME_CONTROL` are dropped even when listed.
+  Commands that need to download something need both switches.
+  → `joy-rs/joyczl-tools/src/roots.rs`, `exec.rs` (`sandbox_argv`)
 * **Deliberate** — The write tools (`write_file` / `edit`, `JOY_WRITE=1`) have
   **no process sandbox**: the write happens in-process, so the hard gate is the
-  writable roots (this turn's chosen workdir + `JOY_EXEC_WRITABLE_ROOTS`,
-  resolved through symlinks). **With no folder chosen nothing is writable**; the
-  Joy home and the process cwd are outside the boundary. Outside them is refused
-  before approval is consulted — approval only unlocks writes already inside it. `require_str` trims, so the
+  writable roots — the **same definition** the exec sandbox uses
+  (`joyczl-tools::roots`): this turn's chosen workdir + `JOY_EXEC_WRITABLE_ROOTS`,
+  resolved through symlinks. **With no folder chosen nothing is writable**; the
+  Joy home is outside the boundary unless it is the folder you picked. Outside
+  them is refused before approval is consulted — approval only unlocks writes
+  already inside it. `require_str` trims, so the
   write tools take content via a no-trim reader: a trailing newline is data,
   not noise.
-  → `joy-rs/joyczl-tools/src/fs_write.rs` (`contained`, `raw_str`)
+  → `joy-rs/joyczl-tools/src/roots.rs`, `fs_write.rs` (`contained`, `raw_str`)
 * **Deliberate** — Spilled command output is cleaned by **age only**
   (`spill/` keeps 7 days, pruned at startup), not by a size quota. A quota that
   guesses wrong either fills the disk or deletes something you wanted; a
@@ -114,15 +120,35 @@ extraction use `run_command` + curl or an MCP fetching service.
   exec but not for MCP, say) is not there because only exec has a gate to ask
   at — the config would be describing something that does not exist.
   → `joy-rs/joyczl-config/src/lib.rs` (`approval`)
-* **Deliberate** — "Remember this command" writes the command **exactly as
-  approved** (no wildcard) into `settings.json`, and takes effect on the next
-  start: the exec policy is read once at startup. Saying "remembered" and
-  silently widening the rule would be worse.
-  → `joy-rs/joyczl-app-server/src/lib.rs` (`remember_command`)
+* **Deliberate** — "Remember this" is three scopes, not one: `once` (nothing is
+  kept), `session` (an in-process cell, gone on restart), `always` (written into
+  `settings.json`). What gets recorded is **exactly what was approved** — the
+  command line, no wildcards; a write remembers its **directory**, never the file
+  name. A remembered rule is not a hole in a fence: hard-deny, the sandbox and the
+  writable boundary still run first.
+  → `joy-rs/joyczl-app-server/src/lib.rs` (`remember`, `persist_exec_allow`,
+  `persist_write_dir`)
+* **Deliberate** — `writeAllowDirs` (`JOY_WRITE_ALLOW_DIRS`) is a **"don't ask
+  again" list, not a writable root**: listing a directory there never lets a write
+  land outside the workspace or `JOY_EXEC_WRITABLE_ROOTS`. Widening the boundary
+  from an approval would make the boundary meaningless.
+  → `joy-rs/joyczl-tools/src/fs_write.rs` (`pass_write_gate`)
 * **Deliberate** — MCP reverse requests (elicitation/sampling) get an explicit
   "not supported" error instead of complete support. Answering them properly
   needs a UI contract for arbitrary server-authored questions.
   → `joy-rs/joyczl-mcp/src/transport.rs`
+* **Deliberate** — one MCP connection carries **one in-flight request at a time**
+  (the lock inside `Connection`). Letting them overlap by JSON-RPC id needs a reader
+  task plus a oneshot table, and buys "two calls to the *same* server overlap" —
+  on a single-user laptop the state machine costs more than the latency. Different
+  servers already run in parallel (one lock each).
+  → `joy-rs/joyczl-mcp/src/lib.rs` (`Connection::transport`)
+* **Deliberate** — `notifications/tools/list_changed` does **not** rebuild the tool
+  table: tools are registered into `ToolRegistry` at startup and every turn only
+  reads it. Already-registered tools keep working (the name is passed through to the
+  server); a **newly added** tool needs a restart. Doing it properly means a
+  session-level view over the registry — a different change.
+  → `joy-rs/joyczl-app-server/src/lib.rs` (`builtin_tools`)
 * **Deliberate** — Without a working sandbox, *nothing* runs. On Linux this
   means `bwrap` must both exist *and* be able to create a namespace: Ubuntu
   24.04 restricts unprivileged user namespaces, so availability is probed by
@@ -159,6 +185,27 @@ extraction use `run_command` + curl or an MCP fetching service.
   streamed; the parent sees one tool call and its conclusion. What it used
   (including failed calls) is appended to that conclusion.
   → `joy-rs/joyczl-app-server/src/subagent.rs`
+* **Deliberate** — A turn continues itself at most twice (`JOY_AUTO_CONTINUE_MAX`), not
+  forever. Codex, Claude Code and pi have no step cap at all and let the context window be the
+  brake; they run in the cloud where the user watches the spend. This runs on the user's own
+  machine. So the cap stays, but "steps ran out" stops being a cliff: when a turn is cut off while the
+  todo list still has open items it buys one more slice (`JOY_TURN_STEP_SLICE`), and when the
+  budget is really gone it says plainly what is left. Only at the cut-off — a turn that ends of
+  its own accord is not hijacked.
+  → `joy-rs/joyczl-app-server/src/turn.rs` (`unfinished_work`)
+* **Deliberate** — The completion gate reads **facts only** (open `pending` / `in_progress` todo
+  items), never asks the model "are you done?". Asking invites the answer that is exactly the
+  problem. The `/goal` judge is separate: it only runs when a human
+  set a goal.
+  → same file
+
+* **Deliberate** — Batched subagents (`tasks`, at most 4) are **read-only**: their
+  tool table carries no `run_command` / `write_file` / `edit` / `apply_patch`.
+  With four loops in flight the "one write at a time" barrier cannot reach them,
+  and two children writing one directory means the last writer wins silently.
+  Keep the writing half in the parent turn; single delegations still get the
+  full table.
+  → `joy-rs/joyczl-tools/src/lib.rs` (`ToolRegistry::readonly`)
 
 * **Deliberate** — Memory de-duplication keys on `(subject, normalised content)`
   (case and surrounding whitespace do not count) and **not** on `kind`: if the same

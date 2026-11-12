@@ -178,6 +178,9 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
 | `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | 0 – 50 |
+| `JOY_TURN_TOKEN_BUDGET` | 0 – 2000000 |
+| `JOY_AUTO_CONTINUE_MAX` | 0 – 5 |
+| `JOY_TURN_STEP_SLICE` | 1 – 60 |
 | `JOY_RESUME_MAX_AGE` | 0 – 10080 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
@@ -204,7 +207,7 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `JOY_MAX_ITERATIONS` | `32` | 单轮的步数预算。**最后一步是收尾轮**：工具被收起，模型只用三句话说「完成 / 卡住 / 需要什么」—— 这个数限定的是成本，不是把「没做成」变成一句道歉 |
+| `JOY_MAX_ITERATIONS` | `32` | 单轮的步数预算。**最后一步是收尾轮**：工具被收起，模型只用三句话说「完成 / 卡住 / 需要什么」—— 这个数限定的是成本，不是把「没做成」变成一句道歉。用完了不算断崖：待办还没做完就自动续一片（见 `JOY_AUTO_CONTINUE_MAX`） |
 | `JOY_MAX_TOKENS` | `8192` | 单次模型调用输出上限（给推理模型留思考余量） |
 | `JOY_HISTORY_TURNS` | `12` | 工作记忆滑窗的**上限**：只把最近 N 轮塞进 prompt（更老的折进滚动摘要，不是丢掉） |
 | `JOY_CONTEXT_WINDOW` | provider 默认 | 覆盖上下文窗口的估算值（本地模型窗口差异极大，表里只是常见默认） |
@@ -212,6 +215,9 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | 一轮里所有工具结果的字符总量上限；超了就从**最旧**的开始换成桩，最新的整条留着（`0` 关闭） |
 | `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | 单条结果超过它才有资格被换桩（`0` 关闭） |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | 最新的几条结果永不换桩（清理从最旧的开始） |
+| `JOY_TURN_TOKEN_BUDGET` | `0` | **一轮**的 token 花费上限（输入+输出，按 provider 报的数）。到 80% 就把工具收起、让模型三句话收尾 —— 和步数上限走同一条路，只是这次是钱包到了。`0` = 关（默认）：步数已经管住轮数，没人要的花费闸门不该掐断正事 |
+| `JOY_AUTO_CONTINUE_MAX` | `2` | 一轮最多**自己续几次**。两个来源共用这个额度：Stop 钩子要求继续，或者内建完成闸发现待办里还有 `pending` / `in_progress`。续跑会带上刚才的步骤与工具结果（不是从头再来），并用掉一片新预算。`0` = 关（跑完就收尾）—— 步数用完不再等于「断掉」 |
+| `JOY_TURN_STEP_SLICE` | `12` | 一次续跑买回的步数。**加片而不是抬高 `JOY_MAX_ITERATIONS`**：上限抬高了，跑飞的那一轮也更贵；而片只在真的需要时才花 |
 | `JOY_RESUME_MAX_AGE` | `60` | 分钟；比这更旧的 `open` checkpoint 在启动时标 `abandoned`，不自动续跑（`0` = 一律续跑） |
 | `JOY_CONSOLIDATE_EVERY` | `6` | 每 N 轮新对话触发一次 consolidation |
 | `JOY_RETRIEVAL_TOP_K` | `4` | 检索门放行时拉回的 facts 条数 |
@@ -349,6 +355,7 @@ HTTP 端点是 POST body。
 | `JOY_APPROVAL_TIMEOUT` | `120` | 等回答的秒数，超时按拒绝算 |
 | `JOY_EXEC_NETWORK` | `0` | 让沙箱内的命令能联网。**默认关** —— 一条被放行的命令不该有能力把数据送出去 |
 | `JOY_EXEC_WRITABLE_ROOTS` | — | 额外可写的目录（冒号分隔，必须是已存在的绝对路径），典型用途是构建缓存 |
+| `JOY_WRITE_ALLOW_DIRS` | — | 写文件**不再逐次确认**的目录（冒号分隔，绝对路径）。这是「别再问我」名单，**不是**可写根：边界外照样写不进去 |
 
 命令一律在沙箱里跑（macOS `sandbox-exec` / Linux `bubblewrap`），写权限限制在
 工作目录、Joy 的 home 与临时目录，并且**默认断网**（`JOY_EXEC_NETWORK=1`
@@ -363,8 +370,11 @@ HTTP 端点是 POST body。
 然后**等**。终端打 `y`/`a`/其他，驾驶舱渲染一条确认小条；两边都发
 `approval/respond`。沉默就是拒绝 —— 超时、答得太晚、没有界面，结局一样。
 
-`remember: true`（终端里的 `a`，或驾驶舱的「允许并记住」）会把**被批准的那条
-命令本身**（不加通配）追加进 `settings.json` 的放行表，**下次启动**生效。
+`remember` 决定这次「是」能管多久，三档：`once`（默认，只这次）、`session`
+（本进程记住，不落盘）、`always`（写进 `settings.json`）。终端里 `y` / `s` / `a`
+分别对应这三档，驾驶舱的卡片是「拒绝 / 只允许这次 / 本会话总是允许 / 记住这条」。
+记下的永远是**被批准的那条命令本身**（不加通配）或写文件时**那个目录**（不记文件
+名），并且**答完立刻生效** —— 不用重启进程。记住的规则不比硬拒、沙箱、可写边界大。
 
 ## 写文件（`JOY_WRITE`）
 
@@ -378,8 +388,10 @@ HTTP 端点是 POST body。
 Joy 的 home 和进程 cwd 都不在范围内 —— 有工作区的助手不应该顺手写进记忆或
 启动它的那个目录。范围外的写入在审批之前就被硬拒。内容必须是 UTF-8 文本
 （不含 NUL 字节）且不超过 1 MiB。驾驶舱里 `JOY_APPROVAL=on-request` 是默认值：
-**每次**写入都在对话窗口弹一张授权卡，允许 / 允许并记住 / 拒绝，没人答就超时
-按拒绝算 —— 配置面板被收掉了，审批留在人说得上话的地方。
+**每次**写入都在对话窗口弹一张授权卡：拒绝 / 只允许这次 / 本会话总是允许 /
+记住这条，没人答就超时按拒绝算。「本会话」只活在内存里，「记住这条」把**目录**
+写进 `settings.json`（`writeAllowDirs`），下次启动也不再问 —— 但边界外的路径
+照样写不进去，记住的是「别问我」，不是「放宽范围」。
 
 ## 任务执行计划（`JOY_PLAN`）
 
@@ -663,6 +675,10 @@ CLI 自己的惰性路径。
 `command` 走 stdio、`url` 走 Streamable HTTP。`auth_env` 放环境变量**名字**
 （值作 Bearer）；`oauth: true` 走浏览器授权（`joy mcp login <名>`），token
 落 `mcp-auth/<名>.json`（0600）。连不上的服务器跳过并警告，Joy 照常启动。
+
+连接中途断了（子进程退出、HTTP 会话过期）会**按原配置重连一次并重放这次调用**，
+不用重启 Joy；重连失败照常计入断路器（连续 3 次失败停 60 秒）。超时**不**重试：
+服务器可能还在干活，有副作用的工具不该因此跑两遍。
 
 驾驶舱的「能力中心」就管理这个文件：加一个连接器（一个名字 + 恰好一种
 传输）、按名字替换、或删掉。改动落进 `<home>/mcp.json`，**重启 Joy 后

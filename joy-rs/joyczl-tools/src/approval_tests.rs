@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::approval::{ApprovalBroker, ApprovalFut, ApprovalRequest};
+use super::approval::{ApprovalBroker, ApprovalFut, ApprovalRequest, RememberTarget};
 use super::exec::{execute, sandbox_available, vet, ExecPolicy, Gate};
 
 fn policy(allow: &[&str], approval: bool) -> ExecPolicy {
@@ -14,6 +14,8 @@ fn policy(allow: &[&str], approval: bool) -> ExecPolicy {
         approval_timeout_secs: 5,
         spill_dir: None,
         extra_roots: Vec::new(),
+        home: std::path::PathBuf::new(),
+        session_allow: Default::default(),
     }
 }
 
@@ -102,6 +104,7 @@ async fn approval_decides_whether_the_command_runs() {
         &policy(&["ls *"], true),
         &writable,
         Some(broker.as_ref()),
+        None,
     )
     .await;
     assert!(output.contains("approved-ok"), "批准了就该跑：{output}");
@@ -110,6 +113,11 @@ async fn approval_decides_whether_the_command_runs() {
         broker.seen.lock().expect("锁")[0].args_preview,
         "echo approved-ok"
     );
+    // "记住这条" must record exactly what the human read: the command, not its class.
+    assert_eq!(
+        broker.seen.lock().expect("锁")[0].remember,
+        Some(RememberTarget::Command("echo approved-ok".to_string()))
+    );
 
     let broker = Fake::answering(false);
     let output = execute(
@@ -117,11 +125,53 @@ async fn approval_decides_whether_the_command_runs() {
         &policy(&["ls *"], true),
         &writable,
         Some(broker.as_ref()),
+        None,
     )
     .await;
     assert!(output.starts_with("Error:"), "{output}");
     assert!(output.contains("没有被批准"), "{output}");
     assert!(!output.contains("nope"), "拒绝就是没跑：{output}");
+}
+
+/// "本会话总是允许" is a rule of its own: the same command stops being asked about, immediately.
+/// It does **not** lift the hard-deny list, and it does not touch the sandbox gate.
+#[test]
+fn a_session_approved_command_needs_no_second_question() {
+    let policy = policy(&["ls *"], true);
+    assert!(
+        matches!(vet("echo hi", &policy), Gate::NeedsApproval { .. }),
+        "起点：没匹配上放行表，问一句"
+    );
+
+    policy
+        .session_allow
+        .lock()
+        .expect("锁")
+        .push("echo hi".to_string());
+    let gate = vet("echo hi", &policy);
+    // The sandbox gate is still the last word (a machine without one refuses here).
+    if sandbox_available() {
+        assert_eq!(gate, Gate::Allow, "{gate:?}");
+    } else {
+        let Gate::Deny(why) = &gate else {
+            panic!("没有沙箱就该拒绝，实际 {gate:?}");
+        };
+        assert!(
+            why.contains("沙箱"),
+            "拒绝的理由必须是沙箱，而不是放行表：{why}"
+        );
+    }
+
+    // A remembered command is still matched against hard-deny first.
+    policy
+        .session_allow
+        .lock()
+        .expect("锁")
+        .push("sudo reboot".to_string());
+    assert!(
+        matches!(vet("sudo reboot", &policy), Gate::Deny(_)),
+        "记住一条命令也解放不了硬拒名单"
+    );
 }
 
 /// No approval channel (subagent, `JOY_APPROVAL=never`, library callers): **denied outright**,
@@ -136,6 +186,7 @@ async fn without_a_broker_it_refuses_and_says_why() {
         "echo hi",
         &policy(&["ls *"], true),
         &[dir.path().to_path_buf()],
+        None,
         None,
     )
     .await;

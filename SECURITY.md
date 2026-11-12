@@ -41,9 +41,12 @@ a structural guarantee, not a convention.
 2. **Allowlist** — `JOY_EXEC_ALLOW` must match, or nothing runs. An empty
    list denies everything; default-deny, never default-allow.
 3. **Sandbox** — commands run under macOS `sandbox-exec` / Linux
-   `bubblewrap` with write access confined to the working directory, the
-   Joy home and temp. **If no sandbox is available, the command is
-   refused** — Joy never runs a command unsandboxed "to make it work".
+   `bubblewrap` with write access confined to the working directory, temp,
+   and explicitly listed extra roots. The Joy home is **not** writable: it
+   holds the control plane (`settings.json` = the allow list above,
+   `hooks.json` = commands run on lifecycle events). **If no sandbox is
+   available, the command is refused** — Joy never runs a command
+   unsandboxed "to make it work".
 
 The sandbox also cuts the network: sandboxed commands run offline unless
 `JOY_EXEC_NETWORK=1` is set, and extra writable roots can be opened with

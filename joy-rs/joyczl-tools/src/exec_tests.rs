@@ -18,6 +18,8 @@ fn policy(allow: &[&str]) -> ExecPolicy {
         approval_timeout_secs: 120,
         spill_dir: None,
         extra_roots: Vec::new(),
+        home: std::path::PathBuf::new(),
+        session_allow: Default::default(),
     }
 }
 
@@ -101,6 +103,7 @@ async fn an_allowed_command_runs_and_reports_its_exit_code() {
         &policy(&["echo*"]),
         &[dir.path().to_path_buf()],
         None,
+        None,
     )
     .await;
     assert!(output.contains("hello-sandbox"), "{output}");
@@ -119,6 +122,7 @@ async fn the_sandbox_confines_writes_to_the_allowed_roots() {
         &policy(&["echo*"]),
         &[dir.path().to_path_buf()],
         None,
+        None,
     )
     .await;
     assert!(
@@ -135,6 +139,7 @@ async fn the_sandbox_confines_writes_to_the_allowed_roots() {
         &format!("echo leak > {}", outside.display()),
         &policy(&["echo*"]),
         &[dir.path().to_path_buf()],
+        None,
         None,
     )
     .await;
@@ -158,6 +163,7 @@ async fn a_refused_command_never_reaches_the_shell() {
         &format!("sudo echo hi > {}", probe.display()),
         &policy(&["*"]),
         &[dir.path().to_path_buf()],
+        None,
         None,
     )
     .await;
@@ -241,6 +247,7 @@ async fn an_extra_root_is_writable_inside_the_sandbox() {
         &settings,
         &[home.path().to_path_buf()],
         None,
+        None,
     )
     .await;
     assert!(
@@ -265,6 +272,7 @@ async fn an_over_long_output_is_spilled_and_the_path_reported() {
         "head -c 9000 /dev/zero | tr '\\0' x",
         &settings,
         &[home.path().to_path_buf()],
+        None,
         None,
     )
     .await;
@@ -310,6 +318,7 @@ async fn without_a_spill_directory_it_just_truncates() {
         "head -c 9000 /dev/zero | tr '\\0' x",
         &policy(&["head*"]),
         &[home.path().to_path_buf()],
+        None,
         None,
     )
     .await;

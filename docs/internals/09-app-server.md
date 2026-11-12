@@ -213,7 +213,7 @@ clone settings
 |---|---|---|
 | 22 | 前门 `graph_route`；返回 `None`（图关着/坏了）→ `full_turn` | 图只能省时间，不能减能力；`full_turn` 里先算**上下文预算**，溢出才触发「强制压缩 + 重试一次」 |
 | 23 | 失败 → `fail_turn`（checkpoint/task/run 台账诚实关闭）+ `StopFailure` 钩子 + 返回错误 | 烂尾的台账会骗过启动对账和任务卡 |
-| 24 | Stop 钩子循环（最多续 1 次，同一 run、step 序连续） | 「Stop 能拖住结尾」，但**不**用它造第二个循环——自动续轮属于目标循环 |
+| 24 | 自我续跑循环（`JOY_AUTO_CONTINUE_MAX`，默认 2；同一 run、step 序连续）：Stop 钩子要求继续，**或**该轮被步数上限截断且待办还有 `pending` / `in_progress` | 「Stop 能拖住结尾」不再只靠用户配钩子：待办是模型自己写下的「还剩什么」，用它当完成闸不花一次模型调用。闸**只在被截断时**开：模型自己说完的轮子（比如「计划如下」）不劫持 —— 那是做完了，接着做等于替人决定去执行。续跑**带上工作记忆**（`Resume` = 这一段的消息 + 已用步数 + 已花 token）并买一片新预算（`JOY_TURN_STEP_SLICE`）—— 「回一句 continue 却不带步骤」会让模型从第 1 步重做，这是 Codex 那篇循环文章点名的坑。带 `goal_condition` 的轮子不进来：目标循环是唯一的多轮驱动者 |
 | 25 | `observe` 每轮消息 → steps / artifacts / contradictions | 台账在轮次边界记，不在工具回调里记 |
 
 ### 决策循环：事实先于判断
@@ -235,6 +235,7 @@ clone settings
 | 33 | 任务台账按 `TaskDecision` 关闭（done / needs_attention / failed）+ 关 run + `taskUpdated` | needs_attention 是**非终态**：人还能继续或取消 |
 | 34 | `fold_tool_activity` 把「用过什么工具」折进回复文本 | 防「重复预订会议」这类复读 |
 | 35 | 组装 `TurnMeta`（gate/graph/iterations/usage/model/provider/latency/interrupted/guardHits/retries/routeReason/goalStatus/goalRounds） | meta 随对话落库，「你是什么模型」不会被自己答错 |
+| 35a | 续跑过的轮子把**前几段**的工具调用接回 `result.tool_calls` 前面（按请求序） | `toolCompleted` 通知在收尾时才按 `result.tool_calls` 发出；不接回去，客户端只会看到最后一段的调用，前面的结果永远不到 |
 | 36 | trace 与 usage 各写一行 | 观测不是可选项，但写失败只喊 stderr |
 | 37 | `chat_log` append（assistant 行带 meta） | |
 | 38 | `consolidate_if_due` → `ConsolidationCompleted`；`export_markdown` 刷 MEMORY.md 镜像 | 攒够了才提炼；「镜子」失败不让整轮报错 |
@@ -363,7 +364,7 @@ JSON。这条规矩在 `lib.rs`、`builtin_tools`、`exec`、`oauth` 等所有�
 
 | 函数 | 落点 |
 |---|---|
-| `record_turn(home, {ts, turnId, sessionId, userMessage, reply, meta})` | `home/traces/{Local 日期}.jsonl`（每轮一行） |
+| `record_turn(home, {ts, turnId, sessionId, userMessage, reply, meta, tools, retries, tokens, history, steps, continues, unfinished})` | `home/traces/{Local 日期}.jsonl`（每轮一行）。`meta` 之外另铺一把扁平字段，`jq` 不必记 `meta` 的形状：`tools[]`（`tool` / `callIndex` 请求序 / `durationMs` / `status`）、`retries`、`tokens`（`input` / `output` / `estimatedInput` / `observedInput` / `turnBudget`）、`history`（`turnsTotal` / `turnsKept` / `compacted` —— 压缩前后按**轮**计）、`steps`（本轮实走步数）、`continues`（自己续了几次）、`unfinished`（带着没做完的活停下时的原因，做完停下是 `null`） |
 | `record_usage(home, {ts, turnId, sessionId, provider, model, inputTokens, outputTokens, iterations, interrupted})` | `home/usage.jsonl`（append-only 账本） |
 
 `append_jsonl` 的失败策略：`create_dir_all` 失败或写失败都 `eprintln!` 后返回，
@@ -413,8 +414,8 @@ JSON。这条规矩在 `lib.rs`、`builtin_tools`、`exec`、`oauth` 等所有�
 
 ```
 stable = SOUL.md + 「你的模型是谁、跑在哪」      ← 同一会话里逐字节不变
-tail   = 时钟 · 能力缺口 · 待办 · 记忆命中 · 记忆库目录 · 技能目录 ·
-         技能正文（命中才载）· 滚动摘要
+tail   = 时钟 · 能力缺口 · 待办 · 项目约定（AGENTS.md 一类）· 记忆命中 ·
+         记忆库目录 · 技能目录 · 技能正文（命中才载）· 滚动摘要
 ```
 
 三条约束，各自都踩过：
@@ -427,6 +428,22 @@ tail   = 时钟 · 能力缺口 · 待办 · 记忆命中 · 记忆库目录 · 
   本仓库文档（见 05-loop 的护栏 2）。开关都开着时这段**完全不出现**。
 - **尾巴的顺序是有意的**：能力 → 待办 → 记忆 → 目录 → 摘要。先约束「能做什么」，再给
   「正在做什么」，最后才是背景知识。
+
+### 项目约定文件：`AGENTS.md` 自动进尾巴（`agents_md.rs`）
+
+从本轮 cwd 向上走到 **`.git` 所在目录**为止，沿途收集 `AGENTS.md`、`AGENTS.override.md`、
+`CLAUDE.md`，按「根 → cwd」拼接（外层先出现，越靠内层的约定越靠后、语气更近），
+总预算 32KB：超了**从最外层整份丢**，最内层允许截断。每份前面标来源路径，模型才能说清
+「这是三楼那个 `AGENTS.md` 说的」。没有 `.git` 时以 cwd 为根，读到的就是本级那一份。
+
+两个刻意的决定：
+
+- **只进 tail，不进 stable。** 它随工作目录变，塞进前缀会让同一会话的缓存前缀逐字节变化 ——
+  省下的那点注入成本，刚好被失效的缓存吃掉。
+- **没有文件时零开销。** 不产生空段落，也就不占一个 token；「没写约定」和「写了空约定」
+  在这里必须长得不一样。
+- **子代理不拿这份约定。** 它只做一件事、只交一个结论；仓库级规矩只会把 brief 搅浑
+  （`subagent.rs` 里 `instructions: None` 就是这个意思）。
 
 同一个函数产出六段计量（`memory_center::usage_of`）：
 

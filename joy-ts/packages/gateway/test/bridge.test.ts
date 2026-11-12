@@ -139,10 +139,11 @@ test("一轮：请求写对了，答复和遥测原样带回来", async () => {
   );
 
   server.notify(started("t1"));
-  server.notify({ type: "toolStarted", turnId: "t1", tool: "memory_search", args: {} });
+  server.notify({ type: "toolStarted", turnId: "t1", toolUseId: "tu-1", tool: "memory_search", args: {} });
   server.notify({
     type: "toolCompleted",
     turnId: "t1",
+    toolUseId: "tu-1",
     tool: "memory_search",
     output: "三条",
     status: "ok",
@@ -246,20 +247,22 @@ test("进度：工具开跑说一声，工具失败也值得说一声", async ()
   const promise = bridge.ask("telegram:42", "帮我查查");
   await tick();
   server.notify(started("t1"));
-  server.notify({ type: "toolStarted", turnId: "t1", tool: "read_file", args: {} });
+  server.notify({ type: "toolStarted", turnId: "t1", toolUseId: "tu-read_file", tool: "read_file", args: {} });
   server.notify({
     type: "toolCompleted",
     turnId: "t1",
+    toolUseId: "tu-read_file",
     tool: "read_file",
     output: "ENOENT",
     status: "error",
     durationMs: 1,
   });
   // Successful tools are normal, not worth interrupting the user; failures are — the next explanation follows.
-  server.notify({ type: "toolStarted", turnId: "t1", tool: "http_get", args: {} });
+  server.notify({ type: "toolStarted", turnId: "t1", toolUseId: "tu-http_get", tool: "http_get", args: {} });
   server.notify({
     type: "toolCompleted",
     turnId: "t1",
+    toolUseId: "tu-http_get",
     tool: "http_get",
     output: "200",
     status: "ok",

@@ -14,4 +14,9 @@ export type SessionSummary = {
    * writes outside it). Absent = not chosen; the dashboard shows "选择工作目录".
    */
   cwd?: string;
+  /**
+   * The session this one was forked from. Display only: the two are independent — deleting
+   * one must not affect the other.
+   */
+  forkedFrom?: string;
 };

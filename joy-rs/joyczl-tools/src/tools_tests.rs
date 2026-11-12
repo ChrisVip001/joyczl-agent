@@ -29,6 +29,7 @@ async fn ctx() -> ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home,
+        on_delta: None,
     }
 }
 
@@ -756,5 +757,105 @@ async fn a_bad_cron_comes_back_as_a_sentence() {
     assert!(
         !ctx.home.join("schedules.json").exists(),
         "被拒绝时不该留下文件"
+    );
+}
+
+// ---- 声明与实现不许漂 ---------------------------------------------------------------
+
+/// 每个工具的 `input_schema` 都得是一份**能读的**契约：有描述、type=object、
+/// required 里的每个名字都能在 properties 里找到、每个属性和顶层 type 都是合法的 JSON
+/// 类型名。模型看到的正是这份 schema，写错一个字，代价是一次「参数不合法」的空转。
+///
+/// 为什么不在这里把 handler 也跑一遍：这些工具会连网、起子进程、写磁盘；「空参数会
+/// 返回 Error 文本」由各工具自己的测试覆盖，混进这个遍历只会让一条断言变成一场副作用。
+#[test]
+fn every_builtin_tool_declares_a_schema_it_can_honour() {
+    const JSON_TYPES: &[&str] = &[
+        "object", "array", "string", "number", "integer", "boolean", "null",
+    ];
+    let registry = handlers::build_default();
+    let names = registry.names();
+    assert!(!names.is_empty(), "工具表不该是空的");
+
+    let mut seen = std::collections::BTreeSet::new();
+    for name in &names {
+        assert!(
+            seen.insert(name.to_string()),
+            "工具名重复了：{name} —— register 会静默覆盖"
+        );
+        let tool = registry.get(name).expect("names() 里的工具要能取到");
+        assert!(
+            tool.description.trim().len() > 4,
+            "{name} 的描述为空或太短 —— 模型就是靠这句话决定要不要用"
+        );
+        let schema = &tool.input_schema;
+        assert_eq!(
+            schema["type"], "object",
+            "{name} 的 schema 顶层必须是 type=object"
+        );
+        let properties = schema["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{name} 没有 properties"));
+        if let Some(required) = schema["required"].as_array() {
+            for field in required {
+                let field = field.as_str().expect("required 里要写字符串");
+                assert!(
+                    properties.contains_key(field),
+                    "{name} 的 required 里有 {field}，但 properties 里没有 —— 模型永远填不对"
+                );
+            }
+        }
+        let declared = schema["type"].as_str().expect("type 是字符串");
+        assert!(
+            JSON_TYPES.contains(&declared),
+            "{name} 的 type 是 {declared}"
+        );
+
+        for (field, spec) in properties {
+            let Some(kind) = spec["type"].as_str() else {
+                // `anyOf` 之类是合法的 JSON Schema；只要不是「什么都没有」就行。
+                assert!(
+                    !spec.is_null(),
+                    "{name}.{field} 没有任何类型信息，模型没法填"
+                );
+                continue;
+            };
+            assert!(
+                JSON_TYPES.contains(&kind),
+                "{name}.{field} 的类型是 {kind}，不是 JSON 类型名"
+            );
+        }
+    }
+}
+
+/// `readonly()` 只去掉独占型工具，其余原样留下（批量委派靠它把写/执行收起来）。
+#[tokio::test]
+async fn readonly_drops_the_exclusive_tools_and_nothing_else() {
+    let mut registry = handlers::build_default();
+    // 用一个假的独占工具代表 run_command / write_file：真正的那些由 app-server 注册。
+    let mut exclusive = crate::handlers::find_tools();
+    exclusive.name = "pretend_write".to_string();
+    registry.register_exclusive(exclusive);
+
+    let read_only = registry.readonly();
+    assert!(
+        read_only.get("pretend_write").is_none(),
+        "独占型工具必须被收走"
+    );
+    assert!(
+        !read_only.is_exclusive("pretend_write"),
+        "收走之后不能再被当成屏障"
+    );
+    assert!(
+        read_only.get("read_file").is_some() && read_only.get("list_dir").is_some(),
+        "只读工具一个都不能少"
+    );
+    assert!(
+        registry.get("pretend_write").is_some(),
+        "原表不能被改：readonly() 是拷贝"
+    );
+    assert!(
+        read_only.names().len() + 1 == registry.names().len(),
+        "差的恰好是那一个独占工具"
     );
 }

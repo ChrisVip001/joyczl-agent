@@ -12,9 +12,28 @@
 //!    the gates in `vet` return before approval ever runs; approval never touches them.
 //! 3. **Timeouts are the implementer's responsibility**. `request` must honor `timeout_secs`
 //!    itself and return `false` — a request that never returns hangs a conversation forever.
+//!
+//! The call site names **what** could be remembered ([`RememberTarget`]); how long a yes lasts
+//! (this once / this process / forever) is the answerer's decision, so it stays out of this layer.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
+
+/// What a "remember this" answer should write down.
+///
+/// Naming it here — rather than making the answerer parse the preview text — keeps "what the user
+/// approved is exactly what is remembered". Nothing in here can relax a hard gate: a remembered
+/// command still meets hard-deny and the sandbox, and a remembered directory still has to be inside
+/// the writable boundary (`contained` runs first).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RememberTarget {
+    /// An exact command line (`run_command`). No wildcards: what the human saw was this line.
+    Command(String),
+    /// A directory (write tools). The file name is deliberately **not** remembered — the human
+    /// approved "this folder", not "this one write".
+    Directory(PathBuf),
+}
 
 /// A single approval request.
 #[derive(Debug, Clone)]
@@ -27,6 +46,8 @@ pub struct ApprovalRequest {
     pub reason: String,
     /// Seconds to wait for a human answer. The implementer must give up after it and return `false`.
     pub timeout_secs: i64,
+    /// What "remember this" would record. `None` = nothing worth remembering (ask every time).
+    pub remember: Option<RememberTarget>,
 }
 
 pub type ApprovalFut = Pin<Box<dyn Future<Output = bool> + Send>>;

@@ -7,7 +7,7 @@
 `schedules.rs`、`calendar.rs`、`messages.rs`、`fs.rs`、`fs_write.rs`、`web.rs`、
 `exec.rs`、`jobs.rs`、`todo.rs`、`subagent.rs`）。
 
-## 6.0 清单：21 个常驻 + 7 个门控
+## 6.0 清单：21 个常驻 + 8 个门控
 
 先给数字，因为这一层最容易「文档说 22 个，代码里其实是 28 个」。
 
@@ -27,16 +27,16 @@
 | 待办 | `todo_write` | 整表替换，每轮重新注入 |
 | 定时 | `schedule_job` `list_schedules` `cancel_schedule` | 见 6.12 |
 
-**门控（7）** —— 开关一关，工具**不注册**，不是「注册了再拒」：
+**门控（8）** —— 开关一关，工具**不注册**，不是「注册了再拒」：
 
 | 工具 | 开关 | 缺了它意味着什么 |
 |---|---|---|
-| `write_file` `edit` | `JOY_WRITE=1` | 改不了任何文件 |
+| `write_file` `edit` `apply_patch` | `JOY_WRITE=1` | 改不了任何文件（`apply_patch` 是「一次改多处、全中才落盘」的那个） |
 | `run_command` | `JOY_EXEC=1` | 跑不了任何命令（包括 `df`、`sqlite3`） |
 | `job_output` `job_list` `job_kill` | `JOY_EXEC=1` | 后台作业无从查看 |
-| `delegate_task` | `JOY_DELEGATE=1` | 不能派子代理（派了也不能再派） |
+| `delegate_task` | `JOY_DELEGATE=1` | 不能派子代理（派了也不能再派；`tasks` 一次最多 4 件并发，**批量的子代理只读**） |
 
-全开 **28**。另有连接器工具（`feishu_send`、`email_send`）由 `joyczl-connector` 在配好凭据后
+全开 **29**。另有连接器工具（`feishu_send`、`email_send`）由 `joyczl-connector` 在配好凭据后
 追加 —— 它们是外挂，不算内置。
 
 数字本身不重要，**边界**才重要：模型能做什么，取决于这台机器被允许做什么。关掉 `JOY_EXEC`
@@ -158,6 +158,20 @@ handler 里那条兜底分支只在 schema 编译失败时才会走到）。
 
 子代理的工具表里把它也去掉了（除了 `delegate_task`）：子代理写清单会把父轮的
 计划表覆盖掉，而它本来也不该替父轮规划。
+
+### 批量子代理为什么只读（`subagent.rs`）
+
+`delegate_task` 的 `tasks: [...]` 一次最多派 4 件，它们**并发**跑在各自的 loop 里。
+父轮那套「独占工具形成屏障、同一时刻只有一个在写」的调度到不了这边：四个循环之间
+没有共享队列，两个同时写同一个目录就是「最后写的赢」，而且悄无声息。
+
+所以批量的子代理拿到的是 `ToolRegistry::readonly()` 收过的表 —— 所有独占型工具
+（`run_command` / `write_file` / `edit` / `apply_patch` / 再派子代理）**从表里消失**，
+不是「调了再拒」：模型看不到的东西不会去试。system 尾段也明说一遍，否则它会用掉五轮
+里的第一轮去撞墙。**单件委派不受影响**，仍拿父轮那张完整表。
+
+子代理的 session 名是 `subagent:{毫秒}-{序号}`：批量的四个可能在同毫秒 spawn，
+不加序号时 hook 事件与 spill 归属就分不清谁是谁 —— 恰恰是需要分辨的时候。
 
 ### 只读文件工具为什么**默认开**（`fs.rs`）
 

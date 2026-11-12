@@ -21,6 +21,8 @@ import type {
   SessionGetResponse,
   SessionNewParams,
   SessionNewResponse,
+  SessionForkParams,
+  SessionForkResponse,
   SessionUpdateParams,
   SessionUpdateResponse,
   TaskCreateParams,
@@ -213,6 +215,20 @@ export async function updateSession(params: SessionUpdateParams): Promise<Sessio
   });
   if (!response.ok) throw new ApiError(await errorOf(response));
   return (await response.json()) as SessionUpdateResponse;
+}
+
+/**
+ * Branch a conversation: the server copies the last few exchanges into a new session and the
+ * original keeps running untouched. Returns the new session so the caller can switch to it.
+ */
+export async function forkSession(params: SessionForkParams): Promise<SessionForkResponse> {
+  const response = await apiFetch("/api/session/fork", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) throw new ApiError(await errorOf(response));
+  return (await response.json()) as SessionForkResponse;
 }
 
 /**

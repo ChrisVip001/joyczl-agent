@@ -16,7 +16,8 @@ main() → match args().nth(1) {
     Some("gather")           → 晨报
     Some("schedule")         → 常驻调度
     Some("memory") / ("skill") / ("mcp") → 各自的子命令
-    Some("eval") / ("judge") → 评测（exit code 即结论）
+    Some("eval") / ("judge") → 评测（exit code 即结论）；eval 的 --replay
+                               切换成回放套件（默认路径 evals/replay）
     Some("--version"|"-V")   → "joy {CARGO_PKG_VERSION}"
     Some(other)              → bail（并打印 USAGE）
 }
@@ -72,7 +73,7 @@ while let Some(frame) = rx.recv().await { … }
 ```text
 …需要批准：echo approved-ok
   为什么问：没有匹配的放行规则。当前规则：ls *。…
-  批准执行？（y = 允许 / a = 允许并记住 / 其他 = 拒绝）:
+  批准执行？（y = 只这次 / s = 本会话总是允许 / a = 记住这条 / 其他 = 拒绝）:
 ```
 
 三个决定：

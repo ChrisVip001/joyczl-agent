@@ -45,7 +45,11 @@ ALWAYS_EXTRA = {"todo_write"}
 MIN_ALWAYS = 15
 MIN_GATED = 5
 
-GATED_RE = re.compile(r"tools\.register\(\s*joyczl_tools::(?:[a-z_]+::)?([a-z_0-9]+)\s*\(")
+# 门控工具用 `register_exclusive` 注册（写/执行/子智能体：它们必须独占运行），
+# 常驻的仍用 `register` —— 两种写法都要认。
+GATED_RE = re.compile(
+    r"tools\.register(?:_exclusive)?\(\s*joyczl_tools::(?:[a-z_]+::)?([a-z_0-9]+)\s*\("
+)
 HEADING_RE = re.compile(r"^## 6\.0 清单：(\d+) 个常驻 \+ (\d+) 个门控", re.M)
 
 # README 里的工具表：只认这一节。整份文件里搜名字是没用的 —— `read_skill` 还会出现在

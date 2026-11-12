@@ -235,6 +235,9 @@ points cannot disagree.
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
 | `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | 0 – 50 |
+| `JOY_TURN_TOKEN_BUDGET` | 0 – 2000000 |
+| `JOY_AUTO_CONTINUE_MAX` | 0 – 5 |
+| `JOY_TURN_STEP_SLICE` | 1 – 60 |
 | `JOY_RESUME_MAX_AGE` | 0 – 10080 |
 | `JOY_CONSOLIDATE_EVERY` | 1 – 1000 |
 | `JOY_RETRIEVAL_TOP_K` | 1 – 100 |
@@ -262,7 +265,9 @@ nothing", which is the default.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `JOY_MAX_ITERATIONS` | `32` | per-turn step budget. The **last** step is a wrap-up: the tools are taken away and the model is asked to say what it did, where it is stuck, and what it needs — the cap bounds cost, it does not turn success into an apology |
+| `JOY_AUTO_CONTINUE_MAX` | `2` | how many times one turn may **continue itself**. Two sources share the budget: the Stop hook demanding one more pass, and the built-in gate seeing `pending` / `in_progress` items in the model's own todo list. A continuation carries the steps and tool results so far (it does not restart) and spends one fresh slice. `0` = off — running out of steps stops being a cliff |
+| `JOY_TURN_STEP_SLICE` | `12` | steps bought by one continuation. **A slice rather than a higher `JOY_MAX_ITERATIONS`**: a bigger cap also makes a runaway turn more expensive, while a slice is only spent when it is asked for |
+| `JOY_MAX_ITERATIONS` | `32` | per-turn step budget. The **last** step is a wrap-up: the tools are taken away and the model is asked to say what it did, where it is stuck, and what it needs — the cap bounds cost, it does not turn success into an apology. Running out is not a cliff: if the todo list still has open items the turn continues itself (`JOY_AUTO_CONTINUE_MAX`) |
 | `JOY_MAX_TOKENS` | `8192` | per-call output cap (headroom for reasoning models) |
 | `JOY_HISTORY_TURNS` | `12` | working-memory window **ceiling**: only the last N turns enter the prompt (older turns are folded into a rolling summary, not dropped) |
 | `JOY_CONTEXT_WINDOW` | provider default | override the context-window estimate (local models differ wildly; the table holds common defaults) |
@@ -270,6 +275,7 @@ nothing", which is the default.
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | per-turn cap on the total size of tool results; over it the **oldest** results are replaced with stubs, newest kept whole (`0` disables) |
 | `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | a single result must exceed this to be stubbed (`0` disables) |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | how many of the newest results are never stubbed (trimming is oldest-first) |
+| `JOY_TURN_TOKEN_BUDGET` | `0` | per-**turn** token cap (input + output, as the provider reports it). At 80% the tools are taken away and the model wraps up — the same exit as the step cap, only this time the wallet ran out. `0` = off (default): the step cap already bounds rounds, and a cost gate nobody asked for cuts honest work short |
 | `JOY_RESUME_MAX_AGE` | `60` | minutes; an `open` turn checkpoint older than this is marked `abandoned` at startup instead of resumed (`0` = always resume) |
 | `JOY_CONSOLIDATE_EVERY` | `6` | run consolidation every N new turns |
 | `JOY_RETRIEVAL_TOP_K` | `4` | facts fetched when the gate opens |
@@ -411,6 +417,7 @@ and the context keeps the head and tail — **complete lines only** — plus
 | `JOY_APPROVAL_TIMEOUT` | `120` | seconds to wait for an answer before treating it as a refusal |
 | `JOY_EXEC_NETWORK` | `0` | let sandboxed commands reach the network. **Off by default** — an allowed command should not be able to send your data out |
 | `JOY_EXEC_WRITABLE_ROOTS` | — | extra writable directories (colon separated, must be existing absolute paths), e.g. a build cache |
+| `JOY_WRITE_ALLOW_DIRS` | — | directories whose writes need no confirmation (colon separated, absolute). A **"don't ask again" list, not a writable root**: outside the boundary nothing lands |
 
 Commands always run sandboxed (macOS `sandbox-exec` / Linux `bubblewrap`)
 with writes confined to the working directory, the Joy home and temp, and
@@ -428,9 +435,13 @@ itself, why it was not allowed, the deadline) and **waits**. The REPL prints
 `approval/respond`. Silence is a refusal — timeouts, a late answer and a
 missing UI all end the same way.
 
-`remember: true` (the `a` answer, or "允许并记住") appends the command — exactly
-as approved, no wildcard — to the exec allowlist in `settings.json`, which takes
-effect on the next start.
+`remember` says how long the yes lasts: `once` (default, this time only),
+`session` (kept in memory, gone on restart), `always` (written into
+`settings.json`). In the terminal `y`/`s`/`a` pick the three; the dashboard card
+offers "拒绝 / 只允许这次 / 本会话总是允许 / 记住这条". What is recorded is exactly
+what was approved — the command line, no wildcard; for a write, the **directory**
+(never the file name). It takes effect immediately, and it never outranks
+hard-deny, the sandbox, or the writable boundary.
 
 ## Writing files (`JOY_WRITE`)
 
@@ -771,6 +782,12 @@ environment variable **name** (its value is sent as Bearer); `oauth: true`
 uses browser authorization (`joy mcp login <name>`) with the token in
 `mcp-auth/<name>.json` (0600). Unreachable servers are skipped with a warning;
 Joy still starts.
+
+A connection that dies mid-flight (the child exited, the HTTP session expired)
+is **rebuilt from the same config and the call replayed once** — no restart
+needed. A failed rebuild counts against the breaker as usual (3 strikes → 60s).
+A **timeout is not retried**: the server may still be working, and a tool with
+side effects must not run twice.
 
 The dashboard's capability center manages this file: add a connector (one
 name plus exactly one transport), replace one by name, or delete one. Changes

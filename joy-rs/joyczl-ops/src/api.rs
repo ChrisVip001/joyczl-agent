@@ -23,13 +23,13 @@ use joyczl_protocol::{
     InboxSummarizeParams, InboxSummarizeResponse, MemoryListEpisodesResponse, MemoryListResponse,
     MessageRole, ModelProfilesResponse, ModelRemoveParams, ModelRemoveResponse,
     ModelRoutesResponse, ModelRoutesSaveParams, ModelSaveParams, ModelSaveResponse, RunResponse,
-    ScheduleListResponse, ServerNotification, SessionGetParams, SessionGetResponse,
-    SessionListResponse, SessionMessagesParams, SessionMessagesResponse, SessionNewParams,
-    SessionNewResponse, SessionUpdateParams, SessionUpdateResponse, TaskActionParams,
-    TaskArtifactsResponse, TaskCreateParams, TaskEnvelope, TaskListResponse, TaskViewResponse,
-    TodoListView, TurnFollowUpParams, TurnFollowUpResponse, TurnInterruptParams,
-    TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams, TurnStartResponse,
-    TurnSteerParams, TurnSteerResponse, UsageSummaryResponse,
+    ScheduleListResponse, ServerNotification, SessionForkParams, SessionForkResponse,
+    SessionGetParams, SessionGetResponse, SessionListResponse, SessionMessagesParams,
+    SessionMessagesResponse, SessionNewParams, SessionNewResponse, SessionUpdateParams,
+    SessionUpdateResponse, TaskActionParams, TaskArtifactsResponse, TaskCreateParams, TaskEnvelope,
+    TaskListResponse, TaskViewResponse, TodoListView, TurnFollowUpParams, TurnFollowUpResponse,
+    TurnInterruptParams, TurnInterruptResponse, TurnListParams, TurnListResponse, TurnStartParams,
+    TurnStartResponse, TurnSteerParams, TurnSteerResponse, UsageSummaryResponse,
 };
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -332,6 +332,22 @@ pub async fn session_update(
     let payload = serde_json::to_value(&params).expect("SessionUpdateParams 一定能序列化");
     match app
         .request::<SessionUpdateResponse>(methods::SESSION_UPDATE, payload)
+        .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}
+
+/// `POST /api/session/fork` — branch a conversation: copy the last few exchanges into a new
+/// session and leave the original running untouched.
+pub async fn session_fork(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(params): Json<SessionForkParams>,
+) -> Response {
+    let payload = serde_json::to_value(&params).expect("SessionForkParams 一定能序列化");
+    match app
+        .request::<SessionForkResponse>(methods::SESSION_FORK, payload)
         .await
     {
         Ok(response) => Json(response).into_response(),
@@ -1377,6 +1393,7 @@ fn turn_id_of(notification: &ServerNotification) -> Option<&str> {
         N::ApprovalRequested(n) => Some(&n.turn_id),
         N::GoalRound(n) => Some(&n.turn_id),
         N::ToolStarted(n) => Some(&n.turn_id),
+        N::ToolDelta(n) => Some(&n.turn_id),
         N::ToolCompleted(n) => Some(&n.turn_id),
         N::TurnCompleted(n) => Some(&n.turn_id),
         N::TurnCheckpointed(n) => Some(&n.turn_id),

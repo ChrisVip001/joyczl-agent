@@ -34,6 +34,13 @@ const DEFAULT_ITERATIONS: i32 = 5;
 const MAX_ITERATIONS: i32 = 10;
 /// The subagent's answer should not consume a whole turn's quota: it delivers conclusions.
 const SUBAGENT_MAX_TOKENS: i32 = 2048;
+/// A subagent is **hard-capped** on cost, independently of `JOY_TURN_TOKEN_BUDGET`: ten rounds of
+/// a big context would otherwise be someone's whole bill for a side question. Same exit as the
+/// parent's budget — tools away, one wrap-up answer.
+const SUBAGENT_TOKEN_BUDGET: Option<usize> = Some(120_000);
+
+/// Distinguishes subagents spawned within the same millisecond (a batch spawns up to four).
+static SUBAGENT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) struct Delegated {
     /// A copy of the parent turn's tool table (already without `delegate_task`).
@@ -80,6 +87,7 @@ async fn run_child(
         ctx,
         max_iterations,
         max_tokens: SUBAGENT_MAX_TOKENS,
+        token_budget: SUBAGENT_TOKEN_BUDGET,
         tool_result_budget: budget,
         observer: None,
         on_text: None,
@@ -110,6 +118,7 @@ impl SubagentRunner for Delegated {
         max_iterations: Option<i32>,
         result_schema: Option<serde_json::Value>,
         parent_cwd: Option<std::path::PathBuf>,
+        readonly: bool,
     ) -> BoxFut {
         let tools = self.tools.clone();
         let settings = self.settings.clone();
@@ -152,6 +161,9 @@ impl SubagentRunner for Delegated {
                 // The subagent has no todo list: that board belongs to the parent turn's task line, and it must not write it.
                 todo: None,
                 summary: None,
+                // No project instructions either: the subagent gets one task in and one
+                // conclusion out — repository-wide conventions would only blur its brief.
+                instructions: None,
                 // Same machine, same gaps: a subagent that does not know there is no shell
                 // burns its budget the same way the parent did.
                 capabilities: crate::turn::capability_note(&settings).as_deref(),
@@ -163,7 +175,16 @@ impl SubagentRunner for Delegated {
             let system = prompt.tail
                 + "\n\nYou are a subagent: do the one task below and answer with the \
                    conclusion only. Whoever asked cannot see your steps, and you cannot ask \
-                   follow-up questions.";
+                   follow-up questions."
+                // Say it before it tries: a child that discovers "no write tools" by calling one
+                // has burned a round of its five, and its conclusion becomes "I could not".
+                + if readonly {
+                    "\n\nYou can only READ in this task: writing files and running commands are \
+                     not available (several subagents are running at once). If the job needs a \
+                     change, say so in the conclusion instead of attempting it."
+                } else {
+                    ""
+                };
 
             // The tool table is the **parent turn's copy**, just without delegate_task — so recursive
             // delegation is not "denied", it is an option that does not exist at all.
@@ -173,16 +194,29 @@ impl SubagentRunner for Delegated {
             let child_tools = tools
                 .without(joyczl_tools::subagent::NAME)
                 .without("todo_write");
+            // A batch member runs **read-only**: four loops are in flight, so the parent's
+            // "one write at a time" barrier cannot reach any of them. Dropping the exclusive
+            // tools makes that a property of the table instead of a rule to remember.
+            let child_tools = if readonly {
+                child_tools.readonly()
+            } else {
+                child_tools
+            };
             // The subagent has **no approval channel** (`None`): it must not block on a human, so
             // actions requiring approval are treated as rejected outright — see limitations.md.
             //
             // Give it a session name of its own: logs and spill attribution can then trace "who made this".
+            //
+            // The counter is not decoration: a batch spawns up to four children in the same
+            // millisecond, and a shared name makes their hook events and spill files
+            // indistinguishable — which is exactly when you need to tell them apart.
             let child_session = format!(
-                "subagent:{}",
+                "subagent:{}-{}",
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis())
-                    .unwrap_or(0)
+                    .unwrap_or(0),
+                SUBAGENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             );
             let ctx = crate::tool_ctx(
                 &facts,
@@ -215,6 +249,8 @@ impl SubagentRunner for Delegated {
                     "session_id": child_session,
                     "task": task_preview,
                     "max_iterations": iterations,
+                    // A hook consumer can tell "this child could write" from "it could not".
+                    "readonly": readonly,
                 }),
             )
             .await;
@@ -243,6 +279,7 @@ impl SubagentRunner for Delegated {
                     "session_id": child_session,
                     "iterations": result.iterations,
                     "interrupted": result.interrupted,
+                    "readonly": readonly,
                 }),
             )
             .await;

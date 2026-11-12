@@ -35,6 +35,9 @@ pub struct SessionRow {
     /// The working directory this session works in: the root of what it may write. `None` = not
     /// chosen yet, which means write tools refuse every write (see `joyczl_tools::fs_write`).
     pub cwd: Option<String>,
+    /// The session this one was forked from, if any. Display only: there is no cascade in
+    /// either direction — deleting the parent must not take the branch with it.
+    pub forked_from: Option<String>,
 }
 
 #[derive(Clone)]
@@ -145,6 +148,54 @@ impl Chat {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Copy the last `turns` exchanges of `from` into a brand-new session `to`.
+    ///
+    /// This is "try another path without losing this one": the branch continues from a copy
+    /// while the original keeps going untouched. What is copied is deliberately narrow —
+    ///
+    /// * the metadata row: `cwd` is inherited (a branch works in the same folder; otherwise
+    ///   its writable boundary would silently change), the title gets a suffix;
+    /// * the last N **pairs** of `chat_log` rows — a turn is user+assistant, so copying by
+    ///   row count would cut a pair in half and leave an answer without its question;
+    /// * **not** the rollup (compaction summary): its watermark points at the source's
+    ///   `chat_log` ids, so a copied summary would describe text this session never had.
+    ///
+    /// Returns how many messages were copied. An unknown source is an error, not an empty
+    /// branch: a session that looks successful but has no context is worse than a refusal.
+    pub async fn fork_session(&self, from: &str, to: &str, turns: usize) -> Result<i64> {
+        let limit = turns.clamp(1, 200) as i64 * 2;
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT INTO sessions (id, title, cwd, forked_from)
+             SELECT ?, COALESCE(NULLIF(TRIM(title), '') || ' · 分支', '分支'), cwd, id
+               FROM sessions WHERE id = ?",
+        )
+        .bind(to)
+        .bind(from)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if inserted == 0 {
+            tx.rollback().await?;
+            anyhow::bail!("会话 {from} 不存在");
+        }
+        let copied = sqlx::query(
+            "INSERT INTO chat_log (session_id, role, content, source, created_at)
+             SELECT ?, role, content, source, created_at FROM (
+                 SELECT role, content, source, created_at, id FROM chat_log
+                  WHERE session_id = ? ORDER BY id DESC LIMIT ?
+             ) ORDER BY id",
+        )
+        .bind(to)
+        .bind(from)
+        .bind(limit)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as i64;
+        tx.commit().await?;
+        Ok(copied)
     }
 
     /// Rows pending distillation (in time order). Consolidation's input and threshold check.
@@ -463,7 +514,8 @@ const SESSION_COLUMNS: &str = "
            (SELECT COUNT(*) FROM chat_log c WHERE c.session_id = s.id) AS messages,
            (SELECT MIN(c.created_at) FROM chat_log c WHERE c.session_id = s.id) AS started_at,
            s.last_at AS last_at,
-           s.cwd AS cwd
+           s.cwd AS cwd,
+           s.forked_from AS forked_from
       FROM sessions s";
 
 #[derive(sqlx::FromRow)]
@@ -474,6 +526,7 @@ struct RawSession {
     started_at: Option<String>,
     last_at: Option<String>,
     cwd: Option<String>,
+    forked_from: Option<String>,
 }
 
 impl From<RawSession> for SessionRow {
@@ -485,6 +538,7 @@ impl From<RawSession> for SessionRow {
             started_at: row.started_at,
             last_at: row.last_at,
             cwd: row.cwd,
+            forked_from: row.forked_from,
         }
     }
 }

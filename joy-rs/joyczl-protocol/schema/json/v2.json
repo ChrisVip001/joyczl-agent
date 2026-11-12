@@ -278,9 +278,12 @@
           "type": "boolean"
         },
         "remember": {
-          "default": false,
-          "description": "Remember this decision: write the command itself into the allowlist in `<home>/settings.json` (no wildcards — the user approved this command, not this kind).",
-          "type": "boolean"
+          "allOf": [
+            {
+              "$ref": "#/definitions/RememberScope"
+            }
+          ],
+          "description": "How long the yes lasts: `once`, `session` (memory only), `always` (settings.json).\n\n**Required**, deliberately: no implicit default, so a client cannot forget to say how long a yes lasts and get `once` by accident. (It also keeps the generated Python model honest — an enum default comes out of `datamodel-codegen` as a bare string, a type error the SDK would then have to live with.)\n\nWhat gets remembered is decided by the asking tool and named on the card: for `run_command` it is the command itself (no wildcards — the human approved this line, not this kind), for `write_file`/`edit` it is the **directory** (never the file name). A remembered rule still meets hard-deny, the sandbox and the writable boundary."
         },
         "requestId": {
           "type": "string"
@@ -291,6 +294,7 @@
       },
       "required": [
         "approved",
+        "remember",
         "requestId",
         "turnId"
       ],
@@ -1985,6 +1989,33 @@
       "title": "ModelSaveResponse",
       "type": "object"
     },
+    "RememberScope": {
+      "description": "How long an approval answer lasts.\n\nThe distinction exists because \"yes\" is three different promises: *this time*, *until the process exits*, and *until revoked*. Conflating them either nags the human on every call or silently writes a standing rule they did not ask for.",
+      "oneOf": [
+        {
+          "description": "Just this once (the default): the next identical action asks again.",
+          "enum": [
+            "once"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Until this process exits: kept in memory, never written to disk.",
+          "enum": [
+            "session"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Until revoked: written into `<home>/settings.json` (`execAllow` / `writeAllowDirs`).",
+          "enum": [
+            "always"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "RememberScope"
+    },
     "RequestId": {
       "anyOf": [
         {
@@ -2385,6 +2416,10 @@
             "tool": {
               "type": "string"
             },
+            "toolUseId": {
+              "description": "The id the model minted for this call — the same id its result comes back under. Clients key on it: several read-only calls can be in flight at once.",
+              "type": "string"
+            },
             "turnId": {
               "type": "string"
             },
@@ -2398,6 +2433,35 @@
           "required": [
             "args",
             "tool",
+            "toolUseId",
+            "turnId",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A chunk of live output from a running tool. Progress, not a result.",
+          "properties": {
+            "chunk": {
+              "description": "A chunk of output, as it arrived. Chunk boundaries are not meaningful.",
+              "type": "string"
+            },
+            "toolUseId": {
+              "type": "string"
+            },
+            "turnId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "toolDelta"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "chunk",
+            "toolUseId",
             "turnId",
             "type"
           ],
@@ -2422,6 +2486,10 @@
             "tool": {
               "type": "string"
             },
+            "toolUseId": {
+              "description": "Same id as the matching `toolStarted`, so a client can settle the right row.",
+              "type": "string"
+            },
             "turnId": {
               "type": "string"
             },
@@ -2436,6 +2504,7 @@
             "output",
             "status",
             "tool",
+            "toolUseId",
             "turnId",
             "type"
           ],
@@ -2893,6 +2962,53 @@
       "title": "SessionCompactResponse",
       "type": "object"
     },
+    "SessionForkParams": {
+      "description": "Fork a session: a new one starts from a copy of the last few exchanges.\n\nThe original keeps running untouched — this is \"try another path\", not \"rewrite history\". Only the conversation is copied: tasks, checkpoints and the compaction summary stay with the source (a copied summary would describe text the branch never had).",
+      "properties": {
+        "newSessionId": {
+          "description": "The new session's id. Absent = the server picks one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turns": {
+          "description": "How many exchanges (user+assistant pairs) to copy. Absent = the server's default.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "SessionForkParams",
+      "type": "object"
+    },
+    "SessionForkResponse": {
+      "properties": {
+        "copied": {
+          "description": "How many messages moved into the branch (0 = the source had nothing said in it yet).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "session": {
+          "$ref": "#/definitions/SessionSummary"
+        }
+      },
+      "required": [
+        "copied",
+        "session"
+      ],
+      "title": "SessionForkResponse",
+      "type": "object"
+    },
     "SessionGetParams": {
       "description": "Read one session's record. Same shape as a list entry — one type, no second modeling.",
       "properties": {
@@ -3058,6 +3174,13 @@
             "null"
           ]
         },
+        "forkedFrom": {
+          "description": "The session this one was forked from. Display only: the two are independent — deleting one must not affect the other.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "type": "string"
         },
@@ -3192,6 +3315,16 @@
           "format": "int32",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "writeAllowDirs": {
+          "description": "Whole-table replacement of the directories \"remember this\" accepted for **writes** (`write_file`/`edit` no longer ask inside them). Remembering a directory never widens the writable boundary — the containment check still runs first.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -3672,6 +3805,10 @@
         "tool": {
           "type": "string"
         },
+        "toolUseId": {
+          "description": "Same id as the matching `toolStarted`, so a client can settle the right row.",
+          "type": "string"
+        },
         "turnId": {
           "type": "string"
         }
@@ -3680,9 +3817,32 @@
         "output",
         "status",
         "tool",
+        "toolUseId",
         "turnId"
       ],
       "title": "ToolCompletedNotification",
+      "type": "object"
+    },
+    "ToolDeltaNotification": {
+      "description": "Live output from a tool that is **still running** (a long command's stdout).\n\nProgress only: the `toolCompleted` that follows carries the real result, and that is what the model reads. A client that ignores this event loses liveness, not correctness.",
+      "properties": {
+        "chunk": {
+          "description": "A chunk of output, as it arrived. Chunk boundaries are not meaningful.",
+          "type": "string"
+        },
+        "toolUseId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "chunk",
+        "toolUseId",
+        "turnId"
+      ],
+      "title": "ToolDeltaNotification",
       "type": "object"
     },
     "ToolStartedNotification": {
@@ -3693,6 +3853,10 @@
         "tool": {
           "type": "string"
         },
+        "toolUseId": {
+          "description": "The id the model minted for this call — the same id its result comes back under. Clients key on it: several read-only calls can be in flight at once.",
+          "type": "string"
+        },
         "turnId": {
           "type": "string"
         }
@@ -3700,6 +3864,7 @@
       "required": [
         "args",
         "tool",
+        "toolUseId",
         "turnId"
       ],
       "title": "ToolStartedNotification",

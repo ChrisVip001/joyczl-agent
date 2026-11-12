@@ -14,4 +14,10 @@ export type SettingsPatch = {
    * Whole-table replacement of the allowlist (`JOY_EXEC_ALLOW`) — what "remember this command" writes.
    */
   execAllow?: Array<string> | null;
+  /**
+   * Whole-table replacement of the directories "remember this" accepted for **writes**
+   * (`write_file`/`edit` no longer ask inside them). Remembering a directory never widens the
+   * writable boundary — the containment check still runs first.
+   */
+  writeAllowDirs?: Array<string> | null;
 };

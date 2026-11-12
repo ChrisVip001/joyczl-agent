@@ -79,6 +79,20 @@ pub struct ScenarioTask {
     pub max_rounds: Option<i32>,
 }
 
+/// How the harness answers one approval question (`JOY_APPROVAL=on-request`).
+///
+/// `silence` is the interesting one: nobody answers, and the case proves the **server's** timeout
+/// turns that into a refusal instead of a hung conversation. That is a property of the approval
+/// bridge, not of the tool, so it can only be measured end to end.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApprovalScript {
+    /// `yes` / `no` / `silence`.
+    pub answer: String,
+    /// `once` (default) / `session` / `always` — how long the yes lasts.
+    #[serde(default)]
+    pub remember: Option<String>,
+}
+
 /// The script for one turn of a multi-turn case.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TurnScript {
@@ -105,6 +119,10 @@ pub struct TurnScript {
     /// then the turn runs. This is what makes "restart, then continue" honest rather than assumed.
     #[serde(default)]
     pub restart: bool,
+    /// How to answer approval questions during this turn. Unset = nobody answers, which with
+    /// `approval` on is a refusal after the timeout (the default the tool layer promises).
+    #[serde(default)]
+    pub approval: Option<ApprovalScript>,
 }
 
 /// Case-level overrides of Settings knobs.
@@ -166,6 +184,20 @@ pub struct SettingsOverrides {
     /// The meter's warning threshold (`JOY_CONTEXT_WARN_RATIO`).
     #[serde(default)]
     pub context_warn_ratio: Option<i32>,
+    /// `never` / `on-request` (`JOY_APPROVAL`) — the latter makes writes and commands ask a human.
+    #[serde(default)]
+    pub approval: Option<String>,
+    /// `JOY_APPROVAL_TIMEOUT`: shortened so a "nobody answers" case costs a second, not two minutes.
+    #[serde(default)]
+    pub approval_timeout_secs: Option<i64>,
+    /// `JOY_AUTO_CONTINUE_MAX`: how many times a turn may continue itself. Cases that end on
+    /// purpose (an unfinished todo is part of the assertion) set this to 0.
+    #[serde(default)]
+    pub auto_continue_max: Option<i32>,
+    /// `JOY_TURN_STEP_SLICE`: steps granted by one continuation — small in a case, so "the budget
+    /// ran out and it kept going" is cheap to prove.
+    #[serde(default)]
+    pub turn_step_slice: Option<i32>,
 }
 
 impl Scenario {
@@ -183,6 +215,7 @@ impl Scenario {
             interrupt_after_deltas: self.interrupt_after_deltas,
             cwd: self.cwd.clone(),
             restart: false,
+            approval: None,
         }]
     }
 
@@ -283,6 +316,18 @@ pub struct Expectations {
     /// Total new facts across emitted consolidation notifications.
     #[serde(default)]
     pub consolidation_new_facts: Option<i32>,
+    /// How many approval questions the turn asked. `0` is a real assertion ("nothing asked"),
+    /// which is what makes "the remembered rule took effect" checkable.
+    #[serde(default)]
+    pub approvals: Option<usize>,
+    /// The event sequence this run must produce, matched as an **ordered subsequence**.
+    ///
+    /// Subsequence, not equality: asserting every chunk boundary would turn "one more delta" into a
+    /// red light, which is noise, not a regression. Each item matches either the plain event name
+    /// (`toolStarted`) or `name:detail` (`toolStarted:run_command`). Empty = unchecked, so every
+    /// existing deterministic case keeps behaving exactly as before.
+    #[serde(default)]
+    pub events: Vec<String>,
     /// The last turn was interrupted.
     #[serde(default)]
     pub interrupted: Option<bool>,

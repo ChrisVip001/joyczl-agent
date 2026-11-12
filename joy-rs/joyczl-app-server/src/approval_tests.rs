@@ -5,9 +5,11 @@
 
 use std::sync::Arc;
 
-use joyczl_protocol::{RequestId, ServerNotification, TurnStartParams};
+use joyczl_protocol::{RememberScope, RequestId, ServerNotification, TurnStartParams};
 use joyczl_provider::mock::Mock;
 use joyczl_provider::Resolved;
+use joyczl_tools::approval::RememberTarget;
+use tokio::sync::oneshot;
 
 use crate::{run_turn, EventSink, Frame, Server};
 
@@ -20,7 +22,7 @@ async fn answering_an_unknown_request_is_false_not_an_error() {
         ..Default::default()
     };
     let server = crate::open(&settings).await.expect("装配");
-    assert!(!server.answer_approval("no-such-turn", "ap-1", true, false));
+    assert!(!server.answer_approval("no-such-turn", "ap-1", true, RememberScope::Once));
 }
 
 /// In a turn, `run_command` needs approval: the notification goes out and the command really runs only after being answered.
@@ -76,8 +78,12 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
                 };
                 match notification {
                     ServerNotification::ApprovalRequested(ask) => {
-                        let accepted =
-                            server.answer_approval(&ask.turn_id, &ask.request_id, true, false);
+                        let accepted = server.answer_approval(
+                            &ask.turn_id,
+                            &ask.request_id,
+                            true,
+                            RememberScope::Once,
+                        );
                         asked = Some((ask.args_preview.clone(), accepted));
                     }
                     ServerNotification::ToolCompleted(done) => {
@@ -192,4 +198,188 @@ async fn without_on_request_the_command_is_simply_refused() {
     assert!(!asked, "never 模式不该问任何问题");
     assert!(output.starts_with("Error:"), "{output}");
     assert!(output.contains("放行"), "拒因要指向放行表：{output}");
+}
+
+// ---- The three remember scopes --------------------------------------------------------------
+//
+// These go in through the waiting table instead of a whole turn: the question "how long does a
+// yes last" is answered by `answer_approval` alone, and a real sandbox would only add noise.
+
+/// Register a question as if a tool had just asked it.
+fn ask(
+    server: &Server,
+    turn_id: &str,
+    request_id: &str,
+    target: RememberTarget,
+) -> oneshot::Receiver<bool> {
+    let (tx, rx) = oneshot::channel();
+    server
+        .approvals
+        .lock()
+        .expect("approvals 锁不该中毒")
+        .entry(turn_id.to_string())
+        .or_default()
+        .insert(
+            request_id.to_string(),
+            crate::approval::Waiting {
+                tx,
+                remember: Some(target),
+            },
+        );
+    rx
+}
+
+fn settings_json(home: &std::path::Path) -> String {
+    std::fs::read_to_string(joyczl_config::patch_path(home)).unwrap_or_default()
+}
+
+/// "记住这条" (command): written to `settings.json` **and** into the live cell, so the next call
+/// sees it — the old "takes effect after a restart" is gone.
+#[tokio::test]
+async fn remembering_a_command_persists_and_takes_effect_at_once() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let settings = joyczl_config::Settings {
+        home: dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let server = crate::open(&settings).await.expect("装配");
+
+    let rx = ask(
+        &server,
+        "t1",
+        "ap-1",
+        RememberTarget::Command("git status".to_string()),
+    );
+    assert!(server.answer_approval("t1", "ap-1", true, RememberScope::Always));
+    assert!(rx.await.expect("答案要送达"), "批准");
+
+    assert!(
+        server
+            .exec_session_allow
+            .lock()
+            .expect("锁")
+            .contains(&"git status".to_string()),
+        "本进程立刻生效"
+    );
+    assert!(
+        server
+            .settings()
+            .exec_allow
+            .iter()
+            .any(|rule| rule == "git status"),
+        "也要进内存里的设置"
+    );
+    let raw = settings_json(dir.path());
+    assert!(raw.contains("git status"), "而且写进 settings.json：{raw}");
+}
+
+/// `once` leaves no trace; `session` stays in memory and never reaches the disk.
+#[tokio::test]
+async fn once_and_session_leave_different_traces() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let settings = joyczl_config::Settings {
+        home: dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let server = crate::open(&settings).await.expect("装配");
+
+    let rx = ask(
+        &server,
+        "t1",
+        "ap-1",
+        RememberTarget::Command("make".to_string()),
+    );
+    assert!(server.answer_approval("t1", "ap-1", true, RememberScope::Once));
+    assert!(rx.await.expect("送达"));
+    assert!(
+        !server
+            .exec_session_allow
+            .lock()
+            .expect("锁")
+            .contains(&"make".to_string()),
+        "只这次 = 什么都不记"
+    );
+    assert_eq!(settings_json(dir.path()), "", "一次性的批准不写盘");
+
+    let rx = ask(
+        &server,
+        "t2",
+        "ap-2",
+        RememberTarget::Command("cargo test".to_string()),
+    );
+    assert!(server.answer_approval("t2", "ap-2", true, RememberScope::Session));
+    assert!(rx.await.expect("送达"));
+    assert!(
+        server
+            .exec_session_allow
+            .lock()
+            .expect("锁")
+            .contains(&"cargo test".to_string()),
+        "本会话记着"
+    );
+    assert_eq!(settings_json(dir.path()), "", "会话作用域不该写盘");
+}
+
+/// A rejected answer remembers nothing — a "no" must never be turned into a standing rule.
+#[tokio::test]
+async fn a_denial_is_never_remembered() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let settings = joyczl_config::Settings {
+        home: dir.path().to_path_buf(),
+        ..Default::default()
+    };
+    let server = crate::open(&settings).await.expect("装配");
+    let rx = ask(
+        &server,
+        "t1",
+        "ap-1",
+        RememberTarget::Command("rm x".to_string()),
+    );
+    assert!(server.answer_approval("t1", "ap-1", false, RememberScope::Always));
+    assert!(!rx.await.expect("送达"), "拒绝就是拒绝");
+    assert!(server.exec_session_allow.lock().expect("锁").is_empty());
+    assert_eq!(settings_json(dir.path()), "");
+}
+
+/// A remembered write **directory** makes the next write land with no broker at all.
+/// The naming difference matters: the human approved the folder, not the file name.
+#[tokio::test]
+async fn a_remembered_write_directory_needs_no_answer() {
+    let dir = tempfile::tempdir().expect("临时目录");
+    let workspace = dir.path().join("ws");
+    std::fs::create_dir_all(&workspace).expect("建工作目录");
+    let settings = joyczl_config::Settings {
+        home: dir.path().join("home"),
+        write_enabled: true,
+        approval: "on-request".to_string(),
+        ..Default::default()
+    };
+    let server = crate::open(&settings).await.expect("装配");
+
+    let rx = ask(
+        &server,
+        "t1",
+        "ap-1",
+        RememberTarget::Directory(workspace.clone()),
+    );
+    assert!(server.answer_approval("t1", "ap-1", true, RememberScope::Always));
+    assert!(rx.await.expect("送达"));
+
+    // No broker in this ctx: only the remembered directory can let the write through.
+    let ctx = server.tool_ctx("s1", Some(workspace.clone()), None);
+    let path = workspace.join("note.md");
+    let out = server
+        .tools
+        .execute(
+            ctx,
+            "write_file",
+            serde_json::json!({"path": path.display().to_string(), "content": "hi\n"}),
+        )
+        .await;
+    assert!(out.starts_with("已写入"), "{out}");
+    assert!(path.exists(), "真写了");
+    assert!(
+        settings_json(&settings.home).contains(workspace.to_string_lossy().as_ref()),
+        "目录进了 settings.json"
+    );
 }

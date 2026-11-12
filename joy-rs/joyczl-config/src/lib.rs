@@ -58,6 +58,20 @@ pub const BOUNDS: &[Bound] = &[
         min: 1,
         max: 100,
     },
+    // Self-continuation: 0 = off (a turn ends where it ends), 5 = "generous but bounded".
+    // Not unbounded on purpose: this runs on a laptop, and an unattended loop is worse than a stop.
+    Bound {
+        patch_name: None,
+        env_name: "JOY_AUTO_CONTINUE_MAX",
+        min: 0,
+        max: 5,
+    },
+    Bound {
+        patch_name: None,
+        env_name: "JOY_TURN_STEP_SLICE",
+        min: 1,
+        max: 60,
+    },
     Bound {
         patch_name: Some("maxTokens"),
         env_name: "JOY_MAX_TOKENS",
@@ -109,6 +123,14 @@ pub const BOUNDS: &[Bound] = &[
         env_name: "JOY_TOOL_RESULT_MAX_CHARS",
         min: 0,
         max: 1_000_000,
+    },
+    // One turn's token cap. 0 = off (the default). The ceiling is a sanity bound, not advice:
+    // 2M tokens in one turn is already a runaway, and the config is not the place to allow it.
+    Bound {
+        patch_name: None,
+        env_name: "JOY_TURN_TOKEN_BUDGET",
+        min: 0,
+        max: 2_000_000,
     },
     // The skill index rides in every prompt, the bodies only when a skill is selected: the
     // index cap is deliberately small (a catalog nobody prunes becomes the context problem
@@ -343,6 +365,31 @@ pub struct Settings {
     /// (default 3). Trimming goes oldest-first: the model is reasoning about the last few
     /// results, and stubbing one of those answers a question it just asked.
     pub tool_result_keep_recent: i32,
+    /// `JOY_TURN_TOKEN_BUDGET`: cost cap for **one turn**, in tokens (input + output, as the
+    /// provider reports it). Reaching it ends the turn the same way the step cap does — tools
+    /// away, one wrap-up call — so a runaway turn costs a bounded amount instead of a night.
+    /// **0 = off** (the default): the step cap already bounds rounds, and a token cap nobody
+    /// asked for would cut honest work short.
+    pub turn_token_budget: i64,
+    /// `JOY_AUTO_CONTINUE_MAX`: how many times one turn may **continue itself** after it would
+    /// have ended. Two reasons qualify: the human's Stop hook demanded it, or the turn was cut off
+    /// by the step cap while the todo list still had `pending`/`in_progress` items.
+    ///
+    /// A turn that ends of its own accord is **not** continued, even with work left on the list:
+    /// "here is the plan" is a finished turn, and driving it on would execute a plan nobody asked
+    /// to execute.
+    ///
+    /// Default 2: a turn that stops one step short is the most common failure mode, and
+    /// "your move" is a poor answer when the model itself wrote down what was left. 0 disables
+    /// self-continuation entirely (the old behavior).
+    pub auto_continue_max: i32,
+    /// `JOY_TURN_STEP_SLICE`: extra steps granted by **one** continuation.
+    ///
+    /// The step cap stops being a cliff: running out means "here is another slice", as long as
+    /// `auto_continue_max` still allows it. Slice rather than raise the cap, because a bigger
+    /// `JOY_MAX_ITERATIONS` also makes a *runaway* turn more expensive — a slice is only spent
+    /// when it is asked for.
+    pub turn_step_slice: i32,
 
     // ---- Lifecycle hooks (see hooks.rs in joyczl-tools)
     /// `JOY_HOOKS`: only when enabled does Joy read `<home>/hooks.json` and run its commands.
@@ -401,6 +448,12 @@ pub struct Settings {
     /// `JOY_EXEC_WRITABLE_ROOTS`: extra writable dirs beyond workdir and home (colon-separated
     /// absolute paths, must already exist). For build caches like `cargo build`.
     pub exec_writable_roots: Vec<PathBuf>,
+    /// `JOY_WRITE_ALLOW_DIRS`: directories whose writes **need no confirmation** in
+    /// `on-request` mode — what "记住这条" writes for `write_file`/`edit`.
+    ///
+    /// It never widens the writable boundary: containment is checked first, so a directory listed
+    /// here but outside `JOY_EXEC_WRITABLE_ROOTS`/workdir unlocks nothing.
+    pub write_allow_dirs: Vec<PathBuf>,
 }
 
 impl Default for Settings {
@@ -445,6 +498,9 @@ impl Default for Settings {
             delegate_enabled: false,
             tool_result_total_chars: 200_000,
             tool_result_max_chars: 30_000,
+            turn_token_budget: 0,
+            auto_continue_max: 2,
+            turn_step_slice: 12,
             tool_result_keep_recent: 3,
             hooks_enabled: false,
             hub_max_open: 32,
@@ -458,6 +514,7 @@ impl Default for Settings {
             approval_timeout_secs: 120,
             exec_network: false,
             exec_writable_roots: Vec::new(),
+            write_allow_dirs: Vec::new(),
         }
     }
 }
@@ -519,6 +576,9 @@ impl Settings {
                 "JOY_TOOL_RESULT_KEEP_RECENT",
                 d.tool_result_keep_recent,
             ),
+            turn_token_budget: env_int("JOY_TURN_TOKEN_BUDGET", d.turn_token_budget as i32) as i64,
+            auto_continue_max: env_int("JOY_AUTO_CONTINUE_MAX", d.auto_continue_max),
+            turn_step_slice: env_int("JOY_TURN_STEP_SLICE", d.turn_step_slice),
             hooks_enabled: env_bool("JOY_HOOKS"),
             hub_max_open: env_int("JOY_HUB_MAX_OPEN", d.hub_max_open as i32) as i64,
             hub_idle_secs: env_int("JOY_HUB_IDLE_SECS", d.hub_idle_secs as i32) as i64,
@@ -540,6 +600,13 @@ impl Settings {
                 as i64,
             exec_network: env_bool("JOY_EXEC_NETWORK"),
             exec_writable_roots: env("JOY_EXEC_WRITABLE_ROOTS")
+                .map(|raw| {
+                    std::env::split_paths(&raw)
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            write_allow_dirs: env("JOY_WRITE_ALLOW_DIRS")
                 .map(|raw| {
                     std::env::split_paths(&raw)
                         .filter(|p| !p.as_os_str().is_empty())
@@ -581,6 +648,9 @@ impl Settings {
         check_bound("JOY_APPROVAL_TIMEOUT", self.approval_timeout_secs)?;
         check_bound("JOY_TOOL_RESULT_TOTAL_CHARS", self.tool_result_total_chars)?;
         check_bound("JOY_TOOL_RESULT_MAX_CHARS", self.tool_result_max_chars)?;
+        check_bound("JOY_TURN_TOKEN_BUDGET", self.turn_token_budget)?;
+        check_bound("JOY_AUTO_CONTINUE_MAX", self.auto_continue_max as i64)?;
+        check_bound("JOY_TURN_STEP_SLICE", self.turn_step_slice as i64)?;
         check_bound(
             "JOY_TOOL_RESULT_KEEP_RECENT",
             self.tool_result_keep_recent as i64,
@@ -652,6 +722,18 @@ impl Settings {
             }
         }
 
+        // Directories a write was approved for ("记住这条"). Not a writable root — just "stop
+        // asking" — but a relative or missing path would silently never match, which reads as
+        // "the button does nothing", so both are refused at the door.
+        for dir in &self.write_allow_dirs {
+            if !dir.is_absolute() {
+                return Err(format!(
+                    "JOY_WRITE_ALLOW_DIRS 里必须是绝对路径，收到 {}",
+                    dir.display()
+                ));
+            }
+        }
+
         check_exec_rules(&self.exec_allow)?;
         Ok(())
     }
@@ -704,6 +786,26 @@ pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(
     // Allow-list replaced as a whole ("remember this command" uses it): same rules as startup.
     if let Some(rules) = &patch.exec_allow {
         check_exec_rules(rules)?;
+    }
+    // Same for the write-side "don't ask again" list ("记住这条" on a write remembers a directory).
+    if let Some(dirs) = &patch.write_allow_dirs {
+        if dirs.len() > MAX_EXEC_RULES {
+            return Err(format!(
+                "writeAllowDirs 最多 {MAX_EXEC_RULES} 条，收到 {} 条",
+                dirs.len()
+            ));
+        }
+        for dir in dirs {
+            if dir.trim().is_empty() {
+                return Err("writeAllowDirs 里有空路径 —— 空串不是一条记录".to_string());
+            }
+            if dir.contains(['\n', '\r']) {
+                return Err(format!("writeAllowDirs 的路径不能含换行：{dir:?}"));
+            }
+            if !std::path::Path::new(dir).is_absolute() {
+                return Err(format!("writeAllowDirs 里必须是绝对路径，收到 {dir:?}"));
+            }
+        }
     }
     Ok(())
 }
@@ -790,6 +892,9 @@ pub fn apply_patch(patch: &joyczl_protocol::SettingsPatch, settings: &mut Settin
     }
     if let Some(v) = &p.exec_allow {
         settings.exec_allow = v.clone();
+    }
+    if let Some(v) = &p.write_allow_dirs {
+        settings.write_allow_dirs = v.iter().map(std::path::PathBuf::from).collect();
     }
 }
 

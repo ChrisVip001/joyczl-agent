@@ -21,6 +21,8 @@ async fn jobs(allow: &[&str]) -> (Arc<Jobs>, tempfile::TempDir) {
         approval_timeout_secs: 5,
         spill_dir: None,
         extra_roots: Vec::new(),
+        home: std::path::PathBuf::new(),
+        session_allow: Default::default(),
     };
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
@@ -165,6 +167,8 @@ async fn the_ledger_records_how_jobs_end() {
         approval_timeout_secs: 5,
         spill_dir: None,
         extra_roots: Vec::new(),
+        home: std::path::PathBuf::new(),
+        session_allow: Default::default(),
     };
     policy.timeout_secs = 10;
     let jobs: Arc<Jobs> = Arc::new(Jobs::new(policy, dir.path().to_path_buf(), rows.clone()));
@@ -227,6 +231,8 @@ async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
             approval_timeout_secs: 5,
             spill_dir: None,
             extra_roots: Vec::new(),
+            home: std::path::PathBuf::new(),
+            session_allow: Default::default(),
         },
         dir.path().to_path_buf(),
         rows.clone(),

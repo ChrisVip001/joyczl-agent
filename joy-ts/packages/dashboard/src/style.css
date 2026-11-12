@@ -378,6 +378,52 @@ body.resizing {
   white-space: nowrap;
 }
 
+/* 分支：入口挂在行上、悬停才显现；来源只用标题前一个小符号，保持列表同一密度。 */
+.session-list li {
+  position: relative;
+}
+
+.session-fork {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--speed) ease;
+}
+
+.session-list li:hover .session-fork,
+.session-list li:focus-within .session-fork {
+  opacity: 1;
+}
+
+.session-fork:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* 悬停时让位给分叉按钮，避免和时间叠在一起 */
+.session-list li:hover .row-when {
+  opacity: 0;
+}
+
+.session-list li.forked .row-title-text::before {
+  content: "⑂ ";
+  color: var(--text-3);
+}
+
 /* 面板入口（侧栏竖排） */
 
 .tabs.rail {

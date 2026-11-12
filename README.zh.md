@@ -56,7 +56,14 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
   （[docs/skills.zh.md](docs/skills.zh.md)、[docs/operations.zh.md](docs/operations.zh.md)）
 - **图式规划**：triage 前门让闲聊便宜地得到快答；gather 工作流写晨报
   （[docs/architecture.zh.md](docs/architecture.zh.md)）
-- **被检验**：确定性 eval 把守每次发布；judge 给回答质量打分
+- **按项目规矩干活**：工作目录里往上找 `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md`，
+  按「根 → 当前目录」拼进每轮尾巴（32KB 预算，超了从最外层丢），并标出来源路径
+  （[docs/internals/09-app-server.md](docs/internals/09-app-server.md)）
+- **不把做到一半的活扔回来**：步数用完时先看它自己写下的待办 —— 还有没做完的就接着
+  做（带上刚才的步骤，不是从头再来），用满 `JOY_AUTO_CONTINUE_MAX` 次才收尾，并说清
+  还剩什么（[docs/configuration.zh.md](docs/configuration.zh.md)）
+- **被检验**：确定性 eval 把守每次发布；`joy eval --replay` 用录制对话钉住事件顺序
+  （压缩、审批超时、增量输出、MCP 断线、步数用尽自动续片）；judge 给回答质量打分
   （[docs/testing.zh.md](docs/testing.zh.md)）
 - **被观察**：每轮落一条 trace 与一行用量
   （[docs/architecture.zh.md](docs/architecture.zh.md)）
@@ -77,8 +84,9 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | `todo_write` | 维护一张每轮重新注入的待办清单（整表替换；同时只能一项 `in_progress`） |
 | `current_time` | 本地时间（含星期与时区） |
 | `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——终端与 hub 默认关，驾驶舱默认开且每次写入在对话里问一次；可写范围 = **会话绑定的工作目录** + `JOY_EXEC_WRITABLE_ROOTS`（会话没选目录时可在这一轮临时指定），没有目录一处也写不了 |
+| `apply_patch` | 按补丁改文件：一次可以改多个文件、多处，**全中才落盘**（一处对不上就一处也不改）；与 `write_file` / `edit` 同一个可写范围与审批 |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)）；`background=true` 丢到后台跑 |
-| `delegate_task` | 把一件自成一体的活交给子代理——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生；可给 `result_schema` 要结构化结论（不合规重试一次后回落散文） |
+| `delegate_task` | 把一件自成一体的活交给子代理（`tasks: [...]` 一次最多派 4 件互不依赖的，并发跑、按顺序合并）——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生；可给 `result_schema` 要结构化结论（不合规重试一次后回落散文） |
 | `read_skill` | 读一个技能的完整正文——常驻的目录里只有名字与一句话；**默认开** |
 | `read_memory_page` | 按名字读记忆库里的一页正文，连带它是从哪几轮提炼来的 `sources`；**默认开** |
 | `find_tools` | 按关键词在延迟加载的工具里找，并把命中的工具在本会话里打开（`JOY_TOOL_POLICY=deferred`）；**默认开** |

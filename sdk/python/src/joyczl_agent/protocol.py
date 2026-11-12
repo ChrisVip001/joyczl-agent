@@ -108,6 +108,21 @@ UsageByModel,
     TurnMeta,
     TurnStartParams,
     TurnStartResponse,
+    # 记忆中心的窗口、手动压缩、会话分叉：都是 0.16–0.17 加进来的方法，
+    # 生成物早就有，清单一直没跟上（`test_every_method_type_reaches_the_package` 红的）。
+    ContextUsageParams,
+    ContextUsageResponse,
+    MemoryIndexResponse,
+    MemoryLedgerParams,
+    MemoryLedgerResponse,
+    MemoryPageParams,
+    MemoryPageResponse,
+    SessionCompactParams,
+    SessionCompactResponse,
+    SessionForkParams,
+    SessionForkResponse,
+    SkillStatsResponse,
+    RememberScope,
 )
 
 #: 通知的联合类型，从生成的 `RootModel` 上摘下来。
@@ -218,6 +233,20 @@ __all__ = [
     "TurnFollowUpResponse",
     "TurnStartParams",
     "TurnStartResponse",
+    # 记忆中心 / 压缩 / 分叉
+    "ContextUsageParams",
+    "ContextUsageResponse",
+    "MemoryIndexResponse",
+    "MemoryLedgerParams",
+    "MemoryLedgerResponse",
+    "MemoryPageParams",
+    "MemoryPageResponse",
+    "SessionCompactParams",
+    "SessionCompactResponse",
+    "SessionForkParams",
+    "SessionForkResponse",
+    "SkillStatsResponse",
+    "RememberScope",
     # 应答和通知**里面**的那些类型。不给出来的话，用户能拿到
     # `reply.facts[0]`，却没法给自己的函数写 `def show(fact: Fact)`。
     "Episode",

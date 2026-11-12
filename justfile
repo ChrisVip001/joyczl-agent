@@ -75,6 +75,11 @@ eval: build
     # 用例按相对路径 `evals/…` 加载，所以必须从仓库根跑（不是 joy-rs）。
     cd {{ justfile_directory() }} && cargo run -q --manifest-path {{ rust_dir }}/Cargo.toml --bin joy -- eval
 
+# 回放评测：录制对话 + 期望事件序列（压缩/审批超时/增量输出/MCP 断线）。
+# 和确定性 eval 一样是门禁 —— 它钉的是「谁在谁之前」，那是最容易悄悄漂的东西。
+eval-replay: build
+    cd {{ justfile_directory() }} && cargo run -q --manifest-path {{ rust_dir }}/Cargo.toml --bin joy -- eval --replay
+
 # Long-task benchmarks: same scripted harness, asks "did autonomous task work get better or
 # worse". **Records, never blocks** — exit 0 even when cases fail. Cases live in evals/long/.
 bench: build
@@ -182,6 +187,6 @@ smoke-sdk-python: build
 
 # ---- Run all checks in one command ----------------------------------------------
 # gate sits last: beyond green tests and lint, the deterministic eval must also pass 100%.
-check: fmt-check check-app-server-schema check-tool-docs ts-check py-check eval
+check: fmt-check check-app-server-schema check-tool-docs ts-check py-check eval eval-replay
     cd {{ rust_dir }} && cargo clippy --workspace --all-targets -- -D warnings
     cd {{ rust_dir }} && cargo test --workspace

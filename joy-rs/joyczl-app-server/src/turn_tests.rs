@@ -1520,6 +1520,7 @@ fn the_system_prompt_carries_the_catalog_not_the_pages() {
         skills: "",
         todo: None,
         summary: None,
+        instructions: None,
         capabilities: None,
     })
     .full();
@@ -1541,6 +1542,7 @@ fn the_system_prompt_carries_the_catalog_not_the_pages() {
         skills: "",
         todo: None,
         summary: None,
+        instructions: None,
         capabilities: None,
     })
     .full();
@@ -1587,6 +1589,7 @@ fn the_stable_prefix_does_not_move_between_turns() {
         skills: "",
         todo,
         summary: None,
+        instructions: None,
         capabilities: None,
     };
     let first = crate::turn::build_system(parts(None));
@@ -1639,4 +1642,88 @@ fn the_prompt_says_what_the_machine_cannot_do() {
         crate::turn::capability_note(&full).is_none(),
         "都开着就不该占提示"
     );
+}
+
+// ---- Pre-loop steps must not outlast "stop" --------------------------------------------
+
+#[tokio::test]
+async fn a_stop_does_not_wait_for_a_slow_preloop_step() {
+    // The gate/compaction are model calls made before the loop starts. Before this race, a
+    // stop queued behind them; now it wins immediately.
+    let cancel = joyczl_loop::Interrupt::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        trigger.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let result = crate::turn::interruptible(
+        Some(&cancel),
+        "测试用长步骤",
+        tokio::time::sleep(std::time::Duration::from_secs(30)),
+    )
+    .await;
+
+    assert!(result.is_none(), "被中断时不应返回步骤结果");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "停止应立即生效，不能等步骤跑完：{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn without_an_interrupt_the_step_just_runs() {
+    let value = crate::turn::interruptible(None, "测试用步骤", async { 7 }).await;
+    assert_eq!(value, Some(7), "没有 interrupt 信号时行为不变");
+}
+
+// ---- Folded tool activity keeps an address, not just a memory --------------------------
+
+fn outcome(name: &str, output: &str) -> joyczl_loop::ToolOutcome {
+    joyczl_loop::ToolOutcome {
+        tool_use_id: format!("tu-{name}"),
+        name: name.to_string(),
+        output: output.to_string(),
+        duration_ms: 1,
+    }
+}
+
+#[test]
+fn a_folded_call_says_what_ran_how_much_and_the_first_line() {
+    let folded = crate::turn::fold_tool_activity(
+        "我看过了。",
+        &[outcome("read_file", "第一行内容\n第二行\n第三行")],
+    );
+    assert!(folded.contains("read_file"), "{folded}");
+    assert!(folded.contains("字"), "{folded}");
+    assert!(folded.contains("第一行内容"), "{folded}");
+    assert!(
+        !folded.contains("第二行"),
+        "只留首行，正文靠 read_file 重取：{folded}"
+    );
+}
+
+#[test]
+fn a_spilled_result_keeps_the_address_to_read_it_again() {
+    let output = "头几行\n…（结果共 90000 字符，已截断，省略了 41 行；完整输出在 spill/20261112/exec-101500-42.txt）\n尾几行";
+    let folded = crate::turn::fold_tool_activity("跑完了。", &[outcome("run_command", output)]);
+    assert!(
+        folded.contains("spill/20261112/exec-101500-42.txt"),
+        "折叠后必须留下去哪儿重取：{folded}"
+    );
+    assert!(folded.contains("run_command"), "{folded}");
+}
+
+#[test]
+fn a_result_without_spill_does_not_invent_an_address() {
+    let folded = crate::turn::fold_tool_activity("好了。", &[outcome("echo", "hi")]);
+    assert!(!folded.contains("全量在"), "{folded}");
+    assert!(folded.contains("hi"), "{folded}");
+}
+
+#[test]
+fn no_tool_calls_leaves_the_reply_untouched() {
+    assert_eq!(crate::turn::fold_tool_activity("就说一句", &[]), "就说一句");
 }

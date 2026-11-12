@@ -15,6 +15,7 @@
 //! It can start even without a configured key: memory and session methods work as usual, only `turn/*`
 //! reports PROVIDER_ERROR, telling the caller where to get a key.
 
+mod agents_md;
 mod approval;
 mod dispatch;
 mod goal;
@@ -81,14 +82,18 @@ mod image_meta_tests;
 mod subagent_tests;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
 use joyczl_config::Settings;
 use joyczl_loop::{Interrupt, Steering};
-use joyczl_protocol::{JsonRpcMessage, ServerNotification, SettingsPatch, SettingsView};
+use joyczl_protocol::{
+    JsonRpcMessage, RememberScope, ServerNotification, SettingsPatch, SettingsView,
+};
 use joyczl_provider::Resolved;
 use joyczl_state::{Calendar, Chat, Episodes, Facts};
+use joyczl_tools::approval::RememberTarget;
 use joyczl_tools::ToolCtx;
 use joyczl_tools::ToolRegistry;
 use sqlx::sqlite::SqlitePool;
@@ -201,6 +206,14 @@ pub struct Server {
     /// Approval requests waiting for a human: `approval/respond` finds one by turn_id + request_id
     /// and delivers the answer back. Same lifecycle discipline as `turns` (the whole bucket is dropped when a turn ends).
     pub(crate) approvals: approval::Pending,
+    /// Commands a human answered "本会话总是允许" to, live for this process: the very same cell the
+    /// exec tool reads (`ExecPolicy::session_allow`), so the next call sees the yes immediately —
+    /// not after a restart. Never persisted (that is `settings.json`'s `execAllow`).
+    pub(crate) exec_session_allow: Arc<Mutex<Vec<String>>>,
+    /// Directories a write was approved for ("本会话总是允许" / "记住这条"), same idea: the cell is
+    /// shared with `WritePolicy::approved_dirs`, so the next write skips the question. The
+    /// persisted half comes from `settings.json`'s `writeAllowDirs` at startup.
+    pub(crate) write_approved_dirs: Arc<Mutex<Vec<PathBuf>>>,
     /// Lifecycle hooks (`<home>/hooks.json`). `None` = unconfigured or disabled.
     pub(crate) hooks: Option<Arc<joyczl_tools::hooks::Hooks>>,
     /// Session -> todo list (see todo.rs in joyczl-tools). Injected into the system prompt every turn,
@@ -428,8 +441,13 @@ impl Server {
 
         let notifier = joyczl_tools::notify::load(&snapshot.home, snapshot.notify_enabled);
         let approval_log = joyczl_state::Approvals::new(pool.clone());
-        let (mut tools, jobs_handle) =
-            builtin_tools(&snapshot, pool.clone(), notifier.clone()).await;
+        let builtin = builtin_tools(&snapshot, pool.clone(), notifier.clone()).await;
+        let BuiltinTools {
+            mut tools,
+            jobs: jobs_handle,
+            exec_session_allow,
+            write_approved_dirs,
+        } = builtin;
         tools.set_hooks(hooks.clone());
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
@@ -465,7 +483,7 @@ impl Server {
             eprintln!(
                 "(joy) 子代理已启用：delegate_task 可用了（子代理不能再派生子代理、不参与批准）"
             );
-            tools.register(joyczl_tools::subagent::delegate_task(Arc::new(
+            tools.register_exclusive(joyczl_tools::subagent::delegate_task(Arc::new(
                 subagent::Delegated {
                     tools: Arc::new(tools.clone()),
                     facts: facts.clone(),
@@ -497,6 +515,8 @@ impl Server {
             tools: Arc::new(tools),
             turns: Arc::new(Mutex::new(HashMap::new())),
             approvals: Arc::new(Mutex::new(HashMap::new())),
+            exec_session_allow,
+            write_approved_dirs,
             hooks,
             todo,
             jobs: jobs_handle,
@@ -677,12 +697,16 @@ impl Server {
 
     /// Answer one approval request. Returns `false` = too late (timed out, or that turn already ended) —
     /// tell the client honestly, so it does not believe the approval took effect.
+    ///
+    /// `remember` says how long the yes lasts. It is applied **before** the answer is delivered, so the
+    /// tool that asked (and the next call after it) already sees the new rule — an approval that only
+    /// takes effect after a restart is not what the click promised.
     pub fn answer_approval(
         &self,
         turn_id: &str,
         request_id: &str,
         approved: bool,
-        remember: bool,
+        remember: RememberScope,
     ) -> bool {
         let waiting = self
             .approvals
@@ -693,34 +717,96 @@ impl Server {
         let Some(waiting) = waiting else {
             return false;
         };
-        if approved && remember {
-            self.remember_command(&waiting.command);
+        if approved {
+            self.remember(waiting.remember.as_ref(), remember);
         }
         // Failing to deliver (the receiver is already gone) is not a failure: that turn has ended.
         let _ = waiting.tx.send(approved);
         true
     }
 
-    /// "Remember this command": replace the allow table wholesale and persist into `settings.json`.
+    /// Write the yes where it belongs, according to its scope.
+    ///
+    /// * `once` — nowhere: the next identical action asks again.
+    /// * `session` — the live in-process cell only (never the disk).
+    /// * `always` — the live cell **and** `settings.json`, so it survives a restart.
+    ///
+    /// A remembered rule is not a fence with a hole in it: `run_command` still meets hard-deny and the
+    /// sandbox, and a write still has to be inside the writable boundary.
+    fn remember(&self, target: Option<&RememberTarget>, scope: RememberScope) {
+        let Some(target) = target else {
+            return; // Nothing worth remembering (e.g. a one-off connector send)
+        };
+        if scope == RememberScope::Once {
+            return;
+        }
+        match target {
+            RememberTarget::Command(command) => {
+                push_unique(&self.exec_session_allow, command.trim().to_string());
+                if scope == RememberScope::Always {
+                    self.persist_exec_allow(command.trim());
+                }
+            }
+            RememberTarget::Directory(dir) => {
+                push_unique(&self.write_approved_dirs, dir.clone());
+                if scope == RememberScope::Always {
+                    self.persist_write_dir(dir);
+                }
+            }
+        }
+    }
+
+    /// "记住这条" for a command: replace the allow table wholesale and persist into `settings.json`.
     ///
     /// What is remembered is **this command itself**, no wildcards — what the user saw and approved was
-    /// it, not the whole class. The exec policy is read once at startup, so this takes effect **on the
-    /// next start**; say that honestly, instead of letting people believe it will not ask again.
-    fn remember_command(&self, command: &str) {
+    /// it, not the whole class. The live table was already updated by `remember`, so this only has to
+    /// make it survive a restart.
+    fn persist_exec_allow(&self, command: &str) {
         let mut settings = self.settings();
         if settings.exec_allow.iter().any(|rule| rule == command) {
-            return; // Already in the table (probably asked twice in the same turn)
+            return; // Already on disk (probably asked twice in the same turn)
         }
         settings.exec_allow.push(command.to_string());
-        let patch = joyczl_protocol::SettingsPatch {
+        let patch = SettingsPatch {
             exec_allow: Some(settings.exec_allow.clone()),
             ..Default::default()
         };
         match self.apply_config_patch(&patch) {
-            Ok(_) => eprintln!(
-                "(joy) 已记住这条命令：{command}（执行策略在启动时读一次，下次启动才生效）"
-            ),
+            Ok(_) => eprintln!("(joy) 已记住这条命令：{command}（已写入 settings.json，立即生效）"),
             Err(why) => eprintln!("(joy) 没能记住这条命令：{why}"),
+        }
+    }
+
+    /// "记住这条" for a write: remember the **directory**, never the file name.
+    ///
+    /// The directory is a "don't ask again" note, not a writable root — containment still decides
+    /// whether a write may land there at all.
+    fn persist_write_dir(&self, dir: &std::path::Path) {
+        let mut settings = self.settings();
+        let entry = dir.display().to_string();
+        if settings
+            .write_allow_dirs
+            .iter()
+            .any(|known| known.as_path() == dir)
+        {
+            return;
+        }
+        settings.write_allow_dirs.push(dir.to_path_buf());
+        let patch = SettingsPatch {
+            write_allow_dirs: Some(
+                settings
+                    .write_allow_dirs
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        match self.apply_config_patch(&patch) {
+            Ok(_) => {
+                eprintln!("(joy) 已记住这个目录：{entry}（写这个目录不再逐次确认）")
+            }
+            Err(why) => eprintln!("(joy) 没能记住这个目录：{why}"),
         }
     }
 
@@ -1001,6 +1087,19 @@ pub async fn open(settings: &Settings) -> Result<Server> {
     Ok(Server::boot(pool, settings).await)
 }
 
+/// The built-in tool table, plus the two live cells the approval answer writes into.
+///
+/// Bundled instead of growing the return tuple: every new shared cell would otherwise add a
+/// positional element at every call site, and a swapped pair of `Arc`s compiles happily.
+struct BuiltinTools {
+    tools: ToolRegistry,
+    jobs: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
+    /// See `Server::exec_session_allow` — same `Arc` the exec policy holds.
+    exec_session_allow: Arc<Mutex<Vec<String>>>,
+    /// See `Server::write_approved_dirs` — same `Arc` the write policy holds.
+    write_approved_dirs: Arc<Mutex<Vec<PathBuf>>>,
+}
+
 /// Built-in tools, plus MCP tools configured in `<home>/mcp.json`.
 ///
 /// An unreachable MCP server only leaves a warning on stderr and Joy starts as usual —
@@ -1012,11 +1111,13 @@ async fn builtin_tools(
     settings: &Settings,
     pool: sqlx::SqlitePool,
     notifier: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
-) -> (
-    ToolRegistry,
-    Option<Arc<dyn joyczl_tools::jobs::JobRegistry>>,
-) {
+) -> BuiltinTools {
     let mut tools = joyczl_tools::handlers::build_default();
+    // The live half of "remember": approvals land here and take effect on the next call. The
+    // persisted half (`settings.json`) is folded in below, at policy construction.
+    let exec_session_allow: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let write_approved_dirs: Arc<Mutex<Vec<PathBuf>>> =
+        Arc::new(Mutex::new(settings.write_allow_dirs.clone()));
     if !joyczl_tools::web::search_ready() {
         // Not silent: the model's tool table lost an entry — the human should know why.
         eprintln!(
@@ -1067,6 +1168,22 @@ async fn builtin_tools(
         eprintln!(
             "(joy) 执行工具已启用：沙箱 {sandbox}，{network}，放行规则：{allow}{approval}{extra}"
         );
+        // Say up front what the sandbox will *not* write: the home is the control plane
+        // (settings.json decides this very allow table), so only the workspace and the
+        // explicitly listed extra roots are writable.
+        let dropped =
+            joyczl_tools::roots::resolve_roots(&[], &settings.exec_writable_roots, &settings.home)
+                .dropped;
+        if !dropped.is_empty() {
+            eprintln!(
+                "(joy) 这些额外可写根被拒绝（它们会交出控制面：home 本身、home 的祖先或 HOME_CONTROL 里的条目）：{}",
+                dropped
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         let policy = joyczl_tools::exec::ExecPolicy {
             allow: settings.exec_allow.clone(),
             timeout_secs: settings.exec_timeout_secs,
@@ -1077,8 +1194,12 @@ async fn builtin_tools(
             // Overlong output spills to disk: truncation still happens (the context must be protected), but the original remains.
             spill_dir: Some(settings.home.join("spill")),
             extra_roots: settings.exec_writable_roots.clone(),
+            home: settings.home.clone(),
+            // Shared with the server: an approval answered "本会话总是允许" is visible to the very
+            // next call, not to the next process.
+            session_allow: exec_session_allow.clone(),
         };
-        tools.register(joyczl_tools::exec::run_command(policy.clone()));
+        tools.register_exclusive(joyczl_tools::exec::run_command(policy.clone()));
 
         // Background jobs: share the same policy with run_command (sandbox, no network, allow table,
         // approval all identical) — background is not a side door around them.
@@ -1097,19 +1218,23 @@ async fn builtin_tools(
     }
     // File-write tools: **off by default**, registered only when JOY_WRITE=1 — same discipline
     // as run_command: the switch must be pressed by the user's own hand. Writable boundary is
-    // the sandbox's roots (workdir + home + JOY_EXEC_WRITABLE_ROOTS); approval in on-request
-    // mode asks once per write.
+    // the same definition the sandbox uses (`joyczl_tools::roots`): workdir +
+    // JOY_EXEC_WRITABLE_ROOTS, never home; approval in on-request mode asks once per write.
     if settings.write_enabled {
         let policy = joyczl_tools::fs_write::WritePolicy {
             approval: settings.approval == "on-request",
             approval_timeout_secs: settings.approval_timeout_secs,
             extra_roots: settings.exec_writable_roots.clone(),
+            // Persisted "记住这条" choices plus whatever this session answers from now on.
+            approved_dirs: write_approved_dirs.clone(),
         };
-        tools.register(joyczl_tools::fs_write::write_file(policy.clone()));
-        tools.register(joyczl_tools::fs_write::edit(policy));
+        tools.register_exclusive(joyczl_tools::fs_write::write_file(policy.clone()));
+        tools.register_exclusive(joyczl_tools::fs_write::edit(policy.clone()));
+        tools.register_exclusive(joyczl_tools::patch::apply_patch(policy));
         eprintln!(
-            "(joy) 文件写入工具已启用：write_file / edit（可写范围 = 本轮选的工作目录 + \
-             额外可写根；没选目录就一处也写不了；JOY_APPROVAL=on-request 时每次写入都会问）"
+            "(joy) 文件写入工具已启用：write_file / edit / apply_patch（可写范围 = 本轮选的\
+             工作目录 + 额外可写根；没选目录就一处也写不了；JOY_APPROVAL=on-request 时每次\
+             写入都会问）"
         );
     }
     // Connectors: `<home>/connectors.json` **is** the switch — no file, no connector tools
@@ -1188,7 +1313,12 @@ async fn builtin_tools(
             servers.join(", ")
         );
     }
-    (tools, jobs_handle)
+    BuiltinTools {
+        tools,
+        jobs: jobs_handle,
+        exec_session_allow,
+        write_approved_dirs,
+    }
 }
 
 /// The **only** construction site of the tool execution environment. Both turn and subagent go through it —
@@ -1239,6 +1369,9 @@ pub(crate) fn tool_ctx(
         hooks: injected.hooks,
         turn_limits: std::sync::Arc::new(joyczl_tools::web::TurnLimits::from_env()),
         jobs: injected.jobs,
+        // Set per call by the loop when a client is watching (SSE); a turn with no observer
+        // (CLI, eval, jobs) keeps it `None` and the tool just collects its output.
+        on_delta: None,
     }
 }
 
@@ -1262,4 +1395,19 @@ pub(crate) async fn fire_hook(
 /// 2.1 billion facts, garbled numbering is still far better than the whole app-server crashing.
 pub(crate) fn narrow(value: i64) -> i32 {
     value.clamp(0, i32::MAX as i64) as i32
+}
+
+/// Add `value` to a shared list unless it is already there (an approval answered twice in one turn
+/// must not grow the table).
+///
+/// A poisoned lock is recovered rather than propagated: remembering is a convenience, and a thread
+/// that panicked elsewhere must not be able to take the turn down here.
+fn push_unique<T: PartialEq>(cell: &Mutex<Vec<T>>, value: T) {
+    let mut list = match cell.lock() {
+        Ok(list) => list,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if !list.contains(&value) {
+        list.push(value);
+    }
 }

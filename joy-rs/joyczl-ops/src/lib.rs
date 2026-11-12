@@ -310,6 +310,7 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         .route("/api/session/meta", get(api::session_meta))
         .route("/api/session/new", post(api::session_new))
         .route("/api/session/update", post(api::session_update))
+        .route("/api/session/fork", post(api::session_fork))
         // What is running right now — the page cannot know this from its own `busy` flag,
         // because another device may be the one running the turn.
         .route("/api/turns", get(api::turns))

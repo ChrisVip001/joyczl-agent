@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
-use super::approval::{ApprovalBroker, ApprovalFut, ApprovalRequest};
+use super::approval::{ApprovalBroker, ApprovalFut, ApprovalRequest, RememberTarget};
 use super::fs_write::{edit, render_change, write_file, WritePolicy};
 use crate::{ToolCtx, ToolRegistry};
 
@@ -31,6 +31,7 @@ async fn test_ctx(approval: Option<Arc<dyn ApprovalBroker>>) -> ToolCtx {
         chat: joyczl_state::Chat::new(pool.clone()),
         calendar: joyczl_state::Calendar::new(pool),
         home,
+        on_delta: None,
     }
 }
 
@@ -308,6 +309,7 @@ async fn on_request_mode_asks_once_per_write() {
         approval: true,
         approval_timeout_secs: 5,
         extra_roots: Vec::new(),
+        approved_dirs: Default::default(),
     };
     reg.register(write_file(policy.clone()));
     reg.register(edit(policy));
@@ -343,6 +345,89 @@ async fn on_request_mode_asks_once_per_write() {
     assert!(!denied_path.exists());
 }
 
+/// "记住这条" on a write names the **directory** (never the file name), and an approved directory
+/// stops being asked about — the cell is shared, so the very next write sees it.
+#[tokio::test]
+async fn an_approved_directory_stops_asking() {
+    let yes = Fake::answering(true);
+    let ctx = test_ctx(Some(yes.clone())).await;
+    let approved: Arc<Mutex<Vec<std::path::PathBuf>>> = Default::default();
+    let mut reg = ToolRegistry::new();
+    reg.register(write_file(WritePolicy {
+        approval: true,
+        approval_timeout_secs: 5,
+        extra_roots: Vec::new(),
+        approved_dirs: approved.clone(),
+    }));
+
+    let first = ctx.home.join("first.md");
+    let out = reg
+        .execute(
+            ctx.clone(),
+            "write_file",
+            json!({"path": first.display().to_string(), "content": "1\n"}),
+        )
+        .await;
+    assert!(out.starts_with("已写入"), "{out}");
+    {
+        let seen = yes.seen.lock().expect("锁");
+        assert_eq!(seen.len(), 1, "第一次要问");
+        assert_eq!(
+            seen[0].remember,
+            Some(RememberTarget::Directory(ctx.home.clone())),
+            "记住的是目录，不是文件名"
+        );
+    }
+
+    // What "本会话总是允许" does on the server side: the directory lands in the shared cell.
+    approved.lock().expect("锁").push(ctx.home.clone());
+    let second = ctx.home.join("second.md");
+    let out = reg
+        .execute(
+            ctx.clone(),
+            "write_file",
+            json!({"path": second.display().to_string(), "content": "2\n"}),
+        )
+        .await;
+    assert!(out.starts_with("已写入"), "{out}");
+    assert_eq!(
+        yes.seen.lock().expect("锁").len(),
+        1,
+        "已批准的目录不该再问第二次"
+    );
+}
+
+/// An approved directory outside the writable boundary unlocks nothing: containment runs first.
+#[tokio::test]
+async fn an_approved_directory_cannot_widen_the_boundary() {
+    let ctx = test_ctx(Some(Fake::answering(true))).await;
+    let outside = tempfile::tempdir().expect("另一个目录");
+    let mut reg = ToolRegistry::new();
+    let approved: Arc<Mutex<Vec<std::path::PathBuf>>> = Default::default();
+    approved
+        .lock()
+        .expect("锁")
+        .push(outside.path().to_path_buf());
+    reg.register(write_file(WritePolicy {
+        approval: true,
+        approval_timeout_secs: 5,
+        extra_roots: Vec::new(),
+        approved_dirs: approved,
+    }));
+
+    let path = outside.path().join("leak.md");
+    let out = reg
+        .execute(
+            ctx,
+            "write_file",
+            json!({"path": path.display().to_string(), "content": "no\n"}),
+        )
+        .await;
+    assert!(out.starts_with("Error:"), "{out}");
+    assert!(out.contains("可写范围"), "{out}");
+    assert!(!path.exists(), "越界的写入不该落盘");
+}
+
 #[tokio::test]
 async fn on_request_mode_without_a_broker_refuses() {
     let ctx = test_ctx(None).await; // approval mode on, nobody home to answer
@@ -351,6 +436,7 @@ async fn on_request_mode_without_a_broker_refuses() {
         approval: true,
         approval_timeout_secs: 5,
         extra_roots: Vec::new(),
+        approved_dirs: Default::default(),
     }));
     let path = ctx.home.join("x.md");
     let out = reg
