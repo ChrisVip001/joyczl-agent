@@ -3,23 +3,16 @@
 
     python3 scripts/check_config_docs.py      # CI 用（通过打印 ✓，不通过 exit 1）
 
-一个 `JOY_*` 原来要同时在四处出现：`.env.example`（给人抄的样例）、
-`docs/configuration.md` 与 `configuration.zh.md`（给读的说明），加上代码里那次读取。
-四处靠人记，就一定会漏 —— 加一个开关要改五个文件，漏掉的那个只有在下一个人
-发现「文档里没这一项」时才会暴露。
+一个 `JOY_*` 原来要同时出现在四处（`.env.example`、两份 `configuration`、代码里那次读取），
+靠人记就一定会漏。所以**代码是唯一事实源**，文档被对账。四个方向各对应一种真实事故：
 
-所以：**代码是唯一事实源**，文档被对账。四个方向都查，每个方向都对应一种真实事故：
+  1. 代码能读、`.env.example` 里没有 —— 抄样例的人开不出这个功能；
+  2. 代码能读、`configuration` 里没提 —— 读者以为开关不存在；
+  3. `.env.example` 里有、代码读不到 —— 死开关看起来能用；
+  4. 文档里提到、代码读不到 —— 改名后残留的说明比没有更糟。
 
-  1. 代码能读、`.env.example` 里没有 —— 抄样例的人永远开不出这个功能；
-  2. 代码能读、`configuration` 里没提 —— 读者以为没有这个开关；
-  3. `.env.example` 里有、代码读不到 —— 一个没人读的开关，写在那儿只是骗人；
-  4. 文档里提到、代码读不到 —— 改名/删除之后残留的说明，比没有更糟。
-
-"读得到"的范围比 Rust 代码大：Python SDK、TS 客户端、`scripts/*.sh` 也读环境变量
-（`JOY_BIN` 就是这样被 SDK 读的），少算一方就会把真开关误判成残文。
-
-为什么不是 cargo test：这几份文件不在 crate 里，打包出去的 crate 不该因为仓库里的
-Markdown 换个写法就红 —— 和 `check_tool_docs.py` 同一个位置、同一个理由。
+"读得到"不止 Rust：Python SDK、TS 客户端、`scripts/*.sh` 也读环境变量（`JOY_BIN` 就是
+SDK 读的），少算一方会把真开关误判成残文。
 """
 
 from __future__ import annotations
@@ -72,11 +65,9 @@ INTERNAL = {
 # 一条永远绿的对账比没有对账更糟。
 MIN_VARS = 60
 
-
 def fail(message: str) -> None:
     print(f"✗ {message}", file=sys.stderr)
     raise SystemExit(1)
-
 
 def code_vars() -> set[str]:
     """凡是**能读到** `JOY_*` 的地方：Rust 非注释字面量 + SDK/TS/脚本里的明文。"""
@@ -109,13 +100,11 @@ def code_vars() -> set[str]:
 
     return found
 
-
 def sample_vars() -> set[str]:
     """`.env.example` 里的名字：注释掉的也算（惯例是整份都注掉，按需取消）。"""
     return set(
         re.findall(r"^#?\s*(JOY_[A-Z0-9_]+)=", ENV_SAMPLE.read_text(encoding="utf-8"), re.M)
     )
-
 
 def main() -> int:
     code = (code_vars() | INDIRECT.keys()) - INTERNAL.keys()
@@ -155,7 +144,6 @@ def main() -> int:
         f"（另有 {len(INTERNAL)} 个测试夹具刻意不写）"
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
