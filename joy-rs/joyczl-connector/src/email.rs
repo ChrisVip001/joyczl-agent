@@ -29,16 +29,15 @@ const APPROVAL_TIMEOUT_SECS: i64 = 120;
 pub fn email_send_tool(config: EmailConfig) -> Tool {
     Tool {
         name: "email_send".to_string(),
-        description: "给白名单里的收件人发邮件。默认只写进本地 outbox 当草稿（不发）；\
-                      真正发送需要用户在配置里开启 live，并且每次都会被问一次。"
+        description: "Send mail to an allowlisted recipient. By default it only writes a draft into the local outbox (nothing is sent); actually sending needs live turned on in the config, and every send asks first."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "收件人地址，多个用逗号分隔（必须在白名单内）"},
-                "subject": {"type": "string", "description": "主题"},
-                "body": {"type": "string", "description": "正文（纯文本）"},
-                "dry_run": {"type": "boolean", "description": "只留草稿、不发。不填则按配置（默认也是草稿）"}
+                "to": {"type": "string", "description": "recipient addresses, comma-separated (must be allowlisted)"},
+                "subject": {"type": "string", "description": "subject"},
+                "body": {"type": "string", "description": "body (plain text)"},
+                "dry_run": {"type": "boolean", "description": "keep a draft, do not send. Unset = follow the config (also a draft by default)"}
             },
             "required": ["to", "subject", "body"]
         }),
@@ -59,7 +58,7 @@ async fn run(ctx: ToolCtx, config: EmailConfig, args: Value) -> Result<String> {
         .unwrap_or(false);
 
     if to.is_empty() {
-        bail!("to 里没有可用地址");
+        bail!("no usable address in to");
     }
 
     // Fence 1: the allowlist is a hard boundary, and it fails closed.
@@ -76,13 +75,13 @@ async fn run(ctx: ToolCtx, config: EmailConfig, args: Value) -> Result<String> {
     if dry_run || !config.live {
         let path = write_draft(&ctx.home, &message).await?;
         return Ok(format!(
-            "邮件草稿已放进 outbox（{}）：收件人 {}。{}",
+            "Mail draft put in the outbox ({}): recipients {}.{}",
             path.display(),
             to.join(", "),
             if config.live {
-                "这次是你的 dry_run 要求"
+                " this run's dry_run asked for it"
             } else {
-                "连接器还没开 live，不会真的发"
+                "; the connector is not live, so nothing was sent"
             }
         ));
     }
@@ -93,23 +92,23 @@ async fn run(ctx: ToolCtx, config: EmailConfig, args: Value) -> Result<String> {
 
     // Fence 3: every live send asks once, and the card says what will happen.
     let Some(broker) = ctx.approval.clone() else {
-        bail!("要真的发邮件必须先问人，但当前没有可应答的界面 —— 这次没有发送。");
+        bail!("Sending for real would have to ask a person first, and there is no interface to answer — nothing was sent this time.");
     };
     let request = ApprovalRequest {
         tool: "email_send".to_string(),
-        args_preview: format!("发给 {}：{}", to.join(", "), summarize(&subject, &body)),
-        reason: "连接器已开启 live，每次实际发送都会确认".to_string(),
+        args_preview: format!("To {}: {}", to.join(", "), summarize(&subject, &body)),
+        reason: "the connector is live; every actual send is confirmed".to_string(),
         timeout_secs: APPROVAL_TIMEOUT_SECS,
         // Nothing worth remembering: a live send is a one-off act, not a standing rule.
         remember: None,
     };
     if !broker.request(request).await {
-        bail!("这次发送没有被批准（或没人回答），已跳过。");
+        bail!("This send was not approved (or nobody answered); skipped.");
     }
 
     send_live(&config, password, &message).await?;
     Ok(format!(
-        "已通过 {}:{} 发给 {}。",
+        "Sent to {} through {}:{}.",
         config.smtp_host,
         config.smtp_port,
         to.join(", ")
@@ -124,8 +123,7 @@ pub fn check_recipients(config: &EmailConfig, to: &[String], home: &std::path::P
         return Ok(());
     }
     bail!(
-        "这些收件人不在白名单里：{}。\n\
-         白名单在 {} 的 allow_recipients —— 只有人能改；留空就是谁都不许。",
+        "These recipients are not on the allowlist: {}.\n\n         The allowlist is allow_recipients in {} — only a person can change it; empty means nobody is allowed.",
         rejected
             .iter()
             .map(|addr| addr.as_str())
@@ -143,8 +141,8 @@ pub fn password_of(config: &EmailConfig, home: &std::path::Path) -> Result<Optio
     };
     if config.username.is_some() && password.is_none() {
         bail!(
-            "配了 SMTP 用户名，但 secret 指向的密码不存在（{}）—— 先在钥匙串或环境变量里补上。",
-            config.secret.as_deref().unwrap_or("(没配 secret)")
+            "An SMTP user name is configured, but the password the secret points at does not exist ({}) — put it in the keychain or an environment variable first.",
+            config.secret.as_deref().unwrap_or("(no secret configured)")
         );
     }
     Ok(password)
@@ -182,9 +180,9 @@ pub(crate) fn summarize(subject: &str, body: &str) -> String {
     let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
     let preview: String = flat.chars().take(160).collect();
     if preview.len() < flat.len() {
-        format!("「{subject}」正文：{preview}…")
+        format!("\"{subject}\" body: {preview}…")
     } else {
-        format!("「{subject}」正文：{preview}")
+        format!("\"{subject}\" body: {preview}")
     }
 }
 

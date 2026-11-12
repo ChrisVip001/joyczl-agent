@@ -232,8 +232,8 @@ impl Scenario {
         }
         for turn in self.effective_turns() {
             let gate = match &turn.gate {
-                Some(gate) => serde_json::to_string(gate).expect("gate 序列化"),
-                None => "（场景没给 gate 脚本 —— 门会失败开放）".to_string(),
+                Some(gate) => serde_json::to_string(gate).expect("the gate serialises"),
+                None => "(the scenario gave no gate script — the gate will fail open)".to_string(),
             };
             responses.push(Mock::text(&gate));
             for (index, response) in turn.responses.iter().enumerate() {
@@ -241,7 +241,7 @@ impl Scenario {
                     // An inline gate script: the round boundary is a real model call, and
                     // this is how the case says "the next round's gate answers this".
                     ScriptedResponse::Gate(gate) => responses.push(Mock::text(
-                        &serde_json::to_string(gate).expect("gate 序列化"),
+                        &serde_json::to_string(gate).expect("the gate serialises"),
                     )),
                     other => responses.push(other.to_create_response(index, home)),
                 }
@@ -274,7 +274,7 @@ impl ScriptedResponse {
         match self {
             ScriptedResponse::Text(text) => Mock::text(text),
             ScriptedResponse::Gate(gate) => {
-                Mock::text(&serde_json::to_string(gate).expect("gate 序列化"))
+                Mock::text(&serde_json::to_string(gate).expect("the gate serialises"))
             }
             ScriptedResponse::ToolUse { name, args } => {
                 // {{home}} in tool arguments becomes the case's own home — file fixtures
@@ -283,7 +283,7 @@ impl ScriptedResponse {
                 let replaced = crate::expand_home(&args.to_string(), home);
                 let args: Value = serde_json::from_str(&replaced).unwrap_or_else(|error| {
                     eprintln!(
-                        "(joy) 用例的工具参数解析失败（{error}），按原文送给模型：{replaced}"
+                        "(joy) could not parse the tool arguments of a case ({error}); sending them to the model as written: {replaced}"
                     );
                     args.clone()
                 });
@@ -375,12 +375,12 @@ pub struct JudgeSpec {
 
 /// Reads judge cases (same JSONL shape as deterministic cases; directories and files both accepted).
 pub fn load_judge(paths: &[PathBuf]) -> anyhow::Result<Vec<JudgeScenario>> {
-    crate::jsonl::read_jsonl(paths, "judge 用例", |_, _| Ok(()))
+    crate::jsonl::read_jsonl(paths, "judge case", |_, _| Ok(()))
 }
 
 /// Reads all deterministic cases: each path is a JSONL file or directory (a directory consumes its *.jsonl).
 pub fn load_all(paths: &[PathBuf]) -> anyhow::Result<Vec<Scenario>> {
-    crate::jsonl::read_jsonl(paths, "用例", |_, _| Ok(()))
+    crate::jsonl::read_jsonl(paths, "case", |_, _| Ok(()))
 }
 
 #[cfg(test)]

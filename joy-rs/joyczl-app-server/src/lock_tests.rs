@@ -7,7 +7,7 @@ use super::lock;
 use std::io::Write;
 
 fn temp_home() -> tempfile::TempDir {
-    tempfile::tempdir().expect("临时目录")
+    tempfile::tempdir().expect("temporary directory")
 }
 
 /// A second process takes the same lock: a hard error, carrying the running PID.
@@ -16,7 +16,7 @@ fn a_second_acquire_on_a_live_lock_fails() {
     let dir = temp_home();
     let first = lock::acquire(dir.path()).expect("第一次该拿到");
     let error = lock::acquire(dir.path()).unwrap_err();
-    assert!(error.contains("已经在跑"), "{error}");
+    assert!(error.contains("already running"), "{error}");
     assert!(
         error.contains(&std::process::id().to_string()),
         "该带 pid：{error}"

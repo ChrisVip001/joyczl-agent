@@ -173,11 +173,11 @@ impl Bundle {
     /// called on boot, on every write, and by the memory center's first read.
     pub fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.root)
-            .with_context(|| format!("建记忆目录 {}", self.root.display()))?;
+            .with_context(|| format!("create the memory catalog at {}", self.root.display()))?;
         if !self.root.join(CHANGELOG_FILE).exists() {
             self.write_atomic(
                 &self.root.join(CHANGELOG_FILE),
-                "# 变更历史\n\n每次写入一行，只追加。\n".as_bytes(),
+                "# Change log\n\nOne line per write, append-only.\n".as_bytes(),
             )?;
         }
         if !self.root.join(INDEX_FILE).exists() {
@@ -192,7 +192,9 @@ impl Bundle {
         let entries = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(pages),
-            Err(error) => return Err(error).with_context(|| format!("读 {}", self.root.display())),
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", self.root.display()))
+            }
         };
         for entry in entries {
             let entry = entry?;
@@ -226,7 +228,7 @@ impl Bundle {
         match fs::read_to_string(&path) {
             Ok(text) => Ok(Page::parse(slug.to_string(), &text)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).with_context(|| format!("读 {}", path.display())),
+            Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
         }
     }
 
@@ -253,7 +255,7 @@ impl Bundle {
                 Ok(true)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error).with_context(|| format!("删 {}", path.display())),
+            Err(error) => Err(error).with_context(|| format!("delete {}", path.display())),
         }
     }
 
@@ -261,8 +263,12 @@ impl Bundle {
     /// never disagree with them.
     pub fn rewrite_index(&self) -> Result<()> {
         let pages = self.pages()?;
-        let mut out = String::from("# 记忆目录\n\n");
-        out.push_str(&format!("{} 页 · 最后更新 {}\n\n", pages.len(), now()));
+        let mut out = String::from("# Memory catalog\n\n");
+        out.push_str(&format!(
+            "{} pages · last updated {}\n\n",
+            pages.len(),
+            now()
+        ));
         for page in &pages {
             let summary = if page.summary.trim().is_empty() {
                 String::new()
@@ -286,7 +292,7 @@ impl Bundle {
         match fs::read_to_string(self.root.join(INDEX_FILE)) {
             Ok(text) => Ok(text),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-            Err(error) => Err(error).context("读记忆目录"),
+            Err(error) => Err(error).context("read the memory catalog"),
         }
     }
 
@@ -297,8 +303,8 @@ impl Bundle {
             .create(true)
             .append(true)
             .open(self.root.join(CHANGELOG_FILE))
-            .context("打开变更历史")?;
-        writeln!(file, "- {} {}", now(), line).context("写变更历史")?;
+            .context("open the change log")?;
+        writeln!(file, "- {} {}", now(), line).context("write the change log")?;
         Ok(())
     }
 
@@ -310,13 +316,13 @@ impl Bundle {
     pub fn page_path(&self, slug: &str) -> Result<PathBuf> {
         let slug = slug.trim();
         if slug.is_empty() || slug.chars().count() > 64 {
-            anyhow::bail!("页面名要是 1-64 个字符");
+            anyhow::bail!("a page name must be 1-64 characters");
         }
         // Case-insensitive: on macOS `Index.md` and `index.md` are the same file, so the
         // catalog would be silently overwritten by a page.
         let lowered = slug.to_lowercase();
         if lowered == "index" || lowered == "changelog" {
-            anyhow::bail!("`{slug}` 是保留文件名");
+            anyhow::bail!("`{slug}` is a reserved file name");
         }
         // Unicode letters are allowed on purpose: a page about 张伟 should be `张伟.md`, not
         // a hash. What stays forbidden is everything that could be a path (`/`, `\\`, `.`)
@@ -325,15 +331,15 @@ impl Bundle {
             .chars()
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_');
         if !ok {
-            anyhow::bail!("页面名只能用字母、数字、`-` 和 `_`（收到 `{slug}`）");
+            anyhow::bail!("a page name may only use letters, digits, `-` and `_` (got `{slug}`)");
         }
         Ok(self.root.join(format!("{slug}.md")))
     }
 
     fn write_atomic(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-        fs::write(&tmp, bytes).with_context(|| format!("写 {}", tmp.display()))?;
-        fs::rename(&tmp, path).with_context(|| format!("落盘 {}", path.display()))?;
+        fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
+        fs::rename(&tmp, path).with_context(|| format!("spill {}", path.display()))?;
         Ok(())
     }
 }

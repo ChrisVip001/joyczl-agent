@@ -53,12 +53,12 @@ pub struct Config {
 
 impl Config {
     pub fn parse(text: &str) -> Result<Config, String> {
-        serde_json::from_str(text).map_err(|e| format!("mcp.json 不是合法 JSON：{e}"))
+        serde_json::from_str(text).map_err(|e| format!("mcp.json is not valid JSON: {e}"))
     }
 
     pub fn read(path: &Path) -> Result<Config, String> {
-        let text =
-            std::fs::read_to_string(path).map_err(|e| format!("读不了 {}：{e}", path.display()))?;
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("could not read {}: {e}", path.display()))?;
         Config::parse(&text)
     }
 }
@@ -109,10 +109,10 @@ pub fn resolve(
     let command = spec.command.as_deref().unwrap_or("");
 
     if !url.is_empty() && !command.is_empty() {
-        return Err("同时写了 'url' 和 'command' —— 只能挑一种传输".to_string());
+        return Err("both 'url' and 'command' are set — pick one transport".to_string());
     }
     if url.is_empty() && command.is_empty() {
-        return Err("既没有 'url' 也没有 'command' —— 不知道该连什么".to_string());
+        return Err("neither 'url' nor 'command' is set — nothing to connect to".to_string());
     }
 
     if url.is_empty() {
@@ -126,7 +126,7 @@ pub fn resolve(
     let auth_env = spec.auth_env.as_deref().unwrap_or("");
     let use_oauth = spec.oauth.unwrap_or(false);
     if !auth_env.is_empty() && use_oauth {
-        return Err("同时写了 'auth_env' 和 'oauth' —— 只能挑一种".to_string());
+        return Err("both 'auth_env' and 'oauth' are set — pick one".to_string());
     }
     // A server with `oauth: true` is built here as an "anonymous Http": the real bearer is
     // fetched by the layer above (lib.rs) from mcp-auth's token store — if never logged in,
@@ -136,7 +136,9 @@ pub fn resolve(
         // quietly vanish, reading like "server down" instead of "you did not export it".
         let token = lookup_env(auth_env)
             .filter(|t| !t.is_empty())
-            .ok_or_else(|| format!("{auth_env} 没有值（mcp.json 里的 'auth_env' 指的是它）"))?;
+            .ok_or_else(|| {
+                format!("{auth_env} has no value (that is what 'auth_env' in mcp.json points at)")
+            })?;
         return Ok(Transport::Http {
             url: url.to_string(),
             token: Some(token),
@@ -155,7 +157,7 @@ pub fn resolve(
 pub fn auth_hint(transport: &Transport) -> Option<String> {
     match transport {
         Transport::Http { url, token: None } => Some(format!(
-            "  {url} —— 如果它需要鉴权，检查 'auth_env' 指的那个变量里有没有有效的凭证"
+            "  {url} — if it needs auth, check that the variable 'auth_env' points at holds valid credentials"
         )),
         _ => None,
     }
@@ -192,7 +194,7 @@ pub fn model_safe_name_unique(
             return (candidate, true);
         }
     }
-    unreachable!("序号总能找到空位")
+    unreachable!("a free slot is always found")
 }
 
 /// Add a suffix under the 64-char cap: **keep the head** (the server prefix distinguishes best).

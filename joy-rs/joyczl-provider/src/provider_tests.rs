@@ -390,8 +390,15 @@ fn notice_sink() -> (
     (seen, sink)
 }
 
-const OK_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","content":"好了"}}],
-                           "usage":{"prompt_tokens":3,"completion_tokens":1}}"#;
+/// One completed Responses turn with a single text item.
+///
+/// The openai client goes through the Responses API (`responses.rs`), so this body is the
+/// shape that path parses — `status`, `output[]`, and usage under `input_tokens` /
+/// `output_tokens`. The Chat Completions shape that used to live here made every test that
+/// mocked a successful call fail with "Responses status is missing".
+const OK_BODY: &str = r#"{"status":"completed",
+                           "output":[{"type":"message","content":[{"type":"output_text","text":"好了"}]}],
+                           "usage":{"input_tokens":3,"output_tokens":1}}"#;
 
 /// 429 → backoff → retry succeeds, and it is **announced**.
 #[tokio::test]
@@ -603,7 +610,7 @@ fn resolve_with_an_unknown_provider_lists_catalog_ids() {
         ..Default::default()
     };
     let error = crate::resolve_with(&settings, &catalog).expect_err("应当报错");
-    assert!(error.contains("可选"), "{error}");
+    assert!(error.contains("Options"), "{error}");
     assert!(error.contains("deepseek"), "{error}");
 }
 
@@ -736,4 +743,30 @@ fn image_token_estimate_is_byte_based_and_clamped() {
     }];
     // 超大图不失控：clamp 上限 8000。
     assert_eq!(estimate_messages(&big), 8_000 + 4);
+}
+
+#[test]
+fn thinking_content_survives_tool_rounds_without_becoming_answer_text() {
+    let response=from_openai(&json!({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"reasoning_content":"private continuation","tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}).to_string()).unwrap();
+    assert_eq!(response.text(), "");
+    let messages = vec![Message {
+        role: Role::Assistant,
+        content: response.content,
+    }];
+    let messages = serde_json::from_str(&serde_json::to_string(&messages).unwrap()).unwrap();
+    let request = CreateRequest {
+        model: "test".into(),
+        cache_prefix: None,
+        system: None,
+        messages,
+        tools: vec![],
+        max_tokens: 200,
+    };
+    let body = to_openai(&request);
+    assert_eq!(
+        body["messages"][0]["reasoning_content"],
+        "private continuation"
+    );
+    assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "call");
+    assert!(body["messages"][0]["content"].is_null());
 }

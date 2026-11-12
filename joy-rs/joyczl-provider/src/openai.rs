@@ -27,6 +27,7 @@ pub struct Client {
     api_key: String,
     /// Max retries on rate limits / transient faults (`JOY_LLM_RETRIES`).
     max_retries: u32,
+    reasoning_content: bool,
 }
 
 impl Client {
@@ -35,14 +36,36 @@ impl Client {
             http: HttpClient::builder()
                 .timeout(timeout)
                 .build()
-                .expect("构建 HTTP 客户端"),
+                .expect("build the HTTP client"),
             base_url: base_url
                 .unwrap_or(DEFAULT_BASE)
                 .trim_end_matches('/')
                 .to_string(),
             api_key: api_key.to_string(),
             max_retries,
+            reasoning_content: false,
         }
+    }
+
+    /// DeepSeek thinking requires the field even on legacy text-only history.
+    pub fn with_reasoning_content(mut self, enabled: bool) -> Self {
+        self.reasoning_content = enabled;
+        self
+    }
+    fn body(&self, request: &CreateRequest) -> Value {
+        let mut body = to_openai(request);
+        if self.reasoning_content {
+            if let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) {
+                for message in messages {
+                    if message.get("role").and_then(Value::as_str) == Some("assistant")
+                        && message.get("reasoning_content").is_none()
+                    {
+                        message["reasoning_content"] = json!("");
+                    }
+                }
+            }
+        }
+        body
     }
 
     /// Attach the key to a request — unless there is none. Local endpoints (Ollama /
@@ -96,7 +119,8 @@ impl Provider for Client {
 
 impl Client {
     async fn create_inner(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
-        let body = to_openai(&request);
+        crate::reject_responses_continuation(&request)?;
+        let body = self.body(&request);
         let text = match self.post(&body).await {
             Ok(text) => text,
             // Older endpoints only know max_tokens, not max_completion_tokens. Retry under the
@@ -126,7 +150,8 @@ impl Client {
         request: CreateRequest,
         on_text: TextSink,
     ) -> Result<CreateResponse, ProviderError> {
-        let mut body = to_openai(&request);
+        crate::reject_responses_continuation(&request)?;
+        let mut body = self.body(&request);
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
 
@@ -136,17 +161,20 @@ impl Client {
 
         let mut tools: BTreeMap<i64, PartialCall> = BTreeMap::new();
         let mut text = String::new();
+        let mut reasoning = String::new();
         let mut usage = Usage::default();
         let mut finish_reason: Option<String> = None;
+        let mut saw_done = false;
 
         let mut events = Box::pin(sse::data_lines(Box::pin(response.bytes_stream())));
         while let Some(item) = events.as_mut().next().await {
             let data = item?;
             if data.trim() == "[DONE]" {
+                saw_done = true;
                 break;
             }
             let value: Value = serde_json::from_str(&data)
-                .map_err(|e| ProviderError::Parse(format!("SSE 载荷不是 JSON：{e}")))?;
+                .map_err(|e| ProviderError::Parse(format!("the SSE payload is not JSON: {e}")))?;
 
             // Usage rides on the last chunk, whose choices array is empty.
             if let Some(u) = value.get("usage") {
@@ -176,6 +204,9 @@ impl Client {
             }
 
             let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+            if let Some(piece) = delta.get("reasoning_content").and_then(Value::as_str) {
+                reasoning.push_str(piece);
+            }
             if let Some(piece) = delta.get("content").and_then(|v| v.as_str()) {
                 if !piece.is_empty() {
                     text.push_str(piece);
@@ -203,12 +234,22 @@ impl Client {
             }
         }
 
+        if finish_reason.is_none() && !saw_done {
+            return Err(ProviderError::Parse(
+                "Chat Completions stream ended before completion".into(),
+            ));
+        }
         let mut content = Vec::new();
+        if !reasoning.is_empty() {
+            content.push(ContentBlock::OpenAiReasoning { text: reasoning });
+        }
         if !text.is_empty() {
             content.push(ContentBlock::Text { text });
         }
         for (_, call) in std::mem::take(&mut tools) {
-            let input = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
+            let input = serde_json::from_str(&call.arguments).map_err(|e| {
+                ProviderError::Parse(format!("Tool arguments are incomplete or invalid: {e}"))
+            })?;
             content.push(ContentBlock::ToolUse {
                 id: call.id,
                 name: call.name,
@@ -295,6 +336,17 @@ pub fn to_openai(request: &CreateRequest) -> Value {
                 if !calls.is_empty() {
                     entry["tool_calls"] = json!(calls);
                 }
+                let reasoning = message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::OpenAiReasoning { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>();
+                if !reasoning.is_empty() {
+                    entry["reasoning_content"] = json!(reasoning);
+                }
                 messages.push(entry);
             }
             Role::User => {
@@ -379,7 +431,7 @@ pub fn to_openai(request: &CreateRequest) -> Value {
 /// OpenAI shape → Anthropic shape.
 pub fn from_openai(text: &str) -> Result<CreateResponse, ProviderError> {
     let value: Value = serde_json::from_str(text)
-        .map_err(|e| ProviderError::Parse(format!("应答不是合法 JSON：{e}")))?;
+        .map_err(|e| ProviderError::Parse(format!("the response is not valid JSON: {e}")))?;
 
     // OpenRouter answers rate limits with 200 + an error body and no choices: surface its
     // message instead of crashing below when taking choices[0].
@@ -390,12 +442,22 @@ pub fn from_openai(text: &str) -> Result<CreateResponse, ProviderError> {
         .get("choices")
         .and_then(|c| c.as_array())
         .and_then(|a| a.first())
-        .ok_or_else(|| ProviderError::Api("应答里没有 choices".to_string()))?;
+        .ok_or_else(|| ProviderError::Api("the response has no choices".to_string()))?;
     let message = choice
         .get("message")
-        .ok_or_else(|| ProviderError::Api("choice 里没有 message".to_string()))?;
+        .ok_or_else(|| ProviderError::Api("the choice has no message".to_string()))?;
 
     let mut content = Vec::new();
+    if let Some(reasoning) = message
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+    {
+        content.push(ContentBlock::OpenAiReasoning {
+            text: reasoning.into(),
+        });
+    }
+
     if let Some(text) = message.get("content").and_then(|c| c.as_str()) {
         if !text.is_empty() {
             content.push(ContentBlock::Text {
@@ -421,7 +483,9 @@ pub fn from_openai(text: &str) -> Result<CreateResponse, ProviderError> {
                 .pointer("/function/arguments")
                 .and_then(|v| v.as_str())
                 .unwrap_or("{}");
-            let input = serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
+            let input = serde_json::from_str(raw).map_err(|e| {
+                ProviderError::Parse(format!("Tool arguments are incomplete or invalid: {e}"))
+            })?;
             let extra = call.get("extra_content").cloned();
             content.push(ContentBlock::ToolUse {
                 id,

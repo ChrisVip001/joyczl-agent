@@ -20,7 +20,7 @@ mkdir -p "$WORK/.joy"
 
 # ---- 1. No config: nothing is enabled, and the CLI says so --------------------------
 OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector list 2>&1)" || fail "connector list 失败：$OUT"
-grep -q "还没有连接器" <<<"$OUT" || fail "没有配置时该说清楚：$OUT"
+grep -q "No connectors yet" <<<"$OUT" || fail "没有配置时该说清楚：$OUT"
 echo "  ✓ 没有配置时不启用任何连接器"
 
 # ---- 2. Allowlist is a hard boundary ------------------------------------------------
@@ -62,7 +62,7 @@ config['email']['live'] = False
 p.write_text(json.dumps(config))
 "
 OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector email --to alice@corp.com --subject 草稿 --body 先存着 2>&1)"
-grep -q "草稿" <<<"$OUT" || fail "关掉 live 后该写草稿：$OUT"
+grep -q "Draft" <<<"$OUT" || fail "关掉 live 后该写草稿：$OUT"
 ls "$WORK/.joy/outbox" | grep -q "email-" || fail "outbox 里没有草稿文件"
 echo "  ✓ live=false：只写 outbox，不发"
 
@@ -78,7 +78,7 @@ p.write_text(json.dumps(config))
 # The fake server exits after one message, so this is the only live send in the smoke.
 OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector email --to alice@corp.com,bob@corp.com --subject 你好 --body 正文内容 2>&1)" \
   || fail "live 发送失败：$OUT"
-grep -q "已发给" <<<"$OUT" || fail "该报告发送成功：$OUT"
+grep -q "Sent to" <<<"$OUT" || fail "该报告发送成功：$OUT"
 
 for _ in $(seq 1 50); do
   [[ -s "$WORK/data.txt" ]] && break
@@ -125,7 +125,7 @@ grep -q "ou_mallory" <<<"$OUT" || fail "飞书报错该点名接收方：$OUT"
 echo "  ✓ 飞书白名单外：拒绝"
 
 OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector feishu --to ou_alice --text 先存草稿 --dry-run 2>&1)"
-grep -q "草稿" <<<"$OUT" || fail "dry-run 该写草稿：$OUT"
+grep -q "Draft" <<<"$OUT" || fail "dry-run 该写草稿：$OUT"
 ls "$WORK/.joy/outbox" | grep -q "feishu-" || fail "outbox 里没有飞书草稿"
 echo "  ✓ 飞书 dry-run：只写 outbox"
 
@@ -300,7 +300,7 @@ kill "$RENEW_SERVER" 2>/dev/null || true
 kill "$RENEW_PID" 2>/dev/null || true
 
 [[ "$RENEWED" == "u-renewed" ]] || { cat "$WORK/renew_out.log"; fail "后台没有把 token 续掉（拿到：$RENEWED）"; }
-grep -q "在后台续期" "$WORK/renew_out.log" || { cat "$WORK/renew_out.log"; fail "续期没在日志里说一声"; }
+grep -q "refreshed in the background" "$WORK/renew_out.log" || { cat "$WORK/renew_out.log"; fail "续期没在日志里说一声"; }
 
 python3 - "$WORK/renew.log" <<'PY_GRANT' || fail "续期请求形状不对"
 import json, sys

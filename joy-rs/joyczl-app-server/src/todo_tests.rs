@@ -15,7 +15,7 @@ async fn run_twice(
     first_message: &str,
     second_message: &str,
 ) -> (Arc<Mock>, String, String, String) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -134,7 +134,7 @@ async fn a_todo_list_is_injected_into_the_next_turn() {
 /// A session that never wrote a board gets no section (an empty header is worse than none: it would suggest the board is empty).
 #[tokio::test]
 async fn a_session_without_a_list_gets_no_section() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await

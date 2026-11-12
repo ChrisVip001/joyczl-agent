@@ -20,9 +20,9 @@ description: Summarize the week and draft the Monday brief
 ## Three rules
 
 1. **The `description` doubles as the trigger.** Triggering = keyword overlap
-   between the message and name+description (≥2 ASCII word hits). Chinese
-   does not participate — writing English trigger words into the description
-   is a format requirement, not an option.
+   between the message and name+description (≥2 distinct hits). Matching uses
+   ASCII words of at least three characters and adjacent Han-character pairs.
+   Chinese descriptions can trigger directly; repeated words do not inflate scores.
 2. **Progressive disclosure.** The frontmatter is scanned every turn (cheap);
    the body enters the system prompt only on a match; files a skill references
    are read only when the model asks.

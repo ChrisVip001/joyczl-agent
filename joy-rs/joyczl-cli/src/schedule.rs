@@ -60,7 +60,9 @@ impl Delivery {
             "quiet" => Delivery::Quiet,
             "outbox" => Delivery::Outbox,
             other => {
-                eprintln!("(joy) delivery '{other}' 不认识（outbox/notify/quiet），按 outbox 处理");
+                eprintln!(
+                    "(joy) unknown delivery '{other}' (outbox/notify/quiet); treating it as outbox"
+                );
                 Delivery::Outbox
             }
         }
@@ -93,7 +95,7 @@ pub fn load_jobs(home: &Path) -> Vec<Job> {
                 name: skill.name.clone(),
                 cron,
                 prompt: format!(
-                    "按技能 '{name}' 的做法执行一次：{description}",
+                    "Run skill '{name}' once the way it says: {description}",
                     name = skill.name,
                     description = skill.description
                 ),
@@ -134,13 +136,13 @@ pub fn load_jobs(home: &Path) -> Vec<Job> {
                             ),
                         }),
                         _ => eprintln!(
-                            "(joy) {} 里有一条缺 name/cron/prompt 的任务，跳过",
+                            "(joy) a job in {} is missing name/cron/prompt — skipped",
                             path.display()
                         ),
                     }
                 }
             }
-            Err(e) => eprintln!("(joy) {} 不是合法 JSON，跳过：{e}", path.display()),
+            Err(e) => eprintln!("(joy) {} is not valid JSON — skipped: {e}", path.display()),
         }
     }
 
@@ -212,10 +214,16 @@ fn append_run_log(home: &Path, line: &str) {
     {
         Ok(mut file) => {
             if let Err(e) = writeln!(file, "{line}") {
-                eprintln!("(joy) run 账本写不进 {}：{e}", path.display());
+                eprintln!(
+                    "(joy) could not write the run ledger in {}: {e}",
+                    path.display()
+                );
             }
         }
-        Err(e) => eprintln!("(joy) run 账本打不开 {}：{e}", path.display()),
+        Err(e) => eprintln!(
+            "(joy) could not open the run ledger {}: {e}",
+            path.display()
+        ),
     }
 }
 
@@ -224,7 +232,7 @@ fn append_run_log(home: &Path, line: &str) {
 pub fn last_missed(job: &Job, from: NaiveDateTime, to: NaiveDateTime) -> Option<NaiveDateTime> {
     let mut latest = None;
     let mut t = from;
-    let step = chrono::TimeDelta::try_minutes(1).expect("一分钟总是合法");
+    let step = chrono::TimeDelta::try_minutes(1).expect("once a minute is always valid");
     while t <= to {
         if cron_matches(&job.cron, t) {
             latest = Some(t);
@@ -245,13 +253,13 @@ pub async fn run(server: Server) -> Result<()> {
     let initial = load_jobs(&home);
     if initial.is_empty() {
         eprintln!(
-            "(joy) 没有定时任务。给 SKILL.md 的 frontmatter 加一行 schedule: 0 8 * * 1-5，\
-             或在 {} 里写 jobs。",
+            "(joy) no scheduled jobs. Add a `schedule: 0 8 * * 1-5` line to a SKILL.md frontmatter, \
+             or write jobs in {}.",
             home.join("schedules.json").display()
         );
     } else {
         for job in &initial {
-            eprintln!("(joy) 定时任务 {} —— cron '{}'", job.name, job.cron);
+            eprintln!("(joy) scheduled job {} — cron '{}'", job.name, job.cron);
         }
     }
 
@@ -265,7 +273,7 @@ pub async fn run(server: Server) -> Result<()> {
         };
         if let Err(e) = schedules.ensure(&job.name, job.catch_up, delivery).await {
             eprintln!(
-                "(joy) 任务 '{}' 的状态登记失败（按无历史继续）：{e}",
+                "(joy) could not record the state of job '{}' (continuing as if there were no history): {e}",
                 job.name
             );
             continue;
@@ -282,7 +290,7 @@ pub async fn run(server: Server) -> Result<()> {
             if let Some(minute) = legacy.get(&job.name) {
                 if schedules.import_legacy(&job.name, minute).await.is_ok() {
                     eprintln!(
-                        "(joy) 任务 '{}' 的历史从 schedules-state.json 导入 state.db",
+                        "(joy) imported the history of job '{}' from schedules-state.json into state.db",
                         job.name
                     );
                 }
@@ -293,25 +301,25 @@ pub async fn run(server: Server) -> Result<()> {
         if let Ok(Some(claimed)) = schedules.pending_claim(&job.name).await {
             if job.catch_up {
                 eprintln!(
-                    "(joy) 任务 '{}' 上次执行中断在 {claimed}，按 catch_up=1 补跑一次",
+                    "(joy) job '{}' was interrupted at {claimed}; catch_up=1 means it runs once more",
                     job.name
                 );
                 let resumed = Job {
                     prompt: format!(
-                        "{}\n\n（补跑：{claimed} 那次触发后进程中断了 —— 这次是重新执行。）",
+                        "{}\n\n(catch-up: the process died after the {claimed} trigger — this is a fresh run.)",
                         job.prompt
                     ),
                     ..job.clone()
                 };
                 if let Err(e) = fire(&server, &resumed, now0).await {
-                    eprintln!("(joy) 任务 '{}' 补跑失败：{e}", job.name);
+                    eprintln!("(joy) the catch-up run of job '{}' failed: {e}", job.name);
                 }
                 let minute = now0.format("%Y-%m-%dT%H:%M").to_string();
                 let _ = schedules.confirm(&job.name, &minute).await;
                 fired.insert(job.name.clone(), minute);
             } else {
                 eprintln!(
-                    "(joy) 任务 '{}' 上次执行中断在 {claimed}，按 catch_up=0 放弃（至多一次）",
+                    "(joy) job '{}' was interrupted at {claimed}; catch_up=0 means it is dropped (at most once)",
                     job.name
                 );
                 let _ = schedules.confirm(&job.name, &claimed).await;
@@ -330,17 +338,18 @@ pub async fn run(server: Server) -> Result<()> {
         {
             fired.insert(job.name.clone(), last.format("%Y-%m-%dT%H:%M").to_string());
             // Lookback capped at seven days: older misses aren't worth a million-minute scan.
-            let from = (last + chrono::TimeDelta::try_minutes(1).expect("一分钟总是合法"))
-                .max(now0 - chrono::TimeDelta::try_days(7).expect("七天总是合法"));
+            let from = (last
+                + chrono::TimeDelta::try_minutes(1).expect("once a minute is always valid"))
+            .max(now0 - chrono::TimeDelta::try_days(7).expect("once a week is always valid"));
             if let Some(missed) = last_missed(&job, from, now0) {
                 eprintln!(
-                    "(joy) 任务 '{}' 在 {} 错过了触发，现在补跑",
+                    "(joy) job '{}' missed its {} trigger; catching up now",
                     job.name,
                     missed.format("%Y-%m-%d %H:%M")
                 );
                 let catch_up = Job {
                     prompt: format!(
-                        "{}\n\n（补跑：{} 那次的定时触发没赶上 —— 进程当时没在跑。）",
+                        "{}\n\n(catch-up: the {} trigger was missed — the process was not running then.)",
                         job.prompt,
                         missed.format("%Y-%m-%d %H:%M")
                     ),
@@ -349,7 +358,7 @@ pub async fn run(server: Server) -> Result<()> {
                 let minute = now0.format("%Y-%m-%dT%H:%M").to_string();
                 let _ = schedules.claim(&job.name, &minute).await;
                 if let Err(e) = fire(&server, &catch_up, now0).await {
-                    eprintln!("(joy) 任务 '{}' 补跑失败：{e}", job.name);
+                    eprintln!("(joy) the catch-up run of job '{}' failed: {e}", job.name);
                 }
                 let _ = schedules.confirm(&job.name, &minute).await;
                 fired.insert(job.name.clone(), minute);
@@ -369,7 +378,7 @@ pub async fn run(server: Server) -> Result<()> {
             // Serial execution: other jobs in the same minute wait for it to finish.
             // Hammering the model with scheduled jobs isn't "fast" — nobody can read it.
             if let Err(e) = fire(&server, job, at).await {
-                eprintln!("(joy) 任务 '{}' 执行失败：{e}", job.name);
+                eprintln!("(joy) job '{}' failed: {e}", job.name);
             }
             // Confirm on both success and failure: no backoff exists, so failures mustn't retry every 20s.
             let _ = schedules.confirm(&job.name, &minute).await;
@@ -381,7 +390,7 @@ pub async fn run(server: Server) -> Result<()> {
 /// Runs one turn and writes the result to the outbox. Sessions are split by job
 /// name — each execution carries that job's history and rolling summary.
 async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
-    eprintln!("(joy) 触发任务 '{}'（{}）", job.name, job.cron);
+    eprintln!("(joy) fired job '{}' ({})", job.name, job.cron);
     let (sink, mut rx) = EventSink::channel();
     let params = TurnStartParams {
         session_id: Some(format!("schedule:{}", job.name)),
@@ -410,22 +419,25 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
     let minute_text = at.format("%Y-%m-%dT%H:%M").to_string();
     let turn_result = match task.await {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("turn 报错：{}", e.message)),
-        Err(e) => Err(format!("turn 任务崩了：{e}")),
+        Ok(Err(e)) => Err(format!("turn error: {}", e.message)),
+        Err(e) => Err(format!("the turn task crashed: {e}")),
     };
     if let Err(why) = turn_result {
         append_run_log(
             &home,
             &run_log_line(&job.name, &minute_text, "error", &why, 0, false),
         );
-        anyhow::bail!("任务 '{}' 没跑通：{why}", job.name);
+        anyhow::bail!("job '{}' did not get through: {why}", job.name);
     }
 
     // An empty reply (or the model answering NO_REPLY by convention) isn't worth
     // delivering — an empty file or empty push is an interruption. One ledger line is enough.
     let trimmed = reply.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("no_reply") {
-        eprintln!("(joy) 任务 '{}' 完成，但没有产出内容，跳过投递", job.name);
+        eprintln!(
+            "(joy) job '{}' finished with no output; skipping delivery",
+            job.name
+        );
         append_run_log(
             &home,
             &run_log_line(&job.name, &minute_text, "empty", "", 0, false),
@@ -444,7 +456,7 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         std::fs::write(
             &path,
             format!(
-                "# {name}\n\n_由 joy schedule 在 {at} 按 cron '{cron}' 触发_\n\n## 请求\n\n{prompt}\n\n## 回答\n\n{reply}\n",
+                "# {name}\n\n_fired by joy schedule at {at} on cron '{cron}'_\n\n## Request\n\n{prompt}\n\n## Answer\n\n{reply}\n",
                 name = job.name,
                 at = at.format("%Y-%m-%d %H:%M"),
                 cron = job.cron,
@@ -452,13 +464,13 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
             ),
         )?;
         eprintln!(
-            "(joy) 任务 '{}' 完成，结果写进 {}",
+            "(joy) job '{}' finished; the result went to {}",
             job.name,
             path.display()
         );
     } else {
         eprintln!(
-            "(joy) 任务 '{}' 完成（quiet：不写文件），回答 {} 字",
+            "(joy) job '{}' finished (quiet: no file written), {} characters of answer",
             job.name,
             trimmed.chars().count()
         );
@@ -469,7 +481,7 @@ async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
         if let Some(notifier) = server.notifier() {
             notifier.notify(joyczl_tools::notify::NotifyEvent::ScheduleRan {
                 name: job.name.clone(),
-                status: "完成".to_string(),
+                status: "done".to_string(),
                 preview: trimmed.chars().take(120).collect(),
             });
         }

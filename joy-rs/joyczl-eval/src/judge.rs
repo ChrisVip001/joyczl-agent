@@ -54,24 +54,24 @@ pub async fn grade(
             max_tokens: 600,
         })
         .await
-        .map_err(|e| anyhow::anyhow!("裁判调用失败：{e}"))?;
+        .map_err(|e| anyhow::anyhow!("the judge call failed: {e}"))?;
     parse_score(&response.text())
 }
 
 fn parse_score(text: &str) -> Result<(i64, String)> {
     // The referee may add prose around it — extract that brace pair (same leniency as the retrieval gate).
     let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) else {
-        anyhow::bail!("裁判没回 JSON：{text}");
+        anyhow::bail!("the judge returned no JSON: {text}");
     };
     if end < start {
-        anyhow::bail!("裁判没回 JSON：{text}");
+        anyhow::bail!("the judge returned no JSON: {text}");
     }
     let verdict: serde_json::Value = serde_json::from_str(&text[start..=end])
-        .map_err(|e| anyhow::anyhow!("裁判的 JSON 坏了：{e}"))?;
+        .map_err(|e| anyhow::anyhow!("the judge's JSON is broken: {e}"))?;
     let score = verdict
         .get("score")
         .and_then(serde_json::Value::as_i64)
-        .ok_or_else(|| anyhow::anyhow!("裁判的 JSON 里没有 score：{verdict}"))?;
+        .ok_or_else(|| anyhow::anyhow!("the judge's JSON has no score: {verdict}"))?;
     let reason = verdict
         .get("reason")
         .and_then(serde_json::Value::as_str)

@@ -4,6 +4,85 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### The CLI and the remaining server text, in English (2 of 2)
+
+- The second half: the CLI's own output (`joy --help`, `joy hub`, `mcp login`, `memory`,
+  `skill`, the REPL's `/help` `/model` `/route` `/cwd` `/goal`, the approval prompt, the
+  per-turn summary line), plus the ops layer (cockpit binding, hub banners, port scanning,
+  webhooks signing and replay, capabilities/marketplace, the app-server client), the
+  connectors (email/imap/smtp, Feishu app and user OAuth), MCP (`mcp.json` validation, OAuth
+  discovery/registration/refresh, the memory MCP server) and the eval harness
+  (`joy eval` / `replay` / `judge` / `bench`).
+- Left Chinese, deliberately: the plugin-facing keyword lists that must match what a vendor
+  or a user actually types — `looks_like_context_overflow`'s `上下文长度` / `超出上下文`, and
+  the memory gate's temporary-statement markers (`本次会话`, `这次对话`, …). Also left alone:
+  every string that is *data* rather than wording.
+- The translation is mechanical but the assertions are not: ~90 test assertions compared
+  Chinese prose, so each was updated to the new English (and a few fixtures that modelled a
+  Chinese error message now model the English one).
+
+### The runtime speaks English, too (1 of 2)
+
+- Everything the model sees and the app-server answers with is English now: `joyczl-app-server`
+  (186 strings), `joyczl-tools` (317 — every tool description, argument help and error), and the
+  core crates behind them (`memory`, `state`, `config`, `schedule`, `provider`, `loop`, `graph`,
+  `protocol`, `agent`). Tool output is what the model actually reads, so those had to move with
+  the prompt rather than after it.
+- Deliberately left in Chinese: the provider's context-overflow needles (a Chinese gateway words
+  the error in Chinese — the needles must match, not be pretty), the memory-gate's temporary-
+  statement markers (they are phrases a user types), and the model/plan labels that are matched
+  back by the code. Chinese role prefixes (`系统:` / `用户:` / `助手:`) were *added* to the
+  injection escaper: the same trick in another language is the same trick.
+- Still Chinese: the CLI's own output and the ops/connector/eval/mcp error text (2 of 2).
+
+### What the model reads is English
+
+- The prompt layer had been English for a while (soul seeds, the stable prefix, the per-turn
+  tail, the wrap-up), but the things that ride along with it were still Chinese: the guard's
+  repeated-call stub, the to-do board header and counts, the compaction fallback excerpt, the
+  memory catalog header, the spill notice ("full output at …"), "no tool named …", "no skill
+  named …", the scheduled-job declarations, the planner prompt and its acceptance labels, the
+  task stop reasons, the inbox prompt, and the app-server's own RPC errors. All English now —
+  one language on the model's side, so a Chinese instruction never meets an English tool
+  result and no sentence needs translating twice.
+- `SOUL.md` was the visible half of the problem: the instance's file dated from the Chinese
+  seed and `load_soul` keeps anything that differs from the built-in seeds, so the persona
+  stayed Chinese long after the code moved on. Replaced here (old file kept as
+  `SOUL.md.zh-<date>.bak`); the rule itself is unchanged and documented in operational notes.
+- Two leftovers fixed while in there: both soul seeds ended with a stray backslash, and the
+  to-do tool's reply wrapped its summary in full-width parentheses while the board itself was
+  already English.
+- Still Chinese on purpose: the CLI's own output and the human-facing server error text. That
+  is a separate decision (the CLI is a Chinese product) and is recorded under limitations.
+
+### The cockpit speaks English too
+
+- Every label, empty state, dialog and status line in the dashboard now goes through
+  `t("中文")` — the Chinese string is the key (gettext style), so a call site stays
+  readable and an unwrapped string is visible in the code instead of hidden behind a
+  symbolic name. A button at the top right of the sidebar switches language and remembers
+  it; a fresh browser follows `navigator.language`. Switching reloads — strings are baked
+  into the DOM when painted, and a reload re-runs the one path that knows how to paint.
+- 266 strings, plus `data-i18n*` attributes for the static markup (text, `title`,
+  `placeholder`, `aria-label`). Missing English falls back to Chinese and warns once: a
+  half-translated screen that works beats a blank button.
+- `scripts/check_i18n.py` (`just check-i18n`, in `just check` and CI) fails when a used
+  string has no translation, when a translation is unused, or when the `{placeholders}` of
+  the two languages disagree — `t()` falls back silently, so nothing else would catch it.
+
+### The dashboard remembers which conversation you were reading
+
+- A reload used to open `default` — in practice the oldest conversation — and, because the
+  history is re-rendered from scratch, land at its first message. The open session is now
+  kept in `localStorage` (`joy.session`) next to the working directory, and a session that
+  no longer exists falls back to the newest row.
+- **Switching back returns to where you were reading.** Each session remembers its own
+  distance from the bottom (in memory, per page load); a session opened for the first time
+  in this sitting goes to the newest message. Placement is instant — `.messages` has
+  `scroll-behavior: smooth`, so a plain `scrollTop` assignment would slide from the first
+  message down to the target, which is the flicker this replaced.
+- A cross-device ping re-reads the history without moving the scroll position.
+
 ### Internal tidying: one source for config, one preamble for scripts, less dead code
 
 - A configuration knob used to be written in six places by hand. Now **the code is the single
@@ -47,7 +126,7 @@ six-plus mutable values — splitting them would only make every function carry 
   notifications are emitted from that result at finalize — so the earlier segment's tool calls
   vanished (the client only saw the last segment). The calls are now re-attached in request order.
 
-### Several places at once: `apply_patch`### Replay evals: `joy eval --replay`
+### Replay evals: `joy eval --replay`
 
 - New suite `evals/replay/*.jsonl`: a recorded dialogue (what the human said, what the model
   answered) plus the **expected event sequence**. The loader turns it into the same `Scenario`

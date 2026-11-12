@@ -53,14 +53,18 @@ impl Outcome {
         match self {
             Outcome::Installed { name, from, to } => match from {
                 Some(from) => format!("✓ {name}：{from} → {to}"),
-                None => format!("✓ {name}：装上 {to}"),
+                None => format!("✓ {name}: installed {to}"),
             },
-            Outcome::UpToDate { name, version } => format!("· {name}：已是最新（{version}）"),
+            Outcome::UpToDate { name, version } => {
+                format!("· {name}: already up to date ({version})")
+            }
             Outcome::Ahead {
                 name,
                 installed,
                 offered,
-            } => format!("· {name}：本地 {installed} 比索引里的 {offered} 新，没动"),
+            } => format!(
+                "· {name}: local {installed} is newer than the index's {offered}; left alone"
+            ),
             Outcome::Failed { name, why } => format!("✗ {name}：{why}"),
         }
     }
@@ -73,11 +77,11 @@ impl Outcome {
 /// Parses the index. Bad entries are skipped with a reason — one broken entry must not fail the update.
 pub fn parse_index(text: &str) -> Result<(Vec<IndexEntry>, Vec<String>), String> {
     let parsed: Value =
-        serde_json::from_str(text).map_err(|e| format!("索引不是合法 JSON：{e}"))?;
+        serde_json::from_str(text).map_err(|e| format!("the index is not valid JSON: {e}"))?;
     let raw = parsed
         .get("skills")
         .and_then(Value::as_array)
-        .ok_or("索引里没有 skills 数组")?;
+        .ok_or("the index has no skills array")?;
 
     let mut entries = Vec::new();
     let mut warnings = Vec::new();
@@ -91,7 +95,7 @@ pub fn parse_index(text: &str) -> Result<(Vec<IndexEntry>, Vec<String>), String>
                 version: version.to_string(),
                 url: url.to_string(),
             }),
-            _ => warnings.push(format!("跳过一条缺 name/version/url 的条目：{item}")),
+            _ => warnings.push(format!("skipped an entry missing name/version/url: {item}")),
         }
     }
     Ok((entries, warnings))
@@ -132,15 +136,16 @@ fn numeric(version: &str) -> Option<Vec<u32>> {
 pub fn install(home: &Path, name: &str, content: &str) -> Result<PathBuf, String> {
     // First gate against path traversal: the name must be a slug.
     if !is_slug(name) {
-        return Err(format!("技能名 '{name}' 不是合法 slug"));
+        return Err(format!("skill name '{name}' is not a valid slug"));
     }
-    let skill = parse_skill_text(content)
-        .ok_or("内容不是一个合法的 SKILL.md（frontmatter 缺 name 或 description）")?;
+    let skill = parse_skill_text(content).ok_or(
+        "the content is not a valid SKILL.md (frontmatter is missing name or description)",
+    )?;
     // Whatever the index calls it, the file must say: a name mismatch desyncs the
     // index from the directory from then on.
     if skill.name != name {
         return Err(format!(
-            "索引说它叫 '{name}'，文件里写的是 '{}' —— 拒绝装一个名不对版的技能",
+            "the index calls it '{name}' but the file says '{}' — refusing to install a skill under the wrong name",
             skill.name
         ));
     }
@@ -153,18 +158,20 @@ pub fn install(home: &Path, name: &str, content: &str) -> Result<PathBuf, String
 
     let target = skills.join(name);
     let staging = skills.join(".staging").join(name);
-    std::fs::create_dir_all(&staging).map_err(|e| format!("建暂存目录失败：{e}"))?;
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| format!("could not create the staging directory: {e}"))?;
     std::fs::write(staging.join("SKILL.md"), content)
-        .map_err(|e| format!("写暂存文件失败：{e}"))?;
+        .map_err(|e| format!("could not write the staging file: {e}"))?;
 
     // Back up the old version first: a failed replacement can still go back (it must
     // exist here — the fresh-install branch already returned above).
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let backup = skills.join(".backup").join(format!("{name}-{stamp}"));
-    copy_dir(&target, &backup).map_err(|e| format!("备份失败：{e}"))?;
-    std::fs::remove_dir_all(&target).map_err(|e| format!("清掉旧版本失败：{e}"))?;
+    copy_dir(&target, &backup).map_err(|e| format!("backup failed: {e}"))?;
+    std::fs::remove_dir_all(&target)
+        .map_err(|e| format!("could not remove the old version: {e}"))?;
     // Atomic replace: a rename within the same filesystem.
-    std::fs::rename(&staging, &target).map_err(|e| format!("替换失败：{e}"))?;
+    std::fs::rename(&staging, &target).map_err(|e| format!("replace failed: {e}"))?;
     Ok(target.join("SKILL.md"))
 }
 
@@ -223,7 +230,7 @@ where
             Err(why) => {
                 outcomes.push(Outcome::Failed {
                     name: entry.name.clone(),
-                    why: format!("取回失败：{why}"),
+                    why: format!("fetch failed: {why}"),
                 });
                 continue;
             }

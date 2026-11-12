@@ -110,9 +110,8 @@ pub struct Connection {
     policy: BreakerPolicy,
 }
 
-/// Why one attempt failed. **The difference decides whether a retry is allowed**: a dead pipe can
-/// be rebuilt and replayed, a timeout must not be (the server may still be working, and a tool
-/// with side effects would then run twice).
+/// Neither transport failure nor timeout proves that the server did not commit an action.
+/// Reconnect prepares future calls; the failed call is never automatically replayed.
 enum Failure {
     Transport(String),
     Timeout,
@@ -160,12 +159,21 @@ impl Connection {
     /// Call a tool. **Never returns Err** — the failure text is for the model to read,
     /// same rule as `ToolRegistry::execute`.
     pub async fn call(&self, tool: &str, args: Value) -> String {
+        self.call_with_notice(tool, args, None).await
+    }
+
+    pub async fn call_with_notice(
+        &self,
+        tool: &str,
+        args: Value,
+        notice: Option<joyczl_tools::UncertainSink>,
+    ) -> String {
         // Breaker: once failures hit the threshold, stop knocking — a dead server makes
         // every turn wait out a timeout while the model keeps trying again and again.
         let now = std::time::Instant::now();
         if let Some(remaining) = self.breaker.lock().await.blocked_for(now) {
             return format!(
-                "MCP {}_{tool} 被跳过了：这台服务器连续失败过 {} 次，断路器还开着（还有 {} 秒）—— \
+                "Error: MCP {}_{tool} 被跳过了：这台服务器连续失败过 {} 次，断路器还开着（还有 {} 秒）—— \
                  等它凉下来会自动放一次探针。",
                 self.name,
                 self.policy.failures,
@@ -175,32 +183,34 @@ impl Connection {
 
         let mut outcome = self.attempt(tool, &args).await;
         if let Err(Failure::Transport(first)) = &outcome {
-            // The pipe died (the child exited, the HTTP session expired). Rebuild from the spec and
-            // replay once: at this point nothing has executed on the server, so retrying cannot
-            // double a side effect. Frequency is governed by the breaker below (3 strikes → 60s),
-            // which is also why there is no separate backoff clock here.
+            // A lost response may follow a committed side effect. Reconnect only for a
+            // future explicitly requested call; do not repeat this unknown operation.
             let first = first.clone();
             match self.reconnect().await {
                 Ok(()) => {
-                    eprintln!("(joy) MCP 服务器 '{}' 断了，已重连并重试 {tool}", self.name);
-                    outcome = self.attempt(tool, &args).await;
+                    eprintln!(
+                        "(joy) MCP server '{}' reconnected; {tool} outcome unknown, not replayed",
+                        self.name
+                    );
+                    outcome = Err(Failure::Transport(format!("outcome unknown; connection restored but call was not replayed. Reconcile remote state before retrying: {first}")));
                 }
                 Err(why) => {
-                    outcome = Err(Failure::Transport(format!("{first}；重连也没成：{why}")));
+                    outcome = Err(Failure::Transport(format!("outcome unknown; reconcile remote state before retrying: {first}；重连也没成：{why}")));
                 }
             }
         }
 
+        let uncertain = outcome.is_err();
         let (ok, text) = match outcome {
             Ok(text) => (true, text),
             Err(Failure::Transport(error)) => (
                 false,
-                format!("MCP 调用 {}_{tool} 失败：{error}", self.name),
+                format!("Error: MCP 调用 {}_{tool} 失败：{error}", self.name),
             ),
             Err(Failure::Timeout) => (
                 false,
                 format!(
-                    "MCP 调用 {}_{tool} 失败：超过 {} 秒没有回话",
+                    "Error: MCP 调用 {}_{tool} 失败：超过 {} 秒没有回话；outcome unknown — reconcile remote state before retrying",
                     self.name,
                     TIMEOUT.as_secs()
                 ),
@@ -217,6 +227,14 @@ impl Connection {
                 self.policy.failures,
                 self.policy.cooldown.as_secs()
             );
+        }
+        if uncertain {
+            if let Some(notice) = notice {
+                notice(&format!(
+                    "MCP {}_{tool} outcome unknown; reconcile external state before continuing",
+                    self.name
+                ));
+            }
         }
         text
     }
@@ -406,7 +424,11 @@ impl McpClient {
                     handler: Arc::new(move |_ctx: ToolCtx, args: Value| {
                         let connection = connection.clone();
                         let tname = tname.clone();
-                        Box::pin(async move { Ok(connection.call(&tname, args).await) })
+                        Box::pin(async move {
+                            Ok(connection
+                                .call_with_notice(&tname, args, _ctx.on_uncertain)
+                                .await)
+                        })
                     }),
                 });
             }

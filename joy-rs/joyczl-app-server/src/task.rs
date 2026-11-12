@@ -109,8 +109,8 @@ async fn reload(server: &Server, id: &str) -> Result<TaskRow, ErrorObject> {
         .tasks
         .get(id)
         .await
-        .map_err(|e| invalid(format!("任务读不回来：{e}")))?
-        .ok_or_else(|| invalid("任务不存在"))
+        .map_err(|e| invalid(format!("the task could not be read back: {e}")))?
+        .ok_or_else(|| invalid("no such task"))
 }
 
 /// Normalise + validate the acceptance list. Refusing at creation is deliberate: a condition
@@ -119,7 +119,7 @@ fn normalise_acceptance(views: &[AcceptanceView]) -> Result<String, ErrorObject>
     let mut normalised = Vec::with_capacity(views.len());
     for (index, view) in views.iter().enumerate() {
         let acceptance = Acceptance::from_view(view)
-            .map_err(|why| invalid(format!("第 {} 条验收条件不对：{why}", index + 1)))?;
+            .map_err(|why| invalid(format!("acceptance check {} is invalid: {why}", index + 1)))?;
         let mut view = view.clone();
         if view
             .label
@@ -136,7 +136,11 @@ fn normalise_acceptance(views: &[AcceptanceView]) -> Result<String, ErrorObject>
         }
         normalised.push(view);
     }
-    serde_json::to_string(&normalised).map_err(|e| invalid(format!("验收条件写不成 JSON：{e}")))
+    serde_json::to_string(&normalised).map_err(|e| {
+        invalid(format!(
+            "the acceptance criteria could not be written as JSON: {e}"
+        ))
+    })
 }
 
 /// Same for the budget: a zero or negative cap is a typo, not an intention.
@@ -151,11 +155,14 @@ fn normalise_budget(budget: &Option<BudgetView>) -> Result<String, ErrorObject> 
     ] {
         if let Some(value) = value {
             if value <= 0 {
-                return Err(invalid(format!("预算 {name} 必须大于 0（收到 {value}）")));
+                return Err(invalid(format!(
+                    "budget {name} must be greater than 0 (got {value})"
+                )));
             }
         }
     }
-    serde_json::to_string(budget).map_err(|e| invalid(format!("预算写不成 JSON：{e}")))
+    serde_json::to_string(budget)
+        .map_err(|e| invalid(format!("the budget could not be written as JSON: {e}")))
 }
 
 pub(crate) async fn create(
@@ -164,7 +171,7 @@ pub(crate) async fn create(
 ) -> Result<TaskEnvelope, ErrorObject> {
     let title = params.title.trim();
     if title.is_empty() {
-        return Err(invalid("任务得有个名字"));
+        return Err(invalid("a task needs a name"));
     }
     // A session is optional now: a task may be created and inspected on its own. An empty
     // string is the same as absent (`""` is not a session anyone can open).
@@ -211,7 +218,7 @@ pub(crate) async fn create(
             tier: tier.as_deref(),
         })
         .await
-        .map_err(|e| invalid(format!("任务没建成：{e}")))?;
+        .map_err(|e| invalid(format!("the task was not created: {e}")))?;
 
     let row = reload(server, &id).await?;
     Ok(TaskEnvelope {
@@ -235,7 +242,7 @@ pub(crate) async fn view_of(server: &Server, session_id: &str) -> TaskViewRespon
         Ok(Some(row)) => Some(view(server, &row).await),
         Ok(None) => None,
         Err(e) => {
-            eprintln!("(joy) 查不到这会话的任务（当没有）：{e}");
+            eprintln!("(joy) no task found for this session (treating it as none): {e}");
             None
         }
     };
@@ -301,36 +308,54 @@ pub(crate) async fn suspend(
     params: TaskActionParams,
 ) -> Result<TaskEnvelope, ErrorObject> {
     let row = reload(server, &params.task_id).await?;
-    if row.status == TaskStatus::Suspended {
+    let control = server.session_write_lock(&format!("task-control:{}", row.id));
+    let _control = control.lock().await;
+    let row = reload(server, &params.task_id).await?;
+    let waits = joyczl_state::waits::JobWaits::new(server.pool.clone());
+
+    let job_wait = waits
+        .get(&row.id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|wait| wait.state == "waiting");
+    if row.status == TaskStatus::Suspended && job_wait.is_none() {
         return Ok(TaskEnvelope {
             task: view(server, &row).await,
         });
     }
     if !matches!(
         row.status,
-        TaskStatus::Running | TaskStatus::Pending | TaskStatus::NeedsAttention
+        TaskStatus::Running
+            | TaskStatus::Pending
+            | TaskStatus::NeedsAttention
+            | TaskStatus::Suspended
     ) {
         return Err(invalid(format!(
-            "任务已经结束了（{}），没什么可暂停的",
+            "the task has already ended ({}), so there is nothing to pause",
             row.status
         )));
     }
     let reason = params
         .reason
         .as_deref()
-        .unwrap_or("用户按了暂停")
+        .unwrap_or("paused by the user")
         .to_string();
     if let Some(turn_id) = &row.current_turn_id {
         // A live turn is paused (checkpoint stays resumable); an idle one just goes suspended.
         if !server.suspend_turn(turn_id) {
-            eprintln!("(joy) 任务 {turn_id} 已经没在跑了，直接标挂起");
+            eprintln!("(joy) task {turn_id} is no longer running; marking it suspended");
         }
+    }
+    if let Some(wait) = job_wait {
+        let _ = waits.cancel(&row.id).await;
+        let _ = server.checkpoints.finish(&wait.turn_id, "suspended").await;
     }
     server
         .tasks
         .suspend(&row.id, Some(&reason))
         .await
-        .map_err(|e| invalid(format!("暂停没记上：{e}")))?;
+        .map_err(|e| invalid(format!("the pause was not recorded: {e}")))?;
     let row = reload(server, &row.id).await?;
     notify(sink, &row, Some(&reason));
     Ok(TaskEnvelope {
@@ -347,6 +372,23 @@ pub(crate) async fn resume(
     params: TaskActionParams,
 ) -> Result<TaskEnvelope, ErrorObject> {
     let row = reload(server, &params.task_id).await?;
+    let control = server.session_write_lock(&format!("task-control:{}", row.id));
+    let _control = control.lock().await;
+    let row = reload(server, &params.task_id).await?;
+    let waits = joyczl_state::waits::JobWaits::new(server.pool.clone());
+
+    if row.status == TaskStatus::Suspended
+        && row.suspend_reason.as_deref() == Some(joyczl_state::waits::JOB_WAIT_REASON)
+    {
+        if let Ok(Some(wait)) = waits.get(&row.id).await {
+            if wait.state == "waiting" {
+                crate::task_waits::arm(server.clone(), sink.clone(), wait);
+                return Ok(TaskEnvelope {
+                    task: view(server, &row).await,
+                });
+            }
+        }
+    }
     if row.status == TaskStatus::Running {
         return Ok(TaskEnvelope {
             task: view(server, &row).await,
@@ -359,7 +401,7 @@ pub(crate) async fn resume(
         TaskStatus::Suspended | TaskStatus::NeedsAttention
     ) {
         return Err(invalid(format!(
-            "只有挂起或需要确认的任务能继续（当前 {}）",
+            "only a suspended task, or one waiting for your call, can resume (currently {})",
             row.status
         )));
     }
@@ -367,9 +409,9 @@ pub(crate) async fn resume(
         .tasks
         .resume(&row.id)
         .await
-        .map_err(|e| invalid(format!("继续没记上：{e}")))?;
+        .map_err(|e| invalid(format!("the resume was not recorded: {e}")))?;
     let row = reload(server, &row.id).await?;
-    notify(sink, &row, Some("用户点了继续"));
+    notify(sink, &row, Some("resumed by the user"));
 
     // The paused turn's checkpoint is the resumable half: continue it in the background.
     if let Some(turn_id) = &row.current_turn_id {
@@ -388,26 +430,47 @@ pub(crate) async fn cancel(
     params: TaskActionParams,
 ) -> Result<TaskEnvelope, ErrorObject> {
     let row = reload(server, &params.task_id).await?;
+    let control = server.session_write_lock(&format!("task-control:{}", row.id));
+    let _control = control.lock().await;
+    let row = reload(server, &params.task_id).await?;
+    let waits = joyczl_state::waits::JobWaits::new(server.pool.clone());
+
     if row.status.is_terminal() {
         return Ok(TaskEnvelope {
             task: view(server, &row).await,
         });
     }
-    let reason = params.reason.as_deref().unwrap_or("用户取消了任务");
+    let reason = params.reason.as_deref().unwrap_or("cancelled by the user");
     if let Some(turn_id) = &row.current_turn_id {
         server.interrupt_turn(turn_id);
         if let Err(e) = server.checkpoints.finish(turn_id, "abandoned").await {
-            eprintln!("(joy) 取消任务时 checkpoint 没标上（不影响取消）：{e}");
+            eprintln!("(joy) the checkpoint was not marked when cancelling (the cancellation itself is unaffected): {e}");
         }
     }
     server
         .tasks
         .finish(&row.id, TaskStatus::Cancelled)
         .await
-        .map_err(|e| invalid(format!("取消没记上：{e}")))?;
+        .map_err(|e| invalid(format!("the cancellation was not recorded: {e}")))?;
+    let _ = waits.cancel(&row.id).await;
+    if let (Some(host), Ok(jobs)) = (
+        &server.jobs,
+        joyczl_state::Jobs::new(server.pool.clone())
+            .for_task(&row.id)
+            .await,
+    ) {
+        for job in jobs.iter().filter(|job| job.status == "running") {
+            if let Err(e) = host.kill(&job.owner, &job.id).await {
+                eprintln!("(joy) task job {} could not be stopped: {e}", job.id);
+            }
+        }
+    }
     // Open runs die with the task; their steps stay as the record of what did happen.
     if let Ok(runs) = server.runs.list_by_task(&row.id, 50).await {
-        for run in runs.iter().filter(|run| run.status == "running") {
+        for run in runs
+            .iter()
+            .filter(|run| matches!(run.status.as_str(), "running" | "waiting" | "suspended"))
+        {
             let _ = server
                 .runs
                 .close(&run.id, joyczl_state::RunStatus::Cancelled, Some(reason))

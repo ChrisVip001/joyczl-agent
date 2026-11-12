@@ -1,30 +1,50 @@
 [English](README.md) | 简体中文
 
-# Joyczl-agent
+# Joy — 记忆能翻开的本地 Agent
 
-> 本地优先的个人助手：Rust 独占逻辑与状态，TypeScript 负责浏览器与聊天
-> 网关，Python 只留一个薄 SDK。状态、推理与工具全部运行在用户自己的机器
-> 上。项目代号 **Joy**，助手人格也叫 Joy。
+[![CI](https://github.com/ChrisVip001/joyczl-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ChrisVip001/joyczl-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/ChrisVip001/joyczl-agent)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/ChrisVip001/joyczl-agent?style=social)](https://github.com/ChrisVip001/joyczl-agent/stargazers)
 
-## 设计原则
+**一个完全跑在自己机器上的个人助手，而且它的记忆是能打开看的。**
+Rust 独占 agent 循环、记忆和 29 个工具；TypeScript 只负责驾驶舱和聊天网关；Python 留一个薄 SDK。对话、`state.db` 和密钥都不出本机。驾驶舱支持中英文切换，侧栏一键换语言。
 
-1. **Rust 独占逻辑与状态。** agent 循环、记忆、工具与 state.db 全在
-   Rust；crate 按职责切碎（目标 <500 行/模块），不设 `joy-core` 大包。
-2. **协议只有一份定义。** `joyczl-protocol` 是跨语言契约的唯一事实来源：
-   类型直接生成 TypeScript 与 Python 绑定，生成物 check-in。
-3. **客户端只做翻译。** CLI、dashboard、聊天网关、Python SDK 都是
-   `joy app-server`（JSON-RPC over stdio）的客户端；state.db 只在一个
-   进程里打开。
+> 多数 Agent 的记忆是个黑盒。Joy **每一轮对话只追加一行账本**：点开这一行，能看到这一轮的完整事件流——检索门怎么判的、跑了哪些工具、哪个模型答的、花了多少 token。记忆库用 `ledger:…` 回溯到原始轮次，FTS5 索引能从账本重建。不藏东西，也不会悄悄丢东西。
 
-## 快速开始
+<!-- 补图后取消注释（拍摄清单见 01-README改写.md）
+![Joy 驾驶舱与记忆抽屉](docs/assets/dashboard.png)
+![记忆账本展开一行](docs/assets/memory-ledger.png)
+-->
+
+## 两分钟跑起来
+
+**预编译二进制，不需要 Rust 工具链**（从 [Releases](https://github.com/ChrisVip001/joyczl-agent/releases/latest) 选自己平台的包）：
+
+```bash
+curl -fL -o joy.tar.gz https://github.com/ChrisVip001/joyczl-agent/releases/download/v0.17.0/joy-v0.17.0-aarch64-apple-darwin.tar.gz
+tar -xzf joy.tar.gz && chmod +x joy
+DEEPSEEK_API_KEY=… ./joy dashboard        # -> http://localhost:7777
+```
+
+四个产物：`aarch64-apple-darwin`、`x86_64-apple-darwin`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`。
+没有 API key 也能用 Ollama 全离线跑（`JOY_PROVIDER=ollama`）。内置 12 家 provider，`/model add` 加一家不用重启。
+
+**Docker：**
+
+```bash
+docker build -t joy .
+docker run --rm -p 7777:7777 -v joy-state:/home/joy/.joy -e DEEPSEEK_API_KEY=… joy
+```
+
+**源码构建：**
 
 ```bash
 cd joy-rs && cargo build
-JOY_PROVIDER=deepseek DEEPSEEK_API_KEY=… ./target/debug/joy       # 终端对话
-JOY_PROVIDER=deepseek DEEPSEEK_API_KEY=… ./target/debug/joy dashboard   # → http://localhost:7777
+JOY_PROVIDER=deepseek DEEPSEEK_API_KEY=… ./target/debug/joy            # 终端对话
+JOY_PROVIDER=deepseek DEEPSEEK_API_KEY=… ./target/debug/joy dashboard  # -> localhost:7777
 ```
 
-原始协议打一轮：
+直接打一轮原始协议：
 
 ```bash
 ANTHROPIC_API_KEY=sk-… JOY_HOME=/tmp/joy-demo ./target/debug/joy app-server <<'JSONRPC'
@@ -32,9 +52,24 @@ ANTHROPIC_API_KEY=sk-… JOY_HOME=/tmp/joy-demo ./target/debug/joy app-server <<
 JSONRPC
 ```
 
-应答之前先来一串通知：`turnStarted → gateDecided → textDelta* →
-toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
-检索门判定、工具耗时、实际作答的模型与 token 用量——随对话落库。
+应答之前先来一串通知：`turnStarted → gateDecided → textDelta* → toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录检索门判定、工具耗时、实际作答的模型与 token 用量——随对话落库。
+
+## 为什么这么设计
+
+| | Joy | 云端助手 | 极简 Agent 框架 |
+|---|---|---|---|
+| 状态 | 本地 SQLite + FTS5，`state.db` 只由一个进程打开 | 厂商云上 | 自己搭 |
+| 记忆 | 只追加账本、可检视、可重建 | 黑盒 | 自己搭 |
+| 契约 | 45 个 JSON-RPC 方法，类型一处定义、多语言生成 | — | 各不相同 |
+| Provider | 内置 12 家 + models.dev 目录 + Ollama | 固定 | 自己搭 |
+| 发版门禁 | 确定性回放 evals + judge | — | 自己搭 |
+| 成本 | 稳定前缀命中缓存、工具按需加载 | — | 自己搭 |
+
+## 还缺什么，怎么参与
+
+原路线图 P0–P20 已完成。剩下的是真正需要人手的活：聊天网关接真实平台、Windows 写入边界、更多 eval 用例、文档与截图。从 [good first issue](https://github.com/ChrisVip001/joyczl-agent/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) 开始，每条都写了验收标准。已知边界见 [docs/limitations.zh.md](docs/limitations.zh.md) 与 [CONTRIBUTING.zh.md](CONTRIBUTING.zh.md)。
+
+每 1–2 周发一个版本并写真实变更说明。只想收版本通知的话：**Watch → Custom → Releases**。
 
 ## Joy 能做什么
 
@@ -46,7 +81,7 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
   条目流）、记忆库（目录、一次一页的正文，以及跳回来源轮次的 `ledger:…` chip）和上下文
   占用（六段分层条，快满之前先给一句提示）。想压缩就按一下，不必等它自己到点
   （[docs/operations.zh.md](docs/operations.zh.md)）
-- **行动**：28 个内置工具（21 个默认常驻，7 个在开关后面）外加 MCP 服务器
+- **行动**：29 个内置工具（21 个默认常驻，8 个在开关后面）外加 MCP 服务器
   （[docs/configuration.zh.md](docs/configuration.zh.md)）
 - **花得少一点**：系统提示是「稳定前缀 + 每轮尾巴」，供应商那边能缓存；技能目录一个技能
   一行、正文按需取；`JOY_TOOL_POLICY=deferred` 时请求里只放常驻工具的 schema
@@ -119,6 +154,11 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 
 ## 路线图
 
+**接下来（欢迎认领）：** 聊天网关接真实平台 · Windows 写入边界与 CI 上两个失败用例 · 更多 replay eval 用例 · 扩展第 13 家之后的 provider · Homebrew / PyPI / npm 发布链路。具体条目见 [open issues](https://github.com/ChrisVip001/joyczl-agent/issues)。
+
+<details>
+<summary>已完成：P0–P20（展开）</summary>
+
 | 阶段 | 内容 |
 |---|---|
 | P0 ✅ | 协议层 + 生成管线（63 个类型） |
@@ -144,6 +184,8 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | P19 ✅ | 密钥与产品化：Windows Credential Manager + `SecretVault` 接缝、驾驶舱自托管安全（绑非回环强制 `JOY_OPS_TOKEN`）、models.dev 目录生成器（`scripts/gen_catalog.py`）、驾驶舱流式 Markdown 块级渲染、单行会话侧栏 + 可拖边界 + 悬停跑马灯 |
 | P20 ✅ | 记忆与上下文（0.17）：只追加的会话账本（逐行 digest、超限内容转存 `ledger/`、按行重建一轮）、`<home>/memory` 的 OKF bundle 与可重建的 FTS5 索引、后台整理 worker（claim-first 单飞、退避）、驾驶舱记忆中心（账本 / 记忆库 / 占用率）、拆成「稳定前缀 + 每轮尾巴」的系统提示与 Anthropic 缓存断点、cached token 记账、薄/全两档灵魂、技能目录 + 正文按需（`read_skill`）、延迟加载工具（`find_tools`）、从旧到新的结果换桩、`/compact [重点]` |
 
+</details>
+
 ## 命名
 
 | 用途 | 名字 |
@@ -154,5 +196,28 @@ toolStarted → toolCompleted* → turnCompleted`。`turnCompleted.meta` 记录
 | 助手人格 | Joy |
 | 环境变量 | `JOY_*` |
 | 状态目录 | `.joy/` |
+
+
+<details>
+<summary>设计原则</summary>
+
+## 设计原则
+
+1. **Rust 独占逻辑与状态。** agent 循环、记忆、工具与 state.db 全在
+   Rust；crate 按职责切碎（目标 <500 行/模块），不设 `joy-core` 大包。
+2. **协议只有一份定义。** `joyczl-protocol` 是跨语言契约的唯一事实来源：
+   类型直接生成 TypeScript 与 Python 绑定，生成物 check-in。
+3. **客户端只做翻译。** CLI、dashboard、聊天网关、Python SDK 都是
+   `joy app-server`（JSON-RPC over stdio）的客户端；state.db 只在一个
+   进程里打开。
+
+</details>
+
+
+
+## 运行可靠性
+
+任务恢复后重新验收，已授权任务可持久等待后台作业完成后继续，人工暂停或取消优先。工具批次与后台作业在执行前持久化意图，结果未知时等待核对。排队指令保留到结果落盘。快速聊天携带近期会话与 SOUL，技能发现支持中文描述。OpenAI 使用原生 Responses 并在本地保留加密接续数据，旧端点兼容方式见[配置文档](docs/configuration.zh.md#原生-openai-responses)。无人值守前请了解[恢复边界与限制](docs/limitations.zh.md)。 计划在重启后恢复完整版本。[限额真实模型评测](docs/live-reliability.zh.md)记录当前 DeepSeek 配置、证据和费用。
+
 
 [English](README.md) | 简体中文 · Code is MIT.

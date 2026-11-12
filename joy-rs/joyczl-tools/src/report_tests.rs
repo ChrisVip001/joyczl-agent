@@ -5,7 +5,7 @@ use super::report::as_report;
 #[test]
 fn a_plain_summary_gets_the_header_and_no_marker() {
     let out = as_report("十点有会，议程在共享文档里。");
-    assert!(out.contains("转述"), "要有声明头：{out}");
+    assert!(out.contains("reported"), "要有声明头：{out}");
     assert!(out.contains("十点有会"), "{out}");
     assert!(
         !out.contains("[harness:"),
@@ -52,7 +52,10 @@ fn every_occurrence_is_escaped() {
 #[test]
 fn a_permission_bypass_mention_is_flagged() {
     let out = as_report("建议你用 --dangerously-skip-permissions 重跑一遍。");
-    assert!(out.contains("权限"), "提到权限开关就该被指出：{out}");
+    assert!(
+        out.contains("permission"),
+        "提到permission开关就该被指出：{out}"
+    );
 }
 
 #[test]

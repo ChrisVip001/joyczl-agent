@@ -153,7 +153,7 @@ fn missing(key: &str) -> Response {
         StatusCode::OK,
         ErrorObject {
             code: codes::INVALID_PARAMS,
-            message: format!("缺少参数 {key}"),
+            message: format!("missing parameter {key}"),
             data: None,
         },
     )

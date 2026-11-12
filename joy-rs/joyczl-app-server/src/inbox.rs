@@ -42,7 +42,9 @@ async fn run(server: &Server, sink: &EventSink) {
     let config = match joyczl_connector::config::load(&home) {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("(joy) 连接器配置读不了，入站轮询没启动：{e}");
+            eprintln!(
+                "(joy) connector config could not be read; inbound polling did not start: {e}"
+            );
             return;
         }
     };
@@ -54,16 +56,19 @@ async fn run(server: &Server, sink: &EventSink) {
     };
     let period = Duration::from_secs(imap.poll_secs);
     eprintln!(
-        "(joy) 收件箱轮询已启用：{}:{} {} 每 {}s（mode={}）",
+        "(joy) inbox polling enabled: {}:{} {} every {}s (mode={})",
         imap.host, imap.port, imap.mailbox, imap.poll_secs, imap.mode
     );
 
     loop {
         match poll_once(server, sink, &email, &imap).await {
             Ok(0) => {}
-            Ok(added) => eprintln!("(joy) 收件箱新增 {added} 封"),
+            Ok(added) => eprintln!("(joy) {added} new messages in the inbox"),
             // Never silent, never fatal: the next tick is the retry.
-            Err(e) => eprintln!("(joy) 收件箱轮询失败（{}s 后重试）：{e}", imap.poll_secs),
+            Err(e) => eprintln!(
+                "(joy) inbox polling failed (retrying in {}s): {e}",
+                imap.poll_secs
+            ),
         }
         tokio::time::sleep(period).await;
     }
@@ -76,7 +81,7 @@ async fn poll_once(
     imap: &joyczl_connector::ImapSection,
 ) -> anyhow::Result<usize> {
     let Some(username) = imap.username(email) else {
-        anyhow::bail!("imap 没配用户名，也没有可沿用的 email.username");
+        anyhow::bail!("imap has no username, and no email.username to fall back on");
     };
     let password = match imap.secret(email) {
         Some(source) => {
@@ -91,7 +96,9 @@ async fn poll_once(
     // A local relay may allow anonymous LOGIN; otherwise a missing secret is a config bug,
     // said once per tick rather than swallowed.
     let Some(password) = password else {
-        anyhow::bail!("imap 的密码找不到（secret 指向的条目不存在）");
+        anyhow::bail!(
+            "the imap password is missing (the entry the secret points at does not exist)"
+        );
     };
 
     let config = joyczl_connector::ImapConfig {
@@ -148,10 +155,10 @@ async fn poll_once(
             // The standing authorization: same path as the button, just not waiting for it.
             match hand_off(server, sink, INBOX_SESSION).await {
                 Ok(response) => eprintln!(
-                    "(joy) 入站自动处理：{}（{} 封）",
+                    "(joy) inbound auto-handling: {} ({} messages)",
                     response.message, response.count
                 ),
-                Err(e) => eprintln!("(joy) 入站自动处理没起来：{}", e.message),
+                Err(e) => eprintln!("(joy) inbound auto-handling did not start: {}", e.message),
             }
         }
     }
@@ -210,7 +217,7 @@ async fn hand_off(
         return Ok(InboxSummarizeResponse {
             count: 0,
             session_id: session.to_string(),
-            message: "收件箱里没有等你处理的邮件。".to_string(),
+            message: "Nothing in the inbox is waiting for you.".to_string(),
         });
     }
 
@@ -218,18 +225,18 @@ async fn hand_off(
     if server.resolved().is_none() {
         return Err(ErrorObject {
             code: codes::PROVIDER_ERROR,
-            message: "模型还没配好，处理不了邮件；邮件原样留在收件箱里。".to_string(),
+            message: "No model is configured, so the mail cannot be handled; the messages stay in the inbox as they are.".to_string(),
             data: None,
         });
     }
 
     let mut message = format!(
-        "收件箱里新到了 {} 封邮件。帮我逐封摘要，标出哪些需要回复（只读，不要替我发信）：\n",
+        "{} new messages arrived in the inbox. Summarise each one and flag the ones that need a reply (read-only — do not send anything on my behalf):\n",
         items.len()
     );
     for (index, item) in items.iter().enumerate() {
         message.push_str(&format!(
-            "\n{}. 发件人：{}｜主题：{}｜时间：{}\n{}\n",
+            "\n{}. From: {} | Subject: {} | Time: {}\n{}\n",
             index + 1,
             item.from_addr,
             item.subject,
@@ -260,21 +267,24 @@ async fn hand_off(
         };
         if let Err(e) = crate::turn::run_turn(&server, params, RequestId::Number(-1), &sink).await {
             // The mail is already marked handled; a failed turn must still be visible.
-            eprintln!("(joy) 处理邮件那个回合没跑起来：{}", e.message);
+            eprintln!(
+                "(joy) the turn that handles the mail did not start: {}",
+                e.message
+            );
         }
     });
 
     Ok(InboxSummarizeResponse {
         count,
         session_id: session,
-        message: format!("{count} 封邮件已交给一个回合处理。"),
+        message: format!("{count} messages were handed to a turn."),
     })
 }
 
 fn internal(error: sqlx::Error) -> ErrorObject {
     ErrorObject {
         code: codes::INTERNAL_ERROR,
-        message: format!("收件箱读写失败：{error}"),
+        message: format!("the inbox could not be read or written: {error}"),
         data: None,
     }
 }

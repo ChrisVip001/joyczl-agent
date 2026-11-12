@@ -78,7 +78,7 @@ pub async fn serve(settings: Settings) -> Result<()> {
 
     if !settings.home.exists() {
         eprintln!(
-            "(joy) 状态目录 {} 还不存在，app-server 会建它",
+            "(joy) the state directory {} does not exist yet; the app-server will create it",
             settings.home.display()
         );
     }
@@ -100,26 +100,28 @@ pub async fn serve(settings: Settings) -> Result<()> {
             Ok(listener) => {
                 match settings.ops_token.as_deref() {
                     Some(_) => println!(
-                        "Joy 驾驶舱 → http://{bind_host}:{candidate}（/api/* 需要 Bearer token）"
+                        "Joy cockpit → http://{bind_host}:{candidate} (/api/* needs a Bearer token)"
                     ),
-                    None => println!("Joy 驾驶舱 → http://{bind_host}:{candidate}（本机免鉴权）"),
+                    None => println!(
+                        "Joy cockpit → http://{bind_host}:{candidate} (no auth on this machine)"
+                    ),
                 }
                 if !assets.join("index.html").exists() {
                     eprintln!(
-                        "(joy) 前端还没构建（{}）。先跑：just dashboard-build",
+                        "(joy) the front end has not been built ({}). Run: just dashboard-build",
                         assets.display()
                     );
                 }
                 return axum::serve(listener, router)
                     .await
-                    .context("HTTP 服务异常退出");
+                    .context("the HTTP server exited unexpectedly");
             }
-            Err(error) => println!("端口 {candidate} 用不了（{error}），换一个"),
+            Err(error) => println!("port {candidate} is unusable ({error}); trying the next one"),
         }
     }
 
     anyhow::bail!(
-        "{bind_host} 上 {first}–{} 都占着。用 JOY_PORT 指定一个空端口。",
+        "{first}–{} are all taken on {bind_host}. Pick a free port with JOY_PORT.",
         first + PORT_SCAN - 1
     )
 }
@@ -132,7 +134,7 @@ pub async fn serve_hub(root: &Path, host: &str, max_open: usize, idle_secs: u64)
     // the owner registers from loopback or via `joy hub adduser`.
     hub.permit_first_registration(bind_addr(host).is_loopback());
     eprintln!(
-        "(joy) hub：{} 个用户，根目录 {}，池上限 {} 个实例，闲置 {} 秒关",
+        "(joy) hub: {} users, root {}, pool capped at {} instances, idle ones closed after {} seconds",
         hub.user_count(),
         root.display(),
         max_open,
@@ -150,19 +152,19 @@ pub async fn serve_hub(root: &Path, host: &str, max_open: usize, idle_secs: u64)
         match TcpListener::bind((bind_host, candidate)).await {
             Ok(listener) => {
                 println!(
-                    "Joy hub → http://{bind_host}:{candidate}（{} 个用户，各自的 home 在 {}）",
+                    "Joy hub → http://{bind_host}:{candidate} ({} users, each home under {})",
                     hub.user_count(),
                     root.display()
                 );
                 return axum::serve(listener, router)
                     .await
-                    .context("HTTP 服务异常退出");
+                    .context("the HTTP server exited unexpectedly");
             }
-            Err(error) => println!("端口 {candidate} 用不了（{error}），换一个"),
+            Err(error) => println!("port {candidate} is unusable ({error}); trying the next one"),
         }
     }
     anyhow::bail!(
-        "{bind_host} 上 {first}–{} 都占着。用 JOY_PORT 指定一个空端口。",
+        "{first}–{} are all taken on {bind_host}. Pick a free port with JOY_PORT.",
         first + PORT_SCAN - 1
     )
 }
@@ -240,10 +242,10 @@ async fn authorize(
             Ok(app) => app,
             Err(error) => {
                 // Never silent: say which user failed and why.
-                eprintln!("(joy) 用户 {user} 的 app-server 起不来：{error:#}");
+                eprintln!("(joy) could not start the app-server for user {user}: {error:#}");
                 return (
                     axum::http::StatusCode::BAD_GATEWAY,
-                    format!("该用户的 app-server 起不来：{error:#}"),
+                    format!("the app-server for that user would not start: {error:#}"),
                 )
                     .into_response();
             }
@@ -251,7 +253,7 @@ async fn authorize(
     } else {
         gate.single
             .clone()
-            .expect("单用户模式的 Gate 必须带一个 app-server")
+            .expect("single-user mode's Gate must carry an app-server")
     };
     req.extensions_mut().insert(app);
     next.run(req).await
@@ -269,8 +271,8 @@ pub fn validate_binding(host: &str, token: Option<&str>) -> Result<()> {
     };
     if !loopback && token.is_none() {
         anyhow::bail!(
-            "驾驶舱要绑在 {host}（非回环地址）却没设 JOY_OPS_TOKEN —— 拒绝启动。\
-             设一个 token，或把 JOY_OPS_HOST 留在 127.0.0.1。"
+            "the cockpit would bind to {host} (not a loopback address) with no JOY_OPS_TOKEN — refusing to start.\
+             Set a token, or leave JOY_OPS_HOST at 127.0.0.1."
         );
     }
     Ok(())

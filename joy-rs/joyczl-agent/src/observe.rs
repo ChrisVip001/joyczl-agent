@@ -100,7 +100,7 @@ impl Observation {
             .iter()
             .filter_map(|fact| match fact {
                 Fact::Contradiction { path, said } => Some(format!(
-                    "工具说写好了 {path}，但文件不存在（工具原话：{said}）"
+                    "the tool said it wrote {path}, but the file is not there (the tool said: {said})"
                 )),
                 _ => None,
             })
@@ -156,7 +156,7 @@ pub fn observe(
                 .iter()
                 .find(|(use_id, _)| use_id == id)
                 .map(|(_, content)| content.as_str())
-                .unwrap_or("(没有结果：这一轮在工具返回前就结束了)");
+                .unwrap_or("Error: no result: the turn ended before the tool returned");
             // Same rule the loop uses to report success: output starting with "Error:" failed.
             let ok = !output.starts_with("Error:");
 
@@ -244,10 +244,12 @@ impl Recorder<'_> {
                 Ok(id) => {
                     let status = if step.ok { "ok" } else { "failed" };
                     if let Err(e) = self.steps.close(id, status, Some(&step.digest), None).await {
-                        eprintln!("(joy) 步骤收尾没记上（不影响回合）：{e}");
+                        eprintln!(
+                            "(joy) the step closing was not recorded (the turn is unaffected): {e}"
+                        );
                     }
                 }
-                Err(e) => eprintln!("(joy) 步骤没记进台账：{e}"),
+                Err(e) => eprintln!("(joy) the step was not written to the ledger: {e}"),
             }
         }
         for (path, bytes) in observation.artifacts() {
@@ -256,11 +258,14 @@ impl Recorder<'_> {
                 .add(self.task_id, self.run_id, &path, bytes as i64)
                 .await
             {
-                eprintln!("(joy) 交付物没记上：{e}");
+                eprintln!("(joy) the deliverable was not recorded: {e}");
             }
         }
         for contradiction in observation.contradictions() {
-            eprintln!("(joy) 任务 {} 发现矛盾：{contradiction}", self.task_id);
+            eprintln!(
+                "(joy) task {} found a contradiction: {contradiction}",
+                self.task_id
+            );
             if let Err(e) = self
                 .events
                 .append(
@@ -271,7 +276,7 @@ impl Recorder<'_> {
                 )
                 .await
             {
-                eprintln!("(joy) 矛盾事件没记上：{e}");
+                eprintln!("(joy) the contradiction event was not recorded: {e}");
             }
         }
     }

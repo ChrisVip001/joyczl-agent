@@ -42,14 +42,9 @@ pub async fn judge(
     condition: &str,
     transcript: &str,
 ) -> Result<Judgement, String> {
-    let system = "你在判断一个长期目标有没有达成。只根据给你的对话记录判断 —— \
-                  你不能调工具，也不该自己动手做事。\n\
-                  只回一个 JSON 对象，不要别的话：\
-                  {\"ok\": bool, \"impossible\": bool, \"reason\": \"一句话\"}\n\
-                  ok 表示目标已经达成；impossible 表示按现有条件根本做不到。\
-                  两者不能同时为真。reason 用一句话说清依据（关键证据），用中文。";
+    let system = "You are deciding whether a long-running goal has been met. Judge only from the conversation record you were given — you cannot call tools, and you should not do the work yourself.\nReply with one JSON object and nothing else:\n{\"ok\": bool, \"impossible\": bool, \"reason\": \"one sentence\"}\nok means the goal has been met; impossible means it cannot be done under the current conditions. They cannot both be true. reason states the evidence in one sentence, in English.";
     let looked: String = transcript.chars().take(JUDGE_TRANSCRIPT_CHARS).collect();
-    let user = format!("目标：{condition}\n\n对话记录：\n{looked}");
+    let user = format!("Goal: {condition}\n\nConversation record:\n{looked}");
 
     let response = resolved
         .client
@@ -62,7 +57,7 @@ pub async fn judge(
             max_tokens: JUDGE_MAX_TOKENS,
         })
         .await
-        .map_err(|e| format!("判断器调用失败：{e}"))?;
+        .map_err(|e| format!("the judge call failed: {e}"))?;
 
     let text = response
         .content
@@ -75,12 +70,12 @@ pub async fn judge(
         .join("\n");
     let json = joyczl_memory::gate::extract_json(&text).ok_or_else(|| {
         format!(
-            "判断器没给出 JSON：{}",
+            "the judge returned no JSON: {}",
             text.chars().take(200).collect::<String>()
         )
     })?;
-    let value: Value =
-        serde_json::from_str(&json).map_err(|e| format!("判断器的 JSON 读不了：{e}（{json}）"))?;
+    let value: Value = serde_json::from_str(&json)
+        .map_err(|e| format!("the judge's JSON could not be read: {e} ({json})"))?;
 
     let ok = value.get("ok").and_then(Value::as_bool).unwrap_or(false);
     let impossible = value
@@ -90,7 +85,7 @@ pub async fn judge(
     let reason = value
         .get("reason")
         .and_then(Value::as_str)
-        .unwrap_or("（判断器没给理由）")
+        .unwrap_or("(the judge gave no reason)")
         .to_string();
 
     if ok && impossible {
@@ -99,7 +94,7 @@ pub async fn judge(
         return Ok(Judgement {
             ok: false,
             impossible: false,
-            reason: format!("判断器自相矛盾（ok 与 impossible 同时为真），当作没达成：{reason}"),
+            reason: format!("the judge contradicted itself (ok and impossible both true); counting it as not met: {reason}"),
         });
     }
     Ok(Judgement {

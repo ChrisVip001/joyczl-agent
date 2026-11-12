@@ -19,7 +19,7 @@ async fn fixtures(
     std::path::PathBuf,
     Arc<std::sync::RwLock<Option<Resolved>>>,
 ) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().join(name);
     std::fs::create_dir_all(&home).expect("建目录");
     let _ = dir.keep();

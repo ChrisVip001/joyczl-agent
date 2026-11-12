@@ -88,7 +88,7 @@ impl FeishuConfig {
         match self.identity.as_deref().unwrap_or("app") {
             identity @ ("app" | "user") => Ok(identity),
             other => Err(format!(
-                "feishu.as 只能是 app 或 user，写的是 {other:?}（不填 = app）"
+                "feishu.as must be app or user, got {other:?} (empty = app)"
             )),
         }
     }
@@ -185,13 +185,13 @@ impl ImapSection {
     pub fn validate(&self) -> Result<(), String> {
         if self.mode != "notify" && self.mode != "turn" {
             return Err(format!(
-                "imap.mode 只能是 notify 或 turn，写的是 {:?}",
+                "imap.mode must be notify or turn, got {:?}",
                 self.mode
             ));
         }
         if self.poll_secs < 30 {
             return Err(format!(
-                "imap.poll_secs 不能小于 30（写的是 {}）",
+                "imap.poll_secs must not be under 30 (got {})",
                 self.poll_secs
             ));
         }
@@ -257,12 +257,12 @@ pub fn load(home: &Path) -> anyhow::Result<ConnectorConfig> {
     if let Some(feishu) = &config.feishu {
         feishu
             .identity()
-            .map_err(|e| anyhow::anyhow!("connectors.json 里 feishu 有问题：{e}"))?;
+            .map_err(|e| anyhow::anyhow!("feishu in connectors.json has a problem: {e}"))?;
     }
     if let Some(email) = &config.email {
         if let Some(imap) = &email.imap {
             imap.validate()
-                .map_err(|e| anyhow::anyhow!("connectors.json 里 email.imap 有问题：{e}"))?;
+                .map_err(|e| anyhow::anyhow!("email.imap in connectors.json has a problem: {e}"))?;
         }
     }
     Ok(config)
@@ -275,8 +275,7 @@ fn load_raw(home: &Path) -> anyhow::Result<ConnectorConfig> {
     };
     serde_json::from_str(&raw).map_err(|e| {
         anyhow::anyhow!(
-            "{} 读不明白：{e}\n\
-             连接器配置是手写的，写错就没人能用 —— 这里宁可大声失败，也不猜。",
+            "{} could not be read: {e}\n\n             connector config is hand-written; a mistake leaves nobody able to use it — better to fail loudly than to guess.",
             path.display()
         )
     })

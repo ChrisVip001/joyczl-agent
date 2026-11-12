@@ -34,7 +34,7 @@ impl Client {
             http: HttpClient::builder()
                 .timeout(timeout)
                 .build()
-                .expect("构建 HTTP 客户端"),
+                .expect("build the HTTP client"),
             base_url: base_url
                 .unwrap_or(DEFAULT_BASE)
                 .trim_end_matches('/')
@@ -111,7 +111,7 @@ pub(crate) fn anthropic_messages(messages: &[Message]) -> Vec<Value> {
                             },
                         }),
                         other => serde_json::to_value(other)
-                            .expect("ContentBlock 永远可序列化"),
+                            .expect("ContentBlock is always serialisable"),
                     })
                     .collect::<Vec<_>>(),
             })
@@ -140,6 +140,18 @@ fn anthropic_system(request: &CreateRequest) -> Option<Value> {
 
 impl Client {
     async fn create_inner(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
+        crate::reject_responses_continuation(&request)?;
+        if request
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .any(|block| matches!(block, ContentBlock::OpenAiReasoning { .. }))
+        {
+            return Err(ProviderError::Api(
+                "Chat Completions thinking continuation cannot be replayed through Anthropic"
+                    .into(),
+            ));
+        }
         let mut body = json!({
             "model": request.model,
             "max_tokens": request.max_tokens,
@@ -156,7 +168,7 @@ impl Client {
         let text = self.post(&body).await?;
 
         let value: Value = serde_json::from_str(&text)
-            .map_err(|e| ProviderError::Parse(format!("应答不是合法 JSON：{e}")))?;
+            .map_err(|e| ProviderError::Parse(format!("the response is not valid JSON: {e}")))?;
         parse_message(&value)
     }
 
@@ -167,6 +179,18 @@ impl Client {
         request: CreateRequest,
         on_text: TextSink,
     ) -> Result<CreateResponse, ProviderError> {
+        crate::reject_responses_continuation(&request)?;
+        if request
+            .messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .any(|block| matches!(block, ContentBlock::OpenAiReasoning { .. }))
+        {
+            return Err(ProviderError::Api(
+                "Chat Completions thinking continuation cannot be replayed through Anthropic"
+                    .into(),
+            ));
+        }
         let mut body = json!({
             "model": request.model,
             "max_tokens": request.max_tokens,
@@ -193,7 +217,7 @@ impl Client {
         while let Some(item) = events.as_mut().next().await {
             let data = item?;
             let value: Value = serde_json::from_str(&data)
-                .map_err(|e| ProviderError::Parse(format!("SSE 载荷不是 JSON：{e}")))?;
+                .map_err(|e| ProviderError::Parse(format!("the SSE payload is not JSON: {e}")))?;
 
             match value.get("type").and_then(|t| t.as_str()) {
                 Some("message_start") => {
@@ -304,7 +328,7 @@ impl Client {
 pub fn parse_message(value: &Value) -> Result<CreateResponse, ProviderError> {
     let content: Vec<ContentBlock> =
         serde_json::from_value(value.get("content").cloned().unwrap_or(Value::Null))
-            .map_err(|e| ProviderError::Parse(format!("content 块不对：{e}")))?;
+            .map_err(|e| ProviderError::Parse(format!("bad content block: {e}")))?;
 
     let stop_reason = value
         .get("stop_reason")

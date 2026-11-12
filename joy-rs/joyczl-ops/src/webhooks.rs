@@ -140,31 +140,31 @@ pub fn load(home: &Path) -> Result<WebhooksConfig> {
     };
     let config: WebhooksConfig = serde_json::from_str(&raw).map_err(|e| {
         anyhow!(
-            "{} 读不明白：{e}（字段只有 name/secret/prompt/session/tier/enabled/signature/limit/callback）",
+            "{} could not be read: {e} (the fields are name/secret/prompt/session/tier/enabled/signature/limit/callback)",
             path.display()
         )
     })?;
     for hook in &config.hooks {
         if hook.name.trim().is_empty() {
-            return Err(anyhow!("{} 里有一个没写 name 的 hook", path.display()));
+            return Err(anyhow!("a hook in {} has no name", path.display()));
         }
         if hook.secret.trim().is_empty() {
             return Err(anyhow!(
-                "{} 里的 hook '{}' 没设 secret —— 拒绝启用（入站 webhook 必须能证明自己是谁）",
+                "hook '{}' in {} has no secret — refusing to enable it (an inbound webhook must be able to prove who it is)",
                 path.display(),
                 hook.name
             ));
         }
         if hook.prompt.trim().is_empty() {
             return Err(anyhow!(
-                "{} 里的 hook '{}' 没有 prompt —— 收到请求也没话可说",
+                "hook '{}' in {} has no prompt — it would have nothing to say when a request arrives",
                 path.display(),
                 hook.name
             ));
         }
         if hook.limit == Some(0) {
             return Err(anyhow!(
-                "{} 里的 hook '{}' 写了 limit: 0 —— 「配了但永远不放行」不是策略，是打错字",
+                "hook '{}' in {} sets limit: 0 — \"configured but never allowed\" is not a policy, it is a typo",
                 path.display(),
                 hook.name
             ));
@@ -172,7 +172,7 @@ pub fn load(home: &Path) -> Result<WebhooksConfig> {
         if let Some(url) = hook.callback_url() {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
                 return Err(anyhow!(
-                    "{} 里的 hook '{}' 的 callback 必须是 http(s) URL，收到：{url}",
+                    "the callback of hook '{}' in {} must be an http(s) URL, got: {url}",
                     path.display(),
                     hook.name
                 ));
@@ -280,7 +280,7 @@ pub fn admit(
     let Some(secret) = hook.secret_value() else {
         // Configured but unreadable (missing env var): refuse, never "open door".
         return Err(Refusal::Unauthorized(
-            "这个 hook 的密钥读不到（env 变量没设？）",
+            "this hook's secret could not be read (is the env var set?)",
         ));
     };
 
@@ -289,20 +289,22 @@ pub fn admit(
         let signature = credential.signature.trim().to_ascii_lowercase();
         if timestamp.is_empty() || signature.is_empty() {
             return Err(Refusal::Unauthorized(
-                "signature 模式需要 X-Joy-Timestamp 与 X-Joy-Signature",
+                "signature mode needs X-Joy-Timestamp and X-Joy-Signature",
             ));
         }
         let Ok(stamp) = timestamp.parse::<i64>() else {
-            return Err(Refusal::Unauthorized("X-Joy-Timestamp 得是秒级整数"));
+            return Err(Refusal::Unauthorized(
+                "X-Joy-Timestamp must be an integer number of seconds",
+            ));
         };
         if (now_epoch - stamp).abs() > SIGNATURE_WINDOW {
             return Err(Refusal::Unauthorized(
-                "时间戳超出窗口（±300 秒）：旧请求不许重放",
+                "the timestamp is outside the window (±300 seconds): old requests may not be replayed",
             ));
         }
         let expected = signature_of(&secret, timestamp, body);
         if !crate::constant_time_eq(expected.as_bytes(), signature.as_bytes()) {
-            return Err(Refusal::Unauthorized("签名不对"));
+            return Err(Refusal::Unauthorized("the signature is wrong"));
         }
         let mut guard = lock_guard();
         guard.prune(now);
@@ -311,7 +313,7 @@ pub fn admit(
         }
         guard.seen.insert(signature, now);
     } else if !crate::constant_time_eq(credential.secret.as_bytes(), secret.as_bytes()) {
-        return Err(Refusal::Unauthorized("X-Joy-Secret 不对"));
+        return Err(Refusal::Unauthorized("X-Joy-Secret is wrong"));
     }
 
     // After auth on purpose: garbage must not burn this hook's budget.
@@ -334,7 +336,7 @@ pub async fn deliver(callback: &str, payload: Value) {
     {
         Ok(client) => client,
         Err(error) => {
-            eprintln!("(joy) hook 回调的 HTTP 客户端建不起来：{error}");
+            eprintln!("(joy) the HTTP client for hook callbacks could not be built: {error}");
             return;
         }
     };
@@ -342,16 +344,18 @@ pub async fn deliver(callback: &str, payload: Value) {
         match client.post(callback).json(&payload).send().await {
             Ok(response) if response.status().is_success() => return,
             Ok(response) => eprintln!(
-                "(joy) hook 回调 {callback} 返回 {}（第 {attempt} 次）",
+                "(joy) hook callback {callback} returned {} (attempt {attempt})",
                 response.status()
             ),
-            Err(error) => eprintln!("(joy) hook 回调 {callback} 失败（第 {attempt} 次）：{error}"),
+            Err(error) => {
+                eprintln!("(joy) hook callback {callback} failed (attempt {attempt}): {error}")
+            }
         }
         if attempt < 3 {
             tokio::time::sleep(Duration::from_secs(u64::from(attempt))).await;
         }
     }
-    eprintln!("(joy) hook 回调 {callback} 三次都没送出去，丢了这一次投递（答案仍在会话历史里）");
+    eprintln!("(joy) hook callback {callback} did not get through in three attempts; this delivery is lost (the answer is still in the session history)");
 }
 
 /// The 202 body for async hooks: the knock was accepted, the answer will be pushed.
@@ -493,7 +497,7 @@ mod webhooks_tests {
         assert_eq!(
             admit(&hook, &stale, body, epoch + SIGNATURE_WINDOW + 1, now),
             Err(Refusal::Unauthorized(
-                "时间戳超出窗口（±300 秒）：旧请求不许重放"
+                "the timestamp is outside the window (±300 seconds): old requests may not be replayed"
             ))
         );
 
@@ -501,7 +505,7 @@ mod webhooks_tests {
         let forged = signed_at("not-the-secret", epoch + 10, body);
         assert_eq!(
             admit(&hook, &forged, body, epoch + 10, now),
-            Err(Refusal::Unauthorized("签名不对"))
+            Err(Refusal::Unauthorized("the signature is wrong"))
         );
 
         let missing = Credential {
@@ -575,7 +579,7 @@ mod webhooks_tests {
         };
         assert_eq!(
             admit(&hook, &bad, "boom", 0, now),
-            Err(Refusal::Unauthorized("X-Joy-Secret 不对"))
+            Err(Refusal::Unauthorized("X-Joy-Secret is wrong"))
         );
 
         let unreadable = Hook {

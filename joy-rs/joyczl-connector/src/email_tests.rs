@@ -28,6 +28,8 @@ impl Fixture {
         let home = self.dir.path().to_path_buf();
         let pool = joyczl_state_open(&home).await;
         ToolCtx {
+            on_uncertain: None,
+            task_run_id: None,
             activate: None,
             embedder: None,
             cwd: None,
@@ -183,8 +185,8 @@ async fn without_live_a_send_is_only_a_draft() {
     )
     .await
     .expect("草稿该成功");
-    assert!(reply.contains("草稿"), "{reply}");
-    assert!(reply.contains("不会真的发"), "{reply}");
+    assert!(reply.contains("draft"), "{reply}");
+    assert!(reply.contains("not live"), "{reply}");
 
     let outbox = fixture.dir.path().join("outbox");
     let mut entries = std::fs::read_dir(&outbox).expect("outbox 目录");
@@ -257,7 +259,7 @@ async fn a_denied_approval_means_nothing_is_sent() {
     )
     .await
     .expect_err("没批准就不能发");
-    assert!(error.to_string().contains("没有被批准"), "{error}");
+    assert!(error.to_string().contains("not approved"), "{error}");
 
     let seen = broker.seen.lock().expect("锁");
     assert_eq!(seen.len(), 1, "每次实际发送问一次");
@@ -285,7 +287,7 @@ async fn an_approved_send_reaches_the_smtp_server() {
     )
     .await
     .expect("批准后该发成功");
-    assert!(reply.contains("已通过"), "{reply}");
+    assert!(reply.contains("through"), "{reply}");
 
     // The payload is MIME base64: decode the body back and compare.
     use base64::Engine;
@@ -328,7 +330,7 @@ async fn a_missing_password_is_reported_before_the_human_is_asked() {
     )
     .await
     .expect_err("没有密码就该失败");
-    assert!(error.to_string().contains("密码"), "{error}");
+    assert!(error.to_string().contains("password"), "{error}");
     assert!(
         broker.seen.lock().expect("锁").is_empty(),
         "参数不全就别浪费那次点击"

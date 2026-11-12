@@ -28,6 +28,7 @@ import type {
   SkillRow,
   SkillsView,
 } from "./api";
+import { applyStatic, getLang, initLang, setLang, t } from "./i18n";
 import { createTimeline } from "./timeline";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
@@ -96,11 +97,38 @@ import {
 /**
  * Which session is currently being viewed.
  *
- * A session is not stored in the browser — just a label on chat_log — so "switching" means
- * changing this variable and re-fetching the history, nothing more. The default session is
- * a good thing: `joy` in the terminal talks on the same line too, so they connect.
+ * A session is not *stored* in the browser — it is just a label on chat_log, and the server
+ * owns the rows — but which one you are reading is client state, and a reload should not
+ * silently take you somewhere else. It is remembered in localStorage next to the workspace;
+ * `boot()` drops it if the list no longer has that id.
+ *
+ * `default` is still the first-run answer: `joy` in the terminal talks on the same line, so
+ * a fresh browser and a fresh terminal meet in the same conversation.
  */
-let current = "default";
+const SESSION_KEY = "joy.session";
+let current = localStorage.getItem(SESSION_KEY) ?? "default";
+
+/** Ids the last `refresh()` saw, newest first. Boot uses this to tell "the remembered
+ *  session still exists" from "it was deleted since" — opening a session the list no longer
+ *  shows would paint an empty shell with no way back except the list. */
+let knownSessions: string[] = [];
+
+/** Switch the label *and* remember it. Every path that changes `current` goes through here. */
+function rememberSession(id: string): void {
+  current = id;
+  localStorage.setItem(SESSION_KEY, id);
+}
+
+/**
+ * Where each conversation was left, by session id.
+ *
+ * Distance **from the bottom**, not an absolute offset: older pages get loaded, images size
+ * themselves, and the top edge moves — the newest edge does not. Deliberately in memory
+ * only: "switch back to where I was reading" is about moving between conversations in one
+ * sitting, while a reload should land on the newest message (the session itself is
+ * remembered in localStorage; the reading position is not).
+ */
+const reading = new Map<string, number>();
 
 /** Cursor for paging back through older messages. `null` = already at the earliest. */
 let olderCursor: string | null = null;
@@ -116,6 +144,7 @@ const dom = {
   /** 只在有轮次可跟时出现：按下 = 发送落成下一轮，而不是补充这一轮。 */
   queueToggle: must<HTMLButtonElement>("queue-toggle"),
   refresh: must<HTMLButtonElement>("refresh"),
+  lang: must<HTMLButtonElement>("lang"),
   older: must<HTMLButtonElement>("older"),
   overview: must("overview"),
   status: must("status"),
@@ -161,9 +190,10 @@ const dom = {
 };
 
 /**
- * The chosen workspace. It is the only client-side state we keep (localStorage): a person
- * expects a folder picker to remember the folder, and the server already records it in
- * workspaces.json for the "recents" list. Never a path typed by hand.
+ * The chosen workspace. One of two things this page keeps in localStorage (the other is
+ * which session is open): a person expects a folder picker to remember the folder, and the
+ * server already records it in workspaces.json for the "recents" list. Never a path typed
+ * by hand.
  */
 const WORKSPACE_KEY = "joy.workspace";
 let workspace: string | null = localStorage.getItem(WORKSPACE_KEY);
@@ -175,13 +205,13 @@ function setWorkspace(path: string | null): void {
   workspace = path;
   if (path === null) {
     localStorage.removeItem(WORKSPACE_KEY);
-    dom.cwdLabel.textContent = "选择工作目录";
-    dom.cwd.title = "选一个文件夹作为工作目录——它同时也是唯一的可写范围";
+    dom.cwdLabel.textContent = t("选择工作目录");
+    dom.cwd.title = t("选一个文件夹作为工作目录——它同时也是唯一的可写范围");
   } else {
     localStorage.setItem(WORKSPACE_KEY, path);
     // A folder's name is what a person recognizes; the full path stays in the tooltip.
     dom.cwdLabel.textContent = path.split("/").filter(Boolean).at(-1) ?? path;
-    dom.cwd.title = `工作目录：${path}（只有这里能写文件）`;
+    dom.cwd.title = t("工作目录：{path}（只有这里能写文件）", { path: path });
   }
 }
 
@@ -240,7 +270,7 @@ function renderStaged(): void {
       const drop = el("button", {
         class: "thumb-drop",
         text: "×",
-        title: "拿掉这个文件",
+        title: t("拿掉这个文件"),
         type: "button",
       });
       drop.addEventListener("click", () => {
@@ -254,7 +284,7 @@ function renderStaged(): void {
     const drop = el("button", {
       class: "ghost",
       text: "×",
-      title: "拿掉这个文件",
+      title: t("拿掉这个文件"),
     });
     drop.addEventListener("click", () => {
       releaseStaged([file]);
@@ -357,8 +387,8 @@ function hitsLine(): Node[] {
     .sort((left, right) => right[1] - left[1])
     .slice(0, 3);
   if (rows.length === 0) return [];
-  const text = rows.map(([name, hits]) => `${name} ${hits} 次`).join("、");
-  return [chip(`命中：${text}`, "note")];
+  const text = rows.map(([name, hits]) => t("{name} {hits} 次", { name: name, hits: hits })).join("、");
+  return [chip(t("命中：{text}", { text: text }), "note")];
 }
 
 /** Paint the skill panel from the latest `skillsView`. */
@@ -463,7 +493,7 @@ function paintMemory(): void {
 /** Read the view that is showing, then paint it. */
 async function loadMemory(): Promise<void> {
   if (current === "") {
-    memError = new Error("还没有选会话 —— 先开一个会话，账本才有得看。");
+    memError = new Error(t("还没有选会话 —— 先开一个会话，账本才有得看。"));
     paintMemory();
     return;
   }
@@ -512,7 +542,7 @@ async function openMemoryPage(slug: string): Promise<void> {
   try {
     const answer = await fetchMemoryPage(slug);
     if (answer.page === null) {
-      memNote = `记忆库里没有「${slug}」这一页 —— 它可能在后台整理时被改名了，刷新目录看看。`;
+      memNote = t("记忆库里没有「{slug}」这一页 —— 它可能在后台整理时被改名了，刷新目录看看。", { slug: slug });
       wikiCurrent = null;
     } else {
       wikiCurrent = answer.page;
@@ -547,7 +577,7 @@ async function jumpToSource(source: string): Promise<void> {
     if (match === undefined) {
       ledgerEntries = [];
       ledgerOpen = null;
-      memNote = `账本里没有 ${source} 对应的那一轮（可能已被整理进更早的摘要）。`;
+      memNote = t("账本里没有 {source} 对应的那一轮（可能已被整理进更早的摘要）。", { source: source });
       memError = null;
       paintMemory();
       return;
@@ -566,7 +596,7 @@ async function jumpToSource(source: string): Promise<void> {
  * that is `joy memory rebuild`, and it belongs where a person can see the cost.
  */
 function rebuildHint(): void {
-  memNote = "整页重生成走 CLI：joy memory rebuild --page " + (wikiCurrent?.slug ?? "<slug>");
+  memNote = t("整页重生成走 CLI：joy memory rebuild --page ") + (wikiCurrent?.slug ?? "<slug>");
   paintMemory();
 }
 
@@ -576,8 +606,8 @@ async function compactNow(): Promise<void> {
     const answer = await compactSession(current);
     memNote =
       answer.coveredTurns === 0
-        ? "没有更早的轮次可折 —— 摘要已经跟上了。"
-        : `已压缩：摘要现在覆盖 ${answer.coveredTurns} 轮（${answer.summaryTokens} token）。`;
+        ? t("没有更早的轮次可折 —— 摘要已经跟上了。")
+        : t("已压缩：摘要现在覆盖 {coveredTurns} 轮（{summaryTokens} token）。", { coveredTurns: answer.coveredTurns, summaryTokens: answer.summaryTokens });
     const usage = await fetchContextUsage(current);
     contextUsage = usage.usage;
     memError = null;
@@ -669,7 +699,7 @@ function openLightbox(src: string, alt: string): void {
 /** The stop button rides the status line while a turn runs — one click, honest answer. */
 function addStopButton(): void {
   if (dom.status.querySelector(".status-stop") !== null) return;
-  const stop = el("button", { class: "ghost status-stop", text: "停止", type: "button" });
+  const stop = el("button", { class: "ghost status-stop", text: t("停止"), type: "button" });
   stop.addEventListener("click", () => {
     if (activeTurnId === null) return;
     stop.disabled = true;
@@ -677,7 +707,7 @@ function addStopButton(): void {
       .then((result) => {
         if (!result.interrupted) {
           const label = dom.status.querySelector(".status-label");
-          if (label !== null) label.textContent = "（那一轮已经结束了）";
+          if (label !== null) label.textContent = t("（那一轮已经结束了）");
         }
       })
       .catch(() => undefined);
@@ -741,6 +771,14 @@ function setupSidebarResize(): void {
 }
 
 async function boot(): Promise<void> {
+  // Language before anything is painted: `t()` is called while the first frame is built, and
+  // the static markup has to be translated before the user sees it in Chinese for a moment.
+  initLang();
+  applyStatic(document);
+  // The button shows the *other* language — it is what you get by pressing it.
+  dom.lang.textContent = getLang() === "zh" ? "EN" : "中文";
+  dom.lang.addEventListener("click", () => setLang(getLang() === "zh" ? "en" : "zh"));
+
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
   dom.newSession.addEventListener("click", () => void newSession());
@@ -839,18 +877,26 @@ async function boot(): Promise<void> {
         dom.status.replaceChildren(
           el("span", {
             class: "status-label",
-            text: "上次中断的回合正在续跑（已完成的工具不重跑）",
+            text: t("上次中断的回合正在续跑（已完成的工具不重跑）"),
           }),
         );
         if (resumeNotice !== null) window.clearTimeout(resumeNotice);
         resumeNotice = window.setTimeout(hideStatus, 5000);
       }
       void refresh();
+      // Re-read the history of the session being viewed. The reading position is captured
+      // first, so a turn landing on another device does not move the page under the reader.
       if (ping.sessionId === current) void open(current);
     },
   });
 
   await refresh();
+  // The remembered session survives a reload; a session deleted since then does not. The
+  // list is newest-first, so `[0]` is "the conversation people would expect to land in".
+  if (!knownSessions.includes(current)) {
+    const newest = knownSessions[0];
+    if (newest !== undefined) rememberSession(newest);
+  }
   await open(current);
   // A bookmarked `#overview` opens the progress drawer; without a hash it stays shut.
   openHashPanel();
@@ -878,7 +924,7 @@ async function switchTask(
 ): Promise<void> {
   if (
     action === "cancel" &&
-    !window.confirm(`取消任务「${task.title}」？取消后不会自动续跑。`)
+    !window.confirm(t("取消任务「{title}」？取消后不会自动续跑。", { title: task.title }))
   ) {
     return;
   }
@@ -916,6 +962,7 @@ async function refresh(): Promise<void> {
         () => void handleInbox(),
       ),
     );
+    knownSessions = data.sessions.map((session) => session.id);
     dom.sessions.replaceChildren(
       sessionList(
         data,
@@ -969,7 +1016,7 @@ async function refreshCapabilities(): Promise<void> {
  */
 async function cwdPicker(): Promise<void> {
   const overlay = el("div", { class: "fsoverlay" });
-  const panel = el("div", { class: "fspanel", role: "dialog", "aria-label": "选择工作目录" });
+  const panel = el("div", { class: "fspanel", role: "dialog", "aria-label": t("选择工作目录") });
   overlay.append(panel);
   const close = () => overlay.remove();
   overlay.addEventListener("click", (event) => {
@@ -1011,13 +1058,13 @@ async function cwdPicker(): Promise<void> {
   }
 
   async function show(path: string | null): Promise<void> {
-    panel.replaceChildren(el("p", { class: "hint", text: "读目录中…" }));
+    panel.replaceChildren(el("p", { class: "hint", text: t("读目录中…") }));
     let listing: Awaited<ReturnType<typeof fetchFs>>;
     try {
       listing = await fetchFs(path, showHidden);
     } catch (error: unknown) {
       panel.replaceChildren(
-        el("p", { class: "hint", text: `读不动：${String(error)}` }),
+        el("p", { class: "hint", text: t("读不动：{error}", { error: String(error) }) }),
         closeButton(),
       );
       return;
@@ -1030,7 +1077,7 @@ async function cwdPicker(): Promise<void> {
     const shortcuts = recents.filter((path) => path !== listing.path && !here.includes(path));
     if (shortcuts.length > 0) {
       const block = el("div", { class: "fsrecent" });
-      block.append(el("p", { class: "hint", text: "最近使用" }));
+      block.append(el("p", { class: "hint", text: t("最近使用") }));
       for (const path of shortcuts) {
         const row = el("button", {
           class: "fsrow",
@@ -1052,23 +1099,25 @@ async function cwdPicker(): Promise<void> {
       return row;
     });
     if (rows.length === 0 && shortcuts.length === 0) {
-      list.append(muted("这层没有子目录了。要选的就是当前显示的目录。"));
+      list.append(muted(t("这层没有子目录了。要选的就是当前显示的目录。")));
     } else {
       list.append(...rows);
     }
 
     // Bottom action bar: new folder + hidden toggle + cancel.
-    const mkdir = el("button", { class: "ghost", text: "＋ 新建文件夹", type: "button" });
+    const mkdir = el("button", { class: "ghost", text: t("＋ 新建文件夹"), type: "button" });
     mkdir.addEventListener("click", () => {
-      const name = window.prompt(`在 ${current} 下新建文件夹：`);
+      const name = window.prompt(t("在 {current} 下新建文件夹：", { current: current }));
       if (name === null || name.trim() === "") return;
       void createFolder(current, name.trim())
         .then(() => show(current))
-        .catch((error: unknown) => window.alert(`建不了：${String(error)}`));
+        .catch((error: unknown) =>
+          window.alert(t("建不了：{error}", { error: String(error) })),
+        );
     });
     const hiddenToggle = el("button", {
       class: "ghost",
-      text: showHidden ? "隐藏点开头" : "显示隐藏目录",
+      text: showHidden ? t("隐藏点开头") : t("显示隐藏目录"),
       type: "button",
     });
     hiddenToggle.addEventListener("click", () => {
@@ -1076,13 +1125,13 @@ async function cwdPicker(): Promise<void> {
       void show(current);
     });
 
-    const pick = el("button", { class: "approve", text: "选这个目录", type: "button" });
+    const pick = el("button", { class: "approve", text: t("选这个目录"), type: "button" });
     pick.addEventListener("click", () => {
       setWorkspace(listing.path);
       // Onto the session as well: the folder belongs to this conversation, so it must survive
       // a reload or another device opening the same conversation.
       void updateSession({ sessionId: current, cwd: listing.path }).catch((error: unknown) => {
-        console.warn("工作目录没记到会话上（这一轮仍然用它）", error);
+        console.warn(t("工作目录没记到会话上（这一轮仍然用它）"), error);
       });
       // Recorded into "Recents" — right at the top next time the overlay opens.
       void recordRecent(listing.path).then(() => {
@@ -1100,7 +1149,7 @@ async function cwdPicker(): Promise<void> {
   }
 
   function closeButton(): HTMLButtonElement {
-    const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+    const cancel = el("button", { class: "ghost", text: t("取消"), type: "button" });
     cancel.addEventListener("click", () => {
       close();
       document.removeEventListener("keydown", esc);
@@ -1140,7 +1189,7 @@ async function capabilityWrite(
 /// The server refuses built-in names as well — this ask is the second fence, not the only one.
 function removeSkillAsk(skill: SkillRow): void {
   const ok = window.confirm(
-    `删除技能「${skill.name}」？SKILL.md 会从 ${skill.folder} 移掉，下一轮起不再载入。`,
+    t("删除技能「{name}」？SKILL.md 会从 {folder} 移掉，下一轮起不再载入。", { name: skill.name, folder: skill.folder }),
   );
   if (!ok) return;
   void capabilityWrite(() => removeSkill(skill.name), dom.skillsBody);
@@ -1148,7 +1197,7 @@ function removeSkillAsk(skill: SkillRow): void {
 
 /// Same for a connector: it stops connecting on the next start.
 function removeMcpAsk(server: McpRow): void {
-  const ok = window.confirm(`删除 MCP 连接器「${server.name}」？重启 Joy 后不再连接它。`);
+  const ok = window.confirm(t("删除 MCP 连接器「{name}」？重启 Joy 后不再连接它。", { name: server.name }));
   if (!ok) return;
   void capabilityWrite(() => removeMcpServer(server.name), dom.mcpBody);
 }
@@ -1176,7 +1225,9 @@ function openOverlay(panel: HTMLElement): () => void {
 }
 
 /** A minimal SKILL.md, shown as the paste box's placeholder — the format at a glance. */
-const SKILL_TEMPLATE = `---
+const SKILL_TEMPLATE = () =>
+  getLang() === "zh"
+    ? `---
 name: my-skill
 description: 什么时候用我 —— 触发词写在这里（英文，它会兼任触发器）
 ---
@@ -1184,7 +1235,16 @@ description: 什么时候用我 —— 触发词写在这里（英文，它会�
 # 标题
 
 第一步……
-第二步……`;
+第二步……`
+    : `---
+name: my-skill
+description: when to use me — trigger words go here (English; it doubles as the trigger)
+---
+
+# Title
+
+First step…
+Second step…`;
 
 /**
  * Add a skill: paste a SKILL.md, or give a URL (GitHub blob / Gist pages are rewritten
@@ -1195,22 +1255,22 @@ async function skillAddOverlay(): Promise<void> {
   const panel = el("div", {
     class: "fspanel cap-form",
     role: "dialog",
-    "aria-label": "添加技能",
+    "aria-label": t("添加技能"),
   });
   const text = el("textarea", {
     class: "cap-textarea",
     rows: 10,
-    placeholder: SKILL_TEMPLATE,
-    "aria-label": "SKILL.md 内容",
+    placeholder: SKILL_TEMPLATE(),
+    "aria-label": t("SKILL.md 内容"),
   });
   const url = el("input", {
     type: "url",
-    placeholder: "https://…/SKILL.md（和粘贴框二选一）",
-    "aria-label": "SKILL.md 网址",
+    placeholder: t("https://…/SKILL.md（和粘贴框二选一）"),
+    "aria-label": t("SKILL.md 网址"),
   });
   const close = openOverlay(panel);
 
-  const install = el("button", { class: "approve", text: "安装", type: "button" });
+  const install = el("button", { class: "approve", text: t("安装"), type: "button" });
   install.addEventListener("click", () => {
     install.disabled = true;
     void capabilityWrite(
@@ -1222,13 +1282,13 @@ async function skillAddOverlay(): Promise<void> {
       else install.disabled = false;
     });
   });
-  const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+  const cancel = el("button", { class: "ghost", text: t("取消"), type: "button" });
   cancel.addEventListener("click", close);
 
   panel.append(
     el("p", {
       class: "hint",
-      text: "粘贴一份 SKILL.md，或填一个网址。名字必须是小写 slug（字母、数字、连字符）—— 它会变成目录名；重名拒绝安装。",
+      text: t("粘贴一份 SKILL.md，或填一个网址。名字必须是小写 slug（字母、数字、连字符）—— 它会变成目录名；重名拒绝安装。"),
     }),
     text,
     url,
@@ -1246,30 +1306,30 @@ async function mcpAddOverlay(): Promise<void> {
   const panel = el("div", {
     class: "fspanel cap-form",
     role: "dialog",
-    "aria-label": "添加 MCP 连接器",
+    "aria-label": t("添加 MCP 连接器"),
   });
   const close = openOverlay(panel);
 
-  const name = el("input", { placeholder: "名字，如 fs / notes", "aria-label": "名称" });
+  const name = el("input", { placeholder: t("名字，如 fs / notes"), "aria-label": t("名称") });
   const url = el("input", {
     type: "url",
-    placeholder: "https://host/mcp（远程 HTTP 服务器）",
-    "aria-label": "远程 URL",
+    placeholder: t("https://host/mcp（远程 HTTP 服务器）"),
+    "aria-label": t("远程 URL"),
   });
   const command = el("input", {
-    placeholder: "npx（本地 stdio 服务器）",
-    "aria-label": "本地命令",
+    placeholder: t("npx（本地 stdio 服务器）"),
+    "aria-label": t("本地命令"),
   });
   const args = el("input", {
-    placeholder: "参数，空格分隔，如 -y @modelcontextprotocol/server-filesystem /tmp",
-    "aria-label": "命令参数",
+    placeholder: t("参数，空格分隔，如 -y @modelcontextprotocol/server-filesystem /tmp"),
+    "aria-label": t("命令参数"),
   });
   const authEnv = el("input", {
-    placeholder: "鉴权环境变量名（可留空），如 NOTES_API_KEY",
-    "aria-label": "鉴权环境变量名",
+    placeholder: t("鉴权环境变量名（可留空），如 NOTES_API_KEY"),
+    "aria-label": t("鉴权环境变量名"),
   });
 
-  const save = el("button", { class: "approve", text: "保存", type: "button" });
+  const save = el("button", { class: "approve", text: t("保存"), type: "button" });
   save.addEventListener("click", () => {
     const spec: McpServerSpec = { name: name.value.trim() };
     if (url.value.trim() !== "") {
@@ -1287,19 +1347,19 @@ async function mcpAddOverlay(): Promise<void> {
       else save.disabled = false;
     });
   });
-  const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+  const cancel = el("button", { class: "ghost", text: t("取消"), type: "button" });
   cancel.addEventListener("click", close);
 
   panel.append(
     el("p", {
       class: "hint",
-      text: "url 和 command 只能填一个。参数用空格分隔（路径里有空格就先编辑 mcp.json）。鉴权填环境变量的名字，不是密钥本身。保存后重启 Joy 生效 —— 连接发生在启动时。",
+      text: t("url 和 command 只能填一个。参数用空格分隔（路径里有空格就先编辑 mcp.json）。鉴权填环境变量的名字，不是密钥本身。保存后重启 Joy 生效 —— 连接发生在启动时。"),
     }),
-    el("label", { class: "cap-field" }, el("span", { text: "名称" }), name),
-    el("label", { class: "cap-field" }, el("span", { text: "远程 URL" }), url),
-    el("label", { class: "cap-field" }, el("span", { text: "本地命令" }), command),
-    el("label", { class: "cap-field" }, el("span", { text: "命令参数" }), args),
-    el("label", { class: "cap-field" }, el("span", { text: "鉴权环境变量名" }), authEnv),
+    el("label", { class: "cap-field" }, el("span", { text: t("名称") }), name),
+    el("label", { class: "cap-field" }, el("span", { text: t("远程 URL") }), url),
+    el("label", { class: "cap-field" }, el("span", { text: t("本地命令") }), command),
+    el("label", { class: "cap-field" }, el("span", { text: t("命令参数") }), args),
+    el("label", { class: "cap-field" }, el("span", { text: t("鉴权环境变量名") }), authEnv),
     el("div", { class: "row" }, save, cancel),
   );
   name.focus();
@@ -1316,34 +1376,34 @@ async function scheduleAddOverlay(): Promise<void> {
   const panel = el("div", {
     class: "fspanel cap-form",
     role: "dialog",
-    "aria-label": "添加定时任务",
+    "aria-label": t("添加定时任务"),
   });
   const close = openOverlay(panel);
 
   const name = el("input", {
-    placeholder: "morning-news（小写字母、数字、连字符）",
-    "aria-label": "名称",
+    placeholder: t("morning-news（小写字母、数字、连字符）"),
+    "aria-label": t("名称"),
   });
   const cron = el("input", {
     class: "sched-cron",
     placeholder: "0 8 * * 1-5",
-    "aria-label": "cron 表达式",
+    "aria-label": t("cron 表达式"),
   });
   const prompt = el("textarea", {
     class: "cap-textarea",
     rows: 4,
-    placeholder: "到点让 Joy 做的事，比如：给我一份今天的科技简报，中文，三条以内",
-    "aria-label": "触发时做什么",
+    placeholder: t("到点让 Joy 做的事，比如：给我一份今天的科技简报，中文，三条以内"),
+    "aria-label": t("触发时做什么"),
   });
   const delivery = el(
     "select",
-    { "aria-label": "投递方式" },
-    el("option", { value: "outbox", text: "outbox —— 写进 <home>/outbox/" }),
-    el("option", { value: "notify", text: "notify —— 写文件，同时推送通知" }),
-    el("option", { value: "quiet", text: "quiet —— 只记日志（高频任务）" }),
+    { "aria-label": t("投递方式") },
+    el("option", { value: "outbox", text: t("outbox —— 写进 <home>/outbox/") }),
+    el("option", { value: "notify", text: t("notify —— 写文件，同时推送通知") }),
+    el("option", { value: "quiet", text: t("quiet —— 只记日志（高频任务）") }),
   );
 
-  const save = el("button", { class: "approve", text: "保存", type: "button" });
+  const save = el("button", { class: "approve", text: t("保存"), type: "button" });
   save.addEventListener("click", () => {
     const spec: ScheduleSpec = {
       name: name.value.trim(),
@@ -1358,18 +1418,18 @@ async function scheduleAddOverlay(): Promise<void> {
       else save.disabled = false;
     });
   });
-  const cancel = el("button", { class: "ghost", text: "取消", type: "button" });
+  const cancel = el("button", { class: "ghost", text: t("取消"), type: "button" });
   cancel.addEventListener("click", close);
 
   panel.append(
     el("p", {
       class: "hint",
-      text: "cron 五段：分 时 日 月 周。`0 8 * * 1-5` 是工作日八点，`30 19 * * *` 是每天十九点半。触发时会在自己的会话里跑一轮。",
+      text: t("cron 五段：分 时 日 月 周。`0 8 * * 1-5` 是工作日八点，`30 19 * * *` 是每天十九点半。触发时会在自己的会话里跑一轮。"),
     }),
-    el("label", { class: "cap-field" }, el("span", { text: "名称" }), name),
-    el("label", { class: "cap-field" }, el("span", { text: "时间" }), cron),
-    el("label", { class: "cap-field" }, el("span", { text: "做什么" }), prompt),
-    el("label", { class: "cap-field" }, el("span", { text: "投递" }), delivery),
+    el("label", { class: "cap-field" }, el("span", { text: t("名称") }), name),
+    el("label", { class: "cap-field" }, el("span", { text: t("时间") }), cron),
+    el("label", { class: "cap-field" }, el("span", { text: t("做什么") }), prompt),
+    el("label", { class: "cap-field" }, el("span", { text: t("投递") }), delivery),
     el("div", { class: "row" }, save, cancel),
   );
   name.focus();
@@ -1379,7 +1439,7 @@ async function scheduleAddOverlay(): Promise<void> {
 /// stops seeing it on its next tick. Result files already written are left alone.
 function removeScheduleAsk(job: ScheduleJob): void {
   const ok = window.confirm(
-    `删除定时任务「${job.name}」？schedules.json 里那一行会被移掉，joy schedule 下次触发前就读不到它。已经写出的 outbox 文件不动。`,
+    t("删除定时任务「{name}」？schedules.json 里那一行会被移掉，joy schedule 下次触发前就读不到它。已经写出的 outbox 文件不动。", { name: job.name }),
   );
   if (!ok) return;
   void capabilityWrite(() => removeSchedule(job.name), dom.schedulesBody);
@@ -1394,7 +1454,7 @@ async function submit(): Promise<void> {
   // Attachments cannot ride it — that request was already built — so they wait, out loud.
   if (busy || otherTurn !== null) {
     if (staged.length > 0) {
-      showStatus("thinking", "这一轮还在跑 —— 附件留到下一轮");
+      showStatus("thinking", t("这一轮还在跑 —— 附件留到下一轮"));
       return;
     }
     if (text === "") return;
@@ -1417,13 +1477,13 @@ async function submit(): Promise<void> {
         const path = await uploadFile(file);
         if (file.type.startsWith("image/")) {
           if (file.size > 20 * 1024 * 1024) {
-            dom.staged.replaceChildren(failureOf(new Error(`${file.name} 超过 20MB 单图上限`)));
+            dom.staged.replaceChildren(failureOf(new Error(t("{name} 超过 20MB 单图上限", { name: file.name }))));
             return;
           }
           attachments ??= [];
           attachments.push({ path, mediaType: file.type });
         } else {
-          lines.push(`（附件：${home}/${path}）`);
+          lines.push(t("（附件：{home}/{path}）", { home: home, path: path }));
         }
       }
     } catch (error: unknown) {
@@ -1463,7 +1523,7 @@ async function steer(text: string): Promise<void> {
     const { queued } = await steerTurn({ sessionId: current, message: text });
     // `queued` counts everything this turn accepted: 1 = it will be seen on the next model
     // call, more = it queues behind the earlier ones.
-    showStatus("thinking", queued > 1 ? `已补充（本轮第 ${queued} 句，排队）` : "已补充，下一轮次生效");
+    showStatus("thinking", queued > 1 ? t("已补充（本轮第 {queued} 句，排队）", { queued: queued }) : t("已补充，下一轮次生效"));
   } catch (error: unknown) {
     dom.messages.append(failureOf(error));
     scrollToEnd(true);
@@ -1491,7 +1551,9 @@ async function followUp(text: string): Promise<void> {
     const { queued } = await followUpTurn({ sessionId: current, message: text });
     showStatus(
       "thinking",
-      queued > 1 ? `已排队 —— 前面还有 ${queued - 1} 条` : "已排队 —— 这一轮跑完就轮到它",
+      queued > 1
+        ? t("已排队 —— 前面还有 {n} 条", { n: queued - 1 })
+        : t("已排队 —— 这一轮跑完就轮到它"),
     );
   } catch (error: unknown) {
     // The usual cause is the turn ending between the click and the request; the probe below
@@ -1538,7 +1600,7 @@ async function send(
   let streamed = "";
   let completed: TurnCompletedNotification | null = null;
   let firstDelta = true;
-  showStatus("thinking", "思考中");
+  showStatus("thinking", t("思考中"));
 
   try {
     // The picked folder travels with every turn: it is the sandbox root for writes.
@@ -1559,7 +1621,7 @@ async function send(
         case "textDelta":
           if (firstDelta) {
             firstDelta = false;
-            showStatus("thinking", "回复中");
+            showStatus("thinking", t("回复中"));
           }
           streamed += notification.delta;
           // Incremental paint, but at **block** granularity: settled blocks keep their
@@ -1574,8 +1636,8 @@ async function send(
           // The gate decides whether to consult memory. The line shows "why it remembered / not".
           timeline.gate(
             notification.decision.decision === "retrieve"
-              ? `检索「${notification.decision.query ?? ""}」`
-              : `跳过记忆（${notification.decision.reason}）`,
+              ? t("检索「{q}」", { q: notification.decision.query ?? "" })
+              : t("跳过记忆（{reason}）", { reason: notification.decision.reason }),
           );
           break;
 
@@ -1587,7 +1649,7 @@ async function send(
               "div",
               { class: "ac-head" },
               el("span", { class: "ac-dot", "aria-hidden": "true" }),
-              el("span", { class: "ac-title", text: "需要你授权" }),
+              el("span", { class: "ac-title", text: t("需要你授权") }),
               el("span", { class: "tag", text: notification.tool }),
             ),
             el("code", { class: "ac-cmd", text: notification.argsPreview }),
@@ -1611,34 +1673,36 @@ async function send(
                     response.accepted
                       ? approved
                         ? remember === "always"
-                          ? "已允许，并记住"
+                          ? t("已允许，并记住")
                           : remember === "session"
-                            ? "已允许，本会话不再问"
-                            : "已允许（只这次）"
-                        : "已拒绝"
-                      : "回答得太晚，那一轮已经不等了",
+                            ? t("已允许，本会话不再问")
+                            : t("已允许（只这次）")
+                        : t("已拒绝")
+                      : t("回答得太晚，那一轮已经不等了"),
                     "note",
                   ),
                 );
               })
               .catch((error: unknown) => {
-                foot.replaceChildren(chip(`回答没送出去：${String(error)}`, "note"));
+                foot.replaceChildren(
+                  chip(t("回答没送出去：{error}", { error: String(error) }), "note"),
+                );
               });
           };
           // Four answers, because "yes" is three different promises: this once, this session,
           // or written into settings.json. The card says which is which instead of guessing.
-          const allow = el("button", { class: "approve", text: "只允许这次" });
+          const allow = el("button", { class: "approve", text: t("只允许这次") });
           const session = el("button", {
             class: "approve",
-            text: "本会话总是允许",
-            title: "这次启动内不再问它（不写盘，重启就忘）",
+            text: t("本会话总是允许"),
+            title: t("这次启动内不再问它（不写盘，重启就忘）"),
           });
           const always = el("button", {
             class: "approve",
-            text: "记住这条",
-            title: "写进 settings.json，下次启动也不再问",
+            text: t("记住这条"),
+            title: t("写进 settings.json，下次启动也不再问"),
           });
-          const deny = el("button", { class: "deny", text: "拒绝" });
+          const deny = el("button", { class: "deny", text: t("拒绝") });
           allow.addEventListener("click", () => settle(true, "once"));
           session.addEventListener("click", () => settle(true, "session"));
           always.addEventListener("click", () => settle(true, "always"));
@@ -1652,16 +1716,18 @@ async function send(
           // The goal loop ran another round: say "why it hasn't ended yet", otherwise the UI
           // moved a round on its own and nobody knows why.
           timeline.goal(
-            `目标 · 第 ${notification.round}/${notification.maxRounds} 轮 · ${notification.status} — ${notification.reason}`,
+            t("目标 · 第 {round}/{maxRounds} 轮 · {status} — {reason}", { round: notification.round, maxRounds: notification.maxRounds, status: notification.status, reason: notification.reason }),
           );
           break;
 
         case "retry":
           // Retries are never silent: this line shows "those seconds weren't a hang".
           timeline.retry(
-            `重试第 ${notification.attempt} 次（${notification.reason}，${formatMs(
-              notification.delayMs,
-            )} 后）`,
+            t("重试第 {attempt} 次（{reason}，{delay} 后）", {
+              attempt: notification.attempt,
+              reason: notification.reason,
+              delay: formatMs(notification.delayMs),
+            }),
           );
           break;
 
@@ -1696,13 +1762,13 @@ async function send(
 
         case "consolidationCompleted":
           if (notification.newFacts > 0) {
-            timeline.note(`记住了 ${notification.newFacts} 条新事实`);
+            timeline.note(t("记住了 {newFacts} 条新事实", { newFacts: notification.newFacts }));
             void refresh(); // The memory panel catches up now, no need to wait for the next poll
           }
           break;
 
         case "graphStarted":
-          timeline.graph(`工作流 ${notification.workflow}`);
+          timeline.graph(t("工作流 {workflow}", { workflow: notification.workflow }));
           break;
 
         case "graphNodeStarted":
@@ -1714,7 +1780,7 @@ async function send(
           break;
 
         case "graphEnded":
-          timeline.graph(`工作流 ${notification.workflow} · ${notification.path.length} 步`);
+          timeline.graph(t("工作流 {workflow} · {length} 步", { workflow: notification.workflow, length: notification.path.length }));
           break;
 
         case "turnCompleted":
@@ -1738,15 +1804,15 @@ async function send(
     if (completed !== null) {
       // Overwrite the streamed accumulation with `reply`: deltas may be missing (backpressure,
       // disconnection), while reply is the authoritative result from app-server.
-      paintReply(bubble, completed.reply === "" ? "（这一轮没有回复）" : completed.reply);
+      paintReply(bubble, completed.reply === "" ? t("（这一轮没有回复）") : completed.reply);
       foot.textContent = turnFooter(completed);
     } else if (streamed !== "") {
       // Truncated mid-way: show what did arrive — the stream already painted it as
       // Markdown, finish() just completes the still-growing last block.
       stream.finish();
-      foot.textContent = "这一轮没有收到结尾 —— 上面的回复可能被截断了";
+      foot.textContent = t("这一轮没有收到结尾 —— 上面的回复可能被截断了");
     } else {
-      bubble.textContent = "（这一轮没有回复）";
+      bubble.textContent = t("（这一轮没有回复）");
     }
 
     scrollToEnd(true);
@@ -1789,11 +1855,12 @@ async function newSession(): Promise<void> {
   const id = await createSession({ cwd: workspace }).then(
     (response) => response.sessionId,
     (error: unknown) => {
-      console.warn("会话没建到服务端（首条消息会补上）", error);
+      console.warn(t("会话没建到服务端（首条消息会补上）"), error);
       return `s-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 4)}`;
     },
   );
-  current = id;
+  rememberSession(id);
+  reading.delete(id);
   olderCursor = null;
   activeTurnId = null;
   dom.session.textContent = id;
@@ -1809,7 +1876,7 @@ async function newSession(): Promise<void> {
   // Refresh paints the session list with a "新会话" placeholder for this id (see render.ts).
   await refresh();
   dom.input.focus();
-  scrollToEnd();
+  scrollToEnd(true);
 }
 
 /**
@@ -1834,7 +1901,9 @@ async function branchFrom(sessionId: string): Promise<void> {
 async function open(sessionId: string): Promise<void> {
   if (busy) return;
 
-  current = sessionId;
+  // Read the outgoing session's position while `current` still points at it.
+  captureReading();
+  rememberSession(sessionId);
   queuedMode = false; // a new conversation: the previous one's 「跑完再说」 is not its own
   dom.session.textContent = sessionId;
   dom.older.hidden = true;
@@ -1849,7 +1918,7 @@ async function open(sessionId: string): Promise<void> {
       setWorkspace(meta.session.cwd ?? null);
     })
     .catch((error: unknown) => {
-      console.warn("会话的元数据没读到（工作目录沿用当前）", error);
+      console.warn(t("会话的元数据没读到（工作目录沿用当前）"), error);
     });
 
   try {
@@ -1858,7 +1927,11 @@ async function open(sessionId: string): Promise<void> {
     dom.messages.replaceChildren(failureOf(error));
     return;
   }
-  scrollToEnd();
+  // Back where this conversation was left — first visit, or someone who never scrolled,
+  // lands on the newest message. (Not `scrollToEnd()`: after `replaceChildren` the position
+  // is 0, so its "already near the bottom" test was always false — which is how a switch
+  // used to strand people at the first message of a long session.)
+  restoreReading();
   // A turn may already be running here (another device, a queued follow-up): the reloaded
   // page has no way to know from its own state, so it asks.
   void syncTurns();
@@ -1881,6 +1954,8 @@ async function loadHistory(sessionId: string, cursor: string | null): Promise<vo
   const nodes = [...page.data].reverse().map(messageRow);
 
   if (cursor === null) {
+    // Replace, then let the caller place the view (`restoreReading`): replacing resets
+    // `scrollTop` to 0, and any scroll decision made here would be guessed twice.
     dom.messages.replaceChildren(
       ...(nodes.length === 0 ? [welcome()] : nodes),
     );
@@ -1954,8 +2029,10 @@ function setOtherTurn(turn: TurnView | null): void {
   showStatus(
     "working",
     Number.isNaN(since)
-      ? "这一轮在别处跑 —— 可以补充它，也可以跑完再说"
-      : `这一轮在别处跑了 ${elapsedSince(since)} —— 可以补充它，也可以跑完再说`,
+      ? t("这一轮在别处跑 —— 可以补充它，也可以跑完再说")
+      : t("这一轮在别处跑了 {elapsed} —— 可以补充它，也可以跑完再说", {
+          elapsed: elapsedSince(since),
+        }),
   );
   activeTurnId = turn.turnId;
   addStopButton();
@@ -1974,7 +2051,7 @@ function paintComposerMode(): void {
   dom.queueToggle.hidden = !inFlight;
   dom.queueToggle.classList.toggle("on", queuedNow);
   dom.queueToggle.setAttribute("aria-pressed", String(queuedNow));
-  dom.send.textContent = !inFlight ? "发送" : queuedNow ? "排队" : "补充";
+  dom.send.textContent = !inFlight ? t("发送") : queuedNow ? t("排队") : t("补充");
 }
 
 function setBusy(value: boolean): void {
@@ -2000,10 +2077,67 @@ function nearBottom(): boolean {
   return dom.messages.scrollHeight - dom.messages.scrollTop - dom.messages.clientHeight < 120;
 }
 
-function scrollToEnd(interactive = false): void {
-  if (interactive || nearBottom()) {
-    dom.messages.scrollTop = dom.messages.scrollHeight;
+/** Remember the current session's distance from the bottom, before leaving it. */
+function captureReading(): void {
+  const m = dom.messages;
+  // Not scrollable (an empty screen, a session shorter than the viewport) → "at the bottom".
+  // Recording `clientHeight` here is how a boot with an empty list would later restore a
+  // 767px gap above the newest message.
+  reading.set(current, m.scrollHeight > m.clientHeight ? m.scrollHeight - m.scrollTop : 0);
+}
+
+/**
+ * Put the view back where this session was left.
+ *
+ * Never opened in this sitting → the newest message (what "open this conversation" means).
+ * Was at the bottom → stay at the bottom, through the late layout pass: people who read in
+ * a chat expect the newest line, not a frozen gap.
+ */
+function restoreReading(): void {
+  const fromBottom = reading.get(current);
+  if (fromBottom === undefined || fromBottom <= 8) {
+    pinToEnd();
+    return;
   }
+  placeAt(Math.max(0, dom.messages.scrollHeight - fromBottom));
+}
+
+function scrollToEnd(interactive = false): void {
+  if (interactive || nearBottom()) pinToEnd();
+}
+
+/**
+ * Put the newest message in view, and keep it there across one more layout pass.
+ *
+ * `scrollTop = scrollHeight` lands at the bottom of what is laid out **right now**; an image
+ * or a Markdown block that sizes itself a frame later pushes the last message back down by
+ * its own height. Re-pin on the next frame — but only if nobody scrolled in between, or an
+ * upload finishing would move the page under someone who is reading further up.
+ */
+function pinToEnd(): void {
+  placeAt(dom.messages.scrollHeight);
+  const pinned = dom.messages.scrollTop;
+  requestAnimationFrame(() => {
+    if (Math.abs(dom.messages.scrollTop - pinned) < 4) {
+      placeAt(dom.messages.scrollHeight);
+    }
+  });
+}
+
+/**
+ * Place the view **without** the stylesheet's smooth-scroll animation.
+ *
+ * `.messages` sets `scroll-behavior: smooth` so a jump of a few lines feels continuous. A
+ * programmatic placement must not inherit it: opening a long conversation would slide from
+ * the first message down to where you were — the exact flicker this code exists to avoid —
+ * and per-delta streaming would spend the turn chasing an animation it never catches.
+ */
+function placeAt(top: number): void {
+  const style = dom.messages.style;
+  const previous = style.scrollBehavior;
+  style.scrollBehavior = "auto";
+  dom.messages.scrollTop = top;
+  style.scrollBehavior = previous;
 }
 
 /**
@@ -2021,7 +2155,7 @@ function trimMessages(): void {
   }
   if (dom.messages.querySelector(".folded-note") === null) {
     dom.messages.prepend(
-      el("p", { class: "hint folded-note", text: "更早的消息已折叠 —— 用上面的「更早的」翻看" }),
+      el("p", { class: "hint folded-note", text: t("更早的消息已折叠 —— 用上面的「更早的」翻看") }),
     );
   }
 }
@@ -2032,7 +2166,7 @@ function must<T extends HTMLElement = HTMLElement>(id: string): T {
   // and the only possible cause is index.html and this getting out of sync.
   if (node === null) {
     stalePage(id);
-    throw new Error(`页面里没有 #${id}`);
+    throw new Error(t("页面里没有 #{id}", { id: id }));
   }
   return node as T;
 }
@@ -2052,7 +2186,7 @@ function stalePage(id: string): void {
   if (document.body === null) return;
   const reload = el("button", {
     type: "button",
-    text: "清掉旧缓存并重新加载",
+    text: t("清掉旧缓存并重新加载"),
     style:
       "margin-top:18px;padding:9px 18px;border:1px solid #6b6f78;border-radius:9px;" +
       "background:transparent;color:inherit;cursor:pointer;font:inherit",
@@ -2076,13 +2210,13 @@ function stalePage(id: string): void {
           "max-width:560px;margin:16vh auto 0;padding:0 24px;color:#c9cbd1;" +
           "font:15px/1.75 -apple-system,system-ui,'Segoe UI',sans-serif",
       },
-      el("h1", { text: "页面和脚本不是同一版", style: "font-size:18px;margin:0 0 14px" }),
+      el("h1", { text: t("页面和脚本不是同一版"), style: "font-size:18px;margin:0 0 14px" }),
       el("p", {
-        text: `这个页面缺了 #${id} —— 浏览器缓存了旧版脚本（service worker 缓存优先），新页面配上了旧 bundle。`,
+        text: t("这个页面缺了 #{id} —— 浏览器缓存了旧版脚本（service worker 缓存优先），新页面配上了旧 bundle。", { id: id }),
         style: "margin:0 0 6px",
       }),
       el("p", {
-        text: "点下面的按钮：会注销 service worker、清掉旧缓存，再取一份新版。",
+        text: t("点下面的按钮：会注销 service worker、清掉旧缓存，再取一份新版。"),
         style: "margin:0;color:#8d919a",
       }),
       reload,
@@ -2111,5 +2245,5 @@ if (localStorage.getItem("joy-server") !== null && localStorage.getItem("joy-ops
 
 // 远程模式下的 401：会话过期或 token 被撤。登录卡回来，成功后整页重载拿干净状态。
 window.addEventListener("joy:unauthorized", () => {
-  showLogin({ notice: "登录已过期，请重新登录", onAuthed: () => location.reload() });
+  showLogin({ notice: t("登录已过期，请重新登录"), onAuthed: () => location.reload() });
 });

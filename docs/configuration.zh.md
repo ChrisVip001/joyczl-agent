@@ -515,7 +515,7 @@ Joy **不会**自动去读这些变量——密钥只来自你配置进模型的
 |---|---|---|
 | `JOY_PORT` | `7777` | dashboard 端口；占用时自动向后找 10 个 |
 | `JOY_DASHBOARD_DIR` | 仓库内 dist | 前端构建产物位置 |
-| `JOY_NOTIFY` | 关 | 开了才读 `<home>/notify.json`（`{"slack": "webhook URL"}`）并往外推通知：**审批请求 / 后台作业收尾 / 目标终局**。fire-and-forget —— 发送失败只往 stderr 说一声，绝不拦 turn。URL 是管理员配的，指向内网自建端点（ntfy/Gotify 这类收 `{"text": …}` 的）是合法用法，不做 SSRF 护栏
+| `JOY_NOTIFY` | 关 | 开了才读 `<home>/notify.json`（`{"slack": "webhook URL"}`）并往外推通知：**审批请求 / 后台作业收尾 / 目标终局**。完成通知先落盘，失败或重启后重试（见[投递边界](limitations.zh.md#通知与审计)）；批准提示仍为尽力发送。网络投递不阻塞 turn。URL 是管理员配的，指向内网自建端点（ntfy/Gotify 这类收 `{"text": …}` 的）是合法用法，不做 SSRF 护栏
 | `JOY_OPS_HOST` | `127.0.0.1` | 绑定地址。**绑非回环必须同时设 `JOY_OPS_TOKEN`，否则启动期拒绝**（配错就该起不来） |
 | `JOY_OPS_TOKEN` | — | `/api/*` 的 Bearer token（常量时间比对）。回环地址可不设；设了本机也要带。驾驶舱页面首次 401 时会问一次并存 localStorage。**刻意不进 `config/read`**：部署面参数不该被模型看到 |
 | `JOY_HUB_ROOT` | — | 多用户模式的根目录（也可用 `joy hub --root` 传） |
@@ -699,3 +699,15 @@ CLI 自己的惰性路径。
 dashboard 或协议的 `config/write` 把补丁累计写入 `<home>/settings.json`，
 启动时叠加在环境变量之上。清除模型覆盖：把字段写成空串后提交。校验失败
 的补丁整体拒绝——不合法的值不会进文件。
+
+### 原生 OpenAI Responses
+
+内置 OpenAI 使用 `wire: "responses"` 与 `/responses`；其他 OpenAI 兼容厂商仍使用 `wire: "openai"` 与 `/chat/completions`。原生适配支持文本、图片、函数工具、SSE 文本流和加密推理接续。请求明确设置 `store: false`，接续数据保留在本地工作记忆与断点中。断流按错误处理，不执行未完整生成的函数调用。此适配未启用托管工具、WebSocket 引导或 API 异步工具调用。
+
+自定义端点若只支持 Chat Completions，可修改目录后重启：
+
+```json
+[{ "id": "openai", "wire": "openai" }]
+```
+
+包含原生 Responses 接续数据的断点不能换到其他 wire 恢复；应使用 Responses 配置或开始新回合。接口依据当前[函数调用](https://developers.openai.com/api/docs/guides/function-calling)与[Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)。

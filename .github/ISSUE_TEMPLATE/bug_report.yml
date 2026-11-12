@@ -1,0 +1,63 @@
+name: Bug report
+description: Something does not work as documented
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Joy. A failed install is useful feedback too.
+        Please do not paste API keys, `secrets.json`, or real conversation content.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `joy --version`, or the release tag you downloaded
+      placeholder: v0.17.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Linux x86_64
+        - Linux arm64
+        - Windows
+        - Docker
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what actually happened
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Commands run, in order. Include the exact binary or build source.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / trace
+      description: Relevant output. Redact keys and personal data before pasting.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked docs/limitations.md and docs/operations.md
+          required: false
+        - label: I removed all credentials and private data from the above
+          required: true

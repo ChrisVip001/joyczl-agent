@@ -58,7 +58,7 @@ pub fn discover(cwd: &Path) -> Option<String> {
                 let head = truncate(text, MAX_BYTES);
                 kept.push((
                     path.clone(),
-                    format!("{head}\n…（超过 {MAX_BYTES} 字节，后面截掉了）"),
+                    format!("{head}\n… (over {MAX_BYTES} bytes; the tail was cut)"),
                 ));
             }
             // Anything further out would only add less-local conventions on top of a
@@ -75,10 +75,10 @@ pub fn discover(cwd: &Path) -> Option<String> {
     kept.reverse();
 
     let mut out = String::from(
-        "\n项目约定（从这个仓库里读到的，按它干活；与用户这次的要求冲突时以用户为准）：",
+        "\nProject conventions (read from this repository — follow them; when they conflict with what the user asked for now, the user wins):",
     );
     for (path, text) in kept {
-        out.push_str(&format!("\n\n来自 {}：\n{text}", path.display()));
+        out.push_str(&format!("\n\nFrom {}:\n{text}", path.display()));
     }
     Some(out)
 }

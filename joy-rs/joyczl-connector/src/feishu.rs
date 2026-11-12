@@ -36,7 +36,10 @@ pub struct TokenCache {
 
 impl TokenCache {
     fn get(&self) -> Option<String> {
-        let guard = self.inner.lock().expect("token 锁不该中毒");
+        let guard = self
+            .inner
+            .lock()
+            .expect("the token lock should not be poisoned");
         guard
             .as_ref()
             .filter(|(_, at)| at.elapsed() < Duration::from_secs(100 * 60))
@@ -44,7 +47,10 @@ impl TokenCache {
     }
 
     fn put(&self, token: String) {
-        *self.inner.lock().expect("token 锁不该中毒") = Some((token, Instant::now()));
+        *self
+            .inner
+            .lock()
+            .expect("the token lock should not be poisoned") = Some((token, Instant::now()));
     }
 }
 
@@ -52,15 +58,14 @@ pub fn feishu_send_tool(config: FeishuConfig) -> Tool {
     let cache = Arc::new(TokenCache::default());
     Tool {
         name: "feishu_send".to_string(),
-        description: "给白名单里的飞书会话或成员发一条文本消息。默认只写进本地 outbox 当草稿；\
-                      真正发送需要配置里开启 live，并且每次都会被问一次。"
+        description: "Send a text message to an allowlisted Feishu chat or member. By default it only writes a draft into the local outbox; actually sending needs live turned on in the config, and every send asks first."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "接收方 id（open_id 或 chat_id，必须在白名单内）"},
-                "text": {"type": "string", "description": "消息正文（纯文本）"},
-                "dry_run": {"type": "boolean", "description": "只留草稿、不发。不填则按配置"}
+                "to": {"type": "string", "description": "recipient id (open_id or chat_id, must be allowlisted)"},
+                "text": {"type": "string", "description": "message body (plain text)"},
+                "dry_run": {"type": "boolean", "description": "keep a draft, do not send. Unset = follow the config"}
             },
             "required": ["to", "text"]
         }),
@@ -88,8 +93,7 @@ async fn run(
     // Fence 1: allowlist, fail closed.
     if !config.permits(&to) {
         bail!(
-            "接收方 {to} 不在白名单里。\n\
-             白名单在 {} 的 allow_recipients（飞书段）—— 只有人能改；留空就是谁都不许。",
+            "Recipient {to} is not on the allowlist.\n\n             The allowlist is allow_recipients in {} (feishu section) — only a person can change it; empty means nobody is allowed.",
             ctx.home.join("connectors.json").display()
         );
     }
@@ -98,12 +102,12 @@ async fn run(
     if dry_run || !config.live {
         let path = write_draft(&ctx.home, &config, &to, &text).await?;
         return Ok(format!(
-            "飞书消息草稿已放进 outbox（{}）：发给 {to}。{}",
+            "Feishu draft put in the outbox ({}): to {to}.{}",
             path.display(),
             if config.live {
-                "这次是你的 dry_run 要求"
+                " this run's dry_run asked for it"
             } else {
-                "连接器还没开 live，不会真的发"
+                "; the connector is not live, so nothing was sent"
             }
         ));
     }
@@ -111,25 +115,25 @@ async fn run(
     // Credentials before the card — no wasted click.
     let Some(secret) = config.secret(&ctx.home) else {
         bail!(
-            "飞书 app_secret 找不到（{}）—— 先在钥匙串或环境变量里补上。",
+            "the Feishu app_secret could not be found ({}) — put it in the keychain or an environment variable first.",
             config.app_secret
         );
     };
 
     // Fence 3: one approval per live send, naming the target and previewing the text.
     let Some(broker) = ctx.approval.clone() else {
-        bail!("要真的发飞书消息必须先问人，但当前没有可应答的界面 —— 这次没有发送。");
+        bail!("Sending a Feishu message for real would have to ask a person first, and there is no interface to answer — nothing was sent this time.");
     };
     let request = ApprovalRequest {
         tool: "feishu_send".to_string(),
-        args_preview: format!("发给 {to}：{}", summarize("飞书消息", &text)),
-        reason: "连接器已开启 live，每次实际发送都会确认".to_string(),
+        args_preview: format!("To {to}: {}", summarize("Feishu message", &text)),
+        reason: "the connector is live; every actual send is confirmed".to_string(),
         timeout_secs: APPROVAL_TIMEOUT_SECS,
         // Nothing worth remembering: a live send is a one-off act, not a standing rule.
         remember: None,
     };
     if !broker.request(request).await {
-        bail!("这次发送没有被批准（或没人回答），已跳过。");
+        bail!("This send was not approved (or nobody answered); skipped.");
     }
 
     let token = match config.identity().unwrap_or("app") {
@@ -146,7 +150,7 @@ async fn run(
         },
     };
     let message_id = send_message(&config, &token, &to, &text).await?;
-    Ok(format!("已发给 {to}（飞书 message_id {message_id}）。"))
+    Ok(format!("Sent to {to} (Feishu message_id {message_id})."))
 }
 
 /// The app-identity token. `code != 0` is a real answer from Feishu, quote it verbatim.
@@ -159,11 +163,14 @@ async fn tenant_token(config: &FeishuConfig, secret: &str) -> Result<String> {
         .json(&json!({ "app_id": config.app_id, "app_secret": secret }))
         .send()
         .await
-        .context("连不上飞书鉴权端点")?;
-    let body: Value = response.json().await.context("飞书鉴权端点没回 JSON")?;
+        .context("could not reach the Feishu auth endpoint")?;
+    let body: Value = response
+        .json()
+        .await
+        .context("the Feishu auth endpoint did not return JSON")?;
     if body.get("code").and_then(Value::as_i64) != Some(0) {
         bail!(
-            "飞书拒绝发 token：{} {}（检查 app_id / app_secret 与应用的可用范围）",
+            "Feishu refused to issue a token: {} {} (check app_id / app_secret and the app's availability scope)",
             body.get("code").unwrap_or(&Value::Null),
             body.get("msg").and_then(Value::as_str).unwrap_or("")
         );
@@ -171,7 +178,7 @@ async fn tenant_token(config: &FeishuConfig, secret: &str) -> Result<String> {
     body.get("tenant_access_token")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("飞书应答里没有 tenant_access_token：{body}"))
+        .ok_or_else(|| anyhow::anyhow!("the Feishu reply has no tenant_access_token: {body}"))
 }
 
 async fn send_message(config: &FeishuConfig, token: &str, to: &str, text: &str) -> Result<String> {
@@ -188,11 +195,14 @@ async fn send_message(config: &FeishuConfig, token: &str, to: &str, text: &str) 
         .json(&json!({ "receive_id": to, "msg_type": "text", "content": content }))
         .send()
         .await
-        .context("连不上飞书消息端点")?;
-    let body: Value = response.json().await.context("飞书消息端点没回 JSON")?;
+        .context("could not reach the Feishu message endpoint")?;
+    let body: Value = response
+        .json()
+        .await
+        .context("the Feishu message endpoint did not return JSON")?;
     if body.get("code").and_then(Value::as_i64) != Some(0) {
         bail!(
-            "飞书拒绝发送：{} {}",
+            "Feishu refused the send: {} {}",
             body.get("code").unwrap_or(&Value::Null),
             body.get("msg").and_then(Value::as_str).unwrap_or("")
         );
@@ -201,7 +211,7 @@ async fn send_message(config: &FeishuConfig, token: &str, to: &str, text: &str) 
         .get("data")
         .and_then(|data| data.get("message_id"))
         .and_then(Value::as_str)
-        .unwrap_or("(没有 id)")
+        .unwrap_or("(no id)")
         .to_string())
 }
 
@@ -210,7 +220,7 @@ fn client() -> Result<reqwest::Client> {
         .timeout(HTTP_TIMEOUT)
         .user_agent(concat!("joy/", env!("CARGO_PKG_VERSION")))
         .build()
-        .context("建不了 HTTP 客户端")
+        .context("could not build the HTTP client")
 }
 
 /// Send for real, with the token cache bypassed (CLI: one message, one process).
@@ -221,7 +231,10 @@ pub async fn send_live(
     text: &str,
 ) -> Result<String> {
     let Some(secret) = config.secret(home) else {
-        bail!("飞书 app_secret 找不到（{}）。", config.app_secret);
+        bail!(
+            "the Feishu app_secret could not be found ({}).",
+            config.app_secret
+        );
     };
     let token = match config.identity().unwrap_or("app") {
         "user" => crate::feishu_oauth::access_token(config, home).await?,

@@ -67,6 +67,8 @@ async fn ctx() -> super::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     super::ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: None,
@@ -94,7 +96,7 @@ async fn a_delegation_returns_the_summary_with_a_label() {
         Err(e) => panic!("不该失败：{e}"),
     };
 
-    assert!(out.contains("子代理回话了"), "{out}");
+    assert!(out.contains("A subagent has answered"), "{out}");
     assert!(out.contains("十点有会。"), "{out}");
     let seen = runner.seen.lock().expect("锁");
     assert_eq!(seen.len(), 1);
@@ -167,7 +169,10 @@ async fn a_result_schema_is_passed_through_and_the_report_is_labelled() {
         Some(schema),
         "schema 该原样交给 runner"
     );
-    assert!(out.contains("转述"), "子代理的话必须标明是转述：{out}");
+    assert!(
+        out.contains("reported"),
+        "子代理的话必须标明是reported：{out}"
+    );
     assert!(out.contains("十点有会。"), "{out}");
 }
 
@@ -198,13 +203,13 @@ async fn a_batch_runs_every_task_and_merges_in_the_order_asked() {
         .await;
 
     for (index, task) in ["甲", "乙", "丙"].iter().enumerate() {
-        let header = format!("### 子任务 {}：{task}", index + 1);
+        let header = format!("### Subtask {}: {task}", index + 1);
         assert!(out.contains(&header), "缺了 {header}：{out}");
     }
     // 顺序：结论跟着自己的标题，一问一答不会错位。
-    let first = out.find("### 子任务 1：甲").expect("第一段");
-    let second = out.find("### 子任务 2：乙").expect("第二段");
-    let third = out.find("### 子任务 3：丙").expect("第三段");
+    let first = out.find("### Subtask 1: 甲").expect("第一段");
+    let second = out.find("### Subtask 2: 乙").expect("第二段");
+    let third = out.find("### Subtask 3: 丙").expect("第三段");
     assert!(first < second && second < third, "顺序乱了：{out}");
     assert!(out.contains("结论：甲"), "{out}");
 }
@@ -234,7 +239,7 @@ async fn an_empty_batch_is_refused() {
     reg.register(delegate_task(Arc::new(Echo)));
     let out = reg.execute(ctx().await, NAME, json!({"tasks": []})).await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("空数组"), "{out}");
+    assert!(out.contains("empty array"), "{out}");
 }
 
 /// 单件委派拿全部工具（行为零变化）；批量委派必须显式告诉实现方「只读」。

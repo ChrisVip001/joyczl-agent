@@ -72,10 +72,10 @@ const APPLE_CALENDAR_NAME: &str = "Joy";
 /// permission dialog can time osascript out — then say honestly: it's local; approve and retry.
 async fn sync_to_apple_calendar(title: &str, start: &str, end: &str, notes: &str) -> String {
     if !cfg!(target_os = "macos") {
-        return "Apple Calendar 同步跳过（不是 macOS）。".to_string();
+        return "Apple Calendar sync skipped (not macOS).".to_string();
     }
     let (Some(start_at), Some(end_at)) = (parse_iso(start), parse_iso(end)) else {
-        return "Apple Calendar 同步失败（时间格式解析不了）—— 事件仍在本地日历。".to_string();
+        return "Apple Calendar sync failed (the time could not be parsed) — the event is still in the local calendar.".to_string();
     };
     // Quotes inside the AppleScript string must be stripped; double quotes become single ones.
     let safe = |s: &str| s.replace('\\', "").replace('"', "'");
@@ -111,7 +111,9 @@ end tell",
         .output()
         .await;
     match outcome {
-        Err(e) => format!("Apple Calendar 同步失败（{e}）—— 事件仍在本地日历。"),
+        Err(e) => {
+            format!("Apple Calendar sync failed ({e}) — the event is still in the local calendar.")
+        }
         Ok(output) => {
             if output.status.success() {
                 let used = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -120,13 +122,12 @@ end tell",
                 } else {
                     &used
                 };
-                format!("也已加进 Apple Calendar（日历「{used}」）。")
+                format!("Also added to Apple Calendar (calendar \"{used}\").")
             } else {
                 let detail = String::from_utf8_lossy(&output.stderr);
                 let detail = detail.trim().chars().take(120).collect::<String>();
                 format!(
-                    "Apple Calendar 同步失败（{detail}）—— 事件仍在本地日历。\
-                     若是权限问题，去 系统设置 > 隐私与安全性 > 自动化 里放行终端控制 Calendar。"
+                    "Apple Calendar sync failed ({detail}) — the event is still in the local calendar.\n                     If this is a permissions problem, allow the terminal to control Calendar under System Settings > Privacy & Security > Automation."
                 )
             }
         }
@@ -136,17 +137,16 @@ end tell",
 pub fn create_event() -> Tool {
     Tool {
         name: "create_event".to_string(),
-        description: "在用户的本地日历上创建日程。用户想安排、预约、计划某个具体时间的\
-                      事情时用。"
+        description: "Create an event on the user's local calendar. Use it when the user wants to schedule, book or plan something at a specific time."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "简短的事件标题"},
-                "start": {"type": "string", "description": "开始时间，ISO 8601，如 2026-07-14T09:00"},
-                "end": {"type": "string", "description": "结束时间，ISO 8601。缺省 = 开始 + 1 小时"},
-                "attendees": {"type": "string", "description": "逗号分隔的参与者名字/邮箱"},
-                "notes": {"type": "string", "description": "可选的事件备注"}
+                "title": {"type": "string", "description": "A short event title"},
+                "start": {"type": "string", "description": "Start time, ISO 8601, e.g. 2026-07-14T09:00"},
+                "end": {"type": "string", "description": "End time, ISO 8601. Default = start + 1 hour"},
+                "attendees": {"type": "string", "description": "Comma-separated attendee names/addresses"},
+                "notes": {"type": "string", "description": "An optional note for the event"}
             },
             "required": ["title", "start"]
         }),
@@ -170,8 +170,7 @@ pub fn create_event() -> Tool {
                 // Defense: models sometimes send half a call. Give an actionable hint, not a bare error.
                 let Some(start_at) = parse_iso(&start) else {
                     return Ok(
-                        "create_event 至少需要 title 和 start（ISO 8601，如 2026-07-14T09:00）。\
-                         请补全后重试。"
+                        "create_event needs at least title and start (ISO 8601, e.g. 2026-07-14T09:00). Please fill them in and retry."
                             .to_string(),
                     );
                 };
@@ -182,7 +181,7 @@ pub fn create_event() -> Tool {
                         Some(at) => at.format("%Y-%m-%dT%H:%M").to_string(),
                         None => {
                             return Ok(format!(
-                                "end 解析不了：'{e}'。要 ISO 8601，如 2026-07-14T10:00。"
+                                "end could not be parsed: '{e}'. It needs ISO 8601, e.g. 2026-07-14T10:00."
                             ))
                         }
                     },
@@ -198,14 +197,14 @@ pub fn create_event() -> Tool {
                     .await?;
                 if stored.is_none() {
                     return Ok(format!(
-                        "事件「{title}」（{start}）已经存在，没有重复创建。"
+                        "The event \"{title}\" ({start}) already exists; not creating a duplicate."
                     ));
                 }
                 write_ics(&ctx.home, &title, &start, &end, &attendees)
-                    .map_err(|e| anyhow::anyhow!("写 calendar.ics 失败：{e}"))?;
+                    .map_err(|e| anyhow::anyhow!("Could not write calendar.ics: {e}"))?;
 
                 let mut where_landed = format!(
-                    "已存进本地日历（{}）。",
+                    "Saved to the local calendar ({}).",
                     ctx.home.join("calendar.ics").display()
                 );
                 if env_flag("JOY_APPLE_CALENDAR") {
@@ -215,23 +214,21 @@ pub fn create_event() -> Tool {
                 }
                 if env_flag("JOY_GOOGLE_CALENDAR") {
                     where_landed.push_str(
-                        " Google Calendar：Joy 还没实现 Google 的连接流程，这次没有同步 ——\
-                         事件只在本地日历里。",
+                        " Google Calendar: Joy has no Google connection flow yet, so nothing was synced this time — the event lives only in the local calendar.",
                     );
                 }
                 if !env_flag("JOY_APPLE_CALENDAR") && !env_flag("JOY_GOOGLE_CALENDAR") {
                     where_landed.push_str(
-                        " 没有同步到任何日历应用（想开就设 JOY_APPLE_CALENDAR=1，\
-                         或手动导入 calendar.ics）。",
+                        " Nothing was synced to a calendar app (set JOY_APPLE_CALENDAR=1 to enable it, or import calendar.ics by hand).",
                     );
                 }
                 let with = if attendees.is_empty() {
                     String::new()
                 } else {
-                    format!("，参与者 {attendees}")
+                    format!(", attendees {attendees}")
                 };
                 Ok(format!(
-                    "事件已创建：「{title}」{start} → {end}{with}。{where_landed}"
+                    "Event created: \"{title}\" {start} → {end}{with}.{where_landed}"
                 ))
             })
         }),
@@ -241,16 +238,14 @@ pub fn create_event() -> Tool {
 pub fn list_events() -> Tool {
     Tool {
         name: "list_events".to_string(),
-        description: "读用户日历上 Joy 创建的事件。用户问某天/某周有什么安排时用。\
-                      日期用 ISO（如 2026-07-10）；两个都不给就列出全部。\
-                      「今天/昨天」这类词先用 current_time 换算成日期。"
+        description: "Read the events Joy created on the user's calendar. Use it when the user asks what is scheduled for a day or a week. Dates are ISO (e.g. 2026-07-10); give neither to list everything. Convert \"today\"/\"yesterday\" with current_time first."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "start": {"type": "string", "description": "最早日期（含当日），ISO，如 2026-07-10"},
-                "end": {"type": "string", "description": "最晚日期（含当日），ISO，如 2026-07-10"},
-                "limit": {"type": "integer", "description": "最多几条，默认 20"}
+                "start": {"type": "string", "description": "Earliest date (inclusive), ISO, e.g. 2026-07-10"},
+                "end": {"type": "string", "description": "Latest date (inclusive), ISO, e.g. 2026-07-10"},
+                "limit": {"type": "integer", "description": "How many at most, 20 by default"}
             },
             "required": []
         }),
@@ -265,14 +260,13 @@ pub fn list_events() -> Tool {
                     .await?;
                 if rows.is_empty() {
                     let window = match (&start, &end) {
-                        (Some(s), Some(e)) => format!("（{s} 到 {e}）"),
-                        (Some(s), None) => format!("（{s} 起）"),
-                        (None, Some(e)) => format!("（到 {e}）"),
+                        (Some(s), Some(e)) => format!("({s} to {e})"),
+                        (Some(s), None) => format!("(from {s})"),
+                        (None, Some(e)) => format!("(to {e})"),
                         (None, None) => String::new(),
                     };
                     return Ok(format!(
-                        "没有找到事件{window}。查过：Joy 的本地日历\
-                         （只包含 Joy 自己创建的事件，Calendar.app 里手动建的不在这里）。"
+                        "No events found{window}. Looked at: Joy's local calendar (it holds only the events Joy itself created; anything made by hand in Calendar.app is not here)."
                     ));
                 }
                 let lines: Vec<String> = rows
@@ -281,13 +275,13 @@ pub fn list_events() -> Tool {
                         let who = if r.attendees.is_empty() {
                             String::new()
                         } else {
-                            format!("，与 {}", r.attendees)
+                            format!(", with {}", r.attendees)
                         };
                         format!("- {}：{} → {}{}", r.title, r.start, r.end, who)
                     })
                     .collect();
                 Ok(format!(
-                    "来自 Joy 的本地日历（Joy 创建的事件）：\n{}",
+                    "From Joy's local calendar (events Joy created):\n{}",
                     lines.join("\n")
                 ))
             })

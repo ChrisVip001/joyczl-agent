@@ -6,7 +6,7 @@ use std::path::Path;
 use super::{discover, MAX_BYTES};
 
 fn repo() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     fs::create_dir(dir.path().join(".git")).expect("建 .git");
     dir
 }
@@ -104,7 +104,7 @@ fn an_oversized_inner_file_is_truncated_on_a_char_boundary() {
     let repo = repo();
     write(repo.path(), "AGENTS.md", &"字".repeat(MAX_BYTES));
     let text = discover(repo.path()).expect("应该有");
-    assert!(text.contains("截掉了"), "截断要说明：{text}");
+    assert!(text.contains("the tail was cut"), "截断要说明：{text}");
     // 不该出现替换字符：截断点落在字符边界上
     assert!(!text.contains('\u{FFFD}'), "{text}");
 }

@@ -6,8 +6,8 @@
 # 断言写在**最后一轮**的请求上：它代表「这一轮模型实际看到的东西」，
 # 而不是整个会话里所有出现过的字。
 
-{"id":"prompt-shape/thin-soul-for-a-strong-model","description":"thin：默认 SOUL 只有三条纪律，没有长脚手架的示例规则","message":"你好","settings":{"soul_mode":"thin"},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"你好。"}],"expect":{"last_prompt_contains":["简洁、温暖、主动"],"last_prompt_not_contains":["先征得同意"]}}
+{"id":"prompt-shape/thin-soul-for-a-strong-model","description":"thin：默认 SOUL 只有三条纪律，没有长脚手架的示例规则","message":"你好","settings":{"soul_mode":"thin"},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"你好。"}],"expect":{"last_prompt_contains":["Concise, warm, proactive"],"last_prompt_not_contains":["ask first"]}}
 
-{"id":"prompt-shape/full-soul-when-asked","description":"full：保留原来那份长脚手架（本地小模型仍需手把手）","message":"你好","settings":{"soul_mode":"full"},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"你好。"}],"expect":{"last_prompt_contains":["先征得同意"]}}
+{"id":"prompt-shape/full-soul-when-asked","description":"full：保留原来那份长脚手架（本地小模型仍需手把手）","message":"你好","settings":{"soul_mode":"full"},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"你好。"}],"expect":{"last_prompt_contains":["ask first"]}}
 
 {"id":"prompt-shape/skill-catalog-rides-but-not-the-body","description":"技能目录常驻提示（名字 + 说明），正文只有被选中时才进请求","message":"你好","files":{"skills/demo-skill/SKILL.md":"---\nname: demo-skill\ndescription: 一段不相干的演示流程\ndependencies: none\n---\n这段正文只在被选中时才该出现。\n"},"gate":{"retrieve":false,"query":"","reason":"note"},"responses":[{"text":"你好。"}],"expect":{"last_prompt_contains":["Skills (catalog only","- demo-skill — 一段不相干的演示流程"],"last_prompt_not_contains":["这段正文只在被选中时才该出现。"]}}

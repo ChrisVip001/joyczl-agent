@@ -16,6 +16,8 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: None,
@@ -93,7 +95,7 @@ async fn forget_note_reports_when_nothing_matched() {
     let out = registry
         .execute(ctx.clone(), "forget_note", json!({"subject": "ghost"}))
         .await;
-    assert!(out.contains("没有"), "0 条删除也该说清楚：{out}");
+    assert!(out.contains("no memory about"), "0 条删除也该说清楚：{out}");
 
     registry
         .execute(
@@ -105,7 +107,7 @@ async fn forget_note_reports_when_nothing_matched() {
     let out = registry
         .execute(ctx.clone(), "forget_note", json!({"subject": "a"}))
         .await;
-    assert!(out.contains("1 条"), "应当报删了几条：{out}");
+    assert!(out.contains("Forgot 1"), "应当报删了几条：{out}");
 }
 
 #[tokio::test]
@@ -117,8 +119,8 @@ async fn current_time_gives_a_usable_answer() {
     // Weekday and UTC offset are both there — parsing "tomorrow morning" needs them.
     assert!(out.contains("UTC"), "没有时区：{out}");
     assert!(
-        out.contains("星期") || out.chars().any(|c| c.is_ascii_alphabetic()),
-        "没有星期：{out}"
+        out.contains("weekday") || out.chars().any(|c| c.is_ascii_alphabetic()),
+        "没有weekday：{out}"
     );
 }
 
@@ -163,7 +165,7 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         )
         .await;
     assert!(
-        out.starts_with("Error:") && out.contains("不能是空"),
+        out.starts_with("Error:") && out.contains("must not be empty"),
         "空串：{out}"
     );
 }
@@ -174,7 +176,7 @@ async fn list_memory_handles_an_empty_store() {
     let out = registry
         .execute(ctx().await, "list_memory", json!({}))
         .await;
-    assert!(out.contains("空的"), "空记忆要有引导性文案：{out}");
+    assert!(out.contains("empty"), "空记忆要有引导性文案：{out}");
 }
 
 #[tokio::test]
@@ -192,14 +194,14 @@ async fn search_memory_with_junk_query_does_not_error() {
         let out = registry
             .execute(ctx.clone(), "search_memory", json!({"query": junk}))
             .await;
-        assert!(out.contains("没有关于"), "{junk:?} → {out}");
+        assert!(out.contains("nothing in memory about"), "{junk:?} → {out}");
     }
     // An empty string is an argument error — still text, not a crash.
     let out = registry
         .execute(ctx.clone(), "search_memory", json!({"query": ""}))
         .await;
     assert!(
-        out.starts_with("Error:") && out.contains("不能是空"),
+        out.starts_with("Error:") && out.contains("must not be empty"),
         "{out}"
     );
 }
@@ -218,8 +220,8 @@ async fn create_event_lands_in_db_and_ics_and_is_idempotent() {
             json!({"title": "与阿明开会", "start": "2026-07-14T09:00:00"}),
         )
         .await;
-    assert!(out.contains("已创建"), "{out}");
-    assert!(out.contains("本地日历"), "输出要说明落点：{out}");
+    assert!(out.contains("created"), "{out}");
+    assert!(out.contains("local calendar"), "输出要说明落点：{out}");
     // No end given defaults to +1 hour.
     assert!(out.contains("2026-07-14T10:00"), "默认结束时间：{out}");
 
@@ -236,7 +238,7 @@ async fn create_event_lands_in_db_and_ics_and_is_idempotent() {
             json!({"title": "与阿明开会", "start": "2026-07-14T09:00"}),
         )
         .await;
-    assert!(out.contains("已经存在"), "第二次应当报幂等：{out}");
+    assert!(out.contains("already exists"), "第二次应当报幂等：{out}");
 
     // And only one row in the database.
     let rows = ctx.calendar.list(None, None, 100).await.expect("查库");
@@ -254,8 +256,8 @@ async fn list_events_reports_what_it_checked_when_empty() {
     let out = registry
         .execute(ctx.clone(), "list_events", json!({}))
         .await;
-    assert!(out.contains("没有找到事件"), "{out}");
-    assert!(out.contains("本地日历"), "要说明查了哪个日历：{out}");
+    assert!(out.contains("No events found"), "{out}");
+    assert!(out.contains("local calendar"), "要说明查了哪个日历：{out}");
 
     registry
         .execute(
@@ -272,7 +274,7 @@ async fn list_events_reports_what_it_checked_when_empty() {
         )
         .await;
     assert!(out.contains("牙医"), "区间内的事件要列出来：{out}");
-    assert!(out.contains("与 阿明"), "参与者要带上：{out}");
+    assert!(out.contains(", with 阿明"), "参与者要带上：{out}");
 
     // Out-of-range entries don't appear.
     let out = registry
@@ -282,7 +284,7 @@ async fn list_events_reports_what_it_checked_when_empty() {
             json!({"start": "2026-08-01", "end": "2026-08-31"}),
         )
         .await;
-    assert!(out.contains("没有找到事件"), "区间外不该出现：{out}");
+    assert!(out.contains("No events found"), "区间外不该出现：{out}");
 }
 
 /// send_message only writes an outbox draft, never sends — the output must say so in full.
@@ -298,7 +300,7 @@ async fn send_message_writes_a_draft_and_never_sends() {
             json!({"to": "阿明 <aming@example.com>", "body": "周四见"}),
         )
         .await;
-    assert!(out.contains("没有真的发送"), "必须明说没发：{out}");
+    assert!(out.contains("Nothing was sent"), "必须明说没发：{out}");
 
     let dir = ctx.home.join("outbox");
     let mut entries: Vec<_> = std::fs::read_dir(&dir)
@@ -335,7 +337,7 @@ async fn manage_memory_updates_and_deletes_by_id() {
             json!({"action": "update_fact", "id": fact.id, "content": "喜欢茶"}),
         )
         .await;
-    assert!(out.contains("已把"), "{out}");
+    assert!(out.contains("now reads"), "{out}");
     assert!(
         ctx.facts.search("茶", 4).await.expect("查库")[0]
             .content
@@ -350,7 +352,7 @@ async fn manage_memory_updates_and_deletes_by_id() {
             json!({"action": "delete_fact", "id": fact.id}),
         )
         .await;
-    assert!(out.contains("已删掉"), "{out}");
+    assert!(out.contains("Deleted"), "{out}");
     let out = registry
         .execute(
             ctx.clone(),
@@ -358,7 +360,7 @@ async fn manage_memory_updates_and_deletes_by_id() {
             json!({"action": "delete_fact", "id": fact.id}),
         )
         .await;
-    assert!(out.contains("没有编号"), "删第二次要如实说：{out}");
+    assert!(out.contains("with id"), "删第二次要如实说：{out}");
 
     // An unknown action is text too, not an error — now caught first by the schema's enum
     // (the handler's fallback branch only runs if schema compilation failed).
@@ -390,7 +392,7 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
             }),
         )
         .await;
-    assert!(out.contains("已创建"), "{out}");
+    assert!(out.contains("created"), "{out}");
 
     let skill = std::fs::read_to_string(
         ctx.home
@@ -411,7 +413,7 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
             json!({"name": "weekly-review", "description": "x", "body": "y"}),
         )
         .await;
-    assert!(out.contains("已有"), "{out}");
+    assert!(out.contains("already exists"), "{out}");
 
     // Invalid slugs (things that would become paths) are refused.
     let out = registry
@@ -503,7 +505,7 @@ async fn valid_arguments_pass_the_schema() {
             json!({"subject": "alex", "content": "喜欢早会"}),
         )
         .await;
-    assert!(out.contains("已记住"), "{out}");
+    assert!(out.contains("Remembered"), "{out}");
 }
 
 /// Same-name tools **never overwrite**: one name, one implementation.
@@ -644,7 +646,7 @@ async fn reading_a_memory_page_carries_its_sources() {
             serde_json::json!({"page": "nobody"}),
         )
         .await;
-    assert!(missing.contains("没有「nobody」这一页"), "{missing}");
+    assert!(missing.contains("has no page \"nobody\""), "{missing}");
 }
 
 /// `JOY_TOOL_POLICY=deferred`：工具表先窄，`find_tools` 打开后下一轮才宽。
@@ -680,7 +682,7 @@ fn deferred_hides_the_shelf_until_find_tools_opens_it() {
         );
     }
 
-    let opened = view.activator()("记住的几条");
+    let opened = view.activator()("remember");
     assert_eq!(
         opened,
         vec!["list_memory".to_string()],
@@ -709,8 +711,8 @@ async fn schedule_job_writes_the_declaration_into_home() {
             json!({"name": "morning-news", "cron": "0 8 * * 1-5", "prompt": "给我一份科技简报"}),
         )
         .await;
-    assert!(out.contains("已保存"), "{out}");
-    assert!(out.contains("下次触发"), "要告诉人什么时候跑：{out}");
+    assert!(out.contains("saved"), "{out}");
+    assert!(out.contains("Next run"), "要告诉人什么时候跑：{out}");
     assert!(
         out.contains("joy schedule"),
         "谁在触发必须说清楚，否则它看起来像已经排好了：{out}"
@@ -732,11 +734,11 @@ async fn schedule_job_writes_the_declaration_into_home() {
             json!({"name": "morning-news"}),
         )
         .await;
-    assert!(gone.contains("已删除"), "{gone}");
+    assert!(gone.contains("deleted"), "{gone}");
     let after = registry
         .execute(ctx.clone(), "list_schedules", json!({}))
         .await;
-    assert!(after.contains("还没有"), "{after}");
+    assert!(after.contains("No scheduled jobs yet"), "{after}");
 }
 
 /// 坏输入变成一句可执行的话（`Error:` 文本回给模型），且不留下半个文件。
@@ -753,7 +755,7 @@ async fn a_bad_cron_comes_back_as_a_sentence() {
         )
         .await;
     assert!(error.starts_with("Error"), "{error}");
-    assert!(error.contains("五段"), "{error}");
+    assert!(error.contains("five fields"), "{error}");
     assert!(
         !ctx.home.join("schedules.json").exists(),
         "被拒绝时不该留下文件"
@@ -775,7 +777,7 @@ fn every_builtin_tool_declares_a_schema_it_can_honour() {
     ];
     let registry = handlers::build_default();
     let names = registry.names();
-    assert!(!names.is_empty(), "工具表不该是空的");
+    assert!(!names.is_empty(), "工具表不该是empty");
 
     let mut seen = std::collections::BTreeSet::new();
     for name in &names {

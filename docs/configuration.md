@@ -568,7 +568,7 @@ page body.
 |---|---|---|
 | `JOY_PORT` | `7777` | dashboard port; occupied ports scan upward |
 | `JOY_DASHBOARD_DIR` | in-repo dist | location of the built frontend |
-| `JOY_NOTIFY` | off | when on, reads `<home>/notify.json` (`{"slack": "webhook URL"}`) and pushes notifications: **approval requests / background-job finish / goal outcomes**. Fire-and-forget — a failed send is one stderr line and the turn carries on. The URL is admin-configured, so pointing it at a self-hosted intranet endpoint (ntfy/Gotify — anything accepting `{"text": …}`) is legitimate; no SSRF guard applies
+| `JOY_NOTIFY` | off | when on, reads `<home>/notify.json` (`{"slack": "webhook URL"}`) and pushes notifications: **approval requests / background-job finish / goal outcomes**. Completion notices persist before delivery and retry after failures/restarts (see [delivery limits](limitations.md#notifications-and-audit)); approval prompts remain best-effort. Network delivery does not block the turn. The URL is admin-configured, so pointing it at a self-hosted intranet endpoint (ntfy/Gotify — anything accepting `{"text": …}`) is legitimate; no SSRF guard applies
 | `JOY_OPS_HOST` | `127.0.0.1` | bind address. **A non-loopback host requires `JOY_OPS_TOKEN` or startup is refused** (a wrong config should fail to boot) |
 | `JOY_OPS_TOKEN` | — | Bearer token for `/api/*` (constant-time compare). Optional on loopback; when set, local requests need it too. The dashboard asks once on first 401 and stores it in localStorage. **Deliberately not in `config/read`**: deployment parameters must not be visible to the model |
 | `JOY_HUB_ROOT` | — | root directory for multi-user mode (or pass `joy hub --root`) |
@@ -779,3 +779,15 @@ machine's UI would silently unconfigure every machine that shares it.
 environment variables at boot. To clear a model override, submit an empty
 string for the field. A patch failing validation is rejected wholesale —
 invalid values never reach the file.
+
+### Native OpenAI Responses
+
+The built-in OpenAI entry uses `wire: "responses"` and `/responses`. Other OpenAI-compatible providers retain `wire: "openai"` and `/chat/completions`. The native adapter supports text, images, function tools, SSE text streaming and encrypted reasoning continuation. Requests set `store: false`; continuation items remain in local working memory and checkpoints. An interrupted stream is an error, and incomplete function calls are never executed. Hosted tools, WebSocket steering and asynchronous API tool calls are not enabled by this adapter.
+
+For a custom endpoint that only implements Chat Completions, patch the catalog and restart:
+
+```json
+[{ "id": "openai", "wire": "openai" }]
+```
+
+A checkpoint containing native Responses continuation cannot be resumed through a different wire; choose a Responses profile or begin a fresh turn. This follows the current [function-calling](https://developers.openai.com/api/docs/guides/function-calling) and [Responses migration](https://developers.openai.com/api/docs/guides/migrate-to-responses) contracts.

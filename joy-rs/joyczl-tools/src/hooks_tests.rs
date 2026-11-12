@@ -190,7 +190,7 @@ async fn a_timeout_blocks_policy_events_but_not_observers() {
         .await;
     assert!(
         policy.blocked.is_some(),
-        "策略事件没能在时限内表态 = 不放行"
+        "策略事件没能在时限内表态 = 不allowed"
     );
 
     let observer = hooks
@@ -251,9 +251,9 @@ async fn a_file_changed_while_running_is_not_executed() {
     let outcome = hooks
         .fire(HookEvent::PostToolUse, json!({"tool_name": "save_note"}))
         .await;
-    assert!(!marker.exists(), "改过之后不该再执行");
+    assert!(!marker.exists(), "was changed之后不该再执行");
     assert!(
-        outcome.note.unwrap_or_default().contains("改过"),
+        outcome.note.unwrap_or_default().contains("was changed"),
         "要说明为什么没执行"
     );
 }

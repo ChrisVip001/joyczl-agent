@@ -27,8 +27,8 @@ use crate::{require_str, Tool, ToolCtx};
 fn raw_str(args: &Value, key: &str) -> Result<String> {
     match args.get(key) {
         Some(Value::String(s)) => Ok(s.clone()),
-        None | Some(Value::Null) => Err(anyhow!("缺少参数 '{key}'")),
-        Some(v) => Err(anyhow!("参数 '{key}' 应该是字符串，得到的是 {v}")),
+        None | Some(Value::Null) => Err(anyhow!("Missing parameter '{key}'")),
+        Some(v) => Err(anyhow!("Parameter '{key}' should be a string, got {v}")),
     }
 }
 
@@ -82,7 +82,7 @@ pub use joyczl_agent::paths::inside_workspace;
 fn contained(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
     if roots.is_empty() {
         return Err(
-            "还没有选择工作目录：先在驾驶舱选一个文件夹，工作目录就是唯一的可写范围。".to_string(),
+            "No working directory has been chosen yet: pick a folder in the cockpit first — the working directory is the only writable scope.".to_string(),
         );
     }
     for root in roots {
@@ -96,8 +96,7 @@ fn contained(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
         .collect::<Vec<_>>()
         .join(", ");
     Err(format!(
-        "{path:?} 在可写范围之外（{listed}）。write_file / edit 只能写这些目录里的文件；\
-         要放开别的目录，让用户把它加进 JOY_EXEC_WRITABLE_ROOTS，或先把它选成工作目录。"
+        "{path:?} is outside the writable scope ({listed}). write_file / edit may only write files in these directories; to widen it, have the user add the directory to JOY_EXEC_WRITABLE_ROOTS, or pick it as the working directory."
     ))
 }
 
@@ -129,15 +128,16 @@ pub(crate) async fn pass_write_gate(
     }
     let Some(broker) = approval else {
         return Err(
-            "当前是 JOY_APPROVAL=on-request，写入需要问你一次，但没人能回答 \
-             （从终端或驾驶舱提问才有人应答）—— 这次写入没有执行。"
+            "JOY_APPROVAL=on-request is set, so a write needs to ask you — but nobody can answer (only a prompt from the terminal or the cockpit has somebody to answer it), so this write did not happen."
                 .to_string(),
         );
     };
     let request = crate::approval::ApprovalRequest {
         tool: tool.to_string(),
         args_preview: preview.to_string(),
-        reason: format!("写入 {path:?}（可写范围内；on-request 模式每次写入都会确认）"),
+        reason: format!(
+            "Write {path:?} (inside the writable scope; in on-request mode every write asks first)"
+        ),
         timeout_secs: policy.approval_timeout_secs,
         // "记住这条" records the **directory**: the human approved this folder, not this file name.
         remember: path
@@ -147,7 +147,7 @@ pub(crate) async fn pass_write_gate(
     if broker.request(request).await {
         Ok(())
     } else {
-        Err("这次写入没有被批准（或没人回答），已跳过。".to_string())
+        Err("This write was not approved (or nobody answered); skipped.".to_string())
     }
 }
 
@@ -176,7 +176,7 @@ pub(crate) async fn permission_hook(
         return (None, Some(why));
     }
     if outcome.allowed {
-        eprintln!("(joy) PermissionRequest hook 放行了这次 {tool}");
+        eprintln!("(joy) a PermissionRequest hook allowed this {tool}");
         return (Some(Arc::new(AlreadyApproved)), None);
     }
     (ctx.approval.clone(), None)
@@ -187,14 +187,12 @@ pub(crate) async fn permission_hook(
 pub(crate) fn check_content(content: &str, what: &str) -> Result<()> {
     if content.contains('\0') {
         return Err(anyhow!(
-            "{what} 含 NUL 字节（可能是二进制内容）—— write_file / edit 只写文本；\
-             二进制请走 run_command（需 JOY_EXEC=1）。"
+            "{what} contains a NUL byte (probably binary content) — write_file / edit only write text; for binary use run_command (needs JOY_EXEC=1)."
         ));
     }
     if content.len() > MAX_WRITE_BYTES {
         return Err(anyhow!(
-            "{what} 有 {} 字节，超过单次写入上限 {MAX_WRITE_BYTES}。大文件请拆分、\
-             或走 run_command（需 JOY_EXEC=1）。",
+            "{what} is {} bytes, over the {MAX_WRITE_BYTES} per-write limit. Split large files, or use run_command (needs JOY_EXEC=1).",
             content.len()
         ));
     }
@@ -205,9 +203,9 @@ pub(crate) fn check_content(content: &str, what: &str) -> Result<()> {
 pub(crate) fn read_text(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::InvalidData {
-            anyhow!("{path:?} 不是 UTF-8 文本（可能是二进制文件）—— edit 只改文本文件。")
+            anyhow!("{path:?} is not UTF-8 text (probably a binary file) — edit only changes text files.")
         } else {
-            anyhow!("读 {path:?} 出错：{e}")
+            anyhow!("Could not read {path:?}: {e}")
         }
     })
 }
@@ -227,7 +225,7 @@ fn hunk_line(out: &mut String, marker: char, line: &str, rendered: &mut usize) {
 /// Pure function — unit tests pin the format.
 pub(crate) fn render_change(old: Option<&str>, new: &str) -> String {
     let Some(old) = old else {
-        return format!("（新建，{} 行）", new.lines().count().max(1));
+        return format!("(new, {} lines)", new.lines().count().max(1));
     };
     let (old_lines, new_lines): (Vec<&str>, Vec<&str>) =
         (old.lines().collect(), new.lines().collect());
@@ -248,7 +246,7 @@ pub(crate) fn render_change(old: Option<&str>, new: &str) -> String {
     let removed = &old_lines[prefix..old_lines.len() - suffix];
     let added = &new_lines[prefix..new_lines.len() - suffix];
     if removed.is_empty() && added.is_empty() {
-        return "（内容未变）".to_string();
+        return "(content unchanged)".to_string();
     }
 
     let ctx_start = prefix.saturating_sub(DIFF_CONTEXT);
@@ -277,7 +275,7 @@ pub(crate) fn render_change(old: Option<&str>, new: &str) -> String {
     }
     if rendered > DIFF_MAX_LINES {
         out.push_str(&format!(
-            "\n[diff 截断：只渲染前 {DIFF_MAX_LINES} 行 —— 用 read_file 看全文。]"
+            "\n[diff truncated: rendering the first {DIFF_MAX_LINES} lines only — use read_file for the whole thing.]"
         ));
     }
     out
@@ -288,15 +286,13 @@ pub fn write_file(policy: WritePolicy) -> Tool {
     let policy = Arc::new(policy);
     Tool {
         name: "write_file".to_string(),
-        description: "把整段文本写进一个文件（覆盖原内容）。只能写工作目录，\
-                      以及 JOY_EXEC_WRITABLE_ROOTS 列出的目录；范围外会被拒绝。\
-                      要改现有文件的一小段，用 edit（更省 token）。"
+        description: "Write a whole piece of text into a file (overwriting it). It may only write inside the working directory and the directories listed in JOY_EXEC_WRITABLE_ROOTS; anything else is refused. To change a small stretch of an existing file, use edit (cheaper in tokens)."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "目标文件路径。支持 ~ 展开；父目录不存在会自动创建。"},
-                "content": {"type": "string", "description": "要写入的完整文本（UTF-8，上限 1MB，覆盖原文件）。"}
+                "path": {"type": "string", "description": "The target file path. ~ is expanded; a missing parent directory is created."},
+                "content": {"type": "string", "description": "The full text to write (UTF-8, 1MB at most, replacing the file)."}
             },
             "required": ["path", "content"]
         }),
@@ -316,7 +312,7 @@ pub fn write_file(policy: WritePolicy) -> Tool {
                 .await;
                 if let Some(why) = blocked {
                     return Ok(format!(
-                        "Error: {why}（PermissionRequest hook 拒绝了这次写入）"
+                        "Error: {why} (a PermissionRequest hook refused this write)"
                     ));
                 }
                 let roots = crate::roots::workspace_roots(&ctx, &policy.extra_roots).workspaces;
@@ -331,25 +327,25 @@ pub fn write_file(policy: WritePolicy) -> Tool {
                 } else {
                     if let Some(parent) = path.parent() {
                         std::fs::create_dir_all(parent)
-                            .map_err(|e| anyhow!("创建父目录 {parent:?} 失败：{e}"))?;
+                            .map_err(|e| anyhow!("Could not create the parent directory {parent:?}: {e}"))?;
                     }
                     None
                 };
                 if old.as_deref() == Some(content.as_str()) {
                     return Ok(format!(
-                        "内容未变，没有写盘：{path:?}（{} 行 / {} 字节）",
+                        "The content is unchanged, nothing was written: {path:?} ({} lines / {} bytes)",
                         content.lines().count().max(1),
                         content.len()
                     ));
                 }
 
-                std::fs::write(&path, &content).map_err(|e| anyhow!("写 {path:?} 失败：{e}"))?;
+                std::fs::write(&path, &content).map_err(|e| anyhow!("Could not write {path:?}: {e}"))?;
                 let was = old
                     .as_ref()
-                    .map(|o| format!("（原 {} 行）", o.lines().count().max(1)))
+                    .map(|o| format!("(was {} lines)", o.lines().count().max(1)))
                     .unwrap_or_default();
                 Ok(format!(
-                    "已写入 {path:?}：{} 行 / {} 字节{was}\n{}",
+                    "Wrote {path:?}: {} lines / {} bytes{was}\n{}",
                     content.lines().count().max(1),
                     content.len(),
                     render_change(old.as_deref(), &content)
@@ -364,16 +360,14 @@ pub fn edit(policy: WritePolicy) -> Tool {
     let policy = Arc::new(policy);
     Tool {
         name: "edit".to_string(),
-        description: "把文件里的一段文本精确替换成另一段（old_string 必须在文件里恰好出现 \
-                      一次：0 次或多次都会被拒绝，多带上前后几行让它唯一）。只能改工作目录、\
-                      以及 JOY_EXEC_WRITABLE_ROOTS 列出的目录下的文本文件。"
+        description: "Replace one stretch of a file with another exactly (old_string must appear exactly once in the file: zero or several occurrences are both refused — include a few surrounding lines to make it unique). It may only change text files inside the working directory and the directories listed in JOY_EXEC_WRITABLE_ROOTS."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "要编辑的文件路径（必须已存在）。支持 ~ 展开。"},
-                "old_string": {"type": "string", "description": "要被替换的原文，必须与文件内容逐字符一致，且恰好出现一次。"},
-                "new_string": {"type": "string", "description": "替换后的文本（与 old_string 相同等于没改，会被拒绝）。"}
+                "path": {"type": "string", "description": "The file to edit (it must already exist). ~ is expanded."},
+                "old_string": {"type": "string", "description": "The text to be replaced; it must match the file character for character and appear exactly once."},
+                "new_string": {"type": "string", "description": "The replacement text (identical to old_string means no change, and is refused)."}
             },
             "required": ["path", "old_string", "new_string"]
         }),
@@ -384,15 +378,15 @@ pub fn edit(policy: WritePolicy) -> Tool {
                 let old_string = raw_str(&args, "old_string")?;
                 let new_string = raw_str(&args, "new_string")?;
                 if old_string.is_empty() {
-                    return Err(anyhow!("old_string 不能为空（整文件重写用 write_file）。"));
+                    return Err(anyhow!("old_string must not be empty (use write_file to rewrite a whole file)."));
                 }
                 if old_string == new_string {
-                    return Err(anyhow!("old_string 与 new_string 相同 —— 没有要做的修改。"));
+                    return Err(anyhow!("old_string and new_string are the same — there is nothing to change."));
                 }
                 let path = crate::fs::resolve_against_cwd(&ctx, crate::fs::expand_tilde(&raw));
                 if !path.is_file() {
                     return Err(anyhow!(
-                        "找不到文件：{raw}（edit 只改已存在的文件；新建用 write_file）"
+                        "File not found: {raw} (edit only changes files that exist; use write_file to create one)"
                     ));
                 }
                 check_content(&new_string, "new_string")?;
@@ -405,7 +399,7 @@ pub fn edit(policy: WritePolicy) -> Tool {
                 .await;
                 if let Some(why) = blocked {
                     return Ok(format!(
-                        "Error: {why}（PermissionRequest hook 拒绝了这次编辑）"
+                        "Error: {why} (a PermissionRequest hook refused this edit)"
                     ));
                 }
                 let roots = crate::roots::workspace_roots(&ctx, &policy.extra_roots).workspaces;
@@ -419,24 +413,22 @@ pub fn edit(policy: WritePolicy) -> Tool {
                 match old.matches(&old_string).count() {
                     0 => {
                         return Err(anyhow!(
-                            "old_string 在 {raw} 里没有找到（0 处）。先 read_file 确认原文——\
-                             空格、行尾都要逐字符一致。"
+                            "old_string was not found in {raw} (0 occurrences). read_file first to confirm the text — spaces and line endings must match character for character."
                         ))
                     }
                     1 => {}
                     n => {
                         return Err(anyhow!(
-                            "old_string 在 {raw} 里出现了 {n} 次——edit 只替换恰好一次的匹配。\
-                             把前后几行一并放进 old_string，让它变成唯一匹配。"
+                            "old_string occurs {n} times in {raw} — edit replaces exactly one match. Include the surrounding lines so it becomes unique."
                         ))
                     }
                 }
 
                 let new_content = old.replacen(&old_string, &new_string, 1);
                 std::fs::write(&path, &new_content)
-                    .map_err(|e| anyhow!("写 {path:?} 失败：{e}"))?;
+                    .map_err(|e| anyhow!("Could not write {path:?}: {e}"))?;
                 Ok(format!(
-                    "已编辑 {path:?}：替换 1 处\n{}",
+                    "Edited {path:?}: 1 replacement\n{}",
                     render_change(Some(&old), &new_content)
                 ))
             })

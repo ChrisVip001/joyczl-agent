@@ -130,7 +130,10 @@ impl State {
     pub fn from_value(value: Value) -> Result<Self, String> {
         match value {
             Value::Object(map) => Ok(State(map)),
-            other => Err(format!("state 必须是 JSON 对象，拿到 {}", kind_of(&other))),
+            other => Err(format!(
+                "state must be a JSON object, got {}",
+                kind_of(&other)
+            )),
         }
     }
 
@@ -291,14 +294,14 @@ pub enum GraphError {
 impl fmt::Display for GraphError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GraphError::Reserved { name } => write!(f, "'{name}' 是保留名"),
-            GraphError::UnknownNode { name } => write!(f, "未知节点 '{name}'"),
+            GraphError::Reserved { name } => write!(f, "'{name}' is a reserved name"),
+            GraphError::UnknownNode { name } => write!(f, "unknown node '{name}'"),
             GraphError::UnknownRouterTarget { label, target } => {
-                write!(f, "路由目标 '{target}'（标签 '{label}'）未知")
+                write!(f, "route target '{target}' (label '{label}') is unknown")
             }
             GraphError::Collision { key, nodes } => write!(
                 f,
-                "'{}' 和 '{}' 都写了 '{key}' —— 并行分支必须写不相交的键",
+                "'{}' and '{}' both write '{key}' — parallel branches must write disjoint keys",
                 nodes.first().map(String::as_str).unwrap_or("?"),
                 nodes.get(1).map(String::as_str).unwrap_or("?"),
             ),

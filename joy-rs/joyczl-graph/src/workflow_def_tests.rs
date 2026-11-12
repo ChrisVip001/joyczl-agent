@@ -94,7 +94,7 @@ fn static_cycle_refuses_to_build() {
         .build(&bindings, &builtin_routes())
         .err()
         .expect("应建图失败");
-    assert!(error.contains("环"), "应报静态边有环：{error}");
+    assert!(error.contains("cycle"), "应报静态边有环：{error}");
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn unregistered_router_refuses_to_build() {
         .err()
         .expect("应建图失败");
     // 控制流绝不交给模型：白名单外的路由名在装载期就拒绝。
-    assert!(error.contains("未注册"), "应报路由未注册：{error}");
+    assert!(error.contains("not registered"), "应报路由未注册：{error}");
     assert!(error.contains("ask_the_model"));
 }
 
@@ -129,7 +129,10 @@ fn node_without_binding_refuses_to_build() {
         .build(&bindings, &builtin_routes())
         .err()
         .expect("应建图失败");
-    assert!(error.contains("没有绑定"), "应报缺绑定：{error}");
+    assert!(
+        error.contains("no bound implementation"),
+        "应报缺绑定：{error}"
+    );
 }
 
 #[test]

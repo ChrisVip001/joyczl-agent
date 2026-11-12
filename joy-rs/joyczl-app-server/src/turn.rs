@@ -13,6 +13,9 @@
 //! arrive (typewriter effect on the dashboard), and a finished tool is pushed the moment it completes.
 //! The reply to `turn/start` is sent by this function itself — it must come only after all notifications are out; only it knows the order.
 
+#[path = "turn_driver.rs"]
+pub(crate) mod driver;
+
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -40,35 +43,31 @@ use joyczl_state::{RunStatus, TaskRow, TaskStatus};
 
 use crate::{narrow, route, trace, EventSink, Server};
 
-const DEFAULT_SOUL: &str = "\
-你是 Joy，一个跑在用户自己电脑上的本地个人助手。
-你简洁、温暖、主动。用户告诉你的事你会记住。
+const DEFAULT_SOUL: &str = "You are Joy, a local personal assistant that runs on the user's own machine.
+You are concise, warm and proactive. What the user tells you, you remember.
 
-规则：
-- 想安排日程、解释「今天」「明天」之前，先用 current_time 确认现在几点。
-- 关于人、项目和偏好的长期事实由后台整理进记忆库；用户明确说「记住这个」时才用 save_note。
-- 用户问起过去的事、某个人，用 search_memory 查；想知道你都记了什么，用 list_memory。
-- 用户明确说「忘掉…」，用 forget_note。
-- 用户教你一套想复用的工作流程时，先征得同意，再用 create_skill 写成 SKILL.md。
-- 下面的「相关记忆」来自你自己的记忆库，可以信任。
-- 每个工具的输出都写明了结果落在哪儿 —— 如实转述，别声称同步到了别处。
-- [tools used: ...] 是你过去几轮实际做过的事；已经做过的不要重复做。\
-";
+Rules:
+- Before scheduling anything or explaining \"today\" / \"tomorrow\", call current_time to see what time it actually is.
+- Long-lived facts about people, projects and preferences are distilled into the memory library in the background; use save_note only when the user explicitly says \"remember this\".
+- Questions about the past or about a person: search_memory. What you have recorded: list_memory.
+- When the user explicitly says \"forget …\", use forget_note.
+- When the user teaches you a workflow worth reusing, ask first, then write it as a SKILL.md with create_skill.
+- \"Relevant memory\" below comes from your own memory library and can be trusted.
+- Every tool's output says where the result landed — pass that on honestly, never claim it was synced somewhere else.
+- [tools used: ...] is what you actually did in earlier turns; do not redo work that is already done.";
 
 /// The thin soul: for models that already know how to be an assistant.
 ///
 /// Same three commitments as the long one — check the clock, memory is the library's job,
 /// tell the truth about where output landed — without the examples and the per-tool
 /// recital a frontier model does not need. Every line here is paid for on every turn.
-const THIN_SOUL: &str = "\
-你是 Joy，一个跑在用户自己电脑上的本地个人助手。简洁、温暖、主动。
+const THIN_SOUL: &str = " You are Joy, a local personal assistant that runs on the user's own machine. Concise, warm, proactive.
 
-- 需要现在几点、安排日程时先用 current_time，不要凭猜。
-- 关于人、项目和偏好的长期事实由后台整理进记忆库；用户明确说「记住这个」时才用 save_note。
-- 问起过去的事用 search_memory；想知道记了什么用 list_memory；说「忘掉」用 forget_note。
-- 工具输出写明了结果落在哪儿 —— 如实转述，别声称同步到了别处。
-- [tools used: ...] 是你过去几轮真做过的事；做过的不要重复做。\
-";
+- Need the time or a schedule? Call current_time first; do not guess.
+- Long-lived facts about people, projects and preferences are distilled into the memory library in the background; use save_note only when the user explicitly says \"remember this\".
+- Past events: search_memory. What you have recorded: list_memory. \"Forget it\": forget_note.
+- Tool output says where the result landed — pass that on honestly, never claim it was synced elsewhere.
+- [tools used: ...] is what you really did in earlier turns; do not repeat it.";
 
 /// Does this model get the thin soul?
 ///
@@ -151,26 +150,26 @@ fn resolve_attachments(
     };
     if !vision {
         return Err(bad(format!(
-            "当前配置 {provider_id} 的模型不支持图片输入。给这套配置声明视觉：\
-             /model add <名字> {provider_id} <模型> --vision（等价于在 <home>/models.json \
-             那一条里写 \"vision\": true）；想整个厂商都算，就在 \
-             <home>/models-catalog.json 对应行加 \"vision\": true 后重启。"
+"The model on this configuration ({provider_id}) cannot take images. Declare vision for it: /model add <name> {provider_id} <model> --vision (the same as adding \"vision\": true to that entry in <home>/models.json); to make it true of the whole provider, add \"vision\": true to its row in <home>/models-catalog.json and restart."
         )));
     }
     let home = server.settings().home;
     let home_real = home
         .canonicalize()
-        .map_err(|e| bad(format!("home 目录不可用：{e}")))?;
+        .map_err(|e| bad(format!("The home directory is unavailable: {e}")))?;
     let mut images = Vec::new();
     for attachment in attachments {
         let raw = home.join(&attachment.path);
         // Symlinks resolve first: the real path must stay inside home, no exceptions.
-        let path = raw
-            .canonicalize()
-            .map_err(|_| bad(format!("附件不存在或不可读：{}", attachment.path)))?;
+        let path = raw.canonicalize().map_err(|_| {
+            bad(format!(
+                "Attachment is missing or unreadable: {}",
+                attachment.path
+            ))
+        })?;
         if !path.starts_with(&home_real) {
             return Err(bad(format!(
-                "附件 {} 在 home 之外 —— 附件只能引用上传目录（<home>/uploads/…）里的文件。",
+                "Attachment {} is outside home — an attachment may only reference a file under the upload directory (<home>/uploads/…).",
                 attachment.path
             )));
         }
@@ -188,15 +187,15 @@ fn resolve_attachments(
             })
             .ok_or_else(|| {
                 bad(format!(
-                    "附件 {} 不是可识别的图片类型（支持 png / jpg / jpeg / gif / webp）；\
-                     其它文件请直接在正文里写路径，模型会用 read_file 打开。",
+"Attachment {} is not a recognised image type (png / jpg / jpeg / gif / webp); for any other file, put the path in the message and the model will open it with read_file.",
                     attachment.path
                 ))
             })?;
-        let bytes = std::fs::read(&path).map_err(|e| bad(format!("读附件失败：{e}")))?;
+        let bytes =
+            std::fs::read(&path).map_err(|e| bad(format!("Could not read the attachment: {e}")))?;
         if bytes.len() > IMAGE_MAX_BYTES {
             return Err(bad(format!(
-                "附件 {} 有 {} 字节，超过单张图片上限 {IMAGE_MAX_BYTES}。",
+                "Attachment {} is {} bytes, over the per-image limit of {IMAGE_MAX_BYTES}.",
                 attachment.path,
                 bytes.len()
             )));
@@ -205,16 +204,13 @@ fn resolve_attachments(
         // 一句 "unsupported image" 挡回来 —— 它既不说原因也不说上限，所以本地先量。
         let (width, height) = crate::image_meta::size(&bytes).ok_or_else(|| {
             bad(format!(
-                "附件 {} 读不出宽高 —— 文件头不是完整的 png / jpg / gif / webp，\
-                 可能已损坏，或者只是改了扩展名。",
+"Attachment {} has no readable dimensions — its header is not a complete png / jpg / gif / webp, so it is probably corrupt, or only had its extension changed.",
                 attachment.path
             ))
         })?;
         if width > crate::image_meta::MAX_EDGE || height > crate::image_meta::MAX_EDGE {
             return Err(bad(format!(
-                "附件 {} 是 {width}×{height}，单边超过本地保守上限 {}。远端的视觉模型会\
-                 直接拒收（只回一句 unsupported image），所以在这里拦下：长截图请分段发 ——\
-                 裁成几张、每段高度不超过 {}，文字才清楚；硬缩成一张只会把字压糊。",
+"Attachment {} is {width}×{height}, one side over the local conservative limit of {}: a remote vision model would refuse it outright (a bare \"unsupported image\"), so it is caught here. Send a long screenshot in pieces — a few images no taller than {} keep the text legible; squeezing it into one only blurs it.",
                 attachment.path,
                 crate::image_meta::MAX_EDGE,
                 crate::image_meta::MAX_EDGE
@@ -270,8 +266,7 @@ pub async fn run_turn(
     // Model not configured: spell out "what to do" instead of just dropping a "no key".
     let resolved: Resolved = server.resolved().ok_or_else(|| ErrorObject {
         code: codes::PROVIDER_ERROR,
-        message: "模型还没配好：缺 API key。配一套就能用 —— \
-                  /model add <名字> <厂商> --env 变量名（key 交给系统钥匙串）。"
+message: "The model is not configured yet: no API key. One command is enough — /model add <name> <provider> --env VAR (the key goes to the system keychain)."
             .to_string(),
         data: None,
     })?;
@@ -299,8 +294,7 @@ pub async fn run_turn(
             .map_err(|holder| ErrorObject {
                 code: codes::SESSION_BUSY,
                 message: format!(
-                    "这个会话里已经有一轮在跑（{holder}）—— 等它结束，或者用 turn/steer 补一句，\
-                     它会在这轮的下一轮次看见。"
+"A turn is already running in this session ({holder}) — wait for it to finish, or add a line with turn/steer; it is picked up on the turn's next round."
                 ),
                 data: None,
             })?;
@@ -317,7 +311,7 @@ pub async fn run_turn(
                     crate::task::notify(sink, &row, None);
                 }
             }
-            Err(e) => eprintln!("(joy) 任务心跳没记上（任务卡片会显示旧状态）：{e}"),
+            Err(e) => eprintln!("(joy) task heartbeat not recorded (the task card keeps showing the old state): {e}"),
         }
     }
     let task_id = task.as_ref().map(|task| task.id.clone());
@@ -339,26 +333,38 @@ pub async fn run_turn(
     // One model call, before the first round, whose only product is text: the plan is written to
     // the step ledger (`kind = "plan"`) and appended to this round's message. A failure here is
     // logged and ignored — a task must not fail because its plan could not be drawn.
-    let mut plan: Option<joyczl_agent::plan::Plan> = None;
-    if server.settings().plan_enabled {
-        if let Some(row) = &task {
-            let labels: Vec<String> = acceptance.iter().map(|item| item.label()).collect();
-            match joyczl_agent::plan::make(
-                &resolved,
-                &row.title,
-                row.goal_condition.as_deref(),
-                &labels,
-                None,
-                1,
-            )
-            .await
-            {
-                Ok(made) => {
-                    joyczl_agent::plan::record(&server.steps, &row.id, &made).await;
-                    plan = Some(made);
+    let mut plan = None;
+    if let Some(row) = &task {
+        match joyczl_agent::plan::restore(&server.steps, &row.id).await {
+            Ok(saved) => {
+                plan = saved;
+                if plan.is_none() && server.settings().plan_enabled {
+                    let labels: Vec<String> = acceptance.iter().map(|item| item.label()).collect();
+                    match joyczl_agent::plan::make(
+                        &resolved,
+                        &row.title,
+                        row.goal_condition.as_deref(),
+                        &labels,
+                        None,
+                        1,
+                    )
+                    .await
+                    {
+                        Ok(made) => {
+                            match joyczl_agent::plan::record(&server.steps, &row.id, &made).await {
+                                Ok(()) => plan = Some(made),
+                                Err(why) => eprintln!(
+                                    "(joy) plan not committed; continuing without it: {why}"
+                                ),
+                            }
+                        }
+                        Err(why) => {
+                            eprintln!("(joy) no plan this round (the turn runs anyway): {why}")
+                        }
+                    }
                 }
-                Err(why) => eprintln!("(joy) 计划没做出来（这一轮照常跑）：{why}"),
             }
+            Err(why) => eprintln!("(joy) saved plan unavailable; no replacement generated: {why}"),
         }
     }
 
@@ -367,7 +373,7 @@ pub async fn run_turn(
     // to). No task, no run — an ordinary chat turn has nothing to account for.
     let run_id = open_run(server, task.as_ref(), &turn_id, &session_id).await;
     // Only meaningful while this turn is the one driving the task: the card's "现在在跑第几轮".
-    let mut round_no = 1i32;
+    let round_no = 1i32;
     let max_rounds = task
         .as_ref()
         .map(|row| row.max_rounds.max(1))
@@ -375,7 +381,7 @@ pub async fn run_turn(
             server
                 .settings
                 .read()
-                .expect("settings 锁不该中毒")
+                .expect("the settings lock cannot be poisoned")
                 .goal_max_rounds
                 .max(1)
         });
@@ -400,7 +406,7 @@ pub async fn run_turn(
         turn_cwd = session_cwd(server, &session_id).await;
     }
     // The boundary acceptance checks resolve paths against — same rule, one directory.
-    let verify_root = turn_cwd.clone();
+
     // Only actually-used directories enter "recently used" (workspaces.json) — quick entries for the cockpit picker.
     if let Some(path) = &turn_cwd {
         joyczl_config::workspaces::record_workspace(
@@ -444,7 +450,7 @@ pub async fn run_turn(
         if let Some(reason) = outcome.blocked {
             return Err(joyczl_protocol::ErrorObject {
                 code: joyczl_protocol::codes::INTERNAL_ERROR,
-                message: format!("SessionStart hook 拒绝了这次会话：{reason}"),
+                message: format!("The SessionStart hook refused this session: {reason}"),
                 data: None,
             });
         }
@@ -585,8 +591,6 @@ pub async fn run_turn(
     let goal_condition = task.as_ref().and_then(|row| row.goal_condition.clone());
     let auto_continue_max = settings.auto_continue_max.max(0) as usize;
 
-    let mut observation =
-        joyczl_agent::observe::observe(&full.result.messages, &turn_id, 1, turn_cwd.as_deref());
     let mut continues = 0usize;
     // Steps from earlier passes. `full` is **replaced** by the continuation, and the turn's tool
     // results (and their `toolCompleted` notifications, emitted at finalize from `result`) would
@@ -634,19 +638,20 @@ pub async fn run_turn(
             // Asked for more after we already continued: say so honestly rather than pretend the
             // work is done.
             full.result.reply.push_str(&format!(
-                "\n\n（还差一步没做完：{reason}。自动续跑的次数用完了 —— 说一声「接着做」我就从断的地方继续。）"
+                "\n\n(One step short: {reason}. The auto-continue budget is spent — say \"carry on\" and I resume where it stopped.)"
             ));
             break Some(reason);
         }
         continues += 1;
-        eprintln!("(joy) 第 {continues} 次自动续跑（上限 {auto_continue_max}）：{reason}");
+        eprintln!("(joy) auto-continue {continues} of {auto_continue_max}: {reason}");
         let nudge = format!(
-            "{reason}\n\n接着做：从刚才断的地方继续，不要重述已经做完的部分，也不要重新规划。"
+            "{reason}\n\nCarry on: continue from where it stopped, do not restate what is done, do not re-plan."
         );
         // Slice, don't restart: one continuation buys `JOY_TURN_STEP_SLICE` more steps, counted
         // on top of the ones already spent.
         cap = full.result.iterations + settings.turn_step_slice.max(1);
         let resume = joyczl_loop::Resume {
+            round_id: full.result.round_id.clone(),
             messages: full.result.messages.clone(),
             completed_iterations: full.result.iterations,
             usage: full.result.usage,
@@ -673,13 +678,6 @@ pub async fn run_turn(
         .await;
         match continued {
             Ok(next) => {
-                let base = observation.next_seq();
-                observation.absorb(joyczl_agent::observe::observe(
-                    &next.result.messages,
-                    &turn_id,
-                    base,
-                    turn_cwd.as_deref(),
-                ));
                 earlier_calls.append(&mut full.result.tool_calls);
                 full = next;
             }
@@ -705,337 +703,37 @@ pub async fn run_turn(
         full.result.tool_calls = earlier_calls;
     }
 
-    // ---- The task loop: facts first, opinions second.
-    //
-    // Only a human can set a goal (`/goal`; the model does not even have that tool), so
-    // continuing here is not "the model assigning itself work" — it is the human having said
-    // earlier "keep going until X". Every round is measured before it is judged: acceptance
-    // conditions and the budget come from the ledger, and a failing condition **skips the judge
-    // entirely** — a model must not be asked to confirm a fact that is already false.
-    //
-    // The condition is read from the **task row** and nowhere else (0.17): there is no separate
-    // goal record left to disagree with it. It was already read up there for the continuation
-    // loop — which is why a turn with a goal never also self-continues: one driver per turn.
-    if let Some(condition) = &goal_condition {
-        eprintln!("(joy) 目标循环开始：{condition}（上限 {max_rounds} 轮）");
-    }
-    let mut round_started = started;
-    // Steps keep one continuous order across the rounds of this turn: the idempotency key is
-    // `<turn_id>:<seq>`, so restarting the numbering each round would make round 2's first step
-    // collide with round 1's and be silently dropped (fake "not done" for `toolsOk`).
-    let mut step_base = observation.next_seq();
-
-    // The loop's two products: the verdict (what the task becomes) and the goal status (what
-    // the trace and the notifications say happened). Both are returned by `break`, so there is
-    // no "maybe nothing was decided" state to test for afterwards.
-    let (decision, goal_status) = loop {
-        // Rounds live on the row (written just below); the notification quotes the same number.
-        let goal_rounds = round_no;
-        if let Some(id) = &task_id {
-            if let Err(e) = server.tasks.record_round(id, round_no).await {
-                eprintln!("(joy) 轮次没记进任务台账：{e}");
-            }
-        }
-
-        // ---- Account the round: steps, artifacts, spend — then measure it.
-        let checks = account_round(
+    let driver::DrivenTask {
+        full,
+        decision,
+        goal_status,
+        round_no,
+    } = driver::drive_task(
+        driver::DriveTask {
             server,
-            RoundCtx {
-                task: task.as_ref(),
-                run_id: run_id.as_deref(),
-                acceptance: &acceptance,
-                verify_root: verify_root.clone(),
-                started: round_started,
-            },
-            &observation,
-            &full.result,
-        )
-        .await;
-
-        // ---- 0. A stop is the human's, and it ends the loop here.
-        //
-        // Without this the goal loop happily spends another round after `turn/interrupt`:
-        // the interrupted round's acceptance fails, "keep trying" kicks in, and the user's stop
-        // only takes effect when the rounds run out. The turn tail already turns an interrupted
-        // result into "suspended at the checkpoint"; the decision below never wins over that.
-        if full.result.interrupted {
-            eprintln!("(joy) 回合被中断，任务循环停在这一轮");
-            break (
-                TaskDecision::NeedsAttention("用户中断，任务停在原地".to_string()),
-                Some("interrupted".to_string()),
-            );
-        }
-
-        // ---- 1. Budget, before anything can spend more.
-        if let Some(id) = &task_id {
-            match server.tasks.get(id).await {
-                Ok(Some(fresh)) => {
-                    if let Some(over) = budget_overrun(&fresh) {
-                        eprintln!("(joy) 任务 {id} 停在预算上：{over}");
-                        if let Err(e) = server
-                            .events
-                            .append(id, run_id.as_deref(), "budget", Some(&over))
-                            .await
-                        {
-                            eprintln!("(joy) 预算事件没记上：{e}");
-                        }
-                        break (
-                            TaskDecision::NeedsAttention(over),
-                            Some("over-budget".to_string()),
-                        );
-                    }
-                }
-                Ok(None) => {}
-                Err(e) => eprintln!("(joy) 预算判定读不到任务行（这一轮不拦）：{e}"),
-            }
-        }
-
-        // ---- 2. Acceptance: a failing condition is a fact, and facts end rounds.
-        if let Some(reason) = joyczl_agent::verify::failure_summary(&checks) {
-            let who = task_id.as_deref().unwrap_or("（无任务）");
-            if round_no >= max_rounds {
-                let reason = format!("{reason}（已经跑了 {round_no} 轮，仍未通过）");
-                eprintln!("(joy) 任务 {who} 停在验收上：{reason}");
-                break (
-                    TaskDecision::NeedsAttention(reason),
-                    Some("verify-failed".to_string()),
-                );
-            }
-            eprintln!("(joy) 任务 {who} 第 {round_no} 轮验收未通过：{reason}");
-            round_no += 1;
-            round_started = std::time::Instant::now();
-            // P1: a failed round is the one moment a plan may change. Capped (initial + one
-            // revision): a plan rewritten after every failure is thrash, not progress.
-            let plan_now = plan.clone();
-            if let (Some(id), Some(current)) = (task_id.as_deref(), plan_now) {
-                if server.settings().plan_enabled
-                    && current.version < joyczl_agent::plan::MAX_VERSIONS
-                {
-                    let labels: Vec<String> = acceptance.iter().map(|item| item.label()).collect();
-                    let title = task
-                        .as_ref()
-                        .map(|row| row.title.as_str())
-                        .unwrap_or("这个任务");
-                    let goal = task.as_ref().and_then(|row| row.goal_condition.as_deref());
-                    match joyczl_agent::plan::make(
-                        &resolved,
-                        title,
-                        goal,
-                        &labels,
-                        Some(&reason),
-                        current.version + 1,
-                    )
-                    .await
-                    {
-                        Ok(revised) => {
-                            joyczl_agent::plan::record(&server.steps, id, &revised).await;
-                            eprintln!("(joy) 任务 {id} 换成第 {} 版计划", revised.version);
-                            plan = Some(revised);
-                        }
-                        Err(why) => eprintln!("(joy) 重新计划失败（按旧计划继续）：{why}"),
-                    }
-                }
-            }
-            // Feed the measurement back — not the judge's opinion, and not "try harder".
-            let mut correction = format!(
-                "验收检查没有通过：{reason}\n\
-                 请继续把它做成事实（真的写出文件、真的改到位），不要只声称完成。"
-            );
-            if let Some(current) = &plan {
-                correction.push_str("\n\n");
-                correction.push_str(&current.brief());
-            }
-            let next = full_turn(
-                server,
-                &resolved,
-                &correction,
-                Vec::new(),
-                TurnFrame {
-                    session_id: &session_id,
-                    turn_id: &turn_id,
-                    sink,
-                    interrupt: Some(interrupt.clone()),
-                    turn_cwd: turn_cwd.clone(),
-                    route_reason: turn_route.clone(),
-                    steering: Some(steering.clone()),
-                    resume: None,
-                    checkpoint: Some(checkpoint.clone()),
-                },
-                None,
-            )
-            .await;
-            match next {
-                Ok(next) => {
-                    observation = joyczl_agent::observe::observe(
-                        &next.result.messages,
-                        &turn_id,
-                        step_base,
-                        turn_cwd.as_deref(),
-                    );
-                    step_base = observation.next_seq();
-                    full = next;
-                    continue;
-                }
-                Err(e) => {
-                    fail_turn(
-                        server,
-                        sink,
-                        &turn_id,
-                        run_id.as_deref(),
-                        task_id.as_deref(),
-                        &e.message,
-                    )
-                    .await;
-                    return Err(e);
-                }
-            }
-        }
-
-        // ---- 3. A contradiction is never "done": the tool said it wrote, the file is not there.
-        if let Some(contradiction) = observation.contradictions().first() {
-            eprintln!(
-                "(joy) 任务 {} 停在矛盾上：{contradiction}",
-                task_id.as_deref().unwrap_or("（无任务）")
-            );
-            break (
-                TaskDecision::NeedsAttention(contradiction.clone()),
-                Some("contradiction".to_string()),
-            );
-        }
-
-        // ---- 4. The judge, only now, and only when a condition was declared.
-        let Some(condition) = &goal_condition else {
-            // Nothing left to decide: acceptance conditions (if any) just passed; a task with
-            // none is a single-turn task — done when the turn is, exactly as before 0.14.
-            break (
-                TaskDecision::Done,
-                if checks.is_empty() {
-                    None
-                } else {
-                    Some("verified".to_string())
-                },
-            );
-        };
-
-        let transcript = judge_transcript(server, &session_id, &full.result.reply).await;
-        let judgement = match crate::goal::judge(&resolved, condition, &transcript).await {
-            Ok(judgement) => judgement,
-            Err(why) => {
-                // The judge broke down: stop continuing, **keep the goal** (don't fake success).
-                notify_goal(sink, &turn_id, goal_rounds, max_rounds, "blocked", &why);
-                eprintln!("(joy) 目标循环停了：{why}");
-                server.notify_goal_finished(&session_id, "blocked", &why);
-                // A broken judge is not "the goal is impossible" — a human should look.
-                break (
-                    TaskDecision::NeedsAttention(format!("判断器故障：{why}")),
-                    Some("blocked".to_string()),
-                );
-            }
-        };
-
-        if judgement.ok {
-            notify_goal(
-                sink,
-                &turn_id,
-                goal_rounds,
-                max_rounds,
-                "satisfied",
-                &judgement.reason,
-            );
-            server.notify_goal_finished(&session_id, "satisfied", &judgement.reason);
-            break (TaskDecision::Done, Some("satisfied".to_string()));
-        }
-        if judgement.impossible {
-            notify_goal(
-                sink,
-                &turn_id,
-                goal_rounds,
-                max_rounds,
-                "impossible",
-                &judgement.reason,
-            );
-            server.notify_goal_finished(&session_id, "impossible", &judgement.reason);
-            break (
-                TaskDecision::Failed(judgement.reason),
-                Some("impossible".to_string()),
-            );
-        }
-        if round_no >= max_rounds {
-            // Cap reached: **say honestly it is not done** — don't fake completion, don't clear the goal.
-            let reason = format!("续了 {max_rounds} 轮还没达成：{}", judgement.reason);
-            notify_goal(
-                sink,
-                &turn_id,
-                goal_rounds,
-                max_rounds,
-                "round-limit",
-                &reason,
-            );
-            server.notify_goal_finished(&session_id, "round-limit", &judgement.reason);
-            break (
-                TaskDecision::Failed(reason),
-                Some("round-limit".to_string()),
-            );
-        }
-
-        notify_goal(
-            sink,
-            &turn_id,
-            goal_rounds,
-            max_rounds,
-            "continuing",
-            &judgement.reason,
-        );
-        eprintln!(
-            "(joy) 目标循环第 {goal_rounds} 轮（上限 {max_rounds}）：{}",
-            judgement.reason
-        );
-        // Feed the reason back as the next user message and run another round **in the same session**.
-        round_no += 1;
-        round_started = std::time::Instant::now();
-        let next = full_turn(
-            server,
-            &resolved,
-            &judgement.reason,
-            Vec::new(),
-            TurnFrame {
+            resolved: &resolved,
+            task: task.clone(),
+            run_id: run_id.clone(),
+            frame: TurnFrame {
                 session_id: &session_id,
                 turn_id: &turn_id,
                 sink,
                 interrupt: Some(interrupt.clone()),
                 turn_cwd: turn_cwd.clone(),
                 route_reason: turn_route.clone(),
-                steering: Some(steering.clone()),
                 resume: None,
                 checkpoint: Some(checkpoint.clone()),
+                steering: Some(steering.clone()),
             },
-            None,
-        )
-        .await;
-        match next {
-            Ok(next) => {
-                observation = joyczl_agent::observe::observe(
-                    &next.result.messages,
-                    &turn_id,
-                    1,
-                    turn_cwd.as_deref(),
-                );
-                full = next;
-            }
-            Err(e) => {
-                fail_turn(
-                    server,
-                    sink,
-                    &turn_id,
-                    run_id.as_deref(),
-                    task_id.as_deref(),
-                    &e.message,
-                )
-                .await;
-                return Err(e);
-            }
-        }
-    };
+            plan,
+            round_no,
+            max_rounds,
+            started,
+            wall_offset_ms: 0,
+        },
+        full,
+    )
+    .await?;
 
     let FullTurn {
         result,
@@ -1072,7 +770,7 @@ pub async fn run_turn(
     sink.response(JsonRpcMessage::Response(JsonRpcResponse {
         jsonrpc: JSONRPC_VERSION.to_string(),
         id,
-        result: serde_json::to_value(TurnStartResponse { turn_id }).expect("序列化"),
+        result: serde_json::to_value(TurnStartResponse { turn_id }).expect("serialises"),
     }));
     Ok(())
 }
@@ -1087,6 +785,7 @@ pub(crate) enum TaskDecision {
     /// A machine may not settle this: verification failed, budget spent, side effect unlanded.
     /// The task stays **open** — a human can continue or cancel it.
     NeedsAttention(String),
+    WaitingForJobs(Vec<String>),
     /// The loop's own verdict: not achievable, or the round cap was reached.
     Failed(String),
 }
@@ -1155,15 +854,27 @@ pub(crate) async fn finalize_turn(
     //   * a stop (turn/interrupt): `abandoned`, never auto-resumed;
     //   * a pause (task/suspend): `suspended`, kept resumable — `task/resume` continues it.
     let paused = server.take_suspending(&turn_id);
+    let waiting_for_jobs =
+        !paused && !result.interrupted && matches!(decision, Some(TaskDecision::WaitingForJobs(_)));
     let (final_status, suspended_reason) = if paused {
-        ("suspended", Some("已暂停，可从断点继续"))
+        (
+            "suspended",
+            Some("Paused; it can resume from the checkpoint"),
+        )
     } else if result.interrupted {
         ("abandoned", Some("interrupted by user"))
+    } else if result.stop_reason == joyczl_provider::StopReason::UncertainEffect {
+        (
+            "suspended",
+            Some("Tool outcome unknown; reconcile before continuing"),
+        )
+    } else if waiting_for_jobs {
+        ("waiting_jobs", Some(joyczl_state::waits::JOB_WAIT_REASON))
     } else {
         ("done", None)
     };
     if let Err(e) = server.checkpoints.finish(&turn_id, final_status).await {
-        eprintln!("(joy) checkpoint 收尾状态没记上（不影响回合本身）：{e}");
+        eprintln!("(joy) checkpoint close-out not recorded (the turn itself is unaffected): {e}");
     }
     if let Some(reason) = suspended_reason {
         sink.notification(ServerNotification::TurnSuspended(
@@ -1181,12 +892,27 @@ pub(crate) async fn finalize_turn(
     // Then the turn's own decision — which came from measurements, never from the reply text.
     let carried_task = server.tasks.by_turn(&turn_id).await.ok().flatten();
     if let Some(task) = &carried_task {
-        let (verdict_reason, run_status) = if paused {
-            let reason = "已暂停，可从断点继续";
+        let control = server.session_write_lock(&format!("task-control:{}", task.id));
+        let _control = control.lock().await;
+        let latest = server.tasks.get(&task.id).await.ok().flatten();
+        let task = latest.as_ref().unwrap_or(task);
+        let paused = paused
+            || server.take_suspending(&turn_id)
+            || (task.status == TaskStatus::Suspended
+                && task.suspend_reason.as_deref() != Some(joyczl_state::waits::JOB_WAIT_REASON));
+        let (verdict_reason, run_status) = if task.status == TaskStatus::Cancelled {
+            let _ = server.checkpoints.finish(&turn_id, "abandoned").await;
+            (
+                Some("Cancelled by the user".to_string()),
+                RunStatus::Cancelled,
+            )
+        } else if paused {
+            let _ = server.checkpoints.finish(&turn_id, "suspended").await;
+            let reason = "Paused; it can resume from the checkpoint";
             let _ = server.tasks.suspend(&task.id, Some(reason)).await;
             (Some(reason.to_string()), RunStatus::Suspended)
         } else if result.interrupted {
-            let reason = "用户中断，任务停在原地";
+            let reason = "Interrupted by the user; the task stays where it is";
             let _ = server.tasks.suspend(&task.id, Some(reason)).await;
             (Some(reason.to_string()), RunStatus::Suspended)
         } else {
@@ -1195,8 +921,32 @@ pub(crate) async fn finalize_turn(
                     let _ = server.tasks.finish(&task.id, TaskStatus::Done).await;
                     (None, RunStatus::Completed)
                 }
+                Some(TaskDecision::WaitingForJobs(job_ids)) => {
+                    let waits = joyczl_state::waits::JobWaits::new(server.pool.clone());
+                    let registered = match run_id.as_deref() {
+                        Some(id) => {
+                            waits
+                                .register(&task.id, id, &turn_id, &session_id, &job_ids)
+                                .await
+                        }
+                        None => Err(anyhow::anyhow!("task has no execution identity")),
+                    };
+                    match registered {
+                        Ok(()) => (
+                            Some(joyczl_state::waits::JOB_WAIT_REASON.to_string()),
+                            RunStatus::Waiting,
+                        ),
+                        Err(e) => {
+                            let reason = format!("Cannot persist background-job wait: {e}");
+                            eprintln!("(joy) {reason}");
+                            let _ = server.tasks.needs_attention(&task.id, &reason).await;
+                            let _ = server.checkpoints.finish(&turn_id, "suspended").await;
+                            (Some(reason), RunStatus::Waiting)
+                        }
+                    }
+                }
                 Some(TaskDecision::NeedsAttention(reason)) => {
-                    eprintln!("(joy) 任务 {} 需要你确认：{reason}", task.id);
+                    eprintln!("(joy) task {} needs your call: {reason}", task.id);
                     let _ = server.tasks.needs_attention(&task.id, &reason).await;
                     (Some(reason), RunStatus::Waiting)
                 }
@@ -1218,7 +968,7 @@ pub(crate) async fn finalize_turn(
                         (Some(status.to_string()), RunStatus::Failed)
                     }
                     Some("blocked") => {
-                        let reason = "判断器故障，已停在这里";
+                        let reason = "Judge failure; stopped here";
                         let _ = server.tasks.needs_attention(&task.id, reason).await;
                         (Some(reason.to_string()), RunStatus::Waiting)
                     }
@@ -1228,7 +978,8 @@ pub(crate) async fn finalize_turn(
                     }
                     None => {
                         if task.goal_condition.is_some() {
-                            let reason = "目标这一轮没推进，等待下一句话";
+                            let reason =
+                                "The goal did not advance this round; waiting for the next message";
                             let _ = server.tasks.suspend(&task.id, Some(reason)).await;
                             (Some(reason.to_string()), RunStatus::Suspended)
                         } else {
@@ -1246,7 +997,7 @@ pub(crate) async fn finalize_turn(
                 .close(run_id, run_status, verdict_reason.as_deref())
                 .await
             {
-                eprintln!("(joy) 执行记录收尾没记上：{e}");
+                eprintln!("(joy) run record not closed out: {e}");
             }
         }
         if let Ok(Some(row)) = server.tasks.get(&task.id).await {
@@ -1256,7 +1007,7 @@ pub(crate) async fn finalize_turn(
         // A run with no task row behind it (deleted mid-turn): close it rather than leave it open.
         let _ = server
             .runs
-            .close(run_id, RunStatus::Failed, Some("任务行不见了"))
+            .close(run_id, RunStatus::Failed, Some("the task row is gone"))
             .await;
     }
 
@@ -1279,7 +1030,13 @@ pub(crate) async fn finalize_turn(
 
     // Tool activity is folded into the assistant text. Without this, the model forgets what it already
     // did and does it again next turn (that is how triple-booked meetings happen).
-    let reply = fold_tool_activity(&result.reply, &result.tool_calls);
+    let mut reply = fold_tool_activity(&result.reply, &result.tool_calls);
+    if result.stop_reason == joyczl_provider::StopReason::MaxTokens && !result.interrupted {
+        reply.push_str("\n\n(The output limit was reached; this response is incomplete.)");
+    }
+    if waiting_for_jobs {
+        reply.push_str("\n\n(Background jobs are still running; task completion is pending.)");
+    }
 
     // The quick answer came from the small model. Record that honestly — so "what model are you" won't be answered wrong by the model itself.
     let quick = graph
@@ -1402,7 +1159,7 @@ pub(crate) async fn finalize_turn(
         )
         .await
     {
-        eprintln!("(joy) 用量没记进台账：{e}");
+        eprintln!("(joy) usage not recorded in the ledger: {e}");
     }
 
     // ---- Write section: per-session serialisation. From the history append to the MEMORY.md
@@ -1417,7 +1174,12 @@ pub(crate) async fn finalize_turn(
     // next turn's history carries it instead of it vanishing.
     let steers = server
         .steering_of(&turn_id)
-        .map(|steering| steering.lock().expect("steering 锁不该中毒").all())
+        .map(|steering| {
+            steering
+                .lock()
+                .expect("the steering lock cannot be poisoned")
+                .all()
+        })
         .unwrap_or_default();
     server
         .chat
@@ -1433,7 +1195,7 @@ pub(crate) async fn finalize_turn(
         .await
         .map_err(|e| ErrorObject {
             code: codes::INTERNAL_ERROR,
-            message: format!("写对话日志失败：{e}"),
+            message: format!("Could not write the conversation log: {e}"),
             data: None,
         })?;
 
@@ -1457,7 +1219,9 @@ pub(crate) async fn finalize_turn(
         .append(&session_id, &turn_id, &ledger_entries, user_message)
         .await
     {
-        eprintln!("(joy) 账本没记上（对话已落库，不影响这一轮）：{e}");
+        eprintln!(
+            "(joy) ledger write failed (the conversation is stored; this turn is unaffected): {e}"
+        );
     }
 
     // ---- Calibrate estimates with measurements: save this turn's last request's (measured prefill, local estimate);
@@ -1471,7 +1235,20 @@ pub(crate) async fn finalize_turn(
         )
         .await
     {
-        eprintln!("(joy) 记上下文实测值失败（不影响这一轮）：{e}");
+        eprintln!("(joy) observed context size not recorded (this turn is unaffected): {e}");
+    }
+
+    if waiting_for_jobs {
+        if let Some(task) = &carried_task {
+            if let Ok(Some(wait)) = joyczl_state::waits::JobWaits::new(server.pool.clone())
+                .get(&task.id)
+                .await
+            {
+                if wait.state == "waiting" {
+                    crate::task_waits::arm(server.clone(), sink.clone(), wait);
+                }
+            }
+        }
     }
 
     // ---- Memory work is the worker's job now: the turn ends when the reply is on disk.
@@ -1503,7 +1280,7 @@ pub(crate) async fn finalize_turn(
         if let Err(e) =
             joyczl_memory::export_markdown(&server.facts, &server.episodes, &settings.home).await
         {
-            eprintln!("(joy) MEMORY.md 镜像失败（记忆本身不受影响）：{e}");
+            eprintln!("(joy) MEMORY.md mirror failed (memory itself is unaffected): {e}");
         }
     }
     // Write section ends here: notifications and the response are not writes — don't let the
@@ -1566,7 +1343,7 @@ pub(crate) fn checkpoint_outlet(
             let messages_json = serde_json::to_string(&cp.messages).unwrap_or_default();
             let usage_json = serde_json::to_string(&cp.usage).unwrap_or_default();
             if let Err(e) = checkpoints
-                .save(
+                .save_round(
                     &turn_id,
                     &session,
                     &user_message,
@@ -1574,11 +1351,12 @@ pub(crate) fn checkpoint_outlet(
                     cp.iterations,
                     &usage_json,
                     run.as_deref(),
+                    Some(&cp.round_id),
                 )
                 .await
             {
-                eprintln!("(joy) checkpoint 没写进去（照常跑，崩了得整轮重来）：{e}");
-                return;
+                eprintln!("(joy) checkpoint persistence failed; stopping execution：{e}");
+                return Err(format!("checkpoint persistence failed: {e}"));
             }
             sink.notification(ServerNotification::TurnCheckpointed(
                 TurnCheckpointedNotification {
@@ -1587,6 +1365,7 @@ pub(crate) fn checkpoint_outlet(
                     iterations: cp.iterations,
                 },
             ));
+            Ok(())
         })
     })
 }
@@ -1616,10 +1395,11 @@ impl Drop for TurnGuard<'_> {
 /// Called when a turn ends (`TurnGuard::drop`) and once at boot. One message per call: the turn
 /// it starts ends and calls back in, so the queue advances one at a time without any loop here.
 pub(crate) async fn drain_queue(server: &Server, session_id: &str) {
-    let Ok(Some(row)) = server.queue.pop(session_id).await else {
-        return;
-    };
-    spawn_queued_turn(server.clone(), session_id.to_string(), row.message);
+    match server.queue.pop(session_id).await {
+        Ok(Some(row)) => spawn_queued_turn(server.clone(), row),
+        Ok(None) => {}
+        Err(e) => eprintln!("(joy) queued instruction could not be claimed: {e}"),
+    }
 }
 
 /// Run one queued message as its own turn, with **no client attached**.
@@ -1627,8 +1407,10 @@ pub(crate) async fn drain_queue(server: &Server, session_id: &str) {
 /// `EventSink` already tolerates that ("a send failure has only one possible cause: the writer
 /// is gone"), so the notifications simply expire. What must never be silent is a **failure**: a
 /// queued turn runs while the human is away, so the error has to land in the transcript.
-fn spawn_queued_turn(server: Server, session_id: String, message: String) {
+fn spawn_queued_turn(server: Server, row: joyczl_state::QueuedMessage) {
     tokio::spawn(async move {
+        let session_id = row.session_id;
+        let message = row.message;
         let (sink, receiver) = EventSink::channel();
         drop(receiver); // nobody is listening; frames expire on send
 
@@ -1638,6 +1420,12 @@ fn spawn_queued_turn(server: Server, session_id: String, message: String) {
             ..TurnStartParams::default()
         };
         let Err(error) = run_turn(&server, params, RequestId::Number(0), &sink).await else {
+            if let Err(e) = server.queue.complete(row.id).await {
+                eprintln!("(joy) queued instruction completion could not be recorded: {e}");
+                return;
+            }
+            // TurnGuard may have drained before this claim was released.
+            drain_queue(&server, &session_id).await;
             return;
         };
 
@@ -1645,21 +1433,32 @@ fn spawn_queued_turn(server: Server, session_id: String, message: String) {
         // line (it drains when that turn ends) instead of inventing an error the person never
         // caused.
         if error.code == codes::SESSION_BUSY {
-            if let Err(e) = server.queue.push(&session_id, &message).await {
-                eprintln!("(joy) 排队的消息没放回队列：{e}");
+            if let Err(e) = server.queue.release(row.id).await {
+                eprintln!("(joy) queued message could not be put back in the queue: {e}");
             }
             return;
         }
 
-        // run_turn writes nothing when it fails, so this pair of rows is the whole record.
-        let note = format!("（这条排队消息没跑起来：{}）", error.message);
+        // A failure may follow partial execution: never claim that no action ran.
+        let note = format!(
+            "(this queued turn failed; review prior actions before retrying: {})",
+            error.message
+        );
         if let Err(e) = server
             .chat
             .append_exchange_for(&message, &note, &session_id, "app-server", None, None)
             .await
         {
-            eprintln!("(joy) 排队消息的失败记录也没写进去：{e}");
+            eprintln!("(joy) the queued message's failure could not be recorded either: {e}");
+            return;
         }
+        if let Err(e) = server.queue.complete(row.id).await {
+            eprintln!(
+                "(joy) queued instruction failure acknowledgement could not be recorded: {e}"
+            );
+            return;
+        }
+        drain_queue(&server, &session_id).await;
     });
 }
 
@@ -1687,7 +1486,7 @@ async fn open_run(
     {
         Ok(()) => Some(turn_id.to_string()),
         Err(e) => {
-            eprintln!("(joy) 执行记录没开起来（这一轮不记账）：{e}");
+            eprintln!("(joy) run record could not be opened (this turn is unaccounted): {e}");
             None
         }
     }
@@ -1702,13 +1501,13 @@ async fn abort_run(server: &Server, run_id: Option<&str>, reason: &str) {
         .close(run_id, RunStatus::Failed, Some(reason))
         .await
     {
-        eprintln!("(joy) 执行记录没收尾（不影响报错）：{e}");
+        eprintln!("(joy) run record not closed out (the error still reaches you): {e}");
     }
 }
 
 /// A turn that failed inside the loop (model died, graph blew up): close the checkpoint, the
 /// run and the task honestly, so nothing is left looking "still running".
-async fn fail_turn(
+pub(crate) async fn fail_turn(
     server: &Server,
     sink: &EventSink,
     turn_id: &str,
@@ -1717,7 +1516,7 @@ async fn fail_turn(
     message: &str,
 ) {
     if let Err(e) = server.checkpoints.finish(turn_id, "abandoned").await {
-        eprintln!("(joy) 失败回合的 checkpoint 没标上：{e}");
+        eprintln!("(joy) the failed turn's checkpoint was not marked: {e}");
     }
     abort_run(server, run_id, message).await;
     if let Some(id) = task_id {
@@ -1728,30 +1527,45 @@ async fn fail_turn(
     }
 }
 
+/// Checkpoint recovery and continuation observe the same round with identical operation keys.
+pub(crate) fn observe_round(
+    result: &LoopResult,
+    turn_id: &str,
+    cwd: Option<&std::path::Path>,
+) -> joyczl_agent::observe::Observation {
+    joyczl_agent::observe::observe(
+        &result.messages,
+        &format!("{turn_id}:{}", result.round_id),
+        1,
+        cwd,
+    )
+}
+
 /// What one round's accounting needs. A struct because the fields would otherwise be seven
 /// positional parameters that all mean different things.
-struct RoundCtx<'a> {
-    task: Option<&'a TaskRow>,
-    run_id: Option<&'a str>,
-    acceptance: &'a [joyczl_agent::verify::Acceptance],
+pub(crate) struct RoundCtx<'a> {
+    pub(crate) task: Option<&'a TaskRow>,
+    pub(crate) run_id: Option<&'a str>,
+    pub(crate) acceptance: &'a [joyczl_agent::verify::Acceptance],
     /// Where acceptance paths resolve (the task's own directory, else this turn's).
-    verify_root: Option<std::path::PathBuf>,
+    pub(crate) verify_root: Option<std::path::PathBuf>,
     /// When this round started, for the wall-clock spend.
-    started: std::time::Instant,
+    pub(crate) started: std::time::Instant,
+    pub(crate) wall_offset_ms: i64,
 }
 
 /// Record one round and measure it. Returns the verdicts (empty = nothing objective to check).
 ///
 /// Cost: N `stat`s + one INSERT batch, no model call. When a condition fails this saves the
 /// judge call the old flow would have spent being talked into "done".
-async fn account_round(
+pub(crate) async fn account_round(
     server: &Server,
     ctx: RoundCtx<'_>,
     observation: &joyczl_agent::observe::Observation,
     result: &LoopResult,
-) -> Vec<joyczl_agent::verify::CheckResult> {
+) -> Result<Vec<joyczl_agent::verify::CheckResult>, String> {
     let Some(task) = ctx.task else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     // 1. What was done: steps (with idempotency keys), files that exist, contradictions.
@@ -1765,33 +1579,31 @@ async fn account_round(
     .record(observation)
     .await;
 
-    // 2. What it cost. The row keeps the running total — a restart must not lose the spent half.
-    let wall_ms = ctx.started.elapsed().as_millis() as i64;
-    let tokens = result.usage.input_tokens + result.usage.output_tokens;
-    let tools = observation.steps.len() as i64;
-    if let Err(e) = server
-        .tasks
-        .add_spent(&task.id, wall_ms, tokens, tools)
-        .await
-    {
-        eprintln!("(joy) 花费没记上（预算判定会偏松）：{e}");
-    }
+    // 2. Record cumulative round watermarks and task/run deltas atomically.
+    let wall_ms = ctx
+        .wall_offset_ms
+        .saturating_add(ctx.started.elapsed().as_millis().min(i64::MAX as u128) as i64);
     if let Some(run_id) = ctx.run_id {
         let ok = observation.steps.iter().filter(|step| step.ok).count() as i64;
-        let failed = observation.steps.len() as i64 - ok;
+        let account = joyczl_state::runs::RoundAccount {
+            tokens_in: result.usage.input_tokens,
+            tokens_out: result.usage.output_tokens,
+            tools_ok: ok,
+            tools_failed: observation.steps.len() as i64 - ok,
+            wall_ms,
+        };
         if let Err(e) = server
             .runs
-            .add_round(
-                run_id,
-                result.usage.input_tokens,
-                result.usage.output_tokens,
-                ok,
-                failed,
-            )
+            .account_round(run_id, &result.round_id, &account)
             .await
         {
-            eprintln!("(joy) 执行账没记上：{e}");
+            return Err(format!("round accounting failed: {e}"));
         }
+    } else {
+        return Err(format!(
+            "task {} has no run; accounting cannot be committed",
+            task.id
+        ));
     }
 
     // 3. The measurement itself.
@@ -1799,6 +1611,7 @@ async fn account_round(
         Vec::new()
     } else {
         joyczl_agent::verify::Verifier {
+            run_id: ctx.run_id.unwrap_or_default().to_string(),
             root: ctx.verify_root,
             steps: server.steps.clone(),
             task_id: task.id.clone(),
@@ -1813,13 +1626,13 @@ async fn account_round(
         match serde_json::to_string(&views) {
             Ok(json) => {
                 if let Err(e) = server.tasks.set_checks(&task.id, &json).await {
-                    eprintln!("(joy) 验收结果没记上：{e}");
+                    eprintln!("(joy) acceptance result not recorded: {e}");
                 }
             }
-            Err(e) => eprintln!("(joy) 验收结果序列化失败：{e}"),
+            Err(e) => eprintln!("(joy) acceptance result could not be serialised: {e}"),
         }
         let detail = if joyczl_agent::verify::all_passed(&checks) {
-            Some("验收全部通过".to_string())
+            Some("All acceptance checks passed".to_string())
         } else {
             joyczl_agent::verify::failure_summary(&checks)
         };
@@ -1828,23 +1641,23 @@ async fn account_round(
             .append(&task.id, ctx.run_id, "verify", detail.as_deref())
             .await
         {
-            eprintln!("(joy) 验收事件没记上：{e}");
+            eprintln!("(joy) acceptance event not recorded: {e}");
         }
     }
-    checks
+    Ok(checks)
 }
 
 /// Did this task already spend past one of its caps? One row read, a few comparisons.
 ///
 /// Reaching the cap counts as over it: the next round would spend more, and the whole point of
 /// a cap is to stop **before** the money is gone, not after.
-fn budget_overrun(task: &TaskRow) -> Option<String> {
+pub(crate) fn budget_overrun(task: &TaskRow) -> Option<String> {
     let budget: joyczl_protocol::BudgetView = serde_json::from_str(&task.budget_json).ok()?;
     let mut over = Vec::new();
     if let Some(cap) = budget.wall_ms.filter(|cap| *cap > 0) {
         if task.spent_wall_ms >= cap as i64 {
             over.push(format!(
-                "时长 {:.1}s（上限 {:.1}s）",
+                "elapsed {:.1}s (cap {:.1}s)",
                 task.spent_wall_ms as f64 / 1000.0,
                 cap as f64 / 1000.0
             ));
@@ -1852,21 +1665,18 @@ fn budget_overrun(task: &TaskRow) -> Option<String> {
     }
     if let Some(cap) = budget.tokens.filter(|cap| *cap > 0) {
         if task.spent_tokens >= cap as i64 {
-            over.push(format!("Token {}（上限 {}）", task.spent_tokens, cap));
+            over.push(format!("tokens {} (cap {})", task.spent_tokens, cap));
         }
     }
     if let Some(cap) = budget.tools.filter(|cap| *cap > 0) {
         if task.spent_tools >= cap as i64 {
-            over.push(format!(
-                "工具调用 {} 次（上限 {} 次）",
-                task.spent_tools, cap
-            ));
+            over.push(format!("tool calls {} (cap {})", task.spent_tools, cap));
         }
     }
     if over.is_empty() {
         None
     } else {
-        Some(format!("预算超了：{}", over.join("；")))
+        Some(format!("Over budget: {}", over.join("; ")))
     }
 }
 
@@ -1952,7 +1762,7 @@ pub(crate) async fn session_cwd(server: &Server, session_id: &str) -> Option<std
     let cwd = row.cwd?;
     let path = std::path::PathBuf::from(&cwd);
     if !path.is_dir() {
-        eprintln!("(joy) 会话 {session_id} 记着的工作目录 {cwd} 已经不在，这一轮没有可写范围");
+        eprintln!("(joy) the working directory {cwd} recorded for session {session_id} is gone; this turn has no writable scope");
         return None;
     }
     Some(path)
@@ -1971,14 +1781,14 @@ pub(crate) fn resolve_turn_cwd(
     if !path.is_absolute() {
         return Err(ErrorObject {
             code: codes::INVALID_PARAMS,
-            message: format!("cwd '{text}' 必须是绝对路径"),
+            message: format!("cwd '{text}' must be an absolute path"),
             data: None,
         });
     }
     if !path.is_dir() {
         return Err(ErrorObject {
             code: codes::INVALID_PARAMS,
-            message: format!("cwd '{text}' 不存在或不是目录"),
+            message: format!("cwd '{text}' does not exist or is not a directory"),
             data: None,
         });
     }
@@ -2004,7 +1814,7 @@ pub(crate) async fn interruptible<T>(
     match interrupt {
         Some(cancel) => tokio::select! {
             _ = cancel.wait() => {
-                eprintln!("(joy) 已中断：{what}不等了");
+                eprintln!("(joy) interrupted: no longer waiting for {what}");
                 None
             }
             value = future => Some(value),
@@ -2044,7 +1854,9 @@ pub(crate) async fn full_turn(
         match joyczl_provider::embed::Embedder::from_settings(&settings) {
             Ok(embedder) => Some(Arc::new(embedder)),
             Err(why) => {
-                eprintln!("(joy) 向量检索没配好，这次只用关键词：{why}");
+                eprintln!(
+                    "(joy) vector search is not configured; this turn uses keywords only: {why}"
+                );
                 None
             }
         }
@@ -2060,7 +1872,8 @@ pub(crate) async fn full_turn(
         Some(_) => (
             GateDecision {
                 decision: GateDecisionKind::Skip,
-                reason: "resumed from checkpoint —— 续跑不再过门".to_string(),
+                reason: "resumed from checkpoint — a resume does not pass the gate again"
+                    .to_string(),
                 query: None,
             },
             String::new(),
@@ -2070,7 +1883,7 @@ pub(crate) async fn full_turn(
             // the answer: skip retrieval and let the loop report the interruption.
             let quick = interruptible(
                 interrupt.as_ref(),
-                "记忆门",
+                "memory gate",
                 tokio::time::timeout(
                     PRELOOP_TIMEOUT,
                     joyczl_memory::gate::should_retrieve(
@@ -2086,7 +1899,10 @@ pub(crate) async fn full_turn(
                     let decision = match quick {
                         Ok(decision) => decision,
                         Err(_) => joyczl_memory::gate::Decision::fail_open(
-                            format!("记忆门超过 {} 秒没答，失败开放", PRELOOP_TIMEOUT.as_secs()),
+                            format!(
+                                "the memory gate did not answer within {}s; failing open",
+                                PRELOOP_TIMEOUT.as_secs()
+                            ),
                             message,
                         ),
                     };
@@ -2108,7 +1924,7 @@ pub(crate) async fn full_turn(
                         // with no memory and the loop answers "interrupted" on its first round.
                         interruptible(
                             interrupt.as_ref(),
-                            "记忆检索",
+                            "memory retrieval",
                             tokio::time::timeout(
                                 PRELOOP_TIMEOUT,
                                 joyczl_memory::retrieve_context(
@@ -2134,7 +1950,7 @@ pub(crate) async fn full_turn(
                 None => (
                     GateDecision {
                         decision: GateDecisionKind::Skip,
-                        reason: "已中断：跳过记忆门与检索".to_string(),
+                        reason: "interrupted: skipped the memory gate and retrieval".to_string(),
                         query: None,
                     },
                     String::new(),
@@ -2215,7 +2031,7 @@ pub(crate) async fn full_turn(
             // "stop" never queues behind a summary.
             let loaded = interruptible(
                 interrupt.as_ref(),
-                "压缩",
+                "compaction",
                 tokio::time::timeout(
                     PRELOOP_TIMEOUT,
                     load_history(
@@ -2234,7 +2050,7 @@ pub(crate) async fn full_turn(
                 Some(Ok(loaded)) => loaded,
                 Some(Err(_)) => {
                     eprintln!(
-                        "(joy) 压缩超过 {} 秒，这一轮先不带历史",
+                        "(joy) compaction took over {}s; this turn goes without history",
                         PRELOOP_TIMEOUT.as_secs()
                     );
                     Loaded::empty()
@@ -2327,6 +2143,16 @@ pub(crate) async fn full_turn(
     // The tool environment is constructed in exactly one place (see tool_ctx in lib.rs) — the subagent uses
     // the same one (it passes None). The approval channel is built per turn: None in `never` mode, actions needing approval are rejected.
     let mut ctx = server.tool_ctx(session_id, turn_cwd, server.approval_bridge(turn_id, sink));
+    ctx.task_run_id = server
+        .runs
+        .get(turn_id)
+        .await
+        .map_err(|e| ErrorObject {
+            code: codes::INTERNAL_ERROR,
+            message: format!("Cannot resolve task execution identity: {e}"),
+            data: None,
+        })?
+        .map(|run| run.id);
     ctx.activate = Some(turn_tools.activator());
     ctx.embedder = embedder;
 
@@ -2415,7 +2241,7 @@ pub(crate) async fn full_turn(
         match attempt {
             Ok(result) => break result,
             Err(e) if !retried && is_context_overflow(&e) => {
-                eprintln!("(joy) 上下文超了，压缩后重试一次");
+                eprintln!("(joy) context overflowed; compacting and retrying once");
                 retried = true;
                 let forced = {
                     let _compact_guard = session_write_lock.lock().await;
@@ -2452,7 +2278,7 @@ pub(crate) async fn full_turn(
             Err(e) => {
                 return Err(ErrorObject {
                     code: codes::PROVIDER_ERROR,
-                    message: format!("模型调用失败：{e}"),
+                    message: format!("Model call failed: {e}"),
                     data: None,
                 })
             }
@@ -2497,6 +2323,20 @@ async fn graph_route(
         return Ok(None);
     }
 
+    // Task execution always uses the durable full loop; quick chat does not create a
+    // working-memory checkpoint or load task context.
+    match server.runs.get(turn_id).await {
+        Ok(Some(_)) => return Ok(None),
+        Ok(None) => {}
+        Err(e) => {
+            return Err(ErrorObject {
+                code: codes::INTERNAL_ERROR,
+                message: format!("Cannot resolve task route: {e}"),
+                data: None,
+            })
+        }
+    }
+
     // State only holds JSON, and a loop turn's product (`LoopResult`) is not JSON —
     // so full_agent's **real** result comes back through this side channel; what goes into state is
     // just "I ran".
@@ -2519,18 +2359,53 @@ async fn graph_route(
     let quick: QuickFn = {
         let client = resolved.client.clone();
         let model = resolved.small_model.clone();
+        let server = server.clone();
+        let session_id = session_id.to_string();
+        let soul = load_soul(
+            &server.settings().home,
+            thin_soul_for(&server.settings().soul_mode, &resolved.provider_id),
+        );
         Arc::new(move |state: State| {
+            let server = server.clone();
+            let session_id = session_id.clone();
+            let soul = soul.clone();
             let (client, model) = (client.clone(), model.clone());
             Box::pin(async move {
                 let prompt = QUICK_REPLY_PROMPT
                     .replace("{calendar}", state.str("calendar").unwrap_or(""))
                     .replace("{message}", state.str("message").unwrap_or(""));
+                let mut history = Vec::new();
+                match server.chat.messages(&session_id, None, 12).await {
+                    Ok(rows) => {
+                        let mut remaining = 8_000usize;
+                        // Keep newest context within the cap, then restore chronological order.
+                        for row in rows {
+                            let text: String =
+                                row.content.chars().take(remaining.min(2_000)).collect();
+                            remaining = remaining.saturating_sub(text.chars().count());
+                            if row.role == "user" {
+                                history.push(Message::user_text(text));
+                            } else if row.role == "assistant" {
+                                history.push(Message {
+                                    role: joyczl_provider::Role::Assistant,
+                                    content: vec![joyczl_provider::ContentBlock::Text { text }],
+                                });
+                            }
+                            if remaining == 0 {
+                                break;
+                            }
+                        }
+                        history.reverse();
+                    }
+                    Err(e) => eprintln!("(joy) quick reply history unavailable: {e}"),
+                }
+                history.push(Message::user_text(prompt));
                 let response = client
                     .create(CreateRequest {
                         cache_prefix: None,
                         model,
-                        system: None,
-                        messages: vec![Message::user_text(prompt)],
+                        system: Some(soul),
+                        messages: history,
                         tools: Vec::new(),
                         max_tokens: 600,
                     })
@@ -2590,7 +2465,9 @@ async fn graph_route(
                 // Record first, then decide what to return to the engine: the error only leaves a trace on the
                 // engine side; the truth goes out through the side channel (its ErrorObject carries the code).
                 let why = outcome.as_ref().err().map(|error| error.message.clone());
-                *slot.lock().expect("侧信道锁不该中毒") = Some(outcome);
+                *slot
+                    .lock()
+                    .expect("the side-channel lock cannot be poisoned") = Some(outcome);
                 match why {
                     Some(why) => Err(why),
                     None => Ok(NodeWrites::new()),
@@ -2604,7 +2481,7 @@ async fn graph_route(
     let graph = match build_triage_graph(classify, calendar, quick, full) {
         Ok(graph) => graph,
         Err(error) => {
-            eprintln!("(joy) triage 图没搭起来，这轮走普通路径 —— {error}");
+            eprintln!("(joy) the triage graph did not assemble; taking the plain path — {error}");
             return Ok(None);
         }
     };
@@ -2620,7 +2497,7 @@ async fn graph_route(
     let report = match run_graph(graph, state, Some(observer), DEFAULT_MAX_STEPS).await {
         // A key collision is a graph bug (parallel nodes wrote the same key); reporting beats silently dropping a write.
         Err(error) => {
-            eprintln!("(joy) triage 图跑挂了，这轮走普通路径 —— {error}");
+            eprintln!("(joy) the triage graph failed; taking the plain path — {error}");
             return Ok(None);
         }
         Ok(report) => report,
@@ -2640,7 +2517,10 @@ async fn graph_route(
 
     // Whether full_agent ran, check the side channel; if it ran and failed, report that failure honestly.
     // Release the lock before dispatching (this is the function's tail expression; the guard cannot live that long).
-    let landed = slot.lock().expect("侧信道锁不该中毒").take();
+    let landed = slot
+        .lock()
+        .expect("the side-channel lock cannot be poisoned")
+        .take();
     match landed {
         Some(Err(error)) => Err(error),
         Some(Ok(turn)) => Ok(Some(Routed {
@@ -2656,6 +2536,8 @@ async fn graph_route(
                     history: HistoryStats::default(),
                     // One model call, no tools — that is its entirety.
                     result: LoopResult {
+                        stop_reason: joyczl_provider::StopReason::EndTurn,
+                        round_id: format!("{turn_id}:quick"),
                         reply: reply.to_string(),
                         tool_calls: Vec::new(),
                         iterations: 1,
@@ -2818,10 +2700,7 @@ pub(crate) fn capability_note(settings: &joyczl_config::Settings) -> Option<Stri
         return None;
     }
     Some(format!(
-        "What this machine cannot do right now:\n{}\n\
-         If a request needs one of these, say so in one sentence and stop — \
-         do not approximate it with the tools you do have, and do not go reading \
-         source code to find a workaround.",
+"What this machine cannot do right now:\n{}\nIf a request needs one of these, say so in one sentence and stop — do not approximate it with the tools you do have, and do not go reading source code to find a workaround.",
         missing.join("\n")
     ))
 }
@@ -2843,9 +2722,7 @@ pub(crate) fn build_system(parts_in: PromptParts<'_>) -> SystemPrompt {
     let now = Local::now();
     // Stable half: what Joy is and what it runs on. Nothing here depends on the turn.
     let stable = format!(
-        "{soul}\n\
-         Your model: you are running on '{model}' via the '{provider}' provider, \
-         inside Joy, a local-first open-source agent harness."
+"{soul}\nYour model: you are running on '{model}' via the '{provider}' provider, inside Joy, a local-first open-source agent harness."
     );
 
     // Dynamic half, in the order the model should read it: what time it is, what this run
@@ -2991,13 +2868,13 @@ fn unfinished_work(
     let mut listed: Vec<String> = open
         .iter()
         .take(3)
-        .map(|item| format!("{}（{}）", item.content, item.status.as_str()))
+        .map(|item| format!("{} ({})", item.content, item.status.as_str()))
         .collect();
     if open.len() > listed.len() {
-        listed.push(format!("等 {} 项", open.len()));
+        listed.push(format!("and {} more", open.len() - listed.len()));
     }
     Some(format!(
-        "待办里还有 {} 项没完成：{}",
+        "{} to-do items are still open: {}",
         open.len(),
         listed.join("；")
     ))
@@ -3151,10 +3028,10 @@ fn fold_one(call: &joyczl_loop::ToolOutcome) -> String {
     let head = truncate(first, 160);
     match spill_address(&call.output) {
         Some(address) => format!(
-            "{}({} 字, 全量在 {address}; 首行: {})",
+            "{}({} chars, full output at {address}; first line: {})",
             call.name, chars, head
         ),
-        None => format!("{}({} 字: {})", call.name, chars, head),
+        None => format!("{}({} chars: {})", call.name, chars, head),
     }
 }
 

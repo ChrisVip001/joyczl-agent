@@ -121,7 +121,7 @@ fn a_batch_under_the_cap_is_left_alone() {
     let report = trim_tool_results(&mut messages, None, &budget(10_000, 5_000), "s");
     assert_eq!(report.trimmed, 0);
     assert!(!report.still_over_budget);
-    assert!(!result_text(&messages, 1).contains("已截断"));
+    assert!(!result_text(&messages, 1).contains("truncated"));
 }
 
 #[test]
@@ -140,8 +140,14 @@ fn the_largest_results_are_stubbed_until_it_fits() {
 
     assert_eq!(report.trimmed, 2, "两条都得换成桩才装得下：{report:?}");
     assert!(!report.still_over_budget);
-    assert!(result_text(&messages, 1).contains("已截断"), "第一条该换掉");
-    assert!(result_text(&messages, 3).contains("已截断"), "第二条该换掉");
+    assert!(
+        result_text(&messages, 1).contains("truncated"),
+        "第一条该换掉"
+    );
+    assert!(
+        result_text(&messages, 3).contains("truncated"),
+        "第二条该换掉"
+    );
     // The small one is kept as-is — a file for a thousand chars is not worth it (below the threshold).
     assert_eq!(result_text(&messages, 5), "x".repeat(1_000));
     assert!(report.total_chars <= 10_000, "{report:?}");
@@ -178,7 +184,7 @@ fn small_results_are_never_stubbed_even_when_the_total_is_over() {
 
     assert_eq!(report.trimmed, 0, "给一百条小结果各建一个文件更贵");
     assert!(report.still_over_budget, "要如实承认没达标，不假装处理过了");
-    assert!(!result_text(&messages, 1).contains("已截断"));
+    assert!(!result_text(&messages, 1).contains("truncated"));
 }
 
 #[test]
@@ -187,7 +193,7 @@ fn a_self_budgeted_tool_is_left_to_the_tool_itself() {
     let mut messages = vec![call("1", "run_command"), result("1", 40_000)];
     let report = trim_tool_results(&mut messages, None, &budget(10_000, 5_000), "s");
     assert_eq!(report.trimmed, 0);
-    assert!(!result_text(&messages, 1).contains("已截断"));
+    assert!(!result_text(&messages, 1).contains("truncated"));
 }
 
 #[test]
@@ -214,11 +220,14 @@ fn the_stub_points_at_the_spilled_file() {
     assert_eq!(report.trimmed, 1);
 
     let text = result_text(&messages, 1);
-    assert!(text.contains("完整输出在 spill/"), "要指出回查路径：{text}");
+    assert!(
+        text.contains("full output at spill/"),
+        "要指出回查路径：{text}"
+    );
     let relative = text
-        .split("完整输出在 ")
+        .split("full output at ")
         .nth(1)
-        .and_then(|rest| rest.split('）').next())
+        .and_then(|rest| rest.split(')').next())
         .expect("路径");
     let saved = std::fs::read_to_string(home.path().join(relative)).expect("读回落盘文件");
     assert_eq!(saved.chars().count(), 100_000, "落盘的必须是完整原文");

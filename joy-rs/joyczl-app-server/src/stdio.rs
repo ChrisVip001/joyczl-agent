@@ -31,11 +31,11 @@ pub async fn run_stdio(server: Server) -> Result<()> {
                     let envelope = JsonRpcNotification {
                         jsonrpc: JSONRPC_VERSION.to_string(),
                         method: "turn/notification".to_string(),
-                        params: Some(serde_json::to_value(&notification).expect("序列化")),
+                        params: Some(serde_json::to_value(&notification).expect("serialize")),
                     };
-                    serde_json::to_string(&envelope).expect("序列化")
+                    serde_json::to_string(&envelope).expect("serialize")
                 }
-                Frame::Response(response) => serde_json::to_string(&response).expect("序列化"),
+                Frame::Response(response) => serde_json::to_string(&response).expect("serialize"),
             };
             if stdout.write_all(text.as_bytes()).await.is_err()
                 || stdout.write_all(b"\n").await.is_err()
@@ -95,7 +95,7 @@ pub async fn run_stdio(server: Server) -> Result<()> {
                 id: None,
                 error: ErrorObject {
                     code: codes::PARSE_ERROR,
-                    message: format!("解析失败：{e}"),
+                    message: format!("parse failed: {e}"),
                     data: None,
                 },
             })),

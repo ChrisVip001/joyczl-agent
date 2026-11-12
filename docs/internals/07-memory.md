@@ -431,7 +431,14 @@ raw 地址）或本地文件读取。
   的截断是机制的一部分，不是偷懒。
 - **压缩产物也是记忆。** 被滑窗挤出去的轮次折进滚动摘要（7.3），摘要进尾巴的 `summary`
   段。它和 fact 的区别是：摘要按会话存、只往前滚，不参与跨会话检索。
+- **项目约定不是记忆。** `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md`（`agents_md.rs`，
+  从 cwd 向上读到包住它的 `.git`）同样进提示，但它描述的是「这个仓库怎么干活」，不是
+  「发生过什么」：不过检索门、不进 bundle、不被蒸馏、不参与跨会话检索，每次从磁盘重读，
+  改了就生效。它只进尾巴、不进稳定前缀（否则换一个目录就缓存失效），子代理也不带 ——
+  详见 09 的 9.10。
 - **计量只覆盖会增长的部分。** 六段（soul / memory / skills / tools / history / summary）
   由 `memory_center::usage_of` 统计；时钟、待办板、能力缺口说明每轮几十个 token 且恒定，
-  故意不计入 —— 那条带子的用途是「看什么在长」。改计量时同步 `docs/architecture.md`
-  的 Context budget 与 `docs/internals/09-app-server.md` 的 9.10。
+  项目约定**按目录**恒定（封顶 32 KB），四样都故意不计入 —— 那条带子的用途是「一个会话里
+  什么在长」。代价写在明处：仓库里有一份很厚的 `AGENTS.md` 时，带子会低估真实占用一个文件
+  （`docs/limitations.md`）。改计量时同步 `docs/architecture.md` 的 Context budget 与
+  `docs/internals/09-app-server.md` 的 9.10。

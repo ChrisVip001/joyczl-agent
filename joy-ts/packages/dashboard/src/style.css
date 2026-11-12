@@ -198,6 +198,16 @@ body.resizing {
   letter-spacing: 0.02em;
 }
 
+/* 语言开关：右上角，和其它「设置类」控件分开 */
+.brand .lang {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  min-width: 34px;
+  white-space: nowrap;
+}
+
 .dot {
   width: 8px;
   height: 8px;
@@ -487,6 +497,27 @@ body.resizing {
 .stamp {
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* 页脚这一行有三样：时间戳、刷新、语言。中文恰好放得下，英文（"22:53 updated / Refresh /
+   中文"）会把按钮挤成两行 —— 时间戳可以让位，按钮不让。 */
+.foot-row {
+  gap: 6px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.foot-row .stamp {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.foot-row .ghost {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 /* 主对话区：单列居中 */

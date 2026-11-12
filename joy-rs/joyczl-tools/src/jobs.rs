@@ -6,7 +6,7 @@
 //!
 //! Three rules:
 //!
-//! * **Authorization via the owner fence, not id secrecy**: a job id is a predictable short
+//! * **Authorization via the owner fence, not id secrecy**: a job id is a restart-safe random
 //!   string, but only **the spawning session** can read or stop it; another session gets nothing.
 //! * **Output is a bounded ring**: overflow drops the oldest bytes; reads **honestly report
 //!   how much was lost** instead of erroring — a runaway command must not eat memory or fail reads.
@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 
 use crate::Tool;
 
-/// A job's id (a predictable short string; see module docs).
+/// A job's id (a restart-safe random string; see module docs).
 pub type JobId = String;
 
 /// A read of output.
@@ -59,6 +59,16 @@ pub trait JobRegistry: Send + Sync {
         command: &str,
         cwd: Option<String>,
     ) -> JobFut<Result<JobId, String>>;
+    /// Host-assigned task execution identity. Custom hosts may override this to persist it.
+    fn spawn_for_run(
+        &self,
+        owner: &str,
+        command: &str,
+        cwd: Option<String>,
+        _run_id: Option<String>,
+    ) -> JobFut<Result<JobId, String>> {
+        self.spawn(owner, command, cwd)
+    }
     /// Read a slice. With `wait` true, wait a bounded while (until a result or the cap).
     fn output(
         &self,
@@ -75,23 +85,22 @@ pub trait JobRegistry: Send + Sync {
 
 /// The answer to the model when no job host is present (background is off by default).
 fn no_registry() -> String {
-    "Error: 这台机器上没有开启后台作业（它跟着 run_command 一起开关：JOY_EXEC=1）。".to_string()
+    "Error: background jobs are not enabled on this machine (they are switched on together with run_command: JOY_EXEC=1).".to_string()
 }
 
 /// `job_output`: read a slice of output. To continue reading, pass back the `cursor` you got.
 pub fn job_output(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     Tool {
         name: "job_output".to_string(),
-        description: "读一个后台作业的输出。第一次不带 cursor（从头读），之后带上上次答复里\
-                      给的 cursor 接着读。作业还没结束时 wait=true 会有界地等一会儿。"
+        description: "Read the output of a background job. Leave cursor off the first time (read from the start), then pass the cursor from the previous reply to carry on. While the job is still running, wait=true waits for a bounded while."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "required": ["id"],
             "properties": {
-                "id": { "type": "string", "description": "job id（run_command 的 background=true 会给）" },
-                "cursor": { "type": "integer", "minimum": 0, "description": "从哪儿接着读（上次答复里给的）" },
-                "wait": { "type": "boolean", "description": "还没结束就等一会儿（有上限，超了如实返回仍在跑）" }
+                "id": { "type": "string", "description": "the job id (run_command with background=true returns one)" },
+                "cursor": { "type": "integer", "minimum": 0, "description": "where to carry on from (given in the previous reply)" },
+                "wait": { "type": "boolean", "description": "wait a while if it has not finished (bounded; past that it honestly reports it is still running)" }
             }
         }),
         handler: std::sync::Arc::new(move |ctx: crate::ToolCtx, args: Value| {
@@ -101,7 +110,7 @@ pub fn job_output(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
                     return Ok(no_registry());
                 };
                 let Some(id) = args.get("id").and_then(Value::as_str) else {
-                    return Ok("Error: 缺少 id".to_string());
+                    return Ok("Error: missing id".to_string());
                 };
                 let cursor = args.get("cursor").and_then(Value::as_u64).unwrap_or(0);
                 let wait = args.get("wait").and_then(Value::as_bool).unwrap_or(false);
@@ -122,7 +131,8 @@ pub fn job_output(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
 pub fn job_list(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     Tool {
         name: "job_list".to_string(),
-        description: "列出这个会话起的后台作业（只有自己的）。".to_string(),
+        description: "List the background jobs started in this session (only your own)."
+            .to_string(),
         input_schema: json!({ "type": "object", "properties": {} }),
         handler: std::sync::Arc::new(move |ctx: crate::ToolCtx, _args: Value| {
             let jobs = jobs.clone();
@@ -132,16 +142,16 @@ pub fn job_list(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
                 };
                 let list = jobs.list(&ctx.session_id);
                 if list.is_empty() {
-                    return Ok("这个会话还没有后台作业。".to_string());
+                    return Ok("This session has no background jobs yet.".to_string());
                 }
-                let mut out = String::from("后台作业：\n");
+                let mut out = String::from("Background jobs:\n");
                 for job in list {
                     out.push_str(&format!(
-                        "- {} {}（{} 字节）: {}\n",
+                        "- {} {} ({} bytes): {}\n",
                         job.id,
                         match job.exit_code {
-                            Some(code) => format!("已结束（退出码 {code}）"),
-                            None => "仍在跑".to_string(),
+                            Some(code) => format!("finished (exit code {code})"),
+                            None => "still running".to_string(),
                         },
                         job.bytes,
                         job.command
@@ -157,7 +167,7 @@ pub fn job_list(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
 pub fn job_kill(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
     Tool {
         name: "job_kill".to_string(),
-        description: "停掉一个后台作业（连带它的进程组）。".to_string(),
+        description: "Stop a background job (and its process group).".to_string(),
         input_schema: json!({
             "type": "object",
             "required": ["id"],
@@ -170,11 +180,11 @@ pub fn job_kill(jobs: Option<std::sync::Arc<dyn JobRegistry>>) -> Tool {
                     return Ok(no_registry());
                 };
                 let Some(id) = args.get("id").and_then(Value::as_str) else {
-                    return Ok("Error: 缺少 id".to_string());
+                    return Ok("Error: missing id".to_string());
                 };
                 match jobs.kill(&ctx.session_id, &id.to_string()).await {
-                    Ok(true) => Ok(format!("已停掉 job {id}。")),
-                    Ok(false) => Ok(format!("job {id} 已经结束了，没什么可停的。")),
+                    Ok(true) => Ok(format!("Stopped job {id}.")),
+                    Ok(false) => Ok(format!("job {id} has already finished; nothing to stop.")),
                     Err(why) => Ok(format!("Error: {why}")),
                 }
             })
@@ -187,21 +197,24 @@ fn render(read: &JobRead) -> String {
     let mut out = String::new();
     if read.lossy {
         out.push_str(&format!(
-            "（前面的 {} 字节已经被丢掉了：输出太多，环里只留了最近的）\n",
+            "(the first {} bytes were dropped: too much output, so the ring keeps only the most recent)\n",
             read.dropped
         ));
     }
     if read.running {
-        out.push_str(&format!("job 仍在跑（已读到 {}）", read.cursor));
+        out.push_str(&format!(
+            "job is still running ({} read so far)",
+            read.cursor
+        ));
     } else {
         out.push_str(&format!(
-            "job 已结束（退出码 {}）",
+            "job finished (exit code {})",
             read.exit_code.map(|c| c.to_string()).unwrap_or("?".into())
         ));
     }
     out.push('\n');
     if read.text.is_empty() {
-        out.push_str("（这一段没有新输出）\n");
+        out.push_str("(no new output in this stretch)\n");
     } else {
         out.push_str(&read.text);
         if !read.text.ends_with('\n') {
@@ -209,7 +222,7 @@ fn render(read: &JobRead) -> String {
         }
     }
     if read.running {
-        out.push_str(&format!("（继续读就带上 cursor={}）", read.cursor));
+        out.push_str(&format!("(to carry on, pass cursor={})", read.cursor));
     }
     out
 }

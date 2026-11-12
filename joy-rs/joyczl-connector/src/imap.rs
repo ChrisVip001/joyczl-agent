@@ -58,13 +58,18 @@ pub struct FetchOutcome {
 pub async fn fetch(config: &ImapConfig, after: Option<i64>) -> Result<FetchOutcome> {
     tokio::time::timeout(TIMEOUT, conversation(config, after))
         .await
-        .map_err(|_| anyhow::anyhow!("IMAP 对话超过 {}s 没有进展，放弃了", TIMEOUT.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the IMAP conversation made no progress for {}s; giving up",
+                TIMEOUT.as_secs()
+            )
+        })?
 }
 
 async fn conversation(config: &ImapConfig, after: Option<i64>) -> Result<FetchOutcome> {
     let tcp = TcpStream::connect((config.host.as_str(), config.port))
         .await
-        .with_context(|| format!("连不上 {}:{}", config.host, config.port))?;
+        .with_context(|| format!("could not connect to {}:{}", config.host, config.port))?;
     let wire = if config.port == 993 {
         Wire::Tls(Box::new(tls_upgrade(tcp, &config.host).await?))
     } else {
@@ -88,14 +93,16 @@ async fn conversation(config: &ImapConfig, after: Option<i64>) -> Result<FetchOu
             Ok(raw) => {
                 if raw.len() > MAX_MESSAGE_BYTES {
                     eprintln!(
-                        "(joy) 第 {uid} 封超过 {}KB，跳过不存",
+                        "(joy) message {uid} is over {}KB; skipped, not stored",
                         MAX_MESSAGE_BYTES / 1024
                     );
                     continue;
                 }
                 messages.push(parse(&raw, uid));
             }
-            Err(e) => eprintln!("(joy) 取第 {uid} 封失败（继续取下一封）：{e}"),
+            Err(e) => {
+                eprintln!("(joy) fetching message {uid} failed (carrying on with the next): {e}")
+            }
         }
     }
     let _ = session.logout().await;
@@ -150,7 +157,7 @@ impl Session {
         self.writer
             .write_all(format!("{line}\r\n").as_bytes())
             .await
-            .context("往 IMAP 写命令失败")
+            .context("could not write the IMAP command")
     }
 
     async fn read_line(&mut self) -> Result<String> {
@@ -159,9 +166,9 @@ impl Session {
             .reader
             .read_line(&mut line)
             .await
-            .context("读 IMAP 应答失败")?;
+            .context("could not read the IMAP reply")?;
         if n == 0 {
-            bail!("IMAP 连接被对端关闭");
+            bail!("the IMAP connection was closed by the server");
         }
         Ok(line.trim_end_matches(['\r', '\n']).to_string())
     }
@@ -174,7 +181,7 @@ impl Session {
             if line.starts_with(&format!("{tag} ")) {
                 let rest = &line[tag.len() + 1..];
                 if !rest.starts_with("OK") {
-                    bail!("IMAP {tag} 失败：{rest}");
+                    bail!("IMAP {tag} failed: {rest}");
                 }
                 return Ok(rest.to_string());
             }
@@ -191,12 +198,12 @@ impl Session {
             if line.starts_with('*') && (line.contains(" OK") || line.contains(" PREAUTH")) {
                 return Ok(());
             }
-            bail!("IMAP 打招呼不对：{line}");
+            bail!("the IMAP greeting is wrong: {line}");
         }
         if line.starts_with(&format!("{tag} ")) && line.contains(" OK") {
             return Ok(());
         }
-        bail!("IMAP {tag} 失败：{line}")
+        bail!("IMAP {tag} failed: {line}")
     }
 
     async fn login(&mut self, user: &str, password: &str) -> Result<()> {
@@ -255,7 +262,7 @@ impl Session {
             let line = self.read_line().await?;
             if line.starts_with("a4 ") {
                 if !line.contains(" OK") {
-                    bail!("IMAP 取信失败：{line}");
+                    bail!("IMAP fetch failed: {line}");
                 }
                 return Ok(literal);
             }
@@ -264,7 +271,7 @@ impl Session {
                 self.reader
                     .read_exact(&mut buffer)
                     .await
-                    .context("读 IMAP 字面量失败")?;
+                    .context("could not read the IMAP literal")?;
                 literal = buffer;
                 // Consume the ")" that follows the literal on its own line.
                 let _ = self.read_line().await?;
@@ -296,12 +303,12 @@ async fn tls_upgrade(stream: TcpStream, host: &str) -> Result<TlsStream<TcpStrea
         .with_root_certificates(roots)
         .with_no_client_auth();
     let server_name = tokio_rustls::rustls::pki_types::ServerName::try_from(host.to_string())
-        .map_err(|_| anyhow::anyhow!("IMAP 主机名 {host} 不能做 TLS 名字"))?;
+        .map_err(|_| anyhow::anyhow!("IMAP host name {host} cannot be a TLS name"))?;
     let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
     connector
         .connect(server_name, stream)
         .await
-        .context("IMAP TLS 握手失败")
+        .context("the IMAP TLS handshake failed")
 }
 
 // ---- MIME, minimally ----------------------------------------------------------------
@@ -317,7 +324,7 @@ pub fn parse(raw: &[u8], uid: i64) -> Incoming {
         headers
             .get("from")
             .map(String::as_str)
-            .unwrap_or("(未知发件人)"),
+            .unwrap_or("(unknown sender)"),
     );
     let message_id = headers.get("message-id").cloned();
     let date = headers.get("date").cloned().unwrap_or_default();
@@ -337,7 +344,7 @@ pub fn parse(raw: &[u8], uid: i64) -> Incoming {
         message_id,
         from,
         subject: if subject.trim().is_empty() {
-            "(无主题)".to_string()
+            "(no subject)".to_string()
         } else {
             subject
         },

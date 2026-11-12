@@ -24,7 +24,7 @@ fn resolved_with(mock: Arc<Mock>) -> Resolved {
 }
 
 async fn server(mock: Arc<Mock>, goal_max_rounds: i32) -> (Server, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -90,7 +90,10 @@ async fn a_self_contradicting_judgement_counts_as_not_done() {
         .await
         .expect("判断出来了");
     assert!(!judgement.ok && !judgement.impossible, "{judgement:?}");
-    assert!(judgement.reason.contains("自相矛盾"), "{judgement:?}");
+    assert!(
+        judgement.reason.contains("contradicted itself"),
+        "{judgement:?}"
+    );
 }
 
 /// The judge gives no JSON: an error (the caller stops continuing and keeps the goal), not a fake success.
@@ -108,15 +111,17 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
     let mock = Arc::new(Mock::new(vec![
         // First round: gate → main reply → judge (not met)
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "goal"}"#),
+        Mock::tool_use("clock1", "current_time", serde_json::json!({})),
         Mock::text("我先做了一半。"),
         Mock::text(r#"{"ok": false, "impossible": false, "reason": "测试还有两条红"}"#),
         // Second round: gate → main reply → judge (met)
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "goal"}"#),
+        Mock::tool_use("clock2", "current_time", serde_json::json!({})),
         Mock::text("两条都修好了。"),
         Mock::text(r#"{"ok": true, "impossible": false, "reason": "全绿了"}"#),
     ]));
     let (server, _dir) = server(mock.clone(), 5).await;
-    server
+    let task = server
         .set_task_goal("goal-session", Some("让测试全绿"))
         .await
         .expect("设上");
@@ -169,6 +174,15 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
     assert!(reply.contains("修好了"), "最终答复是第二轮的：{reply}");
 
     // The judge's **reason** is fed back as the user message and the turn continues (findable in the same session's history).
+    assert_eq!(
+        server
+            .steps
+            .count_ok_by_tool(&task.id, "current_time")
+            .await
+            .unwrap(),
+        2,
+        "both goal rounds must retain distinct operation records"
+    );
     let requests = mock.received.lock().unwrap();
     assert!(
         requests
@@ -233,4 +247,98 @@ async fn running_out_of_rounds_is_reported_honestly() {
         Some("做到 X"),
         "也不清掉目标：停下等人决定"
     );
+}
+
+#[tokio::test]
+async fn a_truncated_answer_cannot_complete_a_goal_or_reach_the_judge() {
+    let mut partial = Mock::text("The report begins...");
+    partial.stop_reason = joyczl_provider::StopReason::MaxTokens;
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text(r#"{"retrieve":false,"query":"","reason":"goal"}"#),
+        partial,
+    ]));
+    let (server, _home) = server(mock.clone(), 2).await;
+    let task = server
+        .set_task_goal("goal-session", Some("finish the report"))
+        .await
+        .unwrap();
+    let (sink, _receiver) = EventSink::channel();
+    crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("goal-session".into()),
+            message: "write the report".into(),
+            ..Default::default()
+        },
+        RequestId::Number(1),
+        &sink,
+    )
+    .await
+    .unwrap();
+    let task = server.tasks.get(&task.id).await.unwrap().unwrap();
+    assert_eq!(task.status, joyczl_state::TaskStatus::NeedsAttention);
+    assert!(task.last_stop_reason.unwrap().contains("token limit"));
+    assert_eq!(mock.received.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn an_uncertain_effect_suspends_the_goal_before_any_model_retry() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text(r#"{"retrieve":false,"query":"","reason":"goal"}"#),
+        Mock::tool_use("call", "unknown_effect", serde_json::json!({})),
+        Mock::text("must not be requested"),
+    ]));
+    let (mut server, _home) = server(mock.clone(), 2).await;
+    let mut tools = (*server.tools).clone();
+    tools.register_exclusive(joyczl_tools::Tool {
+        name: "unknown_effect".into(),
+        description: "test remote uncertainty".into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        handler: Arc::new(|ctx, _| {
+            Box::pin(async move {
+                ctx.on_uncertain.as_ref().unwrap()("unknown remote outcome");
+                Ok("Error: outcome unknown".into())
+            })
+        }),
+    });
+    server.tools = Arc::new(tools);
+    let task = server
+        .set_task_goal("goal-session", Some("finish safely"))
+        .await
+        .unwrap();
+    let (sink, _receiver) = EventSink::channel();
+    crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("goal-session".into()),
+            message: "start".into(),
+            ..Default::default()
+        },
+        RequestId::Number(1),
+        &sink,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        server.tasks.get(&task.id).await.unwrap().unwrap().status,
+        joyczl_state::TaskStatus::NeedsAttention
+    );
+    assert_eq!(mock.received.lock().unwrap().len(), 2);
+    let run = server
+        .runs
+        .list_by_task(&task.id, 1)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(run.status, "waiting");
+    let checkpoint = server.checkpoints.get(&run.id).await.unwrap().unwrap();
+    assert_eq!(checkpoint.status, "suspended");
+    let messages: Vec<joyczl_provider::Message> =
+        serde_json::from_str(&checkpoint.messages_json).unwrap();
+    assert!(messages
+        .last()
+        .unwrap()
+        .content
+        .iter()
+        .any(|block| matches!(block, joyczl_provider::ContentBlock::ToolUse { .. })));
 }

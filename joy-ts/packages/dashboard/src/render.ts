@@ -4,6 +4,7 @@
 // not "what it looks like" — when the page gets ugly, look at this one file.
 
 import { renderMarkdown, stripToolFold } from "./markdown";
+import { t } from "./i18n";
 import type { McpRow, McpView, ScheduleJob, SchedulesView, SkillRow, SkillsView } from "./api";
 import type {
   AgentTaskView,
@@ -82,23 +83,23 @@ export function renderOverview(
     ),
     el("div", { class: "path", text: config.home, title: config.home }),
     numbers([
-      ["会话", data.sessions.length],
-      ["事实", data.facts.length],
-      ["情景", data.episodes.length],
+      [t("会话"), data.sessions.length],
+      [t("事实"), data.facts.length],
+      [t("情景"), data.episodes.length],
     ]),
   );
 
   fragment.append(
     section(
-      "怎么想的",
+      t("怎么想的"),
       el(
         "dl",
         { class: "rows" },
-        ...row("小模型", config.smallModel),
-        ...row("工作记忆", `最近 ${config.historyTurns} 轮`),
-        ...row("提炼频率", `每 ${config.consolidateEvery} 轮`),
-        ...row("检索条数", String(config.retrievalTopK)),
-        ...row("最多迭代", String(config.maxIterations)),
+        ...row(t("小模型"), config.smallModel),
+        ...row(t("工作记忆"), t("最近 {historyTurns} 轮", { historyTurns: config.historyTurns })),
+        ...row(t("提炼频率"), t("每 {consolidateEvery} 轮", { consolidateEvery: config.consolidateEvery })),
+        ...row(t("检索条数"), String(config.retrievalTopK)),
+        ...row(t("最多迭代"), String(config.maxIterations)),
       ),
     ),
   );
@@ -113,9 +114,9 @@ export function renderOverview(
 
   fragment.append(
     section(
-      `最近会话（当前：${session}）`,
+      t("最近会话（当前：{session}）", { session: session }),
       data.sessions.length === 0
-        ? muted("还没有会话。说第一句话就有了。")
+        ? muted(t("还没有会话。说第一句话就有了。"))
         : el(
             "ul",
             { class: "list" },
@@ -139,7 +140,7 @@ function renderInbox(data: DashboardData, onInbox: () => void): HTMLElement {
     "div",
     { class: "block inbox" },
     el("h3", {
-      text: data.inbox.unseen > 0 ? `收件箱 · ${data.inbox.unseen} 封等你处理` : "收件箱",
+      text: data.inbox.unseen > 0 ? t("收件箱 · {unseen} 封等你处理", { unseen: data.inbox.unseen }) : t("收件箱"),
     }),
   );
   for (const item of data.inbox.items.slice(0, 5)) {
@@ -158,7 +159,7 @@ function renderInbox(data: DashboardData, onInbox: () => void): HTMLElement {
       el("button", {
         class: "task-act",
         type: "button",
-        text: "处理这些邮件",
+        text: t("处理这些邮件"),
         onclick: onInbox,
       }),
     );
@@ -166,7 +167,7 @@ function renderInbox(data: DashboardData, onInbox: () => void): HTMLElement {
   block.append(
     el("p", {
       class: "connector-note",
-      text: "只看不标已读；处理是把它们交给一个回合，不会替你回信。",
+      text: t("只看不标已读；处理是把它们交给一个回合，不会替你回信。"),
     }),
   );
   return block;
@@ -175,8 +176,8 @@ function renderInbox(data: DashboardData, onInbox: () => void): HTMLElement {
 /// Connectors: one quiet row each — name, whether it can actually send, allowlist width.
 /// Read-only on purpose: the switch lives in connectors.json, a file only the human edits.
 function renderConnectors(data: DashboardData): HTMLElement {
-  const names: Record<string, string> = { email: "邮件", feishu: "飞书" };
-  const block = el("div", { class: "block connectors" }, el("h3", { text: "连接器" }));
+  const names: Record<string, string> = { email: t("邮件"), feishu: t("飞书") };
+  const block = el("div", { class: "block connectors" }, el("h3", { text: t("连接器") }));
   if (data.connectorsError !== null) {
     block.append(el("div", { class: "connector-broken", text: data.connectorsError }));
   }
@@ -191,14 +192,14 @@ function renderConnectors(data: DashboardData): HTMLElement {
         }),
         el("span", {
           class: `tag connector-mode ${connector.live ? "live" : "draft"}`,
-          text: connector.live ? "可发送" : "草稿",
+          text: connector.live ? t("可发送") : t("草稿"),
         }),
         el("span", {
           class: "connector-allow",
           text:
             connector.allowRecipients === 0
-              ? "白名单空 —— 谁都不能收"
-              : `白名单 ${connector.allowRecipients} 个`,
+              ? t("白名单空 —— 谁都不能收")
+              : t("白名单 {allowRecipients} 个", { allowRecipients: connector.allowRecipients }),
         }),
       ),
     );
@@ -206,7 +207,7 @@ function renderConnectors(data: DashboardData): HTMLElement {
   block.append(
     el("p", {
       class: "connector-note",
-      text: "开关在 connectors.json 里 —— 只有人能改；实际发送每次都会问。",
+      text: t("开关在 connectors.json 里 —— 只有人能改；实际发送每次都会问。"),
     }),
   );
   return block;
@@ -229,30 +230,32 @@ export function renderTaskCard(
   // The task leads: a goal that survives restarts is a noun with a status, not a condition.
   // Pause/continue are **human switches** — the card is the only place they exist.
   const statusText: Record<string, string> = {
-    pending: "等待开始",
-    running: "进行中",
-    suspended: "已暂停",
+    pending: t("等待开始"),
+    running: t("进行中"),
+    suspended: t("已暂停"),
     // Not a failure: the machine measured something it must not overrule, so a person looks.
-    needs_attention: "需要你确认",
-    done: "已完成",
-    failed: "未达成",
-    cancelled: "已取消",
+    needs_attention: t("需要你确认"),
+    done: t("已完成"),
+    failed: t("未达成"),
+    cancelled: t("已取消"),
   };
   if (task != null) {
     const live = task.status === "running" || task.status === "pending";
     // "Needs you" is resumable on purpose: continue is exactly what this state is for.
     const resumable = task.status === "suspended" || task.status === "needs_attention";
     block.append(
-      el("h3", { text: "任务" }),
+      el("h3", { text: t("任务") }),
       el(
         "div",
         { class: "task-goal" },
         el("span", { class: "task-goal-text", text: task.title }),
         el("span", {
           class: `tag task-state st-${task.status}`,
-          text: `${statusText[task.status] ?? task.status}${
-            task.goalCondition !== null ? ` · 第 ${task.roundsUsed}/${task.maxRounds} 轮` : ""
-          }`,
+          text:
+            (statusText[task.status] ?? task.status) +
+            (task.goalCondition !== null
+              ? t(" · 第 {round}/{max} 轮", { round: task.roundsUsed, max: task.maxRounds })
+              : ""),
         }),
       ),
       task.suspendReason !== null
@@ -275,7 +278,7 @@ export function renderTaskCard(
               el("button", {
                 class: "task-act",
                 type: "button",
-                text: "暂停",
+                text: t("暂停"),
                 onclick: () => onTask(task, "suspend"),
               }),
             ]
@@ -285,7 +288,7 @@ export function renderTaskCard(
               el("button", {
                 class: "task-act task-act-go",
                 type: "button",
-                text: "继续",
+                text: t("继续"),
                 onclick: () => onTask(task, "resume"),
               }),
             ]
@@ -295,7 +298,7 @@ export function renderTaskCard(
               el("button", {
                 class: "task-act task-act-stop",
                 type: "button",
-                text: "取消",
+                text: t("取消"),
                 onclick: () => onTask(task, "cancel"),
               }),
             ]
@@ -306,7 +309,7 @@ export function renderTaskCard(
 
   if (todos.items.length > 0) {
     block.append(
-      el("h3", { text: "待办" }),
+      el("h3", { text: t("待办") }),
       el(
         "ul",
         { class: "task-todos" },
@@ -355,15 +358,15 @@ function acceptanceBlock(
       el("span", {
         class: "task-check-detail",
         // Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement.
-        text: check?.detail ?? "尚未检查",
+        text: check?.detail ?? t("尚未检查"),
       }),
     );
   });
   const rest = acceptance.length - rows.length;
   return [
-    el("h3", { text: "验收" }),
+    el("h3", { text: t("验收") }),
     el("ul", { class: "task-checks" }, ...rows),
-    rest > 0 ? el("div", { class: "task-more", text: `还有 ${rest} 条` }) : document.createDocumentFragment(),
+    rest > 0 ? el("div", { class: "task-more", text: t("还有 {rest} 条", { rest: rest }) }) : document.createDocumentFragment(),
   ];
 }
 
@@ -380,9 +383,9 @@ function artifactBlock(artifacts: ArtifactView[]): Node[] {
   );
   const rest = artifacts.length - rows.length;
   return [
-    el("h3", { text: "交付物" }),
+    el("h3", { text: t("交付物") }),
     el("ul", { class: "task-artifacts" }, ...rows),
-    rest > 0 ? el("div", { class: "task-more", text: `还有 ${rest} 个` }) : document.createDocumentFragment(),
+    rest > 0 ? el("div", { class: "task-more", text: t("还有 {rest} 个", { rest: rest }) }) : document.createDocumentFragment(),
   ];
 }
 
@@ -400,12 +403,12 @@ function budgetBlock(
   const clock = (budget.wallMs ?? spent.wallMs) >= 60_000;
   const time = (value: number) => formatDuration(value, clock);
   const rows = [
-    budgetRow("时长", time(spent.wallMs), spent.wallMs, budget.wallMs, time),
+    budgetRow(t("时长"), time(spent.wallMs), spent.wallMs, budget.wallMs, time),
     budgetRow("Token", String(spent.tokens), spent.tokens, budget.tokens, String),
-    budgetRow("工具调用", String(spent.tools), spent.tools, budget.tools, String),
+    budgetRow(t("工具调用"), String(spent.tools), spent.tools, budget.tools, String),
   ].filter((row): row is HTMLDivElement => row !== null);
   if (rows.length === 0) return [];
-  return [el("h3", { text: "预算" }), el("div", { class: "task-budget" }, ...rows)];
+  return [el("h3", { text: t("预算") }), el("div", { class: "task-budget" }, ...rows)];
 }
 
 function budgetRow(
@@ -446,11 +449,11 @@ function budgetRow(
 /** "执行 3 次 · 上次停在「验收未通过：report.md 不存在」· 未设预算" */
 function taskFooter(task: AgentTaskView): Node {
   const parts: string[] = [];
-  parts.push(task.runCount > 0 ? `执行 ${task.runCount} 次` : "还没执行过");
+  parts.push(task.runCount > 0 ? t("执行 {runCount} 次", { runCount: task.runCount }) : t("还没执行过"));
   if (task.lastStopReason !== null && task.lastStopReason !== "") {
-    parts.push(`上次停在「${task.lastStopReason}」`);
+    parts.push(t("上次停在「{lastStopReason}」", { lastStopReason: task.lastStopReason }));
   }
-  if (task.budget === null) parts.push("未设预算");
+  if (task.budget === null) parts.push(t("未设预算"));
   const text = parts.join(" · ");
   // The line is clipped on purpose; `title` keeps the whole sentence reachable on hover.
   return el("div", { class: "task-foot", text, title: text });
@@ -494,7 +497,7 @@ export function sessionList(
   if (!sessions.some((item) => item.id === current)) {
     const fresh: SessionSummary = {
       id: current,
-      title: "新会话",
+      title: t("新会话"),
       messages: 0,
       startedAt: null,
       lastAt: null,
@@ -502,7 +505,7 @@ export function sessionList(
     sessions.unshift(fresh);
   }
   if (sessions.length === 0) {
-    fragment.append(muted("还没有会话"));
+    fragment.append(muted(t("还没有会话")));
     return fragment;
   }
   for (const item of sessions) {
@@ -551,7 +554,7 @@ export function failure(error: { code: number; message: string }): HTMLElement {
       "div",
       { class: "failure-head" },
       el("span", { class: "failure-dot", "aria-hidden": "true" }),
-      el("span", { class: "failure-title", text: "出错了" }),
+      el("span", { class: "failure-title", text: t("出错了") }),
       el("span", { class: "code", text: String(error.code) }),
     ),
     el("div", { class: "failure-body", text: error.message }),
@@ -573,14 +576,14 @@ export function failureOf(error: unknown): HTMLElement {
 export function turnFooter(turn: TurnCompletedNotification): string {
   const parts = [
     turn.meta.model,
-    `${turn.meta.iterations} 轮`,
+    t("{iterations} 轮", { iterations: turn.meta.iterations }),
     formatMs(turn.meta.latencyMs),
   ];
   if (turn.usage !== null && turn.usage !== undefined) parts.push(formatUsage(turn.usage));
-  if (turn.meta.tools.length > 0) parts.push(`${turn.meta.tools.length} 次工具`);
-  if (turn.meta.interrupted === true) parts.push("已被你停止");
+  if (turn.meta.tools.length > 0) parts.push(t("{length} 次工具", { length: turn.meta.tools.length }));
+  if (turn.meta.interrupted === true) parts.push(t("已被你停止"));
   // Route reason only speaks when a choice/fallback actually happened (empty in fixed/active).
-  if (turn.meta.routeReason) parts.push(`路由 ${turn.meta.routeReason}`);
+  if (turn.meta.routeReason) parts.push(t("路由 {routeReason}", { routeReason: turn.meta.routeReason }));
   return parts.join(" · ");
 }
 
@@ -592,10 +595,10 @@ export function welcome(): HTMLElement {
   return el(
     "div",
     { class: "welcome" },
-    el("p", { class: "welcome-title", text: "你好，我是 Joy" }),
+    el("p", { class: "welcome-title", text: t("你好，我是 Joy") }),
     el("p", {
       class: "welcome-sub",
-      text: "把要做的事说清楚就行 —— 长任务会一步步来，需要你拍板时会停下来问。",
+      text: t("把要做的事说清楚就行 —— 长任务会一步步来，需要你拍板时会停下来问。"),
     }),
   );
 }
@@ -671,15 +674,23 @@ function metaChips(meta: TurnMeta): HTMLElement[] {
     chips.push(
       chip(
         gate.decision === "retrieve"
-          ? `检索「${gate.query ?? ""}」`
-          : `跳过记忆（${gate.reason}）`,
+          ? t("检索「{q}」", { q: gate.query ?? "" })
+          : t("跳过记忆（{reason}）", { reason: gate.reason }),
         "gate",
       ),
     );
   }
 
   for (const tool of meta.tools) {
-    chips.push(chip(`工具 · ${tool.tool} ${tool.status === "ok" ? "好了" : "出错"}`, "tool"));
+    chips.push(
+      chip(
+        t("工具 · {tool} {status}", {
+          tool: tool.tool,
+          status: tool.status === "ok" ? t("好了") : t("出错"),
+        }),
+        "tool",
+      ),
+    );
   }
 
   return chips;
@@ -695,7 +706,7 @@ function historyFooter(message: Message): string {
   const parts = [formatWhen(message.at)];
   const meta = message.meta;
   if (meta !== null && meta !== undefined) {
-    parts.unshift(meta.model, `${meta.iterations} 轮`, formatMs(meta.latencyMs));
+    parts.unshift(meta.model, t("{iterations} 轮", { iterations: meta.iterations }), formatMs(meta.latencyMs));
   }
   return parts.join(" · ");
 }
@@ -752,8 +763,8 @@ function sessionRow(
       class: item.id === current ? "session-row current" : "session-row",
       type: "button",
       title: fresh
-        ? `新会话「${item.id}」—— 说第一句就有了`
-        : `「${item.title}」 · ${item.messages} 条消息 · ${item.id}`,
+        ? t("新会话「{id}」—— 说第一句就有了", { id: item.id })
+        : t("「{title}」 · {messages} 条消息 · {id}", { title: item.title, messages: item.messages, id: item.id }),
     },
     el(
       "span",
@@ -770,7 +781,7 @@ function sessionRow(
   // flat list of conversations at one visual density.
   if (item.forkedFrom !== undefined) {
     li.classList.add("forked");
-    button.title = `${button.title} · 分支自「${item.forkedFrom}」`;
+    button.title = t("{title} · 分支自「{forkedFrom}」", { title: button.title, forkedFrom: item.forkedFrom });
   }
   if (onFork !== undefined) {
     // The entry point lives on the row (hover reveals it) instead of a permanent button: a
@@ -779,8 +790,8 @@ function sessionRow(
       class: "session-fork",
       type: "button",
       text: "⑂",
-      title: item.forkedFrom === undefined ? "从这段对话开一个分支" : "再开一个分支",
-      "aria-label": `从「${item.title}」开一个分支`,
+      title: item.forkedFrom === undefined ? t("从这段对话开一个分支") : t("再开一个分支"),
+      "aria-label": t("从「{title}」开一个分支", { title: item.title }),
     });
     fork.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -857,23 +868,23 @@ function marqueeOnHover(row: HTMLElement): void {
 
 // --- Formatting ---------------------------------------------------------------
 
-/** ISO time → "just now / 12 minutes ago / yesterday 09:31 / Aug 3". */
+/** ISO time → "just now / 12 minutes ago / 09:31 / 8 月 3 日". */
 export function formatWhen(iso: string | null | undefined): string {
   if (iso === null || iso === undefined || iso === "") return "—";
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return iso;
 
   const minutes = (Date.now() - at.getTime()) / 60_000;
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${Math.floor(minutes)} 分钟前`;
+  if (minutes < 1) return t("刚刚");
+  if (minutes < 60) return t("{n} 分钟前", { n: Math.floor(minutes) });
   if (minutes < 60 * 24) return clock(at);
-  return `${at.getMonth() + 1} 月 ${at.getDate()} 日`;
+  return t("{month} 月 {day} 日", { month: at.getMonth() + 1, day: at.getDate() });
 }
 
 /** The header timestamp: when the data is from. */
 export function formatStamp(iso: string): string {
   const at = new Date(iso);
-  return Number.isNaN(at.getTime()) ? iso : `${clock(at)} 更新`;
+  return Number.isNaN(at.getTime()) ? iso : t("{time} 更新", { time: clock(at) });
 }
 
 export function formatMs(ms: number): string {
@@ -918,7 +929,7 @@ const TOOL_SUMMARY: Record<string, (args: ToolArgs) => string> = {
   remember: (args) => argString(args, "content"),
   todo_write: (args) => {
     const todos = args["todos"];
-    return Array.isArray(todos) ? `${todos.length} 项` : "看一眼";
+    return Array.isArray(todos) ? t("{length} 项", { length: todos.length }) : t("看一眼");
   },
 };
 
@@ -950,7 +961,7 @@ export function renderSkills(
   onRemove: (skill: SkillRow) => void,
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  fragment.append(capHead(`技能 · ${view.skills.length} 个`, "＋ 添加技能", onAdd));
+  fragment.append(capHead(t("技能 · {length} 个", { length: view.skills.length }), t("＋ 添加技能"), onAdd));
 
   if (view.error !== null) {
     fragment.append(el("div", { class: "failure", text: view.error }));
@@ -958,7 +969,7 @@ export function renderSkills(
   if (view.skills.length === 0) {
     fragment.append(
       muted(
-        "还没有技能。技能是一份 SKILL.md：写上名字、用途和做法，Joy 会在相关消息出现时载入它。",
+        t("还没有技能。技能是一份 SKILL.md：写上名字、用途和做法，Joy 会在相关消息出现时载入它。"),
       ),
     );
   }
@@ -973,7 +984,7 @@ export function renderSkills(
         class: `cap-row${skill.source === "builtin" ? " builtin" : ""}`,
         title:
           skill.source === "builtin"
-            ? `「${skill.name}」随 Joy 内置分发（JOY_SKILL_DIRS）—— 只能看，不能改`
+            ? t("「{name}」随 Joy 内置分发（JOY_SKILL_DIRS）—— 只能看，不能改", { name: skill.name })
             : `「${skill.name}」 · ${skill.folder}`,
       },
       el(
@@ -984,23 +995,25 @@ export function renderSkills(
           ? el("span", { class: "tag", text: `v${skill.version}` })
           : document.createDocumentFragment(),
         skill.source === "builtin"
-          ? el("span", { class: "tag cap-builtin-tag", text: "内置" })
+          ? el("span", { class: "tag cap-builtin-tag", text: t("内置") })
           : document.createDocumentFragment(),
         skill.source === "user"
           ? el("button", {
               class: "cap-del",
               type: "button",
               text: "×",
-              title: `删除技能「${skill.name}」`,
+              title: t("删除技能「{name}」", { name: skill.name }),
               onclick: () => onRemove(skill),
             })
           : document.createDocumentFragment(),
       ),
       el("p", { class: "cap-desc", text: skill.description }),
       capMeta([
-        skill.allowModelInvocation ? null : "只走 $名字 显式引用",
-        skill.schedule !== null ? `定时 ${skill.schedule}` : null,
-        missing.length > 0 ? `依赖缺失：${missing.join(", ")}` : null,
+        skill.allowModelInvocation ? null : t("只走 $名字 显式引用"),
+        skill.schedule !== null ? t("定时 {schedule}", { schedule: skill.schedule }) : null,
+        missing.length > 0
+          ? t("依赖缺失：{list}", { list: missing.join(", ") })
+          : null,
       ]),
     );
     fragment.append(row);
@@ -1009,7 +1022,7 @@ export function renderSkills(
   fragment.append(
     el("p", {
       class: "cap-note",
-      text: "内置技能只读；自己加在 <home>/skills/ 下，下一轮就生效，不用重启。",
+      text: t("内置技能只读；自己加在 <home>/skills/ 下，下一轮就生效，不用重启。"),
     }),
   );
   return fragment;
@@ -1022,7 +1035,7 @@ export function renderMcp(
   onRemove: (server: McpRow) => void,
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  fragment.append(capHead(`MCP 连接器 · ${view.servers.length} 个`, "＋ 添加连接器", onAdd));
+  fragment.append(capHead(t("MCP 连接器 · {length} 个", { length: view.servers.length }), t("＋ 添加连接器"), onAdd));
 
   if (view.error !== null) {
     fragment.append(el("div", { class: "failure", text: view.error }));
@@ -1030,7 +1043,7 @@ export function renderMcp(
   if (view.servers.length === 0) {
     fragment.append(
       muted(
-        "还没有连接器。连上一个 MCP 服务器，它的工具就并进 Joy 的工具表（<服务器>_<工具>）。",
+        t("还没有连接器。连上一个 MCP 服务器，它的工具就并进 Joy 的工具表（<服务器>_<工具>）。"),
       ),
     );
   }
@@ -1041,9 +1054,9 @@ export function renderMcp(
         ? (server.url ?? "")
         : [server.command ?? "", ...server.args].join(" ").trim();
     const auth: Record<string, string> = {
-      none: "无鉴权",
-      auth_env: `鉴权：${server.authEnv ?? ""}（环境变量，值以 Bearer 发出）`,
-      oauth: "浏览器 OAuth（joy mcp login）",
+      none: t("无鉴权"),
+      auth_env: t("鉴权：{env}（环境变量，值以 Bearer 发出）", { env: server.authEnv ?? "" }),
+      oauth: t("浏览器 OAuth（joy mcp login）"),
     };
     fragment.append(
       el(
@@ -1052,7 +1065,7 @@ export function renderMcp(
           class: `cap-row${server.source === "builtin" ? " builtin" : ""}`,
           title:
             server.source === "builtin"
-              ? `「${server.name}」由系统内置配置提供（JOY_MCP_CONFIG）—— 只能看，不能改`
+              ? t("「{name}」由系统内置配置提供（JOY_MCP_CONFIG）—— 只能看，不能改", { name: server.name })
               : `「${server.name}」 · ${target}`,
         },
         el(
@@ -1064,14 +1077,14 @@ export function renderMcp(
             text: server.kind === "url" ? "HTTP" : "stdio",
           }),
           server.source === "builtin"
-            ? el("span", { class: "tag cap-builtin-tag", text: "内置" })
+            ? el("span", { class: "tag cap-builtin-tag", text: t("内置") })
             : document.createDocumentFragment(),
           server.source === "user"
             ? el("button", {
                 class: "cap-del",
                 type: "button",
                 text: "×",
-                title: `删除连接器「${server.name}」`,
+                title: t("删除连接器「{name}」", { name: server.name }),
                 onclick: () => onRemove(server),
               })
             : document.createDocumentFragment(),
@@ -1085,7 +1098,7 @@ export function renderMcp(
   fragment.append(
     el("p", {
       class: "cap-note",
-      text: "内置配置只读；改动落在 <home>/mcp.json，重启 Joy 后生效 —— 连接发生在启动时。",
+      text: t("内置配置只读；改动落在 <home>/mcp.json，重启 Joy 后生效 —— 连接发生在启动时。"),
     }),
   );
   return fragment;
@@ -1124,7 +1137,7 @@ export function renderSchedules(
   onRemove: (job: ScheduleJob) => void,
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  fragment.append(capHead(`定时任务 · ${view.jobs.length} 个`, "＋ 添加任务", onAdd));
+  fragment.append(capHead(t("定时任务 · {length} 个", { length: view.jobs.length }), t("＋ 添加任务"), onAdd));
 
   if (view.error !== null) {
     fragment.append(el("div", { class: "failure", text: view.error }));
@@ -1132,7 +1145,7 @@ export function renderSchedules(
   if (view.jobs.length === 0) {
     fragment.append(
       muted(
-        "还没有定时任务。加一个：什么时候（cron，如 0 8 * * 1-5）、做什么（一句话）。到点它会在自己的会话里跑一轮，结果写进 outbox。",
+        t("还没有定时任务。加一个：什么时候（cron，如 0 8 * * 1-5）、做什么（一句话）。到点它会在自己的会话里跑一轮，结果写进 outbox。"),
       ),
     );
   }
@@ -1144,8 +1157,11 @@ export function renderSchedules(
         class: `cap-row${job.source === "skill" ? " builtin" : ""}`,
         title:
           job.source === "skill"
-            ? `「${job.name}」的定时来自技能 ${job.skill ?? job.name} 的 SKILL.md —— 改那里，不在这里`
-            : `「${job.name}」写在 <home>/schedules.json`,
+            ? t("「{name}」的定时来自技能 {skill} 的 SKILL.md —— 改那里，不在这里", {
+                name: job.name,
+                skill: job.skill ?? job.name,
+              })
+            : t("「{name}」写在 <home>/schedules.json", { name: job.name }),
       },
       el(
         "div",
@@ -1153,27 +1169,27 @@ export function renderSchedules(
         el("span", { class: "cap-name", text: job.name }),
         el("span", { class: "tag sched-cron", text: job.cron }),
         job.source === "skill"
-          ? el("span", { class: "tag cap-builtin-tag", text: "随技能" })
+          ? el("span", { class: "tag cap-builtin-tag", text: t("随技能") })
           : document.createDocumentFragment(),
         job.source === "file"
           ? el("button", {
               class: "cap-del",
               type: "button",
               text: "×",
-              title: `删除定时任务「${job.name}」`,
+              title: t("删除定时任务「{name}」", { name: job.name }),
               onclick: () => onRemove(job),
             })
           : document.createDocumentFragment(),
       ),
       el("p", { class: "cap-desc", text: job.prompt }),
       capMeta([
-        job.nextRun !== null ? `下次 ${job.nextRun}` : job.nextRunNote,
+        job.nextRun !== null ? t("下次 {nextRun}", { nextRun: job.nextRun }) : job.nextRunNote,
         job.lastFiredMinute !== null
-          ? `上次 ${job.lastFiredMinute}`
-          : "还没跑过",
-        job.claimedMinute !== null ? "上次被中断，重启时按「错过是否补跑」处理" : null,
-        `投递 ${job.delivery}`,
-        job.catchUp ? null : "错过不补跑",
+          ? t("上次 {lastFiredMinute}", { lastFiredMinute: job.lastFiredMinute })
+          : t("还没跑过"),
+        job.claimedMinute !== null ? t("上次被中断，重启时按「错过是否补跑」处理") : null,
+        t("投递 {delivery}", { delivery: job.delivery }),
+        job.catchUp ? null : t("错过不补跑"),
       ]),
     );
     fragment.append(row);
@@ -1182,7 +1198,7 @@ export function renderSchedules(
   fragment.append(
     el("p", {
       class: "cap-note",
-      text: "到点执行的是 `joy schedule` 这个常驻进程 —— 它没在跑就不会触发（用系统 cron 驱动 `joy gather` 也一样）。输出落在 <home>/outbox/，不进聊天。",
+      text: t("到点执行的是 `joy schedule` 这个常驻进程 —— 它没在跑就不会触发（用系统 cron 驱动 `joy gather` 也一样）。输出落在 <home>/outbox/，不进聊天。"),
     }),
   );
   return fragment;
@@ -1216,15 +1232,15 @@ export function renderLedger(
   const fragment = document.createDocumentFragment();
   if (turns.length === 0) {
     fragment.append(
-      muted("这个会话还没有记录。第一轮说完话，账本就会有第一行 —— 只追加，不改写。"),
+      muted(t("这个会话还没有记录。第一轮说完话，账本就会有第一行 —— 只追加，不改写。")),
     );
     return fragment;
   }
   const head = el(
     "div",
     { class: "mem-head" },
-    el("p", { class: "hint", text: `账本 · ${turns.length} 轮` }),
-    el("span", { class: "mem-note", text: "只追加 · 可重建" }),
+    el("p", { class: "hint", text: t("账本 · {length} 轮", { length: turns.length }) }),
+    el("span", { class: "mem-note", text: t("只追加 · 可重建") }),
   );
   fragment.append(head);
 
@@ -1233,18 +1249,18 @@ export function renderLedger(
     const row = el("button", {
       class: `mem-row${openTurn === turn.turnId ? " open" : ""}`,
       type: "button",
-      title: folded ? "这一轮的工具输出只保留了摘要（回填而来，原文已不可重建）" : turn.preview,
+      title: folded ? t("这一轮的工具输出只保留了摘要（回填而来，原文已不可重建）") : turn.preview,
       onclick: () => onOpen(turn.turnId),
     });
     row.append(
       el("span", { class: "mem-time", text: clockOf(turn.at) }),
-      el("span", { class: "mem-preview", text: turn.preview === "" ? "（空）" : turn.preview }),
+      el("span", { class: "mem-preview", text: turn.preview === "" ? t("（空）") : turn.preview }),
       el(
         "span",
         { class: "mem-tags" },
-        el("span", { class: "tag", text: `${turn.entries} 条` }),
-        turn.consolidated ? el("span", { class: "tag", text: "已整理" }) : document.createDocumentFragment(),
-        folded ? el("span", { class: "tag mem-folded", text: "折叠" }) : document.createDocumentFragment(),
+        el("span", { class: "tag", text: t("{entries} 条", { entries: turn.entries }) }),
+        turn.consolidated ? el("span", { class: "tag", text: t("已整理") }) : document.createDocumentFragment(),
+        folded ? el("span", { class: "tag mem-folded", text: t("折叠") }) : document.createDocumentFragment(),
       ),
     );
     fragment.append(row);
@@ -1252,7 +1268,7 @@ export function renderLedger(
     if (openTurn !== turn.turnId) continue;
     const detail = el("div", { class: "mem-entries" });
     if (entries.length === 0) {
-      detail.append(muted("这一轮没有可展开的条目。"));
+      detail.append(muted(t("这一轮没有可展开的条目。")));
     }
     for (const entry of entries) {
       detail.append(
@@ -1262,7 +1278,7 @@ export function renderLedger(
           el("span", { class: `mem-kind mem-kind-${entry.kind}`, text: entry.kind }),
           el("span", { class: "mem-entry-text", text: entry.preview }),
           entry.fidelity !== "exact"
-            ? el("span", { class: "tag mem-folded", text: "折叠" })
+            ? el("span", { class: "tag mem-folded", text: t("折叠") })
             : document.createDocumentFragment(),
         ),
       );
@@ -1288,13 +1304,13 @@ export function renderWiki(
   const fragment = document.createDocumentFragment();
   if (pages.length === 0) {
     fragment.append(
-      muted("记忆库还是空的。它由后台整理写出来 —— 攒够几轮之后就会有自己的目录。"),
+      muted(t("记忆库还是空的。它由后台整理写出来 —— 攒够几轮之后就会有自己的目录。")),
     );
     return fragment;
   }
 
   const catalog = el("div", { class: "mem-catalog" });
-  catalog.append(el("p", { class: "hint", text: `目录 · ${pages.length} 页` }));
+  catalog.append(el("p", { class: "hint", text: t("目录 · {length} 页", { length: pages.length }) }));
   for (const page of pages) {
     catalog.append(
       el("button", {
@@ -1308,13 +1324,13 @@ export function renderWiki(
   fragment.append(catalog);
 
   if (current === null) {
-    fragment.append(muted("点左边的一页看看 —— 每页都带着它从哪几轮账本里来的。"));
+    fragment.append(muted(t("点左边的一页看看 —— 每页都带着它从哪几轮账本里来的。")));
     return fragment;
   }
 
   const sources = el("div", { class: "mem-sources" });
   if (current.sources.length === 0) {
-    sources.append(el("span", { class: "mem-note", text: "这页没有记出处" }));
+    sources.append(el("span", { class: "mem-note", text: t("这页没有记出处") }));
   }
   for (const source of current.sources) {
     sources.append(
@@ -1322,7 +1338,7 @@ export function renderWiki(
         class: "chip note mem-source",
         type: "button",
         text: source,
-        title: "跳到账本里那一轮",
+        title: t("跳到账本里那一轮"),
         onclick: () => onSource(source),
       }),
     );
@@ -1344,8 +1360,8 @@ export function renderWiki(
       el("button", {
         class: "ghost mem-rebuild",
         type: "button",
-        text: "重新生成",
-        title: "换更强的模型后可以整页重跑（会先在后台重读来源轮次）",
+        text: t("重新生成"),
+        title: t("换更强的模型后可以整页重跑（会先在后台重读来源轮次）"),
         onclick: onRebuild,
       }),
     ),
@@ -1365,11 +1381,11 @@ export function renderContext(
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
   if (usage === null) {
-    fragment.append(muted("还没有测量 —— 这个会话跑过一轮之后就有数了。"));
+    fragment.append(muted(t("还没有测量 —— 这个会话跑过一轮之后就有数了。")));
     return fragment;
   }
   const total = usage.parts.reduce((sum, part) => sum + Math.max(part.tokens, 0), 0);
-  const band = el("div", { class: "mem-band", role: "img", "aria-label": "上下文占用分层条" });
+  const band = el("div", { class: "mem-band", role: "img", "aria-label": t("上下文占用分层条") });
   for (const part of usage.parts) {
     if (part.tokens <= 0 || total === 0) continue;
     band.append(
@@ -1390,7 +1406,7 @@ export function renderContext(
       "span",
       { class: `mem-percent${percent >= 85 ? " hot" : ""}` },
       el("span", { class: "mem-key" }),
-      el("span", { text: "灵魂 · 记忆 · 技能 · 工具 · 历史 · 摘要（hover 看明细）" }),
+      el("span", { text: t("灵魂 · 记忆 · 技能 · 工具 · 历史 · 摘要（hover 看明细）") }),
     ),
   );
 
@@ -1398,7 +1414,7 @@ export function renderContext(
     el(
       "div",
       { class: "mem-meter" },
-      el("p", { class: "hint", text: "上下文占用" }),
+      el("p", { class: "hint", text: t("上下文占用") }),
       band,
       numbers,
       usage.notice !== null
@@ -1407,8 +1423,8 @@ export function renderContext(
       el("button", {
         class: "ghost mem-compact",
         type: "button",
-        text: "现在压缩",
-        title: "把较早的轮次折进摘要，保留最近两轮",
+        text: t("现在压缩"),
+        title: t("把较早的轮次折进摘要，保留最近两轮"),
         onclick: onCompact,
       }),
     ),

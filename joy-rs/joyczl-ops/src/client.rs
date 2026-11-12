@@ -70,7 +70,8 @@ impl AppServer {
     /// A human-set environment variable always wins.
     pub fn spawn(home: &Path, interactive: bool) -> Result<Self> {
         let home = home.to_path_buf();
-        let exe = std::env::current_exe().context("拿不到自己的可执行文件路径")?;
+        let exe =
+            std::env::current_exe().context("could not get the path of our own executable")?;
         let mut command = Command::new(exe);
         command
             .arg("app-server")
@@ -93,9 +94,11 @@ impl AppServer {
             }
         }
 
-        let mut child = command.spawn().context("起 app-server 子进程失败")?;
-        let stdin = child.stdin.take().expect("刚 piped 的 stdin");
-        let stdout = child.stdout.take().expect("刚 piped 的 stdout");
+        let mut child = command
+            .spawn()
+            .context("could not start the app-server child process")?;
+        let stdin = child.stdin.take().expect("the stdin just piped");
+        let stdout = child.stdout.take().expect("the stdout just piped");
         Ok(Self::attach(home, Some(child), stdout, stdin))
     }
 
@@ -137,20 +140,22 @@ impl AppServer {
             method: method.to_string(),
             params: Some(params),
         };
-        let mut line =
-            serde_json::to_string(&frame).map_err(|e| internal(format!("请求装不进 JSON：{e}")))?;
+        let mut line = serde_json::to_string(&frame)
+            .map_err(|e| internal(format!("the request does not fit into JSON: {e}")))?;
         line.push('\n');
 
         if let Err(error) = self.write(line.as_bytes()).await {
             // If the write failed, remove the entry, or it waits forever for an absent answer.
             self.pending().remove(&id);
-            return Err(transport(&format!("往 app-server 写请求失败：{error}")));
+            return Err(transport(&format!(
+                "could not write the request to the app-server: {error}"
+            )));
         }
 
         match rx.await {
             Ok(result) => result,
             // Sender gone: only one possibility — the read loop exited before waking me (lost link).
-            Err(_) => Err(transport("app-server 走了，没等到应答")),
+            Err(_) => Err(transport("the app-server went away before answering")),
         }
     }
 
@@ -161,7 +166,8 @@ impl AppServer {
         params: Value,
     ) -> Result<T, ErrorObject> {
         let value = self.call(method, params).await?;
-        serde_json::from_value(value).map_err(|e| internal(format!("{method} 的应答看不懂：{e}")))
+        serde_json::from_value(value)
+            .map_err(|e| internal(format!("the reply to {method} could not be read: {e}")))
     }
 
     /// Subscribe to server pushes. Each browser connection subscribes once.
@@ -183,7 +189,10 @@ impl AppServer {
         &self,
     ) -> std::sync::MutexGuard<'_, HashMap<RequestId, oneshot::Sender<Result<Value, ErrorObject>>>>
     {
-        self.shared.pending.lock().expect("pending 表没被毒化")
+        self.shared
+            .pending
+            .lock()
+            .expect("the pending table is not poisoned")
     }
 }
 
@@ -195,7 +204,7 @@ async fn read_loop<R: AsyncRead + Unpin>(shared: Arc<Shared>, reader: R) {
             Ok(Some(line)) => accept(&shared, line.trim()),
             Ok(None) => break,
             Err(error) => {
-                eprintln!("(joy) 读 app-server 的 stdout 出错：{error}");
+                eprintln!("(joy) error reading the app-server's stdout: {error}");
                 break;
             }
         }
@@ -206,12 +215,14 @@ async fn read_loop<R: AsyncRead + Unpin>(shared: Arc<Shared>, reader: R) {
     let waiting: Vec<_> = shared
         .pending
         .lock()
-        .expect("pending 表没被毒化")
+        .expect("the pending table is not poisoned")
         .drain()
         .map(|(_, tx)| tx)
         .collect();
     for tx in waiting {
-        let _ = tx.send(Err(transport("app-server 退出了，这条请求没有应答")));
+        let _ = tx.send(Err(transport(
+            "the app-server exited; this request has no reply",
+        )));
     }
 }
 
@@ -225,7 +236,7 @@ fn accept(shared: &Shared, line: &str) {
         Err(error) => {
             // One unreadable line must not kill the connection: otherwise a decoding bug
             // shows outside as "nothing happened", far harder to trace than an error.
-            eprintln!("(joy) app-server 送来一行读不懂的东西：{error}");
+            eprintln!("(joy) the app-server sent a line that could not be read: {error}");
             return;
         }
     };
@@ -241,7 +252,7 @@ fn accept(shared: &Shared, line: &str) {
                 Ok(notification) => {
                     let _ = shared.events.send(notification);
                 }
-                Err(error) => eprintln!("(joy) 这条通知读不懂：{error}"),
+                Err(error) => eprintln!("(joy) this notification could not be read: {error}"),
             }
         }
         return;
@@ -252,7 +263,7 @@ fn accept(shared: &Shared, line: &str) {
             if let Some(tx) = shared
                 .pending
                 .lock()
-                .expect("pending 表没被毒化")
+                .expect("the pending table is not poisoned")
                 .remove(&id)
             {
                 let _ = tx.send(Ok(result));
@@ -263,7 +274,7 @@ fn accept(shared: &Shared, line: &str) {
                 if let Some(tx) = shared
                     .pending
                     .lock()
-                    .expect("pending 表没被毒化")
+                    .expect("the pending table is not poisoned")
                     .remove(&id)
                 {
                     let _ = tx.send(Err(error.error));
@@ -275,7 +286,7 @@ fn accept(shared: &Shared, line: &str) {
                 let _ = shared.events.send(crate::as_notification(error.error));
             }
         },
-        Err(error) => eprintln!("(joy) 这一帧既不是通知也不是应答：{error}"),
+        Err(error) => eprintln!("(joy) this frame is neither a notification nor a reply: {error}"),
     }
 }
 
@@ -288,7 +299,7 @@ fn internal(message: String) -> ErrorObject {
 }
 
 fn transport(what: &str) -> ErrorObject {
-    internal(format!("跟 app-server 的连接断了：{what}"))
+    internal(format!("the connection to the app-server broke: {what}"))
 }
 
 #[cfg(test)]

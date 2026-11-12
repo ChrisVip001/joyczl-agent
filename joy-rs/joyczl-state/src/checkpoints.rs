@@ -15,6 +15,7 @@ use sqlx::{FromRow, SqlitePool};
 /// One checkpoint row: a turn's durable progress.
 #[derive(Debug, Clone, FromRow)]
 pub struct CheckpointRow {
+    pub round_id: Option<String>,
     pub turn_id: String,
     pub session_id: String,
     pub user_message: String,
@@ -24,7 +25,7 @@ pub struct CheckpointRow {
     pub iterations: i32,
     /// Token usage spent before the checkpoint (resumed turns add both halves up).
     pub usage_json: String,
-    /// `open` / `done` / `abandoned` / `suspended`.
+    /// `open` / `done` / `abandoned` / `suspended` / `waiting_jobs`.
     pub status: String,
     /// The run (task attempt) this checkpoint belongs to; `None` for a task-less turn.
     pub run_id: Option<String>,
@@ -60,11 +61,36 @@ impl Checkpoints {
         usage_json: &str,
         run_id: Option<&str>,
     ) -> Result<()> {
+        self.save_round(
+            turn_id,
+            session_id,
+            user_message,
+            messages_json,
+            iterations,
+            usage_json,
+            run_id,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_round(
+        &self,
+        turn_id: &str,
+        session_id: &str,
+        user_message: &str,
+        messages_json: &str,
+        iterations: i32,
+        usage_json: &str,
+        run_id: Option<&str>,
+        round_id: Option<&str>,
+    ) -> Result<()> {
         sqlx::query(
             "INSERT INTO turn_checkpoints
                  (turn_id, session_id, user_message, messages_json, iterations, usage_json,
-                  run_id, step_seq)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  run_id, step_seq, round_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(turn_id) DO UPDATE SET
                  session_id = excluded.session_id,
                  user_message = excluded.user_message,
@@ -73,6 +99,7 @@ impl Checkpoints {
                  usage_json = excluded.usage_json,
                  run_id = excluded.run_id,
                  step_seq = excluded.step_seq,
+                 round_id = excluded.round_id,
                  status = 'open',
                  updated_at = datetime('now')",
         )
@@ -84,6 +111,7 @@ impl Checkpoints {
         .bind(usage_json)
         .bind(run_id)
         .bind(iterations)
+        .bind(round_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -116,7 +144,7 @@ impl Checkpoints {
     pub async fn get(&self, turn_id: &str) -> Result<Option<CheckpointRow>> {
         Ok(sqlx::query_as::<_, CheckpointRow>(
             "SELECT turn_id, session_id, user_message, messages_json, iterations, usage_json,
-                    status, run_id, step_seq, plan_version, updated_at
+                    status, run_id, step_seq, plan_version, updated_at, round_id
              FROM turn_checkpoints WHERE turn_id = ?",
         )
         .bind(turn_id)
@@ -131,7 +159,7 @@ impl Checkpoints {
     pub async fn open_rows(&self) -> Result<Vec<CheckpointRow>> {
         Ok(sqlx::query_as::<_, CheckpointRow>(
             "SELECT turn_id, session_id, user_message, messages_json, iterations, usage_json,
-                    status, run_id, step_seq, plan_version, updated_at
+                    status, run_id, step_seq, plan_version, updated_at, round_id
              FROM turn_checkpoints WHERE status = 'open' ORDER BY rowid ASC",
         )
         .fetch_all(&self.pool)

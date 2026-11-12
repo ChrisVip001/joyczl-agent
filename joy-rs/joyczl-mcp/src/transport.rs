@@ -77,11 +77,11 @@ where
         self.writer
             .write_all(line.as_bytes())
             .await
-            .map_err(|e| format!("写不出去：{e}"))?;
+            .map_err(|e| format!("could not write: {e}"))?;
         self.writer
             .flush()
             .await
-            .map_err(|e| format!("写不出去：{e}"))
+            .map_err(|e| format!("could not write: {e}"))
     }
 
     pub async fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
@@ -101,9 +101,9 @@ where
                 .reader
                 .read_line(&mut line)
                 .await
-                .map_err(|e| format!("读不到：{e}"))?;
+                .map_err(|e| format!("could not read: {e}"))?;
             if read == 0 {
-                return Err("服务器把连接关了".to_string());
+                return Err("the server closed the connection".to_string());
             }
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -125,13 +125,13 @@ where
                     message.get("method").and_then(Value::as_str),
                     message.get("id").cloned(),
                 ) {
-                    eprintln!("(joy) MCP 服务器发来反向请求 '{method}'，已明确回绝（不支持）");
+                    eprintln!("(joy) the MCP server sent a reverse request '{method}'; refused explicitly (not supported)");
                     let reply = json!({
                         "jsonrpc": "2.0",
                         "id": their_id,
                         "error": {
                             "code": -32601,
-                            "message": format!("Joy 不支持反向请求 '{method}'"),
+                            "message": format!("Joy does not support the reverse request '{method}'"),
                         },
                     });
                     self.send(&reply).await?;
@@ -203,7 +203,7 @@ pub async fn initialize(session: &mut impl Rpc) -> Result<Value, String> {
 pub async fn list_tools(session: &mut impl Rpc) -> Result<Vec<ToolMeta>, String> {
     let result = session.rpc_request("tools/list", json!({})).await?;
     let tools = result.get("tools").cloned().unwrap_or(Value::Array(vec![]));
-    serde_json::from_value(tools).map_err(|e| format!("工具列表读不懂：{e}"))
+    serde_json::from_value(tools).map_err(|e| format!("the tool list could not be read: {e}"))
 }
 
 /// Call a tool once, returning the text for the model to read.
@@ -222,12 +222,12 @@ pub async fn call_tool(session: &mut impl Rpc, tool: &str, args: Value) -> Resul
             .get("text")
             .and_then(Value::as_str)
             .filter(|t| !t.is_empty())
-            .unwrap_or("[非文本内容]");
+            .unwrap_or("[non-text content]");
         parts.push(text.to_string());
     }
     let joined = parts.join("\n");
     let joined = if joined.is_empty() {
-        "(没有输出)".to_string()
+        "(no output)".to_string()
     } else {
         joined
     };
@@ -236,7 +236,9 @@ pub async fn call_tool(session: &mut impl Rpc, tool: &str, args: Value) -> Resul
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        return Err(joined);
+        // The transport succeeded: this is a known remote tool failure, not a broken
+        // connection. Preserve it as error text without reconnecting or replaying.
+        return Ok(format!("Error: MCP tool {tool} failed: {joined}"));
     }
     Ok(joined)
 }
@@ -266,7 +268,7 @@ fn unwrap_message(message: &Value) -> Result<Value, String> {
             let text = error
                 .get("message")
                 .and_then(Value::as_str)
-                .unwrap_or("（没有说明）");
+                .unwrap_or("(no description)");
             let code = error.get("code").map(Value::to_string).unwrap_or_default();
             return Err(format!("{text} ({code})"));
         }
@@ -312,7 +314,7 @@ impl HttpSession {
         let response = request
             .send()
             .await
-            .map_err(|e| format!("请求发不出去：{e}"))?;
+            .map_err(|e| format!("could not send the request: {e}"))?;
         let status = response.status().as_u16();
         if let Some(session) = response.headers().get("mcp-session-id") {
             if let Ok(session) = session.to_str() {
@@ -328,7 +330,7 @@ impl HttpSession {
         let text = response
             .text()
             .await
-            .map_err(|e| format!("读不到回话：{e}"))?;
+            .map_err(|e| format!("could not read the reply: {e}"))?;
         Ok((status, content_type, text))
     }
 
@@ -357,21 +359,24 @@ impl HttpSession {
             return Err(format!("HTTP {status}：{}", first_line(&text)));
         }
         if content_type.contains("text/event-stream") {
-            let message = find_in_stream(&text, id)
-                .ok_or_else(|| "SSE 流里没有我们要的那个应答".to_string())?;
+            let message = find_in_stream(&text, id).ok_or_else(|| {
+                "the SSE stream does not contain the reply we asked for".to_string()
+            })?;
             return unwrap_message(&message);
         }
         if text.trim().is_empty() {
-            return Err("服务器回了个空身体".to_string());
+            return Err("the server returned an empty body".to_string());
         }
         let message: Value =
-            serde_json::from_str(&text).map_err(|e| format!("回话不是 JSON：{e}"))?;
+            serde_json::from_str(&text).map_err(|e| format!("the reply is not JSON: {e}"))?;
         match message {
             Value::Array(messages) => messages
                 .iter()
                 .find(|m| m.get("id").and_then(Value::as_u64) == Some(id))
                 .map(unwrap_message)
-                .unwrap_or_else(|| Err("回话里没有我们要的那个应答".to_string())),
+                .unwrap_or_else(|| {
+                    Err("the reply does not contain the answer we asked for".to_string())
+                }),
             other => unwrap_message(&other),
         }
     }
@@ -447,9 +452,15 @@ impl Transport {
                 }
                 let mut child = child
                     .spawn()
-                    .map_err(|e| format!("起不来 '{command}'：{e}"))?;
-                let stdin = child.stdin.take().ok_or("拿不到子进程的 stdin")?;
-                let stdout = child.stdout.take().ok_or("拿不到子进程的 stdout")?;
+                    .map_err(|e| format!("could not start '{command}': {e}"))?;
+                let stdin = child
+                    .stdin
+                    .take()
+                    .ok_or("could not get the child's stdin")?;
+                let stdout = child
+                    .stdout
+                    .take()
+                    .ok_or("could not get the child's stdout")?;
                 Ok(Transport::Stdio(Box::new(StdioTransport {
                     session: StdioSession::new(stdout, stdin),
                     _child: child,

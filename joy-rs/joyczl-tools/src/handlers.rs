@@ -17,14 +17,13 @@ pub fn memory_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "save_note".to_string(),
-            description: "把一条值得长期记住的事实存进记忆（关于人、项目、偏好）。\
-                          适合「Alex 喜欢早上的会议」这种话。"
+            description: "Store a fact worth remembering for the long run (about a person, a project, a preference). Right for things like \"Alex prefers morning meetings\"."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "subject": {"type": "string", "description": "这条事实关于谁/什么，例如 alex 或 acme 项目"},
-                    "content": {"type": "string", "description": "事实本身，一句话"}
+                    "subject": {"type": "string", "description": "Who or what the fact is about, e.g. alex or the acme project"},
+                    "content": {"type": "string", "description": "The fact itself, in one sentence"}
                 },
                 "required": ["subject", "content"]
             }),
@@ -39,12 +38,12 @@ pub fn memory_tools() -> Vec<Tool> {
                         // Say "already remembered" outright: the model knows not to save it again,
                         // and the user knows their words weren't recorded twice.
                         return Ok(format!(
-                            "这条已经记过了（没有重复入库）：#{} {} — {}",
+                            "Already recorded (not stored twice): #{} {} — {}",
                             row.id, row.subject, row.content
                         ));
                     }
                     Ok(format!(
-                        "已记住：**{}** — {}（存在 {} 的 facts 表，可随时用 search_memory 找回）",
+                        "Remembered: **{}** — {} (in the facts table of {}, retrievable with search_memory at any time)",
                         row.subject,
                         row.content,
                         ctx.home.join("state.db").display()
@@ -54,11 +53,11 @@ pub fn memory_tools() -> Vec<Tool> {
         },
         Tool {
             name: "forget_note".to_string(),
-            description: "忘掉某个主题下的全部记忆。用户明确说「忘掉…」时才用。".to_string(),
+            description: "Forget every memory about a subject. Use it only when the user explicitly says to forget something.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "subject": {"type": "string", "description": "要忘记的主题"}
+                    "subject": {"type": "string", "description": "The subject to forget"}
                 },
                 "required": ["subject"]
             }),
@@ -67,21 +66,21 @@ pub fn memory_tools() -> Vec<Tool> {
                     let subject = require_str(&args, "subject")?;
                     let removed = ctx.facts.forget_subject(&subject).await?;
                     if removed == 0 {
-                        Ok(format!("没有关于「{subject}」的记忆，无需删除。"))
+                        Ok(format!("There is no memory about \"{subject}\", so nothing was deleted."))
                     } else {
-                        Ok(format!("已忘掉 {removed} 条关于「{subject}」的记忆。"))
+                        Ok(format!("Forgot {removed} memories about \"{subject}\"."))
                     }
                 })
             }),
         },
         Tool {
             name: "search_memory".to_string(),
-            description: "在记忆里搜索。用户问起过去的事、某个人、某个偏好时用。".to_string(),
+            description: "Search the memories. Use it when the user asks about the past, a person or a preference.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "搜索词"},
-                    "top_k": {"type": "integer", "description": "最多返回几条，默认 4"}
+                    "query": {"type": "string", "description": "The search terms"},
+                    "top_k": {"type": "integer", "description": "How many at most, 4 by default"}
                 },
                 "required": ["query"]
             }),
@@ -100,25 +99,24 @@ pub fn memory_tools() -> Vec<Tool> {
                     )
                     .await;
                     if hits.is_empty() {
-                        return Ok(format!("记忆里没有关于「{query}」的东西。"));
+                        return Ok(format!("There is nothing in memory about \"{query}\"."));
                     }
                     let lines: Vec<String> = hits
                         .iter()
-                        .map(|f| format!("- **{}**: {}（来源 {}）", f.subject, f.content, f.source))
+                        .map(|f| format!("- **{}**: {} (source {})", f.subject, f.content, f.source))
                         .collect();
-                    Ok(format!("找到 {} 条：\n{}", hits.len(), lines.join("\n")))
+                    Ok(format!("Found {}:\n{}", hits.len(), lines.join("\n")))
                 })
             }),
         },
         Tool {
             name: "read_memory_page".to_string(),
-            description: "读记忆库里的一页（系统提示里给的目录中，`[标题](页面名.md)` 那个名字）。\
-                          目录只有一句话摘要；要细节、要出处、要核对原话时读页。"
+            description: "Read one page of the memory library (the `[title](page.md)` name from the catalog in the system prompt). The catalog carries one-line summaries only; read the page for detail, sources or the exact wording."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "page": {"type": "string", "description": "页面名，例如 alex（不带 .md）"}
+                    "page": {"type": "string", "description": "The page name, e.g. alex (without .md)"}
                 },
                 "required": ["page"]
             }),
@@ -131,17 +129,17 @@ pub fn memory_tools() -> Vec<Tool> {
                             // Provenance rides along: a page without its sources is a claim
                             // the model cannot check, and this project does not ship those.
                             let sources = if found.sources.is_empty() {
-                                "（这页没有记出处）".to_string()
+                                "(this page records no sources)".to_string()
                             } else {
                                 found.sources.join("、")
                             };
                             Ok(format!(
-                                "# {}（{}）\n\n{}\n\n出处：{}",
+                                "# {} ({})\n\n{}\n\nSources: {}",
                                 found.title, found.kind, found.body, sources
                             ))
                         }
                         None => Ok(format!(
-                            "记忆库里没有「{page}」这一页。可读的页面见系统提示里的目录。"
+                            "The memory library has no page \"{page}\". The readable pages are in the catalog in the system prompt."
                         )),
                     }
                 })
@@ -149,13 +147,12 @@ pub fn memory_tools() -> Vec<Tool> {
         },
         Tool {
             name: "read_skill".to_string(),
-            description: "读一个技能的完整正文（系统提示里的技能目录给出名字）。\
-                          目录只有一句话说明；正文里才是步骤、命令和注意事项。"
+            description: "Read a skill's full text (the skill catalog in the system prompt gives the names). The catalog carries one line each; the body is where the steps, commands and caveats live."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "技能名，目录里 `- 名字 — 说明` 的那个名字"}
+                    "name": {"type": "string", "description": "The skill name — the one in `- name — description` in the catalog"}
                 },
                 "required": ["name"]
             }),
@@ -178,11 +175,11 @@ pub fn memory_tools() -> Vec<Tool> {
                                 .map(str::to_string)
                                 .collect();
                             Ok(format!(
-                                "没有叫「{name}」的技能。现有技能：{}",
+                                "No skill named \"{name}\". Known skills: {}",
                                 if known.is_empty() {
-                                    "（一个都没有）".to_string()
+                                    "(none)".to_string()
                                 } else {
-                                    known.join("、")
+                                    known.join(", ")
                                 }
                             ))
                         }
@@ -192,11 +189,11 @@ pub fn memory_tools() -> Vec<Tool> {
         },
         Tool {
             name: "list_memory".to_string(),
-            description: "列出最近记住的几条事实。用户想知道 Joy 都记了什么时用。".to_string(),
+            description: "List the most recently remembered facts. Use it when the user wants to know what Joy has remembered.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "limit": {"type": "integer", "description": "条数，默认 10"}
+                    "limit": {"type": "integer", "description": "How many, 10 by default"}
                 },
                 "required": []
             }),
@@ -206,7 +203,7 @@ pub fn memory_tools() -> Vec<Tool> {
                     let rows = ctx.facts.recent(limit, 0).await?;
                     if rows.is_empty() {
                         return Ok(
-                            "记忆还是空的。告诉 Joy 一些关于你的事，它就会记住。".to_string()
+                            "Memory is still empty. Tell Joy something about yourself and it will remember.".to_string()
                         );
                     }
                     let lines: Vec<String> = rows
@@ -214,7 +211,7 @@ pub fn memory_tools() -> Vec<Tool> {
                         .map(|f| format!("- **{}**: {}", f.subject, f.content))
                         .collect();
                     Ok(format!(
-                        "最近 {} 条记忆：\n{}",
+                        "The {} most recent memories:\n{}",
                         rows.len(),
                         lines.join("\n")
                     ))
@@ -232,13 +229,12 @@ pub fn memory_tools() -> Vec<Tool> {
 pub fn find_tools() -> Tool {
     Tool {
         name: "find_tools".to_string(),
-        description: "工具表里没有某个能力时，用这个工具按关键词找出来并打开（下一轮就能用）。\
-                      例如「日历」「邮件」「表格」「截图」。"
+        description: "When a capability is missing from the tool table, use this to find it by keyword and open it (usable next turn). E.g. \"calendar\", \"email\", \"spreadsheet\", \"screenshot\"."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "要找什么能力，例如「日历 事件」"}
+                "query": {"type": "string", "description": "What capability to look for, e.g. \"calendar event\""}
             },
             "required": ["query"]
         }),
@@ -249,17 +245,17 @@ pub fn find_tools() -> Tool {
                     // Eager mode: the table is already complete. Saying "found nothing" here
                     // would send the model looking for another search tool that does not exist.
                     return Ok(
-                        "工具表已经是完整的，没有隐藏的工具 —— 直接用现有的就好。".to_string()
+                        "The tool table is already complete; there are no hidden tools — just use what you have.".to_string()
                     );
                 };
                 let opened = activate(&query);
                 if opened.is_empty() {
                     return Ok(format!(
-                        "没有找到「{query}」相关的额外工具。要么名字不对，要么这个能力没装在这里。"
+                        "No additional tool found for \"{query}\". Either the name is off, or that capability is not installed here."
                     ));
                 }
                 Ok(format!(
-                    "已打开 {} 个工具，下一轮就能用：{}",
+                    "Opened {} tools, usable next turn: {}",
                     opened.len(),
                     opened.join("、")
                 ))
@@ -273,15 +269,14 @@ pub fn find_tools() -> Tool {
 pub fn current_time() -> Tool {
     Tool {
         name: "current_time".to_string(),
-        description: "获取用户电脑上的当前本地时间（含星期与时区）。\
-                      安排日程、解释「今天」「明天」之前先调它。"
+        description: "Get the current local time on the user's machine (with the weekday and time zone). Call it before scheduling anything or explaining \"today\"/\"tomorrow\"."
             .to_string(),
         input_schema: json!({"type": "object", "properties": {}, "required": []}),
         handler: Arc::new(|_ctx: ToolCtx, _args: Value| {
             Box::pin(async move {
                 let now = Local::now();
                 Ok(format!(
-                    "现在是 {}（{}，UTC{}）",
+                    "It is now {} ({}, UTC{})",
                     now.format("%Y-%m-%d %H:%M:%S"),
                     now.format("%A"),
                     now.format("%:z")

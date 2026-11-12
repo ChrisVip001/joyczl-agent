@@ -174,7 +174,7 @@ async fn a_rejected_refresh_names_the_reauth_command() {
         .await
         .expect_err("续期被拒该失败");
     let text = error.to_string();
-    assert!(text.contains("重新跑"), "要告诉人下一步做什么：{text}");
+    assert!(text.contains("again"), "要告诉人下一步做什么：{text}");
 }
 
 #[tokio::test]

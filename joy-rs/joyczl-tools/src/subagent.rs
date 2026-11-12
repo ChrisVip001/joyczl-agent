@@ -58,11 +58,7 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
     Tool {
         name: NAME.to_string(),
         description:
-            "把一件**独立**的活交给子代理去跑，只拿结论回来。适合「查清楚 X」「把 Y 整理成清单」\
-             这类自成一体、不需要和用户来回确认的任务。子代理看不到你们刚才的对话，所以任务\
-             描述要自足；它也**不能再派生子代理**。别用它来逃避一件事——它只是换了个上下文。\
-             一次派多件时（`tasks`）它们**只能读**：并发写同一个目录会互相覆盖，所以改文件和\
-             命令留给单件委派、或者你自己做。"
+            "Hand one **independent** piece of work to a subagent and get only the conclusion back. Good for self-contained tasks like \"find out X\" or \"turn Y into a list\" that need no back-and-forth with the user. A subagent cannot see your conversation, so the task description must stand alone; it also **cannot spawn further subagents**. Do not use it to dodge work — it only changes the context. When dispatching several at once (`tasks`) they are **read-only**: concurrent writes to one directory overwrite each other, so leave file changes and commands to a single delegation, or do them yourself."
                 .to_string(),
         input_schema: json!({
             "type": "object",
@@ -71,27 +67,23 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
             "properties": {
                 "task": {
                     "type": "string",
-                    "description": "要让子代理做的事，写成自足的指令（它看不到当前对话）"
+                    "description": "What the subagent should do, written as self-contained instructions (it cannot see this conversation)"
                 },
                 "tasks": {
                     "type": "array",
                     "maxItems": MAX_BATCH,
                     "items": {"type": "string"},
-                    "description": "一次派出去的几件**互不依赖**的活（最多 4 件）：它们并发跑，\
-                                   结论按你给的顺序合并回来；批量的子代理**只读**（不能写文件、\
-                                   不能执行命令）。有先后依赖、或者要动磁盘的，就分开调。"
+                    "description": "Several **independent** pieces of work dispatched at once (4 at most): they run concurrently and their conclusions come back merged in the order you gave; a batch of subagents is **read-only** (no writing files, no running commands). Anything with ordering or disk writes should be delegated separately."
                 },
                 "max_iterations": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 10,
-                    "description": "子代理最多跑几轮（默认 5，上限 10）"
+                    "description": "How many rounds a subagent may run (5 by default, 10 at most)"
                 },
                 "result_schema": {
                     "type": "object",
-                    "description": "想要结构化结论就给一份 JSON Schema：子代理必须回符合它的 \
-                                   JSON。不合规会带着报错重试一次，仍不合规就回落成散文并在 \
-                                   文本里说明 —— 结论的形状由你定，不靠它自觉。"
+                    "description": "To get a structured conclusion, give a JSON Schema: the subagent must reply with JSON that matches it. A mismatch is retried once with the error, and if it still fails it falls back to prose and says so in the text — you define the shape, rather than trusting it to comply."
                 }
             }
             // No top-level `required`: "one task" and "a batch" are two valid shapes, and the
@@ -116,27 +108,26 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                         .iter()
                         .map(|item| {
                             item.as_str().map(str::to_string).ok_or_else(|| {
-                                anyhow::anyhow!("tasks 里每一项都得是字符串（收到 {item}）")
+                                anyhow::anyhow!("every entry in tasks must be a string (got {item})")
                             })
                         })
                         .collect::<anyhow::Result<_>>()?,
                     Some(Value::Array(_)) => {
                         return Err(anyhow::anyhow!(
-                            "tasks 是空数组 —— 要么给一件事（task），要么给几件互不依赖的活"
+                            "tasks is an empty array — give either one job (task) or several independent ones"
                         ))
                     }
                     _ => vec![require_str(&args, "task")?],
                 };
                 if tasks.len() > MAX_BATCH {
                     return Err(anyhow::anyhow!(
-                        "一次最多派 {MAX_BATCH} 个子代理（收到 {} 件）—— 每件都是一整轮模型循环，\
-                         拆成几次调用比一次派十个便宜",
+                        "At most {MAX_BATCH} subagents at a time (got {}) — each one is a whole model loop; splitting into several calls is cheaper than dispatching ten at once",
                         tasks.len()
                     ));
                 }
 
                 if tasks.len() == 1 {
-                    let task = tasks.into_iter().next().expect("刚刚确认有一个");
+                    let task = tasks.into_iter().next().expect("just confirmed there is one");
                     // Single delegation keeps every tool it always had: the parent turn is still
                     // serializing behind this call, so a write here is the same write as before.
                     return match runner
@@ -145,7 +136,7 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                     {
                         // Subagent output is **paraphrased**: escape + report header, so it never reads as system text.
                         Ok(summary) => Ok(crate::report::as_report(&summary)),
-                        Err(why) => Ok(format!("Error: 子代理没跑成：{why}")),
+                        Err(why) => Ok(format!("Error: the subagent did not run: {why}")),
                     };
                 }
 
@@ -175,7 +166,7 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                     match joined {
                         Ok((index, Ok(summary))) => {
                             slots[index] = Some(format!(
-                                "### 子任务 {}：{}\n{summary}",
+                                "### Subtask {}: {}\n{summary}",
                                 index + 1,
                                 tasks[index]
                             ));
@@ -184,17 +175,17 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                         // worth delivering, and the failure is stated where it happened.
                         Ok((index, Err(why))) => {
                             slots[index] = Some(format!(
-                                "### 子任务 {}：{}\n（没跑成：{why}）",
+                                "### Subtask {}: {}\n(did not run: {why})",
                                 index + 1,
                                 tasks[index]
                             ));
                         }
-                        Err(join_error) => eprintln!("(joy) 一个子代理崩了：{join_error}"),
+                        Err(join_error) => eprintln!("(joy) a subagent crashed: {join_error}"),
                     }
                 }
                 let merged = slots
                     .into_iter()
-                    .map(|slot| slot.unwrap_or_else(|| "（这个子任务没有结果）".to_string()))
+                    .map(|slot| slot.unwrap_or_else(|| "(this subtask has no result)".to_string()))
                     .collect::<Vec<_>>()
                     .join("\n\n");
                 Ok(crate::report::as_report(&merged))

@@ -42,7 +42,7 @@ impl Ran {
 }
 
 async fn server(mock: Arc<Mock>, graph_workflows: bool) -> Server {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
@@ -277,7 +277,7 @@ async fn a_failed_loop_inside_the_graph_is_reported_without_a_retry() {
 
     let error = ran.error.expect("该报错");
     assert_eq!(error.code, joyczl_protocol::codes::PROVIDER_ERROR);
-    assert!(error.message.contains("模型调用失败"), "{error:?}");
+    assert!(error.message.contains("Model call failed"), "{error:?}");
 
     // Three attempts: classify, gate, loop. One more would mean a retry happened.
     assert_eq!(ran.requests.len(), 3);
@@ -294,7 +294,7 @@ async fn a_failed_loop_inside_the_graph_is_reported_without_a_retry() {
 /// A misconfigured MCP server must not keep the whole assistant from starting.
 #[tokio::test]
 async fn a_broken_mcp_server_still_leaves_the_builtin_tools() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
@@ -328,7 +328,7 @@ async fn an_mcp_server_next_to_home_lands_in_the_tool_table() {
         eprintln!("跳过：这台机器上没有 python3");
         return;
     };
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let script = dir.path().join("fake_mcp_server.py");
     std::fs::write(&script, FAKE_SERVER).expect("写服务器");
     std::fs::write(
@@ -500,7 +500,7 @@ async fn interrupt_hits_a_running_turn_and_misses_a_finished_one() {
 /// config/write: takes effect in memory, lands on disk, survives a reboot — all three or nothing.
 #[tokio::test]
 async fn config_write_lands_in_memory_and_survives_a_reboot() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -549,7 +549,7 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
 /// changing them only goes through `model/*`. This assertion pins "the old road has been torn out".
 #[tokio::test]
 async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -593,7 +593,7 @@ async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
 /// config/write validation: a bad patch is rejected wholesale — half a patch is worse than none.
 #[tokio::test]
 async fn a_bad_patch_is_rejected_without_touching_anything() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -897,19 +897,14 @@ async fn scripted_http(responses: Vec<(u16, String)>) -> String {
 
 /// One complete (non-streaming) response — the gate takes this path.
 fn completion(text: &str) -> String {
-    serde_json::json!({
-        "choices": [{"message": {"role": "assistant", "content": text}}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-    })
-    .to_string()
+    serde_json::json!({"status":"completed", "output":[{"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":text}]}], "usage":{"input_tokens":1,"output_tokens":1}}).to_string()
 }
 
-/// One streaming response — the loop takes this path (`stream: true`).
 fn sse_text(text: &str) -> String {
     format!(
-        "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-        serde_json::json!({"choices": [{"delta": {"content": text}}]}),
-        serde_json::json!({"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 3}}),
+        "data: {}\n\ndata: {}\n\n",
+        serde_json::json!({"type":"response.output_text.delta", "delta":text}),
+        serde_json::json!({"type":"response.completed", "response":serde_json::from_str::<serde_json::Value>(&completion(text)).unwrap()})
     )
 }
 
@@ -928,7 +923,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
     ])
     .await;
 
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         provider: "openai".to_string(),
@@ -985,7 +980,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
 fn turn_cwd_validation_is_fail_closed() {
     use crate::turn::resolve_turn_cwd;
 
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let ok = resolve_turn_cwd(&Some(dir.path().display().to_string()));
     assert!(ok.unwrap().is_some(), "存在的绝对路径应该通过");
 
@@ -995,7 +990,7 @@ fn turn_cwd_validation_is_fail_closed() {
 
     // Relative path: rejected, and the error speaks plainly.
     let err = resolve_turn_cwd(&Some("相对/路径".into())).unwrap_err();
-    assert!(err.message.contains("绝对路径"), "{}", err.message);
+    assert!(err.message.contains("absolute path"), "{}", err.message);
 
     // A nonexistent absolute path: rejected.
     let err = resolve_turn_cwd(&Some("/不存在/的/目录/joy".into())).unwrap_err();
@@ -1013,7 +1008,7 @@ async fn run_with_attachments(
     prepare: impl FnOnce(&std::path::Path),
 ) -> Ran {
     let mock = Arc::new(mock);
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     prepare(dir.path());
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
@@ -1169,7 +1164,7 @@ async fn an_oversized_image_is_refused_with_its_real_dimensions() {
         error.message
     );
     assert!(
-        error.message.contains("分段"),
+        error.message.contains("in pieces"),
         "报错要给出可执行的下一步：{}",
         error.message
     );
@@ -1188,7 +1183,7 @@ async fn attachments_fail_up_front_on_a_non_vision_provider() {
     .await;
     let error = ran.error.as_ref().expect("vision 关着必须在门口拦下");
     assert!(
-        error.message.contains("不支持图片输入"),
+        error.message.contains("cannot take images"),
         "{}",
         error.message
     );
@@ -1216,7 +1211,7 @@ async fn an_attachment_outside_home_is_refused_before_the_turn() {
     )
     .await;
     let error = ran.error.as_ref().expect("越界路径必须被拒");
-    assert!(error.message.contains("home 之外"), "{}", error.message);
+    assert!(error.message.contains("outside home"), "{}", error.message);
     assert!(ran.requests.is_empty());
 }
 
@@ -1239,7 +1234,7 @@ async fn a_symlinked_attachment_outside_home_is_refused() {
     )
     .await;
     let error = ran.error.as_ref().expect("越界路径必须被拒");
-    assert!(error.message.contains("home 之外"), "{}", error.message);
+    assert!(error.message.contains("outside home"), "{}", error.message);
     assert!(ran.requests.is_empty());
 }
 
@@ -1275,7 +1270,7 @@ async fn the_session_working_directory_is_used_when_the_turn_names_none() {
 #[tokio::test]
 async fn a_vanished_session_directory_is_not_silently_replaced() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
-    let work = tempfile::tempdir().expect("临时目录");
+    let work = tempfile::tempdir().expect("temporary directory");
     let path = work.path().to_string_lossy().to_string();
     server
         .chat
@@ -1556,11 +1551,14 @@ fn the_system_prompt_carries_the_catalog_not_the_pages() {
 /// 薄 SOUL 是给强模型的：同样的三条纪律，去掉脚手架；用户动过文件之后，文件说了算。
 #[test]
 fn the_thin_soul_trades_scaffolding_for_tokens_and_a_user_edit_wins() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
 
     let thin = crate::turn::load_soul(&home, true);
-    assert!(thin.contains("简洁、温暖、主动"), "薄版该保留身份：{thin}");
+    assert!(
+        thin.contains("Concise, warm, proactive"),
+        "薄版该保留身份：{thin}"
+    );
     assert!(
         !thin.contains("先征得同意"),
         "薄版不该带长脚手架的细则：{thin}"
@@ -1568,7 +1566,7 @@ fn the_thin_soul_trades_scaffolding_for_tokens_and_a_user_edit_wins() {
 
     // 默认文本可以随模式互换 —— 那是「用户没动过」这一种情况。
     let full = crate::turn::load_soul(&home, false);
-    assert!(full.contains("先征得同意"), "全版该有完整规则：{full}");
+    assert!(full.contains("ask first"), "全版该有完整规则：{full}");
 
     // 用户写过的 SOUL.md 是权威：任何模式都不覆盖。
     std::fs::write(home.join("SOUL.md"), "只叫我船长。").expect("写 SOUL.md");
@@ -1697,7 +1695,7 @@ fn a_folded_call_says_what_ran_how_much_and_the_first_line() {
         &[outcome("read_file", "第一行内容\n第二行\n第三行")],
     );
     assert!(folded.contains("read_file"), "{folded}");
-    assert!(folded.contains("字"), "{folded}");
+    assert!(folded.contains("chars"), "{folded}");
     assert!(folded.contains("第一行内容"), "{folded}");
     assert!(
         !folded.contains("第二行"),
@@ -1726,4 +1724,81 @@ fn a_result_without_spill_does_not_invent_an_address() {
 #[test]
 fn no_tool_calls_leaves_the_reply_untouched() {
     assert_eq!(crate::turn::fold_tool_activity("就说一句", &[]), "就说一句");
+}
+
+#[tokio::test]
+async fn interrupted_queue_claim_is_visible_and_is_not_replayed() {
+    let mock = Mock::new(Vec::new());
+    let server = server(Arc::new(mock), false).await;
+    server
+        .queue
+        .push("test", "uncertain instruction")
+        .await
+        .unwrap();
+    let claim = server.queue.pop("test").await.unwrap().unwrap();
+    server.restore_tasks().await;
+    let rows = server.chat.messages("test", None, 50).await.unwrap();
+    assert!(rows.iter().any(|row| row.content == claim.message));
+    assert!(rows
+        .iter()
+        .any(|row| row.content.contains("outcome is unknown")));
+    assert!(server.queue.pop("test").await.unwrap().is_none());
+    assert!(server
+        .queue
+        .reconcile_interrupted()
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(server.active_turns(Some("test")).is_empty());
+}
+
+#[tokio::test]
+async fn quick_chat_keeps_recent_context_and_personality() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text(r#"{"route":"quick","reason":"conversation"}"#),
+        Mock::text("I remember."),
+    ]));
+    let server = server(mock.clone(), true).await;
+    std::fs::write(
+        server.settings().home.join("SOUL.md"),
+        "Be patient and warm.",
+    )
+    .unwrap();
+    server
+        .chat
+        .append_exchange("My cat is Momo.", "How is Momo?", "test", "test", None)
+        .await
+        .unwrap();
+    server
+        .chat
+        .append_exchange("private other session", "secret", "other", "test", None)
+        .await
+        .unwrap();
+    let (sink, _receiver) = EventSink::channel();
+    crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("test".into()),
+            message: "Hello again".into(),
+            ..Default::default()
+        },
+        RequestId::Number(1),
+        &sink,
+    )
+    .await
+    .unwrap();
+    let requests = mock.received.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let quick = &requests[1];
+    assert!(quick
+        .system
+        .as_deref()
+        .unwrap()
+        .contains("patient and warm"));
+    assert_eq!(quick.messages[0].text(), "My cat is Momo.");
+    assert_eq!(quick.messages[1].text(), "How is Momo?");
+    assert!(!quick
+        .messages
+        .iter()
+        .any(|m| m.text().contains("private other session")));
 }

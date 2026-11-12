@@ -15,6 +15,8 @@ async fn test_ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite 还会写 -wal/-shm：这个目录不能被就地删掉
     ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: Some(home.clone()),
@@ -140,7 +142,7 @@ fn a_hunk_that_does_not_fit_changes_nothing() {
         panic!("应是 Update");
     };
     let why = apply(file, hunks).expect_err("对不上就该拒绝");
-    assert!(why.contains("找不到对应的原文"), "{why}");
+    assert!(why.contains("matches nothing in the file"), "{why}");
 }
 
 #[test]
@@ -154,7 +156,7 @@ fn a_hunk_without_context_is_refused() {
         }],
     )
     .expect_err("要拒绝");
-    assert!(why.contains("上下文"), "{why}");
+    assert!(why.contains("context"), "{why}");
 }
 
 #[test]
@@ -192,21 +194,21 @@ async fn the_tool_writes_two_files_and_creates_one() {
 +新内容
  第三行
 *** Add File: sub/b.txt
-+新建的
++(new)的
 *** End Patch
 ";
     let out = reg
         .execute(ctx.clone(), "apply_patch", json!({ "patch": patch }))
         .await;
-    assert!(out.contains("已修改"), "{out}");
-    assert!(out.contains("新建"), "{out}");
+    assert!(out.contains("Changed"), "{out}");
+    assert!(out.contains("(new)"), "{out}");
     assert_eq!(
         std::fs::read_to_string(home.join("a.txt")).expect("读"),
         "第一行\n新内容\n第三行\n"
     );
     assert_eq!(
         std::fs::read_to_string(home.join("sub/b.txt")).expect("读"),
-        "新建的\n"
+        "(new)的\n"
     );
 }
 
@@ -260,7 +262,7 @@ async fn add_file_refuses_to_overwrite() {
         .execute(ctx.clone(), "apply_patch", json!({ "patch": patch }))
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("已经存在"), "{out}");
+    assert!(out.contains("already exists"), "{out}");
     assert_eq!(
         std::fs::read_to_string(home.join("exists.txt")).expect("读"),
         "别动我\n"

@@ -162,13 +162,12 @@ pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
     // Gate 1: hard-deny. Not configurable, not negotiable.
     if let Some(hit) = HARD_DENY.iter().find(|pattern| lower.contains(*pattern)) {
         return Gate::Deny(format!(
-            "这条命令被硬拒名单挡下了（命中 '{hit}'）—— 这类命令无论怎么配都不会执行。"
+            "This command was refused by the hard blocklist (matched '{hit}') — no configuration will let it run."
         ));
     }
     if pipes_into_a_shell(&lower) {
         return Gate::Deny(
-            "这条命令被硬拒名单挡下了（把下载的内容直接交给 shell 执行）\
-             —— 这类命令无论怎么配都不会执行。"
+            "This command was refused by the hard blocklist (piping downloaded content straight into a shell) — no configuration will let it run."
                 .to_string(),
         );
     }
@@ -187,17 +186,15 @@ pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
             .any(|remembered| remembered.trim() == command.trim());
     if !matched {
         let why = if policy.allow.is_empty() && session_rules.is_empty() {
-            "执行工具没有放行任何命令。要允许一类命令，设 JOY_EXEC_ALLOW，\
-             例如 JOY_EXEC_ALLOW='cargo test,git status,ls *'。"
+            "The exec tool has no command allowed. To allow a class of commands, set JOY_EXEC_ALLOW, e.g. JOY_EXEC_ALLOW='cargo test,git status,ls *'."
                 .to_string()
         } else {
             // Name the session approvals too: a rule the human set that does not cover *this*
             // command is exactly what makes "why is it asking again" answerable.
             let mut known: Vec<String> = policy.allow.clone();
-            known.extend(session_rules.iter().map(|c| format!("{c}（本会话）")));
+            known.extend(session_rules.iter().map(|c| format!("{c} (this session)")));
             format!(
-                "没有匹配的放行规则。当前规则：{}。\
-                 要允许它，往 JOY_EXEC_ALLOW 里加一条（支持末尾的 * 通配）。",
+                "No allow rule matched. Current rules: {}. To allow it, add a rule to JOY_EXEC_ALLOW (a trailing * is accepted).",
                 known.join(", ")
             )
         };
@@ -211,8 +208,7 @@ pub fn vet(command: &str, policy: &ExecPolicy) -> Gate {
     // Gate 3: sandbox. Unavailable means no run — this module's reason to exist, not negotiable.
     if !sandbox_available() {
         return Gate::Deny(
-            "这台机器上没有可用的沙箱（macOS 需要 sandbox-exec，Linux 需要 bubblewrap），\
-             拒绝在沙箱之外执行命令。"
+            "This machine has no usable sandbox (macOS needs sandbox-exec, Linux needs bubblewrap); refusing to run commands outside a sandbox."
                 .to_string(),
         );
     }
@@ -411,8 +407,7 @@ pub async fn pass_gate(
             // an explicit "yes".
             let Some(broker) = approval else {
                 return Err(format!(
-                    "{reason}\n（也没人在问你：JOY_APPROVAL=on-request 时，从终端或 \
-                     驾驶舱提问才有人能回答。）"
+                    "{reason}\n(nor is anyone there to ask: with JOY_APPROVAL=on-request, only a prompt from the terminal or the cockpit has somebody to answer it.)"
                 ));
             };
             let request = crate::approval::ApprovalRequest {
@@ -426,7 +421,7 @@ pub async fn pass_gate(
             if broker.request(request).await {
                 Ok(())
             } else {
-                Err("这次执行没有被批准（或没人回答），已跳过。".to_string())
+                Err("This run was not approved (or nobody answered); skipped.".to_string())
             }
         }
     }
@@ -444,7 +439,8 @@ pub fn spawn_sandboxed(
     policy: &ExecPolicy,
     writable: &[PathBuf],
 ) -> Result<tokio::process::Child, String> {
-    let backend = sandbox_backend().ok_or_else(|| "这台机器上没有可用的沙箱".to_string())?;
+    let backend =
+        sandbox_backend().ok_or_else(|| "This machine has no usable sandbox".to_string())?;
 
     let roots = crate::roots::resolve_roots(writable, &policy.extra_roots, &policy.home).workspaces;
 
@@ -455,7 +451,7 @@ pub fn spawn_sandboxed(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("命令起不来：{e}"))
+        .map_err(|e| format!("The command would not start: {e}"))
 }
 
 /// Read stdout in chunks, pushing deltas as they arrive and collecting the full text.
@@ -554,8 +550,8 @@ pub async fn execute(
     };
 
     let timeout = Duration::from_secs(policy.timeout_secs.max(1) as u64);
-    let mut stdout = child.stdout.take().expect("stdout 是 piped");
-    let mut stderr = child.stderr.take().expect("stderr 是 piped");
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut stderr = child.stderr.take().expect("stderr is piped");
 
     // Read and wait share one timeout budget; on timeout, kill_on_drop cleans up. The two
     // pipes are read concurrently — stdout-then-stderr deadlocks when stderr fills the pipe.
@@ -575,17 +571,17 @@ pub async fn execute(
         Ok(collected) => collected,
         Err(_) => {
             return format!(
-                "Error: 命令超过 {} 秒还没结束，已经掐掉。（要放宽就设 JOY_EXEC_TIMEOUT）",
+                "Error: the command did not finish within {} seconds and was killed. (Raise JOY_EXEC_TIMEOUT to widen it.)",
                 policy.timeout_secs
             );
         }
     };
     if let Err(e) = out_result {
-        return format!("Error: 读输出失败：{e}");
+        return format!("Error: could not read the output: {e}");
     }
     let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
 
-    let mut combined = format!("退出码 {code}\n{out}");
+    let mut combined = format!("exit code {code}\n{out}");
     if !err.trim().is_empty() {
         combined.push_str("\n--- stderr ---\n");
         combined.push_str(&err);
@@ -642,20 +638,16 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
     let policy = Arc::new(policy);
     Tool {
         name: "run_command".to_string(),
-        description: "在用户的机器上执行一条 shell 命令（受沙箱限制：只能写工作目录与临时目录）。\
-                      适合查看状态、跑测试、git 只读操作这类事。\
-                      命令被拒绝时会给出原因，照原因调整或请用户放开 JOY_EXEC_ALLOW。"
+        description: "Run a shell command on the user's machine (sandboxed: it may only write the working directory and the temp directory). Good for checking state, running tests, read-only git. A refused command comes back with the reason — adjust to it, or ask the user to widen JOY_EXEC_ALLOW."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "要执行的 shell 命令"},
-                "cwd": {"type": "string", "description": "工作目录（默认：Joy 启动时所在目录）"},
+                "command": {"type": "string", "description": "The shell command to run"},
+                "cwd": {"type": "string", "description": "Working directory (default: where Joy was started)"},
                 "background": {
                     "type": "boolean",
-                    "description": "丢到后台跑（默认 false = 这一轮等它结束）。适合几分钟以上的命令：\
-                                   起完立刻拿到 job id，用 job_output 看进度、job_list 看全部、\
-                                   job_kill 停掉。沙箱与批准规则与前台完全一致。"
+                    "description": "Run it in the background (default false = this turn waits for it). Good for anything taking minutes: you get a job id immediately, then job_output for progress, job_list for all of them, job_kill to stop one. Sandbox and approval rules are identical to the foreground."
                 }
             },
             "required": ["command"]
@@ -685,8 +677,7 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                 if let (Some(requested), Some(workspace)) = (&cwd, &ctx.cwd) {
                     if crate::fs_write::inside_workspace(requested, workspace).is_err() {
                         return Ok(format!(
-                            "Error: cwd {requested:?} 不在本轮工作目录 {workspace:?} 里 —— \
-                             run_command 只能在工作目录及其子目录下执行。"
+                            "Error: cwd {requested:?} is not inside this turn's working directory {workspace:?} — run_command may only run in the working directory and its subdirectories."
                         ));
                     }
                 }
@@ -712,11 +703,11 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                         .await;
                     if let Some(why) = outcome.blocked {
                         return Ok(format!(
-                            "Error: {why}（PermissionRequest hook 拒绝了这条命令）"
+                            "Error: {why} (a PermissionRequest hook refused this command)"
                         ));
                     }
                     if outcome.allowed {
-                        eprintln!("(joy) PermissionRequest hook 放行了这条命令：{command}");
+                        eprintln!("(joy) a PermissionRequest hook allowed this command: {command}");
                         approval = Some(Arc::new(AlreadyApproved));
                     }
                 }
@@ -729,17 +720,23 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     }
                     let Some(jobs) = ctx.jobs.clone() else {
                         return Ok(
-                            "Error: 这台机器上没有开启后台作业（它跟着 run_command 一起开关：\
-                             JOY_EXEC=1）。"
+                            "Error: background jobs are not enabled on this machine (they are switched on together with run_command: JOY_EXEC=1)."
                                 .to_string(),
                         );
                     };
                     let cwd_text = cwd.as_ref().map(|p| p.display().to_string());
                     return Ok(
-                        match jobs.spawn(&ctx.session_id, &command, cwd_text).await {
+                        match jobs
+                            .spawn_for_run(
+                                &ctx.session_id,
+                                &command,
+                                cwd_text,
+                                ctx.task_run_id.clone(),
+                            )
+                            .await
+                        {
                             Ok(id) => format!(
-                            "已在后台跑起来：{id}（{command}）\n用 job_output 看进度、job_list \
-                             看全部、job_kill 停掉。"
+                            "Running in the background: {id} ({command})\nUse job_output for progress, job_list for all of them, job_kill to stop one."
                         ),
                             Err(why) => format!("Error: {why}"),
                         },

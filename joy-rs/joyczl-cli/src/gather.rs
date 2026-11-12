@@ -30,7 +30,7 @@ const DEFAULT_TOPICS: &str = "AI agent harness loop memory eval";
 
 /// Runs one morning report and prints it. The only write is the outbox draft file.
 pub async fn run(server: &Server) -> Result<()> {
-    println!("gathering — github、web、calendar、memory 一起问……");
+    println!("gathering — asking github, web, calendar and memory at once…");
 
     let home = server.settings().home.clone();
     let github = bind_github();
@@ -94,7 +94,7 @@ pub async fn run(server: &Server) -> Result<()> {
         }
         None => Arc::new(|_state| {
             Box::pin(async {
-                Err("模型还没配好：缺 API key。往 .env 里加对应 provider 的 key 再试。".to_string())
+                Err("No model configured yet: the API key is missing. Add the provider's key to .env and try again.".to_string())
                     as Result<String, String>
             })
         }),
@@ -115,18 +115,18 @@ pub async fn run(server: &Server) -> Result<()> {
     };
 
     let graph = build_gather_graph(github, web, calendar, memory, synth, draft)
-        .expect("gather 图写死在这个文件旁边，建不起来就是 bug");
+        .expect("the gather graph is written next to this file; failing to build it is a bug");
 
     let report = run_graph(graph, State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect("图的撞键错误属于图的 bug");
+        .expect("a key collision in the graph is a graph bug");
 
     match report.state.str("digest") {
         Some(digest) if !digest.is_empty() => println!("{digest}"),
-        _ => println!("（没有摘要 —— 每一路都是空的）"),
+        _ => println!("(no summary — every branch came back empty)"),
     }
     if let Some(path) = report.state.str("draft_path") {
-        println!("已存到 {path}");
+        println!("Saved to {path}");
     }
     for (node, error) in &report.errors {
         println!("{node}: {error}");
@@ -142,7 +142,7 @@ fn bind_github() -> GithubScanFn {
         let repo = repo.trim().to_string();
         Box::pin(async move {
             if repo.is_empty() {
-                return Err("JOY_GH_REPO 没设（如 JOY_GH_REPO=owner/repo）".to_string());
+                return Err("JOY_GH_REPO is not set (e.g. JOY_GH_REPO=owner/repo)".to_string());
             }
             let prs = gh_list(&repo, &["pr", "list", "--state", "open", "--limit", "20"]).await?;
             let issues = gh_list(
@@ -173,10 +173,10 @@ async fn gh_list(repo: &str, args: &[&str]) -> Result<Vec<String>, String> {
         .args(args)
         .output()
         .await
-        .map_err(|e| format!("gh 跑不起来：{e}"))?;
+        .map_err(|e| format!("could not run gh: {e}"))?;
     if !output.status.success() {
         return Err(format!(
-            "gh 失败：{}",
+            "gh failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
@@ -194,8 +194,10 @@ async fn bind_web(home: &std::path::Path) -> WebScanFn {
     // pool is acceptable — this leg runs once a day, the pool lives with the closure.
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the library");
     let ctx = ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         approval: None,

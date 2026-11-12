@@ -72,13 +72,23 @@ fn parse_file(path: &Path) -> Option<Skill> {
     Some(skill)
 }
 
-/// Tokenizer shared by messages and skill descriptions: lowercase ASCII alphanumeric
-/// runs, ≥3 chars. Chinese excluded — triggers belong in the description, per format.
+/// Shared lexical matching: ASCII words and adjacent Han-character pairs.
+/// No dictionary dependency; this is discovery, not semantic understanding.
 fn tokens(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
     let mut out = Vec::new();
     let mut run = String::new();
+    let mut previous_han = None;
     for c in lower.chars() {
+        let han = matches!(c as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0x20000..=0x323af);
+        if han {
+            if let Some(previous) = previous_han {
+                out.push(format!("{previous}{c}"));
+            }
+            previous_han = Some(c);
+        } else {
+            previous_han = None;
+        }
         if c.is_ascii_alphanumeric() {
             run.push(c);
         } else if !run.is_empty() {
@@ -184,6 +194,7 @@ impl SkillLoader {
             .map(|skill| {
                 let mut skill_words = tokens(&skill.name);
                 skill_words.extend(tokens(&skill.description));
+                let skill_words: std::collections::HashSet<_> = skill_words.into_iter().collect();
                 let overlap = skill_words
                     .iter()
                     .filter(|w| msg_words.contains(*w))
@@ -297,7 +308,9 @@ impl SkillLoader {
             } else {
                 // No error (the user may have just typed a $), but the model must know,
                 // so it can reply "no skill named x" instead of ignoring it.
-                hints.push(format!("用户引用了 ${name}，但没有叫 '{name}' 的技能。"));
+                hints.push(format!(
+                    "The user referred to ${name}, but no skill is named '{name}'."
+                ));
             }
         }
         let stripped = stripped.trim().to_string();
@@ -522,7 +535,7 @@ pub fn export_skills(home: &Path, targets: &[(String, PathBuf)], force: bool) ->
             }
             if dest.exists() && !force {
                 lines.push(format!(
-                    "  kept yours  {}（内容有出入；--force 覆盖）",
+                    "  kept yours  {} (the content differs; --force overwrites)",
                     dest.display()
                 ));
                 continue;
@@ -572,11 +585,11 @@ pub fn is_slug(name: &str) -> bool {
 /// `<home>/skills/<name>/SKILL.md`. Name clashes are always rejected — never overwrite.
 pub fn install_from_text(home: &Path, text: &str) -> Result<String, String> {
     let skill = parse_skill_text(text).ok_or_else(|| {
-        "不是合法的技能：SKILL.md 需要 YAML frontmatter，含 name 和 description。".to_string()
+        "not a valid skill: SKILL.md needs YAML frontmatter with name and description.".to_string()
     })?;
     if !is_slug(&skill.name) {
         return Err(format!(
-            "技能名 '{}' 不是小写 slug（小写字母、数字、连字符），拒绝安装 —— 它要变成目录名。",
+            "skill name '{}' is not a lowercase slug (lowercase letters, digits, hyphens); refusing to install — it becomes a directory name.",
             skill.name
         ));
     }
@@ -584,14 +597,14 @@ pub fn install_from_text(home: &Path, text: &str) -> Result<String, String> {
     let dest = dest_dir.join("SKILL.md");
     if dest.exists() {
         return Err(format!(
-            "已有一个叫 '{}' 的技能 —— 换个名字或先删掉旧的。",
+            "a skill named '{}' already exists — pick another name or delete the old one first.",
             skill.name
         ));
     }
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
     std::fs::write(&dest, text).map_err(|e| e.to_string())?;
     Ok(format!(
-        "已安装 '{}' → {}\n  {}",
+        "installed '{}' → {}\n  {}",
         skill.name,
         dest.display(),
         skill.description
@@ -616,12 +629,12 @@ pub async fn fetch_text(url: &str) -> Result<String, String> {
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("拉不动 {raw}：{e}"))?;
+        .map_err(|e| format!("could not fetch {raw}: {e}"))?;
     let status = response.status().as_u16();
     let text = response
         .text()
         .await
-        .map_err(|e| format!("读不动 {raw} 的内容：{e}"))?;
+        .map_err(|e| format!("could not read the content of {raw}: {e}"))?;
     if status >= 400 {
         return Err(format!("{raw}：HTTP {status}"));
     }
@@ -639,4 +652,24 @@ pub fn raw_url(url: &str) -> String {
         return format!("{}/raw", url.trim_end_matches('/'));
     }
     url.to_string()
+}
+
+#[cfg(test)]
+mod lexical_tests {
+    use super::*;
+
+    fn overlap(message: &str, description: &str) -> usize {
+        let message: std::collections::HashSet<_> = tokens(message).into_iter().collect();
+        let description: std::collections::HashSet<_> = tokens(description).into_iter().collect();
+        message.intersection(&description).count()
+    }
+
+    #[test]
+    fn chinese_skills_are_discoverable_without_english_aliases() {
+        assert!(overlap("帮我整理会议纪要", "整理会议纪要并提取待办") >= 2);
+        assert_eq!(overlap("今天心情不好", "整理会议纪要"), 0);
+        assert_eq!(overlap("会议", "会议会议会议"), 1);
+        assert_eq!(overlap("会，议", "会议"), 0);
+        assert_eq!(overlap("Review PULL request", "pull request review"), 3);
+    }
 }

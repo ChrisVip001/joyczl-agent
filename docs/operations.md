@@ -41,6 +41,28 @@ The first screen shows config / sessions / memory; the chat area shows the
 retrieval gate's ruling, tool calls, and streaming replies live. If port
 7777 is taken it scans upward (10 tries).
 
+- **The page remembers where you were.** Which conversation is open is kept in
+  `localStorage` (`joy.session`, next to the working directory), so a reload lands back in
+  that session instead of the oldest one; if that session was deleted meanwhile, the newest
+  one opens instead — never an empty shell the list cannot show.
+- **Switching back returns to where you were reading.** Each session keeps its own distance
+  from the bottom (in memory, per page load): leave in the middle of a long conversation,
+  come back, and you are at that same line — no dragging. A session opened for the first
+  time in this sitting goes to the newest message, as does a reload; the position is placed
+  instantly, not animated from the top.
+- A cross-device ping (another device finished a turn) re-reads the history **without**
+  moving the scroll position: if you are reading further up, you stay there.
+- **The agent's own wording is English.** `SOUL.md`, the prompt sections, the tool-result
+  messages and the planner prompt are English, whatever language you write in — the model
+  answers in yours. `<home>/SOUL.md` is yours to edit: it is used verbatim, and only a file
+  identical to the built-in seed is ever replaced. (A soul carried over from an older release
+  counts as *yours*, so switching the prompt language means editing that file once.)
+- **Two languages.** The button at the top right of the sidebar switches between Chinese and
+  English and remembers the choice; a fresh browser follows `navigator.language` (Chinese for
+  `zh-*`, English otherwise). Switching reloads the page — strings are baked into the DOM as
+  they are painted. Model output, session titles and task text stay in whatever language they
+  were written in: those are data, not labels.
+
 ### Putting it on a server (self-hosting)
 
 ```bash
@@ -228,10 +250,14 @@ and conversation, the source of truth), `SOUL.md` (persona), `skills/`
   walk back to the rows the page was distilled from. **上下文**: the six-section band
   (soul / memory / skills / tools / history / summary) with used, budget and a notice at
   `JOY_CONTEXT_WARN_RATIO`.
-* The band measures what **grows with the session**. Three short lines ride in every prompt
-  uncounted — the clock, the todo board, and the capability note (the two or three lines that
-  appear when `JOY_EXEC` / `JOY_WRITE` are off) — because they are constant: mixing constants
-  into a growth chart only adds noise.
+* The band measures what **grows with the session**. Four things ride in every prompt
+  uncounted: the clock, the todo board, the capability note (the two or three lines that
+  appear when `JOY_EXEC` / `JOY_WRITE` are off), and the project-conventions section read
+  from `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` between your working directory and
+  the enclosing `.git`. The first three are a few dozen tokens; the conventions are capped
+  at 32 KB — so in a repository with a fat `AGENTS.md` the band *understates* the prompt by
+  that file. That is the trade: the band answers "what grows within a session", and a file
+  that is constant per directory does not grow.
 * A turn may spend at most `JOY_MAX_ITERATIONS` model calls (default 32). The **last one is a
   wrap-up**: the tools are taken away and the model has to answer in three sentences — done /
   stuck / what it needs next. A long turn therefore ends with something you can act on

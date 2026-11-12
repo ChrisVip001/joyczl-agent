@@ -21,8 +21,8 @@ use crate::{require_str, Tool, ToolCtx};
 fn next_label(cron: &str) -> String {
     let now = chrono::Local::now().naive_local();
     match declarations::next_run_at(cron, now) {
-        Ok(when) => format!("下次触发 {when}"),
-        Err(why) => format!("（{why}，所以它不会跑）"),
+        Ok(when) => format!("Next run {when}"),
+        Err(why) => format!("({why}, so it will not run)"),
     }
 }
 
@@ -68,23 +68,20 @@ pub fn schedule_tools() -> Vec<Tool> {
 fn schedule_job() -> Tool {
     Tool {
         name: "schedule_job".to_string(),
-        description: "创建一个定时任务：什么时候（五段 cron）、做什么（一句话）。到点会在一轮\
-                      对话里执行，结果写进 <home>/outbox/。真正触发的是 `joy schedule` 这个\
-                      常驻进程 —— 如果它没在跑，任务不会执行。用户说「每天八点给我简报」\
-                      这类话时用它，不要去手写 schedules.json。"
+        description: "Create a scheduled job: when (five-field cron) and what (one sentence). At that time it runs as a turn and the result goes to <home>/outbox/. The thing that actually fires is the `joy schedule` daemon — if it is not running, nothing runs. Use it when the user says things like \"send me a briefing at eight every day\"; do not hand-write schedules.json."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "任务名：小写字母、数字、连字符，如 morning-news"},
-                "cron": {"type": "string", "description": "五段 cron：分 时 日 月 周。如 `0 8 * * 1-5` 工作日八点"},
-                "prompt": {"type": "string", "description": "触发时发给 Joy 的那一句话"},
+                "name": {"type": "string", "description": "The job name: lowercase letters, digits, hyphens, e.g. morning-news"},
+                "cron": {"type": "string", "description": "Five-field cron: minute hour day month weekday, e.g. `0 8 * * 1-5` for 08:00 on weekdays"},
+                "prompt": {"type": "string", "description": "The sentence sent to Joy when it fires"},
                 "delivery": {
                     "type": "string",
                     "enum": ["outbox", "notify", "quiet"],
-                    "description": "outbox（默认，写文件）/ notify（文件 + 通知）/ quiet（只记日志）"
+                    "description": "outbox (default, writes a file) / notify (file + notification) / quiet (log only)"
                 },
-                "catch_up": {"type": "boolean", "description": "错过之后补跑一次？默认 true"}
+                "catch_up": {"type": "boolean", "description": "Catch up once after a missed run? Default true"}
             },
             "required": ["name", "cron", "prompt"]
         }),
@@ -95,8 +92,7 @@ fn schedule_job() -> Tool {
                     .map_err(|why| anyhow::anyhow!(why))?;
                 let cron = body.cron.split_whitespace().collect::<Vec<_>>().join(" ");
                 Ok(format!(
-                    "{summary}。{}。\n\
-                     到点执行的是 `joy schedule` 常驻进程：它没在跑就不会触发（界面上「能力中心 → 定时任务」能看到这一行）。",
+                    "{summary}.{}.\n\n                     Firing is done by the `joy schedule` daemon: nothing runs unless it is running (the cockpit shows this job under Capabilities → Scheduled jobs).",
                     next_label(&cron)
                 ))
             })
@@ -107,8 +103,7 @@ fn schedule_job() -> Tool {
 fn list_schedules() -> Tool {
     Tool {
         name: "list_schedules".to_string(),
-        description: "列出已有的定时任务（名字、cron、提示词、投递方式）。用户问「我都有哪些\
-                      定时任务」时用。上次/下次什么时候跑要看驾驶舱。"
+        description: "List the scheduled jobs (name, cron, prompt, delivery). Use it when the user asks what is scheduled. Last and next run times are in the cockpit."
             .to_string(),
         input_schema: json!({"type": "object", "properties": {}, "required": []}),
         handler: Arc::new(|ctx: ToolCtx, _args: Value| {
@@ -118,7 +113,7 @@ fn list_schedules() -> Tool {
                 for skill in joyczl_memory::skills::loaded_skills(&ctx.home) {
                     let Some(cron) = skill.schedule else { continue };
                     lines.push(format!(
-                        "- {}（随技能）· {cron} · 按技能的做法执行",
+                        "- {} (comes with a skill) · {cron} · runs that skill's method",
                         skill.name
                     ));
                 }
@@ -132,14 +127,14 @@ fn list_schedules() -> Tool {
                 }
                 if lines.is_empty() {
                     return Ok(
-                        "还没有定时任务。要加一个，告诉我：什么时候（cron）做什么。".to_string()
+                        "No scheduled jobs yet. To add one, tell me when (cron) and what.".to_string()
                     );
                 }
-                let mut out = format!("定时任务 {} 个：\n{}", lines.len(), lines.join("\n"));
+                let mut out = format!("{} scheduled jobs:\n{}", lines.len(), lines.join("\n"));
                 if let Some(why) = error {
-                    out.push_str(&format!("\n注意：{why}"));
+                    out.push_str(&format!("\nNote: {why}"));
                 }
-                out.push_str("\n到点由 `joy schedule` 常驻进程执行；它没在跑就不会触发。");
+                out.push_str("\nFiring is done by the `joy schedule` daemon; nothing runs unless it is running.");
                 Ok(out)
             })
         }),
@@ -150,13 +145,12 @@ fn cancel_schedule() -> Tool {
     Tool {
         name: "cancel_schedule".to_string(),
         description:
-            "删掉一个定时任务（按名字，只删 schedules.json 里的那些）。用户说\
-                      「把那个任务取消掉」时用；随技能来的任务要改 SKILL.md，这个工具会拒绝并说明。"
+            "Delete a scheduled job (by name; only the ones in schedules.json). Use it when the user says \"cancel that job\"; a job that comes with a skill has to be changed in its SKILL.md, and this tool refuses and says so."
                 .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "任务名（先用 list_schedules 看清楚）"}
+                "name": {"type": "string", "description": "The job name (check with list_schedules first)"}
             },
             "required": ["name"]
         }),

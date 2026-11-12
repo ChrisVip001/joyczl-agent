@@ -278,12 +278,12 @@ pub async fn discover(client: &reqwest::Client, server_url: &str) -> Result<Auth
         .get(&meta_url)
         .send()
         .await
-        .map_err(|e| format!("授权服务器元数据读不到（{meta_url}）：{e}"))?
+        .map_err(|e| format!("could not read the authorisation server metadata ({meta_url}): {e}"))?
         .error_for_status()
-        .map_err(|e| format!("授权服务器元数据（{meta_url}）：{e}"))?
+        .map_err(|e| format!("authorisation server metadata ({meta_url}): {e}"))?
         .json()
         .await
-        .map_err(|e| format!("授权服务器元数据不是 JSON：{e}"))?;
+        .map_err(|e| format!("the authorisation server metadata is not JSON: {e}"))?;
     let endpoint = |key: &str| {
         meta.get(key)
             .and_then(serde_json::Value::as_str)
@@ -291,8 +291,8 @@ pub async fn discover(client: &reqwest::Client, server_url: &str) -> Result<Auth
     };
     Ok(AuthEndpoints {
         authorization_endpoint: endpoint("authorization_endpoint")
-            .ok_or("元数据里没有 authorization_endpoint")?,
-        token_endpoint: endpoint("token_endpoint").ok_or("元数据里没有 token_endpoint")?,
+            .ok_or("the metadata has no authorization_endpoint")?,
+        token_endpoint: endpoint("token_endpoint").ok_or("the metadata has no token_endpoint")?,
         registration_endpoint: endpoint("registration_endpoint"),
     })
 }
@@ -326,12 +326,12 @@ pub async fn register_client(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("动态注册发不出去：{e}"))?
+        .map_err(|e| format!("could not send the dynamic registration: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("动态注册被拒：{e}"))?
+        .map_err(|e| format!("the dynamic registration was refused: {e}"))?
         .json()
         .await
-        .map_err(|e| format!("注册应答不是 JSON：{e}"))
+        .map_err(|e| format!("the registration reply is not JSON: {e}"))
 }
 
 /// Local callback: listen once, catch the redirect, return the query params.
@@ -343,7 +343,7 @@ async fn catch_callback(
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
         .await
         .map_err(|e| {
-            format!("端口 {CALLBACK_PORT} 被占着 —— 登录重定向没地方落。关掉占着它的进程再试：{e}")
+            format!("port {CALLBACK_PORT} is taken — the login redirect has nowhere to land. Free it and try again: {e}")
         })?;
     open_browser(authorize_url);
 
@@ -352,10 +352,10 @@ async fn catch_callback(
     loop {
         tokio::select! {
             _ = &mut timeout => {
-                return Err("等浏览器登录回来超时了".to_string());
+                return Err("timed out waiting for the browser sign-in".to_string());
             }
             accepted = listener.accept() => {
-                let (mut socket, _) = accepted.map_err(|e| format!("回调连接收不到：{e}"))?;
+                let (mut socket, _) = accepted.map_err(|e| format!("could not accept the callback connection: {e}"))?;
                 // Read only until the HTTP headers end — the browser holds the connection
                 // open, and read_to_string would wait until the end of time.
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -432,7 +432,7 @@ pub async fn sign_in(
             let endpoint = endpoints
                 .registration_endpoint
                 .as_deref()
-                .ok_or("服务器不支持动态注册，也没有现成的 client_id —— 手工注册后把 client_id 写进 mcp-auth 的 client_info")?;
+                .ok_or("the server does not support dynamic registration and there is no client_id — register by hand and write the client_id into mcp-auth's client_info")?;
             let info = register_client(client, endpoint, &redirect_uri).await?;
             store.save_client_info(info.clone())?;
             info
@@ -441,7 +441,7 @@ pub async fn sign_in(
     let client_id = client_info
         .get("client_id")
         .and_then(serde_json::Value::as_str)
-        .ok_or("注册应答里没有 client_id")?
+        .ok_or("the registration reply has no client_id")?
         .to_string();
 
     let verifier = pkce_verifier();
@@ -469,12 +469,12 @@ pub async fn sign_in(
         let detail = get("error_description")
             .map(|d| format!(" — {d}"))
             .unwrap_or_default();
-        return Err(format!("授权失败：{error}{detail}"));
+        return Err(format!("authorisation failed: {error}{detail}"));
     }
-    let code = get("code").ok_or("回调里没有 code")?;
+    let code = get("code").ok_or("no code in the callback")?;
     if let Some(returned_state) = get("state") {
         if returned_state != state {
-            return Err("state 对不上 —— 可能是伪造的回调，拒绝换 token".to_string());
+            return Err("the state does not match — this callback may be forged; refusing to exchange the token".to_string());
         }
     }
 
@@ -489,12 +489,12 @@ pub async fn sign_in(
         ])
         .send()
         .await
-        .map_err(|e| format!("换 token 发不出去：{e}"))?
+        .map_err(|e| format!("could not send the token exchange: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("换 token 被拒：{e}"))?
+        .map_err(|e| format!("the token exchange was refused: {e}"))?
         .json()
         .await
-        .map_err(|e| format!("token 应答不是 JSON：{e}"))?;
+        .map_err(|e| format!("the token reply is not JSON: {e}"))?;
     let tokens = tokens_from_response(&token)?;
     store.save_tokens(tokens.clone())?;
     Ok(tokens.access_token)
@@ -504,7 +504,7 @@ fn tokens_from_response(token: &serde_json::Value) -> Result<StoredTokens, Strin
     let access = token
         .get("access_token")
         .and_then(serde_json::Value::as_str)
-        .ok_or("token 应答里没有 access_token")?;
+        .ok_or("the token reply has no access_token")?;
     let expires_at = token
         .get("expires_in")
         .and_then(serde_json::Value::as_i64)
@@ -533,13 +533,13 @@ pub async fn ensure_access_token(
 ) -> Result<String, String> {
     let store = TokenStore::new(home, server_name);
     let tokens = store.tokens().ok_or_else(|| {
-        format!("还没登录过。跑 joy mcp login {server_name} 完成一次浏览器授权。")
+        format!("Not signed in yet. Run joy mcp login {server_name} to complete a browser authorisation.")
     })?;
     if !tokens.expired() {
         return Ok(tokens.access_token);
     }
     let refresh = tokens.refresh_token.clone().ok_or_else(|| {
-        format!("token 过期了且没有 refresh_token。重跑 joy mcp login {server_name}。")
+        format!("The token expired and there is no refresh_token. Run joy mcp login {server_name} again.")
     })?;
 
     let client = reqwest::Client::new();
@@ -552,7 +552,7 @@ pub async fn ensure_access_token(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
-        .ok_or("没有 client_info —— 重跑 joy mcp login")?;
+        .ok_or("no client_info — run joy mcp login again")?;
     let token: serde_json::Value = client
         .post(&endpoints.token_endpoint)
         .form(&[
@@ -562,12 +562,12 @@ pub async fn ensure_access_token(
         ])
         .send()
         .await
-        .map_err(|e| format!("刷新发不出去：{e}"))?
+        .map_err(|e| format!("could not send the refresh: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("刷新被拒：{e}"))?
+        .map_err(|e| format!("the refresh was refused: {e}"))?
         .json()
         .await
-        .map_err(|e| format!("刷新应答不是 JSON：{e}"))?;
+        .map_err(|e| format!("the refresh reply is not JSON: {e}"))?;
     let mut fresh = tokens_from_response(&token)?;
     if fresh.refresh_token.is_none() {
         fresh.refresh_token = Some(refresh);

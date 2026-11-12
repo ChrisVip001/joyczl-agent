@@ -39,13 +39,18 @@ pub struct SmtpConfig {
 pub async fn send(config: &SmtpConfig, message: &Outgoing) -> Result<()> {
     tokio::time::timeout(TIMEOUT, conversation(config, message))
         .await
-        .map_err(|_| anyhow::anyhow!("SMTP 对话超过 {}s 没有进展，放弃了", TIMEOUT.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the SMTP conversation made no progress for {}s; giving up",
+                TIMEOUT.as_secs()
+            )
+        })?
 }
 
 async fn conversation(config: &SmtpConfig, message: &Outgoing) -> Result<()> {
     let tcp = TcpStream::connect((config.host.as_str(), config.port))
         .await
-        .with_context(|| format!("连不上 {}:{}", config.host, config.port))?;
+        .with_context(|| format!("could not connect to {}:{}", config.host, config.port))?;
     let wire = if config.port == 465 {
         Wire::tls(tls_upgrade(tcp, &config.host).await?)
     } else {
@@ -67,7 +72,7 @@ async fn conversation(config: &SmtpConfig, message: &Outgoing) -> Result<()> {
 
     if let Some(user) = &config.username {
         let Some(password) = &config.password else {
-            bail!("配了 SMTP 用户名，但没找到密码（secret 指向的条目不存在）");
+            bail!("An SMTP user name is configured, but no password was found (the entry the secret points at does not exist)");
         };
         session.auth_plain(user, password).await?;
     }
@@ -82,7 +87,7 @@ async fn conversation(config: &SmtpConfig, message: &Outgoing) -> Result<()> {
         // delivering to half the recipients and claiming success would be a lie.
         let (code, text) = session.response().await?;
         if code != "250" && code != "251" {
-            bail!("服务器不接受收件人 {to}：{code} {text}");
+            bail!("the server does not accept recipient {to}: {code} {text}");
         }
     }
     session.command("DATA").await?;
@@ -90,7 +95,7 @@ async fn conversation(config: &SmtpConfig, message: &Outgoing) -> Result<()> {
     session
         .write_raw(render(config, message).as_bytes())
         .await
-        .context("发正文时连接断了")?;
+        .context("the connection dropped while sending the body")?;
     session.expect("250").await?;
 
     // Polite shutdown; a server that hangs up first is not an error.
@@ -211,7 +216,7 @@ impl Session {
         let halves = self.reader.into_inner().unsplit(self.writer);
         match halves {
             Wire::Plain(tcp) => Ok(tcp),
-            Wire::Tls(_) => bail!("内部错误：STARTTLS 升级时连接已经是 TLS —— 这是连接器的 bug"),
+            Wire::Tls(_) => bail!("internal error: the connection is already TLS when upgrading with STARTTLS — that is a connector bug"),
         }
     }
 
@@ -230,16 +235,16 @@ impl Session {
         if code.starts_with('2') {
             Ok(())
         } else if text.contains("PLAIN") {
-            bail!("服务器不支持 AUTH PLAIN（{code} {text}）—— 这个连接器只实现了 PLAIN")
+            bail!("the server does not support AUTH PLAIN ({code} {text}) — this connector only implements PLAIN")
         } else {
-            bail!("SMTP 认证被拒：{code} {text}")
+            bail!("SMTP authentication was rejected: {code} {text}")
         }
     }
 
     async fn command(&mut self, line: &str) -> Result<()> {
         self.write_raw(format!("{line}\r\n").as_bytes())
             .await
-            .with_context(|| format!("发命令 {line} 时连接断了"))
+            .with_context(|| format!("the connection dropped while sending {line}"))
     }
 
     async fn write_raw(&mut self, bytes: &[u8]) -> Result<()> {
@@ -258,9 +263,12 @@ impl Session {
                 .reader
                 .read_line(&mut line)
                 .await
-                .context("等服务器回话时连接断了")?;
+                .context("the connection dropped while waiting for the server")?;
             if read == 0 {
-                bail!("服务器在回话中途断开了（已收到：{}）", lines.join(" | "));
+                bail!(
+                    "the server disconnected mid-reply (received so far: {})",
+                    lines.join(" | ")
+                );
             }
             let line = line.trim_end().to_string();
             let done = line.len() < 4 || line.as_bytes()[3] == b' ';
@@ -279,7 +287,7 @@ impl Session {
         if code == want {
             Ok(())
         } else {
-            bail!("期待 {want}，服务器回了 {code}（{text}）")
+            bail!("expected {want}, the server sent {code} ({text})")
         }
     }
 }
@@ -296,9 +304,9 @@ async fn tls_upgrade(
         .with_no_client_auth();
     let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(config));
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
-        .map_err(|_| anyhow::anyhow!("{host} 不是合法的 TLS 主机名"))?;
+        .map_err(|_| anyhow::anyhow!("{host} is not a valid TLS host name"))?;
     connector
         .connect(server_name, tcp)
         .await
-        .with_context(|| format!("和 {host} 的 TLS 握手失败"))
+        .with_context(|| format!("the TLS handshake with {host} failed"))
 }

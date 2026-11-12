@@ -165,6 +165,7 @@ pub type Observer = Arc<dyn Fn(LoopEvent) + Send + Sync>;
 /// assistant thoughts, tool calls and their results all in `messages`, nothing half-done.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
+    pub round_id: String,
     pub messages: Vec<Message>,
     /// Completed iterations so far (the tool round just fed back included).
     pub iterations: i32,
@@ -176,7 +177,10 @@ pub struct Checkpoint {
 /// the write must land **before** the next model call, or a crash loses exactly the
 /// boundary it was supposed to save.
 pub type CheckpointSink = Arc<
-    dyn Fn(Checkpoint) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+    dyn Fn(
+            Checkpoint,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
         + Send
         + Sync,
 >;
@@ -185,6 +189,7 @@ pub type CheckpointSink = Arc<
 /// assembling history + user message — finished tools are never re-run.
 #[derive(Debug, Clone)]
 pub struct Resume {
+    pub round_id: String,
     pub messages: Vec<Message>,
     /// How many iterations were already completed before the crash.
     pub completed_iterations: i32,
@@ -219,6 +224,8 @@ impl ToolOutcome {
 
 #[derive(Debug, Clone)]
 pub struct LoopResult {
+    pub stop_reason: StopReason,
+    pub round_id: String,
     /// What the model says to the user.
     pub reply: String,
     pub tool_calls: Vec<ToolOutcome>,
@@ -246,18 +253,19 @@ pub struct LoopResult {
 /// Written as an instruction the model can *follow*, not as an apology: three sentences, no
 /// pretending, no invented results. The failure this answers was a turn that spent its whole
 /// budget and then handed the human 「试试把请求拆小一点」.
-const WRAP_UP: &str = "（预算提示：这是本轮的最后一次模型调用，工具已经收起。）\
-用三句话收尾：已经完成的、卡在哪、下一步需要我做什么。\
-没查证的事直接说不确定，不要编造结果。";
+const WRAP_UP: &str =
+    "(Budget note: this is the last model call of this turn; the tools have been put away.)\
+Answer in three sentences: what is done, where you are stuck, what you need from me next.\
+If you have not verified something, say you are unsure — do not invent results.";
 
 /// The same wrap-up, for the other budget: **this turn's tokens are (nearly) spent**.
 ///
 /// It says *why* on purpose — "it was the wallet, not the work" is the one thing the human
 /// cannot infer from an answer that stops mid-task.
-const WRAP_UP_TOKENS: &str = "（预算提示：本轮的 token 预算到了，工具已经收起。）\
-用三句话收尾：已经完成的、卡在哪、下一步需要我做什么；\
-并说清这次停下是因为本轮的 token 预算（JOY_TURN_TOKEN_BUDGET），不是事情做完了。\
-没查证的事直接说不确定，不要编造结果。";
+const WRAP_UP_TOKENS: &str = "(Budget note: this turn's token budget is spent; the tools have been put away.)\
+Answer in three sentences: what is done, where you are stuck, what you need from me next —\
+and say plainly that the stop came from this turn's token budget (JOY_TURN_TOKEN_BUDGET), not from the work being finished.\
+If you have not verified something, say you are unsure — do not invent results.";
 
 pub struct Turn<'a> {
     pub client: &'a dyn Provider,
@@ -333,6 +341,22 @@ fn plan_segments(
 }
 
 pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
+    let round_id = turn
+        .resume
+        .as_ref()
+        .map(|r| r.round_id.clone())
+        .unwrap_or_else(|| {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            format!(
+                "round-{}-{stamp}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            )
+        });
     let notify: Option<Observer> = turn.observer.clone();
     // Fresh start or resume: a resumed turn skips assembly entirely — history, user message
     // and images were already folded into the checkpointed working memory before the crash.
@@ -355,6 +379,18 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             (messages, Usage::default(), 0)
         }
     };
+    // Even a text-only round can enter a durable wait for an earlier background job.
+    // Save its input before the first model call, using the same fallible sink.
+    if let Some(checkpoint) = &turn.checkpoint {
+        checkpoint(Checkpoint {
+            round_id: round_id.clone(),
+            messages: messages.clone(),
+            iterations: completed_before,
+            usage,
+        })
+        .await
+        .map_err(joyczl_provider::ProviderError::Api)?;
+    }
     let mut tool_calls: Vec<ToolOutcome> = Vec::new();
     // Spill directory: `ToolCtx` already carries home, no extra parameter to thread through.
     let spill_dir = turn.ctx.home.join("spill");
@@ -385,6 +421,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             .is_some_and(|cancel| cancel.is_cancelled())
         {
             return Ok(interrupted_result(Scene {
+                round_id: round_id.clone(),
                 streamed,
                 tool_calls,
                 iterations: iteration - 1,
@@ -524,6 +561,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 tokio::select! {
                     _ = cancel.wait() => {
                                 return Ok(interrupted_result(Scene {
+                round_id: round_id.clone(),
                                     streamed,
                                     tool_calls,
                                     iterations: iteration - 1,
@@ -562,6 +600,8 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         // ---- Guardrail 1: no tools requested → the model is talking to the human
         if uses.is_empty() {
             return Ok(LoopResult {
+                stop_reason: response.stop_reason,
+                round_id: round_id.clone(),
                 reply: response.text(),
                 tool_calls,
                 iterations: iteration,
@@ -574,6 +614,17 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             });
         }
 
+        if let Some(checkpoint) = &turn.checkpoint {
+            checkpoint(Checkpoint {
+                round_id: round_id.clone(),
+                messages: messages.clone(),
+                iterations: iteration - 1,
+                usage,
+            })
+            .await
+            .map_err(joyczl_provider::ProviderError::Api)?;
+        }
+
         // ---- act: run each requested tool; observe: feed the results back
         //
         // Read-only calls in one round share a batch and run together; a write / exec /
@@ -581,6 +632,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         // Events and `tool_calls` stay in **request order** — what the model sees must not
         // depend on which tool happened to finish first.
         let mut results = Vec::new();
+        let uncertain = Arc::new(std::sync::atomic::AtomicBool::new(false));
         for segment in plan_segments(turn.tools, uses) {
             // Announced up front, in request order: the client can render "calling X" for
             // each one without knowing how the batch is scheduled.
@@ -596,6 +648,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             if let Some(cancel) = turn.interrupt.as_ref() {
                 if cancel.is_cancelled() {
                     return Ok(interrupted_result(Scene {
+                        round_id: round_id.clone(),
                         streamed,
                         tool_calls,
                         iterations: iteration - 1,
@@ -612,6 +665,14 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             for (position, (id, name, input)) in segment.iter().enumerate() {
                 let registry = turn.tools.clone();
                 let mut ctx = turn.ctx.clone();
+                let uncertain = uncertain.clone();
+                let host_notice = ctx.on_uncertain.clone();
+                ctx.on_uncertain = Some(Arc::new(move |reason| {
+                    uncertain.store(true, std::sync::atomic::Ordering::Release);
+                    if let Some(notice) = &host_notice {
+                        notice(reason);
+                    }
+                }));
                 // Live output goes out under this call's id, so the client can put it on the
                 // right row while several calls run side by side.
                 if let Some(notify) = &notify {
@@ -640,36 +701,37 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             loop {
                 let next = match turn.interrupt.as_ref() {
                     Some(cancel) => tokio::select! {
-                        _ = cancel.wait() => {
-                            // Returning drops the JoinSet, which aborts every task still in
-                            // flight — same semantics as dropping a single tool future: child
-                            // processes/connections clean up in their own Drop impls. What
-                            // already finished is still reported honestly.
-                            for (position, slot) in slots.iter().enumerate() {
-                                if let (Some((output, duration_ms)), Some((id, name, _))) =
-                                    (slot, segment.get(position))
-                                {
-                                    tool_calls.push(ToolOutcome {
-                                        tool_use_id: id.clone(),
-                                        name: name.clone(),
-                                        output: output.clone(),
-                                        duration_ms: *duration_ms,
-                                    });
+                            _ = cancel.wait() => {
+                                // Returning drops the JoinSet, which aborts every task still in
+                                // flight — same semantics as dropping a single tool future: child
+                                // processes/connections clean up in their own Drop impls. What
+                                // already finished is still reported honestly.
+                                for (position, slot) in slots.iter().enumerate() {
+                                    if let (Some((output, duration_ms)), Some((id, name, _))) =
+                                        (slot, segment.get(position))
+                                    {
+                                        tool_calls.push(ToolOutcome {
+                                            tool_use_id: id.clone(),
+                                            name: name.clone(),
+                                            output: output.clone(),
+                                            duration_ms: *duration_ms,
+                                        });
+                                    }
                                 }
+                                return Ok(interrupted_result(Scene {
+                    round_id: round_id.clone(),
+                                    streamed,
+                                    tool_calls,
+                                    iterations: iteration - 1,
+                                    usage,
+                                    messages,
+                                    guard: GuardReport::close(&guard),
+                                    estimated_input_tokens: last_estimate,
+                                    observed_input_tokens: last_observed,
+                                }));
                             }
-                            return Ok(interrupted_result(Scene {
-                                streamed,
-                                tool_calls,
-                                iterations: iteration - 1,
-                                usage,
-                                messages,
-                                guard: GuardReport::close(&guard),
-                                estimated_input_tokens: last_estimate,
-                                observed_input_tokens: last_observed,
-                            }));
-                        }
-                        next = set.join_next() => next,
-                    },
+                            next = set.join_next() => next,
+                        },
                     None => set.join_next().await,
                 };
                 match next {
@@ -717,21 +779,47 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                     content: for_model,
                 });
             }
+            if uncertain.load(std::sync::atomic::Ordering::Acquire) {
+                break;
+            }
         }
         messages.push(Message {
             role: Role::User,
             content: results,
         });
 
+        if uncertain.load(std::sync::atomic::Ordering::Acquire) {
+            // Keep the pre-execution intent checkpoint. Recovery must reconcile the whole
+            // uncertain batch; no further model call or tool segment is allowed here.
+            eprintln!("(joy) tool outcome unknown; stopping this round for reconciliation");
+            return Ok(LoopResult {
+                round_id: round_id.clone(),
+                stop_reason: StopReason::UncertainEffect,
+                reply:
+                    "A tool's outcome is unknown. Reconcile the external state before continuing."
+                        .into(),
+                tool_calls,
+                iterations: iteration,
+                usage,
+                messages,
+                interrupted: false,
+                guard: GuardReport::close(&guard),
+                estimated_input_tokens: last_estimate,
+                observed_input_tokens: last_observed,
+            });
+        }
+
         // ---- Checkpoint: this boundary is durable **before** the next model call goes out.
         // Crash here = resume from exactly here; the finished tool round is never re-run.
         if let Some(checkpoint) = &turn.checkpoint {
             checkpoint(Checkpoint {
+                round_id: round_id.clone(),
                 messages: messages.clone(),
                 iterations: iteration,
                 usage,
             })
-            .await;
+            .await
+            .map_err(joyczl_provider::ProviderError::Api)?;
         }
     }
 
@@ -739,9 +827,11 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
     // residue: `max_iterations == 1`, or a provider that keeps emitting tool calls with an empty
     // tool table). Say what happened and how to continue — never "ask smaller".
     Ok(LoopResult {
+        stop_reason: StopReason::IterationLimit,
+        round_id: round_id.clone(),
         reply: format!(
-            "（这一轮用完了 {} 步预算，没能收尾。上面每步的工具调用与结果都还在，\
-             说一声「接着做」我就从断的地方继续；想一次做完的话，也可以把它拆成两步说。）",
+            "(This turn used its {} steps without wrapping up. Every tool call and result above is still here —\
+             say \"carry on\" and I resume where it stopped, or split the request into two and it fits in one turn.)",
             turn.max_iterations
         ),
         tool_calls,
@@ -760,6 +850,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
 /// The stand-down scene. Both interrupt and "iteration cap" assemble `LoopResult` here — past
 /// seven or eight params, a struct reads better, and adding a field no longer breaks four sites.
 struct Scene {
+    round_id: String,
     streamed: Arc<Mutex<String>>,
     tool_calls: Vec<ToolOutcome>,
     iterations: i32,
@@ -772,6 +863,7 @@ struct Scene {
 
 fn interrupted_result(scene: Scene) -> LoopResult {
     let Scene {
+        round_id,
         streamed,
         tool_calls,
         iterations,
@@ -788,6 +880,8 @@ fn interrupted_result(scene: Scene) -> LoopResult {
         partial
     };
     LoopResult {
+        stop_reason: StopReason::Other,
+        round_id,
         reply,
         tool_calls,
         iterations,

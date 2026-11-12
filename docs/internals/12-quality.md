@@ -131,8 +131,7 @@ loader 与一条事件断言。**不做第二套框架**是这一层的设计约
   放它过就是把绿灯当装饰。
 
 现在五条，各钉一个边界：压缩（窗口与 token 门同时命中）、审批超时（没人回答 → 拒绝且能
-收尾）、增量输出（`toolDelta` 在 `toolCompleted` 之前）、MCP 断线（重建传输 → 重放握手 →
-重试一次）、步数用尽但待办没写完（自动续一片，且续跑**带着**前一段的步骤）。
+收尾）、增量输出（`toolDelta` 在 `toolCompleted` 之前）、MCP 断线（重建传输与握手，原调用结果未知、不自动重试）、步数用尽但待办没写完（自动续一片，且续跑**带着**前一段的步骤）。
 
 ## 12.3 judge：真模型 + 裁判
 
@@ -171,6 +170,7 @@ release gate 步骤里跑（`bash ../scripts/smoke.sh`）。
 | Rust (fmt / clippy / test) | `cargo fmt --check`、`clippy --all-targets -D warnings`、`cargo test --workspace` |
 | Protocol artifacts (drift check) | `python3 scripts/write_schema.py --check`（① 的漂移检查） |
 | Tool docs (drift check) | `python3 scripts/check_tool_docs.py`（⑥：代码里的工具名单、06-tools §6.0 的清单与数字、两份 README 的工具表必须一致） |
+| i18n (drift check) | `python3 scripts/check_i18n.py`（⑪：驾驶舱里 `t()` 用到的每条文案都要有英文，反之亦然，占位符名字还要对得上） |
 | TypeScript | `npm install` → `npm run typecheck` → `npm test` |
 | Python SDK | `uv sync` → `uv run mypy` → `uv run pytest` |
 | Release gate | `cargo build -p joyczl-cli` → `joy eval evals/deterministic` → `bash ../scripts/smoke.sh` |
@@ -182,7 +182,7 @@ release gate 步骤里跑（`bash ../scripts/smoke.sh`）。
   边界对」。这两件事各自出过问题（一次是测试本身平台相关、一次是 Rust↔前端的缝），
   所以都不当可选项。
 
-`just check` 是本地版：`fmt-check + schema drift + tool docs drift + ts-check + py-check + eval`，
+`just check` 是本地版：`fmt-check + schema drift + tool docs drift + config docs drift + i18n drift + ts-check + py-check + eval`，
 再加 `clippy` 与 `cargo test`。**提交前跑它**——本轮工作里 CI 连红六次就是没跑全
 导致的（本地全绿但 CI 红，因为一个测试断言依赖了本机有沙箱）。
 

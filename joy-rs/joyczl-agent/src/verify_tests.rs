@@ -20,6 +20,7 @@ async fn fixture() -> (tempfile::TempDir, Steps, String) {
 
 fn verifier(workspace: &std::path::Path, steps: &Steps, task_id: &str) -> Verifier {
     Verifier {
+        run_id: "run1".into(),
         root: Some(workspace.to_path_buf()),
         steps: steps.clone(),
         task_id: task_id.to_string(),
@@ -62,7 +63,7 @@ async fn a_missing_file_fails_with_the_measurement_not_a_guess() {
         .await;
     assert!(!results[0].passed);
     assert!(
-        results[0].detail.contains("不存在"),
+        results[0].detail.contains("does not exist"),
         "失败要说实测：{}",
         results[0].detail
     );
@@ -95,7 +96,7 @@ async fn file_contains_counts_a_plain_substring() {
         .await;
     assert!(!short[0].passed);
     assert!(
-        short[0].detail.contains("只找到 3 处"),
+        short[0].detail.contains("only 3 ×"),
         "要说清实测几处：{}",
         short[0].detail
     );
@@ -162,7 +163,7 @@ async fn a_path_outside_the_workspace_is_refused() {
         .await;
     assert!(!results[0].passed, "逃逸必须被拒");
     assert!(
-        results[0].detail.contains("之外"),
+        results[0].detail.contains("outside the working directory"),
         "拒绝要说清在范围之外：{}",
         results[0].detail
     );
@@ -172,6 +173,7 @@ async fn a_path_outside_the_workspace_is_refused() {
 async fn no_workspace_refuses_every_path_check() {
     let (_dir, steps, task) = fixture().await;
     let verifier = Verifier {
+        run_id: "run1".into(),
         root: None,
         steps,
         task_id: task,
@@ -184,7 +186,7 @@ async fn no_workspace_refuses_every_path_check() {
         .await;
     assert!(!results[0].passed, "没有工作目录就不做路径检查");
     assert!(
-        results[0].detail.contains("工作目录"),
+        results[0].detail.contains("working directory"),
         "要说清原因：{}",
         results[0].detail
     );
@@ -201,7 +203,7 @@ fn a_malformed_condition_is_dropped_with_its_reason() {
 
     let parsed = parse(r#"[{"kind":"toolsOk","tool":"write_file","min":2}]"#);
     assert_eq!(parsed.len(), 1);
-    assert_eq!(parsed[0].label(), "write_file 成功调用至少 2 次");
+    assert_eq!(parsed[0].label(), "write_file succeeds at least 2 times");
 }
 
 #[test]
@@ -211,7 +213,7 @@ fn labels_read_as_conditions() {
             path: "report.md".to_string()
         }
         .label(),
-        "report.md 存在"
+        "report.md exists"
     );
     assert_eq!(
         Acceptance::FileContains {
@@ -220,6 +222,53 @@ fn labels_read_as_conditions() {
             min: 3
         }
         .label(),
-        "report.md 里至少 3 处「结论」"
+        "report.md contains at least 3 × “结论”"
     );
+}
+
+#[tokio::test]
+async fn successes_from_an_older_run_cannot_satisfy_current_acceptance() {
+    let (dir, steps, task) = fixture().await;
+    let old = steps
+        .begin(NewStep {
+            task_id: &task,
+            run_id: Some("older-run"),
+            seq: 1,
+            kind: "tool",
+            tool: Some("write_file"),
+            input_json: None,
+            idempotency_key: Some("older:1"),
+        })
+        .await
+        .unwrap();
+    steps
+        .close(old, "ok", None, Some("old output"))
+        .await
+        .unwrap();
+    let verifier = verifier(dir.path(), &steps, &task);
+    let condition = [Acceptance::ToolsOk {
+        tool: "write_file".into(),
+        min: 1,
+    }];
+    assert!(
+        !verifier.run(&condition).await[0].passed,
+        "an old delivery is not evidence for this execution"
+    );
+    let current = steps
+        .begin(NewStep {
+            task_id: &task,
+            run_id: Some("run1"),
+            seq: 1,
+            kind: "tool",
+            tool: Some("write_file"),
+            input_json: None,
+            idempotency_key: Some("current:1"),
+        })
+        .await
+        .unwrap();
+    steps
+        .close(current, "ok", None, Some("new output"))
+        .await
+        .unwrap();
+    assert!(verifier.run(&condition).await[0].passed);
 }

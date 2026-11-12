@@ -76,8 +76,12 @@ async fn ledger(server: &Server, params: Option<&Value>) -> Result<Value, ErrorO
         entries: entries
             .into_iter()
             .map(|row| LedgerEntryView {
-                kind: row.kind,
-                preview: preview_of(&row.payload),
+                kind: row.kind.clone(),
+                preview: if row.kind == "provider_item" {
+                    "Model continuation data".into()
+                } else {
+                    preview_of(&row.payload)
+                },
                 fidelity: row.fidelity,
                 bytes: crate::narrow(row.payload.len() as i64),
             })
@@ -106,9 +110,12 @@ pub(crate) fn preview_of(payload: &str) -> String {
 fn index(server: &Server) -> Result<Value, ErrorObject> {
     let home = server.settings().home;
     let bundle = joyczl_memory::bundle::Bundle::new(&home);
-    let pages = bundle
-        .pages()
-        .map_err(|e| failure(format!("记忆库读不了（{}）：{e}", bundle.root().display())))?;
+    let pages = bundle.pages().map_err(|e| {
+        failure(format!(
+            "the memory library could not be read ({}): {e}",
+            bundle.root().display()
+        ))
+    })?;
     let catalog = bundle.index_text().unwrap_or_default();
     encode(MemoryIndexResponse {
         catalog,
@@ -129,9 +136,12 @@ fn page(server: &Server, params: Option<&Value>) -> Result<Value, ErrorObject> {
     let p: MemoryPageParams = parse(params, methods::MEMORY_PAGE)?;
     let home = server.settings().home;
     let bundle = joyczl_memory::bundle::Bundle::new(&home);
-    let found = bundle
-        .read(&p.page)
-        .map_err(|e| failure(format!("记忆页读不了（{}）：{e}", bundle.root().display())))?;
+    let found = bundle.read(&p.page).map_err(|e| {
+        failure(format!(
+            "could not read the memory page ({}): {e}",
+            bundle.root().display()
+        ))
+    })?;
     encode(MemoryPageResponse {
         page: found.map(|page| MemoryPageView {
             slug: page.slug,
@@ -182,7 +192,7 @@ pub(crate) fn usage_of(
     };
     let notice = (ratio * 100.0 >= warn_at as f64).then(|| {
         format!(
-            "上下文已用 {:.0}%（{} / {} token）：再长就该压缩了。",
+            "Context is {:.0}% used ({} / {} tokens): it should be compacted soon.",
             ratio * 100.0,
             used,
             budget_tokens
@@ -273,7 +283,7 @@ pub async fn compact_session(
     }
     let Some(resolved) = server.resolved() else {
         return Err(failure(
-            "压缩要一次模型调用，但模型还没配好（先 model/save 或设 JOY_PROVIDER）".to_string(),
+            "Compaction costs one model call, but no model is configured yet (model/save first, or set JOY_PROVIDER)".to_string(),
         ));
     };
     let (covered_now, summary) = joyczl_memory::compaction::roll_forward_with(
@@ -294,11 +304,11 @@ pub async fn compact_session(
         // returning the old coverage would look like the button did nothing.
         Ok(false) => {
             let why = format!(
-                "压缩结果没写进去：库里已有一份覆盖更多轮次的摘要（并发压缩）。当前覆盖 {covered} 轮"
+                "The compaction was not stored: the database already holds a summary covering more turns (concurrent compaction); it covers {covered} turns"
             );
             return Err(failure(why));
         }
-        Err(e) => return Err(internal(format!("摘要落库失败：{e}"))),
+        Err(e) => return Err(internal(format!("could not store the summary: {e}"))),
     }
     Ok(SessionCompactResponse {
         covered_turns: covered_now,
@@ -312,7 +322,7 @@ fn parse<T: DeserializeOwned>(params: Option<&Value>, method: &str) -> Result<T,
     let value = params.cloned().unwrap_or_else(|| serde_json::json!({}));
     serde_json::from_value(value).map_err(|e| ErrorObject {
         code: codes::INVALID_PARAMS,
-        message: format!("{method} 的参数不对：{e}"),
+        message: format!("{method} got bad parameters: {e}"),
         data: None,
     })
 }

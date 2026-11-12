@@ -111,7 +111,7 @@ impl ApprovalBroker for Bridge {
                 )
                 .await
             {
-                eprintln!("(joy) 审批审计没记上（{outcome}）：{e}");
+                eprintln!("(joy) the approval audit record was not written ({outcome}): {e}");
             }
             let approved = outcome == "approved";
             // Deregister no matter the outcome — otherwise the table grows forever.
@@ -124,7 +124,7 @@ impl ApprovalBroker for Bridge {
                 }
             }
             if !approved {
-                eprintln!("(joy) 批准请求 {request_id} 没有在时限内得到批准，按拒绝处理");
+                eprintln!("(joy) approval request {request_id} was not approved in time; treating it as a denial");
             }
             approved
         })

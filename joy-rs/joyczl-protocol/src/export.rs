@@ -239,7 +239,7 @@ fn write_consts(out_dir: &Path) -> Result<(), String> {
     let codes_module = render_const_module(
         "CODES",
         "`rpc::codes`",
-        "key 跟 Rust 侧常量同名，好让两边 grep 得到同一处。",
+        "the keys match the Rust constants, so one grep finds both sides.",
         &code_entries()
             .into_iter()
             .map(|(key, value)| (key, value.to_string()))
@@ -249,7 +249,7 @@ fn write_consts(out_dir: &Path) -> Result<(), String> {
     let methods_module = render_const_module(
         "METHODS",
         "`protocol::v2::methods`",
-        "值就是线上传的方法名。",
+        "the values are the method names that travel on the wire.",
         &method_entries()
             .into_iter()
             .map(|(key, value)| (key, format!("\"{value}\"")))

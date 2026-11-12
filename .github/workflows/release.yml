@@ -16,8 +16,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin }
-          - { os: macos-13, target: x86_64-apple-darwin }
+          # macOS 13 镜像已于 2025-12-04 退役，继续用它会让 job 永远排队（v0.8.0
+          # 挂满 24h 被取消、v0.16.0 排队 31h 未启动，release job 因此从未执行）。
+          # 官方给 x86_64 的替代标签是 macos-15-intel（可用到 2027 年秋）。
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
           - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}
@@ -50,7 +53,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, name: macos-arm64 }
+          - { os: macos-15, name: macos-arm64 }
           - { os: ubuntu-24.04, name: linux-x86_64 }
           - { os: ubuntu-24.04-arm, name: linux-aarch64 }
     runs-on: ${{ matrix.os }}

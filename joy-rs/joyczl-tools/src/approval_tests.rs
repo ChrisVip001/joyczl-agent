@@ -52,7 +52,10 @@ fn on_request_turns_a_denial_into_a_question() {
     let Gate::NeedsApproval { reason } = &ask else {
         panic!("on-request 时该问一句，实际 {ask:?}");
     };
-    assert!(reason.contains("放行"), "拒因要留给模型看：{reason}");
+    assert!(
+        reason.contains("No allow rule matched"),
+        "拒因要留给模型看：{reason}"
+    );
 }
 
 /// **The hard-deny list is non-negotiable**: approval on or not, it's refused without even asking.
@@ -65,9 +68,9 @@ fn a_hard_denied_command_is_never_negotiable() {
     ] {
         let verdict = vet(command, &policy(&["*"], true));
         let Gate::Deny(why) = &verdict else {
-            panic!("{command} 必须被硬拒，实际 {verdict:?}");
+            panic!("{command} 必须被hard block，实际 {verdict:?}");
         };
-        assert!(why.contains("硬拒"), "{command}: {why}");
+        assert!(why.contains("hard block"), "{command}: {why}");
     }
 }
 
@@ -84,9 +87,9 @@ fn the_sandbox_gate_is_not_negotiable_either() {
     }
     let verdict = vet("echo hi", &policy(&["echo*"], true));
     let Gate::Deny(why) = &verdict else {
-        panic!("没有沙箱就该拒绝，实际 {verdict:?}");
+        panic!("没有sandbox就该拒绝，实际 {verdict:?}");
     };
-    assert!(why.contains("沙箱"), "{why}");
+    assert!(why.contains("sandbox"), "{why}");
 }
 
 /// Approved it runs, denied it doesn't, and **the denial is text** (the tool layer never Errs).
@@ -107,7 +110,7 @@ async fn approval_decides_whether_the_command_runs() {
         None,
     )
     .await;
-    assert!(output.contains("approved-ok"), "批准了就该跑：{output}");
+    assert!(output.contains("approved-ok"), "approved了就该跑：{output}");
     assert_eq!(broker.seen.lock().expect("锁").len(), 1);
     assert_eq!(
         broker.seen.lock().expect("锁")[0].args_preview,
@@ -129,7 +132,7 @@ async fn approval_decides_whether_the_command_runs() {
     )
     .await;
     assert!(output.starts_with("Error:"), "{output}");
-    assert!(output.contains("没有被批准"), "{output}");
+    assert!(output.contains("not approved"), "{output}");
     assert!(!output.contains("nope"), "拒绝就是没跑：{output}");
 }
 
@@ -140,7 +143,7 @@ fn a_session_approved_command_needs_no_second_question() {
     let policy = policy(&["ls *"], true);
     assert!(
         matches!(vet("echo hi", &policy), Gate::NeedsApproval { .. }),
-        "起点：没匹配上放行表，问一句"
+        "起点：没匹配上allowed表，问一句"
     );
 
     policy
@@ -154,11 +157,11 @@ fn a_session_approved_command_needs_no_second_question() {
         assert_eq!(gate, Gate::Allow, "{gate:?}");
     } else {
         let Gate::Deny(why) = &gate else {
-            panic!("没有沙箱就该拒绝，实际 {gate:?}");
+            panic!("没有sandbox就该拒绝，实际 {gate:?}");
         };
         assert!(
-            why.contains("沙箱"),
-            "拒绝的理由必须是沙箱，而不是放行表：{why}"
+            why.contains("sandbox"),
+            "拒绝的理由必须是sandbox，而不是allowed表：{why}"
         );
     }
 
@@ -170,7 +173,7 @@ fn a_session_approved_command_needs_no_second_question() {
         .push("sudo reboot".to_string());
     assert!(
         matches!(vet("sudo reboot", &policy), Gate::Deny(_)),
-        "记住一条命令也解放不了硬拒名单"
+        "记住一条命令也解放不了hard block名单"
     );
 }
 

@@ -15,7 +15,7 @@
 //! not be able to soften them by re-planning.
 
 use joyczl_provider::{ContentBlock, CreateRequest, Message, Resolved};
-use joyczl_state::{NewStep, Steps};
+use joyczl_state::Steps;
 use serde_json::Value;
 
 /// A plan only needs a few lines; a long one is a sign the model is padding.
@@ -35,14 +35,16 @@ impl Plan {
     /// protocol object, and a model that ignores it loses nothing but its own checklist.
     pub fn brief(&self) -> String {
         let mut text = format!(
-            "执行计划（第 {} 版，共 {} 步）：\n",
+            "Execution plan (v{}, {} steps):\n",
             self.version,
             self.steps.len()
         );
         for (index, step) in self.steps.iter().enumerate() {
             text.push_str(&format!("{}. {}\n", index + 1, step));
         }
-        text.push_str("按计划推进；哪一步做不到就直说，不要为了走完计划而跳过验收条件。");
+        text.push_str(
+            "Work through the plan; if a step cannot be done, say so — do not skip acceptance to reach the end.",
+        );
         text
     }
 }
@@ -56,23 +58,23 @@ pub async fn make(
     feedback: Option<&str>,
     version: i32,
 ) -> Result<Plan, String> {
-    let system = "你在给一个长期任务排执行计划。只回一个 JSON 对象，不要别的话：\
-                  {\"steps\": [\"一步一句话\", …]}\n\
-                  要求：3 到 6 步；每一步都短、可执行、能看出做没做完；\
-                  不要写工具名，不要复述验收条件，不要写「检查是否完成」这种空话。用中文。";
-    let mut user = format!("任务：{title}\n");
+    let system = "You are planning a long-running task. Reply with one JSON object and nothing else: \
+                  {\"steps\": [\"one sentence per step\", …]}\n\
+                  Requirements: 3 to 6 steps; each one short, actionable, and clearly done or not done; \
+                  no tool names, do not restate the acceptance criteria, and no filler like \"check whether it is done\". Write in English.";
+    let mut user = format!("Task: {title}\n");
     if let Some(goal) = goal {
-        user.push_str(&format!("目标：{goal}\n"));
+        user.push_str(&format!("Goal: {goal}\n"));
     }
     if !acceptance.is_empty() {
-        user.push_str("完成标准（由人定，不能改）：\n");
+        user.push_str("Acceptance criteria (set by the user, not negotiable):\n");
         for line in acceptance {
             user.push_str(&format!("- {line}\n"));
         }
     }
     if let Some(feedback) = feedback {
         user.push_str(&format!(
-            "\n上一版计划跑到这里没过：{feedback}\n请给出调整后的计划（第 {version} 版）。"
+            "\nThe previous plan did not get past this: {feedback}\nGive a revised plan (v{version})."
         ));
     }
 
@@ -87,7 +89,7 @@ pub async fn make(
             max_tokens: PLAN_MAX_TOKENS,
         })
         .await
-        .map_err(|e| format!("计划器调用失败：{e}"))?;
+        .map_err(|e| format!("the planner call failed: {e}"))?;
 
     let text = response
         .content
@@ -100,12 +102,12 @@ pub async fn make(
         .join("\n");
     let json = joyczl_memory::gate::extract_json(&text).ok_or_else(|| {
         format!(
-            "计划器没给出 JSON：{}",
+            "the planner returned no JSON: {}",
             text.chars().take(200).collect::<String>()
         )
     })?;
-    let value: Value =
-        serde_json::from_str(&json).map_err(|e| format!("计划的 JSON 读不了：{e}（{json}）"))?;
+    let value: Value = serde_json::from_str(&json)
+        .map_err(|e| format!("the plan JSON could not be read: {e} ({json})"))?;
 
     let steps: Vec<String> = value
         .get("steps")
@@ -122,43 +124,26 @@ pub async fn make(
         })
         .unwrap_or_default();
     if steps.is_empty() {
-        return Err("计划器给了空计划（steps 为空）".to_string());
+        return Err("the planner returned an empty plan (steps is empty)".to_string());
     }
     Ok(Plan { version, steps })
 }
 
-/// Write the plan into the step ledger. `run_id` stays `None`: a plan outlives the run that
-/// produced it, and `ToolsOk` counts by tool name, so plan rows can never inflate a tool count.
-pub async fn record(steps: &Steps, task_id: &str, plan: &Plan) {
-    for (index, step) in plan.steps.iter().enumerate() {
-        let input = serde_json::json!({ "title": step, "version": plan.version }).to_string();
-        let key = format!("plan:{task_id}:v{}:{}", plan.version, index + 1);
-        match steps
-            .begin(NewStep {
-                task_id,
-                run_id: None,
-                seq: (index + 1) as i32,
-                kind: "plan",
-                tool: None,
-                input_json: Some(&input),
-                idempotency_key: Some(&key),
-            })
-            .await
-        {
-            Ok(id) => {
-                if let Err(e) = steps
-                    .close(
-                        id,
-                        "planned",
-                        None,
-                        Some(&format!("第 {} 版", plan.version)),
-                    )
-                    .await
-                {
-                    eprintln!("(joy) 计划步骤收尾没记上（不影响回合）：{e}");
-                }
-            }
-            Err(e) => eprintln!("(joy) 计划步骤没记进台账：{e}"),
-        }
-    }
+/// Commit the complete recovery snapshot and readable step rows together.
+pub async fn record(steps: &Steps, task_id: &str, plan: &Plan) -> Result<(), String> {
+    steps
+        .plans()
+        .save(task_id, plan.version, &plan.steps)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Legacy partial step rows are deliberately not treated as complete snapshots.
+pub async fn restore(steps: &Steps, task_id: &str) -> Result<Option<Plan>, String> {
+    steps
+        .plans()
+        .latest(task_id)
+        .await
+        .map(|row| row.map(|(version, steps)| Plan { version, steps }))
+        .map_err(|e| e.to_string())
 }

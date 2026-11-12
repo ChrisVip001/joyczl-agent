@@ -211,7 +211,7 @@ hello=20world=0Asecond=20line\r\n";
 fn a_message_without_a_subject_is_still_a_message() {
     let raw = b"From: a@b.c\r\n\r\nthe body\r\n";
     let message = parse(raw, 9);
-    assert_eq!(message.subject, "(无主题)");
+    assert_eq!(message.subject, "(no subject)");
     assert_eq!(message.body, "the body");
     assert_eq!(message.from, "a@b.c");
 }

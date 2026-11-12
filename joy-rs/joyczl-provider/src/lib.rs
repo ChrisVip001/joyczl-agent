@@ -1,14 +1,12 @@
 //! `joyczl-provider` — model access.
 //!
 //! loop speaks only one dialect: the Anthropic Messages shape (system/messages/tools in,
-//! content blocks out). Providers plug in via two paths:
+//! content blocks out). Providers plug in via three wire formats:
 //!
 //!   * anthropic native format → Anthropic, Kimi/Moonshot, GLM/Z.ai, MiniMax
-//!   * openai compatible format → OpenAI, Gemini, DeepSeek, OpenRouter, xAI ...
+//!   * Responses native format -> OpenAI, with encrypted continuation
+//!   * openai compatible format -> Gemini, DeepSeek, OpenRouter, xAI ...
 //!   * local inference → Ollama (same openai compatible format, no key needed)
-//!
-//! The entire difference between the two wire formats is those two conversion functions
-//! in openai.rs — together they are only a few dozen lines.
 //!
 //! Differences from the Python version (deliberate):
 //!   * no more `SimpleNamespace` fake objects — these are real types;
@@ -21,6 +19,7 @@ pub mod embed;
 pub mod error;
 pub mod mock;
 pub mod openai;
+pub mod responses;
 pub mod retry;
 pub mod sse;
 pub mod tokens;
@@ -47,6 +46,14 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
+    /// OpenAI-compatible thinking continuation; never rendered as assistant answer text.
+    OpenAiReasoning {
+        text: String,
+    },
+    /// Native encrypted reasoning, retained in local checkpoints for Responses continuation.
+    ResponseItem {
+        item: serde_json::Value,
+    },
     Text {
         text: String,
     },
@@ -115,6 +122,10 @@ pub enum StopReason {
     EndTurn,
     ToolUse,
     MaxTokens,
+    /// The host loop exhausted its iteration allowance.
+    IterationLimit,
+    /// The runtime halted after an unconfirmed external effect.
+    UncertainEffect,
     #[serde(other)]
     Other,
 }
@@ -225,15 +236,35 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// Native continuation data must never be silently dropped or sent to a different wire.
+pub(crate) fn reject_responses_continuation(request: &CreateRequest) -> Result<(), ProviderError> {
+    if request
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .any(|block| match block {
+            ContentBlock::ResponseItem { .. } => true,
+            ContentBlock::ToolUse {
+                extra: Some(extra), ..
+            } => extra.get("openaiResponses").is_some(),
+            _ => false,
+        })
+    {
+        return Err(ProviderError::Api("This checkpoint contains Responses continuation data; resume with a Responses provider or begin a fresh turn".into()));
+    }
+    Ok(())
+}
+
 // ---- provider catalog -------------------------------------------------------
 
-/// The two wire formats. Choosing one decides which HTTP client is used.
+/// The native Anthropic, Chat Completions and Responses wire formats. Choosing one decides which HTTP client is used.
 /// Lowercase in JSON — the catalog file uses the same words as `JOY_PROVIDER`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Wire {
     Anthropic,
     OpenAi,
+    Responses,
 }
 
 pub struct ProviderInfo {
@@ -287,7 +318,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
     },
     ProviderInfo {
         id: "openai",
-        wire: Wire::OpenAi,
+        wire: Wire::Responses,
         key_env: "OPENAI_API_KEY",
         base_url: None,
         model: "gpt-5.5",
@@ -490,7 +521,7 @@ pub fn resolve(settings: &Settings) -> Result<Resolved, String> {
 pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<Resolved, String> {
     let info = catalog.lookup(&settings.provider).ok_or_else(|| {
         format!(
-            "未知的 JOY_PROVIDER '{}'。可选：{}",
+            "unknown JOY_PROVIDER '{}'. Options: {}",
             settings.provider,
             catalog.ids().join(", ")
         )
@@ -525,12 +556,16 @@ pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<R
             timeout,
             max_retries,
         )),
-        Wire::OpenAi => Arc::new(openai::Client::new(
+        Wire::Responses => Arc::new(responses::Client::new(
             &api_key,
             base_url.as_deref(),
             timeout,
             max_retries,
         )),
+        Wire::OpenAi => Arc::new(
+            openai::Client::new(&api_key, base_url.as_deref(), timeout, max_retries)
+                .with_reasoning_content(info.id == "deepseek"),
+        ),
     };
 
     Ok(Resolved {
@@ -550,22 +585,22 @@ pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<R
 }
 
 fn no_key_message(id: &str, key_env: &str, known: &str) -> String {
-    let mut msg = format!("provider '{id}' 没有 API key。\n");
+    let mut msg = format!("provider '{id}' has no API key.\n");
     if let Some(url) = key_url(id) {
-        msg.push_str(&format!("  1. 去领一个 key：{url}\n"));
+        msg.push_str(&format!("  1. Get a key: {url}\n"));
     }
     msg.push_str(&format!(
-        "  2. 配进 Joy（`--env {var}` 只读环境变量、不落盘；key 优先交给系统钥匙串）：\
-         \n       /model add <名字> {id} --env {var}\n",
+        "  2. Wire it into Joy (`--env {var}` reads the environment and writes nothing; the key goes to the system keychain first):\
+         \n       /model add <name> {id} --env {var}\n",
         var = key_env,
         id = id,
     ));
     msg.push_str(&format!(
-        "  3. 或直接给 key（钥匙串不可用时会退回明文文件，界面会如实说是哪一种）：\
-         \n       /model add <名字> {id} --key 你的-key\n",
+        "  3. Or hand the key over directly (without a usable keychain it falls back to a plaintext file, and the UI says which one):\
+         \n       /model add <name> {id} --key your-key\n",
         id = id,
     ));
-    msg.push_str(&format!("其他 provider：{known}"));
-    msg.push_str("\n切到另一套：/model use <名字>（配置在 REPL 与 <home>/models.json，驾驶舱不放模型面板）。");
+    msg.push_str(&format!("Other providers: {known}"));
+    msg.push_str("\nSwitch to another one: /model use <name> (configured in the REPL and <home>/models.json; the cockpit has no model panel).");
     msg
 }

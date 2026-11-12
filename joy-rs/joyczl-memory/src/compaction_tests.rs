@@ -74,7 +74,10 @@ async fn a_dead_summarizer_falls_back_to_a_deterministic_excerpt() {
     assert_eq!(covered, 2, "折叠过就是折叠过，跟上不上模型无关");
     assert!(summary.contains("问题 0"), "兜底要留住原话：{summary}");
     assert!(summary.contains("回答 1"), "{summary}");
-    assert!(summary.starts_with("（模型摘要不可用"), "{summary}");
+    assert!(
+        summary.starts_with("(the model summary is unavailable"),
+        "{summary}"
+    );
 }
 
 #[tokio::test]

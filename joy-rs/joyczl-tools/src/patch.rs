@@ -71,7 +71,7 @@ pub fn parse(text: &str) -> Result<Vec<Op>, String> {
     }
     if !started {
         return Err(
-            "找不到 `*** Begin Patch` —— 补丁必须从这一行开始（前后可以有别的文字）。".into(),
+            "No `*** Begin Patch` found — a patch must start at that line (there may be other text around it).".into(),
         );
     }
 
@@ -89,7 +89,7 @@ pub fn parse(text: &str) -> Result<Vec<Op>, String> {
             None => Ok(()),
             Some(Section::Update { path, hunks }) => {
                 if hunks.is_empty() {
-                    return Err(format!("`*** Update File: {path}` 后面没有 hunk。"));
+                    return Err(format!("`*** Update File: {path}` has no hunk after it."));
                 }
                 ops.push(Op::Update { path, hunks });
                 Ok(())
@@ -135,29 +135,27 @@ pub fn parse(text: &str) -> Result<Vec<Op>, String> {
         }
         if line.starts_with("*** ") {
             return Err(format!(
-                "不认识的指令：`{line}`。只支持 Update / Add / Delete File（Move 没实现，\
-                 宁可拒绝也不装作移动了）。"
+                "Unknown directive: `{line}`. Only Update / Add / Delete File are supported (Move is not implemented — better to refuse than to pretend it moved)."
             ));
         }
 
         match section.as_mut() {
             None => {
                 return Err(format!(
-                    "这行出现在任何文件段之前：`{line}`。它得落在 `*** Update File:` 之类的\
-                     标题下面。"
+                    "This line appears before any file section: `{line}`. It has to sit under a heading like `*** Update File:`."
                 ))
             }
             Some(Section::Add { lines, .. }) => {
                 let Some(content) = line.strip_prefix('+') else {
                     return Err(format!(
-                        "`*** Add File:` 段里每一行都要以 `+` 开头，这行不是：`{line}`。"
+                        "Every line in a `*** Add File:` section must start with `+`; this one does not: `{line}`."
                     ));
                 };
                 lines.push(content.to_string());
             }
             Some(Section::Delete { .. }) => {
                 if !line.trim().is_empty() {
-                    return Err(format!("`*** Delete File:` 段里不该有内容：`{line}`。"));
+                    return Err(format!("A `*** Delete File:` section must not contain content: `{line}`."));
                 }
             }
             Some(Section::Update { hunks, .. }) => {
@@ -186,12 +184,12 @@ pub fn parse(text: &str) -> Result<Vec<Op>, String> {
                     PatchLine::Context(String::new())
                 } else {
                     return Err(format!(
-                        "hunk 里的每一行要以 ` `/`-`/`+` 开头，这行不是：`{line}`。"
+                        "Every line in a hunk must start with ` `, `-` or `+`; this one does not: `{line}`."
                     ));
                 };
                 let Some(hunk) = hunks.last_mut() else {
                     return Err(format!(
-                        "内容出现在第一个 `@@` 之前：`{line}`。每个 hunk 要用 `@@` 开头。"
+                        "Content appears before the first `@@`: `{line}`. Every hunk starts with `@@`."
                     ));
                 };
                 hunk.lines.push(parsed);
@@ -200,11 +198,11 @@ pub fn parse(text: &str) -> Result<Vec<Op>, String> {
     }
 
     if !ended {
-        return Err("补丁没有 `*** End Patch` 结尾 —— 半截补丁不敢套用。".into());
+        return Err("The patch has no `*** End Patch` — refusing to apply half a patch.".into());
     }
     flush(section.take(), &mut ops)?;
     if ops.is_empty() {
-        return Err("补丁里没有任何文件段。".into());
+        return Err("The patch has no file section at all.".into());
     }
     Ok(ops)
 }
@@ -240,8 +238,7 @@ pub fn apply(current: &str, hunks: &[Hunk]) -> Result<String, String> {
             .collect();
         if before.is_empty() {
             return Err(format!(
-                "第 {} 个 hunk（@@ {}）只有新增行、没有任何上下文 —— 不知道往哪儿加。\
-                 至少留一行不改的内容作为锚点。",
+                "Hunk {} (@@ {}) has only added lines and no context — there is no telling where it goes. Keep at least one unchanged line as an anchor.",
                 index + 1,
                 hunk.hint
             ));
@@ -259,8 +256,7 @@ pub fn apply(current: &str, hunks: &[Hunk]) -> Result<String, String> {
         };
         let Some(start) = found else {
             return Err(format!(
-                "第 {} 个 hunk（@@ {}）在文件里找不到对应的原文。补丁里的上下文行必须与文件\
-                 逐字符一致 —— 先 read_file 看一眼，或者少写几行上下文。",
+                "Hunk {} (@@ {}) matches nothing in the file. The context lines in a patch must match the file character for character — read_file first, or write fewer context lines.",
                 index + 1,
                 hunk.hint
             ));
@@ -281,16 +277,12 @@ pub fn apply_patch(policy: WritePolicy) -> Tool {
     let policy = Arc::new(policy);
     Tool {
         name: "apply_patch".to_string(),
-        description: "按补丁改文件：一次可以改多个文件、多处，全中才落盘（有一处对不上就一处\
-                      也不改）。格式：`*** Begin Patch` / `*** Update File: 路径` / `@@` / \
-                      以空格、-、+ 开头的行 / `*** Add File: 路径`（每行 + 开头）/ \
-                      `*** Delete File: 路径` / `*** End Patch`。只改文件的一小段用 edit，\
-                      整文件重写用 write_file。可写范围与 edit 相同。"
+        description: "Change files by patch: several files and several places at once, and it lands only if every hunk matches (one mismatch and nothing changes). Format: `*** Begin Patch` / `*** Update File: path` / `@@` / lines starting with space, - or + / `*** Add File: path` (every line starting with +) / `*** Delete File: path` / `*** End Patch`. To change a small stretch use edit; to rewrite a whole file use write_file. The writable scope is the same as edit's."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "patch": {"type": "string", "description": "补丁全文（上限 512KB）。上下文行要与文件逐字符一致。"}
+                "patch": {"type": "string", "description": "The whole patch (512KB at most). Context lines must match the file character for character."}
             },
             "required": ["patch"]
         }),
@@ -300,15 +292,14 @@ pub fn apply_patch(policy: WritePolicy) -> Tool {
                 let text = require_str(&args, "patch")?;
                 if text.len() > MAX_PATCH_BYTES {
                     return Err(anyhow!(
-                        "补丁有 {} 字节，超过上限 {MAX_PATCH_BYTES} —— 这么大的补丁不如直接用 \
-                         write_file，或者拆成几次。",
+                        "The patch is {} bytes, over the {MAX_PATCH_BYTES} limit — a patch that size is better done with write_file, or split into several.",
                         text.len()
                     ));
                 }
                 check_content(&text, "patch")?;
                 let ops = match parse(&text) {
                     Ok(ops) => ops,
-                    Err(why) => return Ok(format!("Error: 补丁没解析出来：{why}")),
+                    Err(why) => return Ok(format!("Error: the patch could not be parsed: {why}")),
                 };
 
                 // Everything is resolved in memory first: a rejected hunk must leave no trace.
@@ -321,34 +312,34 @@ pub fn apply_patch(policy: WritePolicy) -> Tool {
                                 read_text(&resolved)?
                             } else {
                                 return Err(anyhow!(
-                                    "找不到文件：{path}（Update File 只改已存在的文件；新建用 Add File）"
+                                    "File not found: {path} (Update File only changes files that exist; create one with Add File)"
                                 ));
                             };
                             let new = match apply(&old, hunks) {
                                 Ok(new) => new,
                                 Err(why) => return Ok(format!("Error: {path}：{why}")),
                             };
-                            check_content(&new, "补丁结果")?;
+                            check_content(&new, "patch result")?;
                             planned.push((resolved, Some(old), Some(new)));
                         }
                         Op::Add { path, lines } => {
                             let resolved = resolve(&ctx, path);
                             if resolved.exists() {
                                 return Err(anyhow!(
-                                    "{path} 已经存在 —— Add File 只用来建新文件（要改它用 Update File）"
+                                    "{path} already exists — Add File only creates new files (use Update File to change it)"
                                 ));
                             }
                             let mut new = lines.join("\n");
                             if !new.is_empty() {
                                 new.push('\n');
                             }
-                            check_content(&new, "补丁结果")?;
+                            check_content(&new, "patch result")?;
                             planned.push((resolved, None, Some(new)));
                         }
                         Op::Delete { path } => {
                             let resolved = resolve(&ctx, path);
                             if !resolved.is_file() {
-                                return Err(anyhow!("找不到要删除的文件：{path}"));
+                                return Err(anyhow!("No such file to delete: {path}"));
                             }
                             planned.push((resolved, None, None));
                         }
@@ -363,7 +354,7 @@ pub fn apply_patch(policy: WritePolicy) -> Tool {
                 .await;
                 if let Some(why) = blocked {
                     return Ok(format!(
-                        "Error: {why}（PermissionRequest hook 拒绝了这次补丁）"
+                        "Error: {why} (a PermissionRequest hook refused this patch)"
                     ));
                 }
                 let roots = crate::roots::workspace_roots(&ctx, &policy.extra_roots).workspaces;
@@ -373,7 +364,7 @@ pub fn apply_patch(policy: WritePolicy) -> Tool {
                     if let Err(why) = pass_write_gate(
                         "apply_patch",
                         path,
-                        &format!("{} 个文件", planned.len()),
+                        &format!("{} files", planned.len()),
                         &policy,
                         &roots,
                         approval.clone(),
@@ -388,33 +379,33 @@ pub fn apply_patch(policy: WritePolicy) -> Tool {
                 for (path, old, new) in &planned {
                     match (old, new) {
                         (Some(old), Some(new)) if old == new => {
-                            report.push(format!("{}：内容未变，没有写盘", path.display()));
+                            report.push(format!("{}: content unchanged, nothing written", path.display()));
                         }
                         (_, Some(new)) => {
                             if let Some(parent) = path.parent() {
                                 if !parent.is_dir() {
                                     std::fs::create_dir_all(parent)
-                                        .map_err(|e| anyhow!("创建父目录 {parent:?} 失败：{e}"))?;
+                                        .map_err(|e| anyhow!("Could not create the parent directory {parent:?}: {e}"))?;
                                 }
                             }
                             std::fs::write(path, new)
-                                .map_err(|e| anyhow!("写 {path:?} 失败：{e}"))?;
+                                .map_err(|e| anyhow!("Could not write {path:?}: {e}"))?;
                             report.push(format!(
-                                "已修改 {}：{} 行{}",
+                                "Changed {}: {} lines{}",
                                 path.display(),
                                 new.lines().count().max(1),
                                 match old {
                                     Some(old) =>
-                                        format!("（原 {} 行）", old.lines().count().max(1)),
-                                    None => "（新建）".to_string(),
+                                        format!("(was {} lines)", old.lines().count().max(1)),
+                                    None => "(new)".to_string(),
                                 }
                             ));
                             report.push(render_change(old.as_deref(), new));
                         }
                         (_, None) => {
                             std::fs::remove_file(path)
-                                .map_err(|e| anyhow!("删除 {path:?} 失败：{e}"))?;
-                            report.push(format!("已删除 {}", path.display()));
+                                .map_err(|e| anyhow!("Could not delete {path:?}: {e}"))?;
+                            report.push(format!("Deleted {}", path.display()));
                         }
                     }
                 }

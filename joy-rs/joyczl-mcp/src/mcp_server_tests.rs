@@ -81,7 +81,7 @@ async fn remember_then_search_round_trips_through_the_memory_tables() {
                "arguments": {"subject": "alex", "content": "喜欢早上的会议"}}),
     )
     .await;
-    assert!(text(&saved).contains("已记住"), "{}", saved);
+    assert!(text(&saved).contains("Remembered"), "{}", saved);
 
     let found = call(
         &server,
@@ -119,7 +119,7 @@ async fn forget_reports_the_count_and_says_when_there_is_nothing() {
         json!({"name": "memory_forget", "arguments": {"subject": "bob"}}),
     )
     .await;
-    assert!(text(&forgotten).contains("2 条"), "{}", forgotten);
+    assert!(text(&forgotten).contains("2 facts"), "{}", forgotten);
 
     let again = call(
         &server,
@@ -127,7 +127,10 @@ async fn forget_reports_the_count_and_says_when_there_is_nothing() {
         json!({"name": "memory_forget", "arguments": {"subject": "bob"}}),
     )
     .await;
-    assert!(text(&again).contains("没有"), "第二次要如实说：{again}");
+    assert!(
+        text(&again).contains("no memory about"),
+        "第二次要如实说：{again}"
+    );
 }
 
 #[tokio::test]
@@ -142,7 +145,10 @@ async fn empty_memory_answers_honestly_not_with_an_error() {
         .await;
         assert!(response["error"].is_null(), "{tool} 空库不该是 RPC 错误");
         assert_eq!(response["result"]["isError"], Value::Null);
-        assert!(text(&response).contains("还没有"), "{tool}: {response}");
+        assert!(
+            text(&response).contains("Memory has no"),
+            "{tool}: {response}"
+        );
     }
 
     let search = call(
@@ -151,7 +157,10 @@ async fn empty_memory_answers_honestly_not_with_an_error() {
         json!({"name": "memory_search", "arguments": {"query": "???"}}),
     )
     .await;
-    assert!(text(&search).contains("没有找到"), "{search}");
+    assert!(
+        text(&search).contains("Nothing in memory matches"),
+        "{search}"
+    );
 }
 
 #[tokio::test]

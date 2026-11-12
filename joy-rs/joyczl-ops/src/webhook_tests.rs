@@ -151,7 +151,7 @@ async fn a_good_secret_hands_over_exactly_one_turn() {
     fake.fail(
         &request["id"],
         joyczl_protocol::codes::PROVIDER_ERROR,
-        "模型没配好",
+        "No model is configured",
     )
     .await;
     let response = call.await.expect("任务不该 panic");
@@ -230,7 +230,7 @@ async fn a_signed_hook_refuses_stale_and_replayed_requests() {
     fake.fail(
         &request["id"],
         joyczl_protocol::codes::PROVIDER_ERROR,
-        "模型没配好",
+        "No model is configured",
     )
     .await;
     assert_eq!(
@@ -281,7 +281,7 @@ async fn a_hook_can_cap_itself_per_minute() {
     fake.fail(
         &request["id"],
         joyczl_protocol::codes::PROVIDER_ERROR,
-        "模型没配好",
+        "No model is configured",
     )
     .await;
     assert_eq!(call.await.expect("不该 panic").status(), StatusCode::OK);
@@ -365,7 +365,7 @@ async fn an_async_hook_answers_202_and_pushes_the_result_to_its_callback() {
     fake.fail(
         &request["id"],
         joyczl_protocol::codes::PROVIDER_ERROR,
-        "模型没配好",
+        "No model is configured",
     )
     .await;
 
@@ -380,7 +380,7 @@ async fn an_async_hook_answers_202_and_pushes_the_result_to_its_callback() {
     assert!(
         pushed["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("模型没配好")),
+            .is_some_and(|message| message.contains("No model is configured")),
         "失败原因要原样送到：{pushed}"
     );
 }

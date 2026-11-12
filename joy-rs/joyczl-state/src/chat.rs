@@ -168,9 +168,7 @@ impl Chat {
         let limit = turns.clamp(1, 200) as i64 * 2;
         let mut tx = self.pool.begin().await?;
         let inserted = sqlx::query(
-            "INSERT INTO sessions (id, title, cwd, forked_from)
-             SELECT ?, COALESCE(NULLIF(TRIM(title), '') || ' · 分支', '分支'), cwd, id
-               FROM sessions WHERE id = ?",
+            "INSERT INTO sessions (id, title, cwd, forked_from)\n             SELECT ?, COALESCE(NULLIF(TRIM(title), '') || ' · branch', 'branch'), cwd, id\n               FROM sessions WHERE id = ?",
         )
         .bind(to)
         .bind(from)
@@ -179,7 +177,7 @@ impl Chat {
         .rows_affected();
         if inserted == 0 {
             tx.rollback().await?;
-            anyhow::bail!("会话 {from} 不存在");
+            anyhow::bail!("session {from} does not exist");
         }
         let copied = sqlx::query(
             "INSERT INTO chat_log (session_id, role, content, source, created_at)
@@ -533,7 +531,7 @@ impl From<RawSession> for SessionRow {
     fn from(row: RawSession) -> Self {
         SessionRow {
             id: row.id,
-            title: row.title.unwrap_or_else(|| "(空会话)".to_string()),
+            title: row.title.unwrap_or_else(|| "(empty session)".to_string()),
             messages: row.messages,
             started_at: row.started_at,
             last_at: row.last_at,

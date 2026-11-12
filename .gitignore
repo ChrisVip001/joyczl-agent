@@ -44,3 +44,8 @@ desktop/src-tauri/gen/
 # 编辑器/助手的本地状态（和其他 agent 的 .claude/ 同类）：里面是本机会话数据，
 # 不是项目内容，也不该因为「有个目录没被忽略」就被顺手提交。
 .codebuddy/
+
+# macOS 缩略图 + CodeGraph 本地索引 / 守护进程状态：纯本机产物，不进仓库。
+.DS_Store
+.codegraph/
+.cursor/rules/codegraph.mdc

@@ -19,7 +19,7 @@ pub fn write(home: &Path, suite: &str, payload: serde_json::Value) -> Result<()>
     let report_path = home.join("eval_report.json");
     if let Err(e) = std::fs::write(&report_path, record.to_string()) {
         eprintln!(
-            "(joy) eval_report.json 写不进去（{}）：{e}",
+            "(joy) could not write eval_report.json ({}): {e}",
             report_path.display()
         );
     }
@@ -27,7 +27,7 @@ pub fn write(home: &Path, suite: &str, payload: serde_json::Value) -> Result<()>
     // shared "latest" file would let one run quietly overwrite the other's verdict.
     let suite_path = home.join(format!("eval_report_{suite}.json"));
     if let Err(e) = std::fs::write(&suite_path, record.to_string()) {
-        eprintln!("(joy) {} 写不进去：{e}", suite_path.display());
+        eprintln!("(joy) could not write {}: {e}", suite_path.display());
     }
     let history = home.join("eval_runs.jsonl");
     if let Some(parent) = history.parent() {
@@ -41,10 +41,10 @@ pub fn write(home: &Path, suite: &str, payload: serde_json::Value) -> Result<()>
         Ok(mut file) => {
             use std::io::Write;
             if let Err(e) = writeln!(file, "{record}") {
-                eprintln!("(joy) eval_runs.jsonl 追加失败：{e}");
+                eprintln!("(joy) could not append to eval_runs.jsonl: {e}");
             }
         }
-        Err(e) => eprintln!("(joy) eval_runs.jsonl 打不开：{e}"),
+        Err(e) => eprintln!("(joy) could not open eval_runs.jsonl: {e}"),
     }
     Ok(())
 }

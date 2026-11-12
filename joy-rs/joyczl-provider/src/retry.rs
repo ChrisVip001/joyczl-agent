@@ -134,7 +134,7 @@ fn note_retry(error: &ProviderError, attempt: u32, delay: Duration) {
     if NOTE_SINK.try_with(|sink| sink(notice.clone())).is_err() {
         // No notice outlet for this turn (evals, unit tests, library use): fall back to stderr.
         eprintln!(
-            "(joy) 模型调用失败（{}），{}ms 后重试第 {} 次",
+            "(joy) model call failed ({}), retrying in {}ms (attempt {})",
             notice.reason, notice.delay_ms, notice.attempt
         );
     }
@@ -143,7 +143,7 @@ fn note_retry(error: &ProviderError, attempt: u32, delay: Duration) {
 fn reason_of(error: &ProviderError) -> String {
     match error {
         ProviderError::Http { status, .. } => format!("HTTP {status}"),
-        ProviderError::Network(e) => format!("网络错误：{e}"),
+        ProviderError::Network(e) => format!("network error: {e}"),
         other => other.to_string(),
     }
 }

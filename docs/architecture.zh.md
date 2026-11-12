@@ -23,7 +23,7 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
                  joyczl-protocol  ←──── 唯一事实来源（TS/JSON Schema/pydantic 生成物）
                  joyczl-config    ←──── JOY_* 环境变量，启动读一次
                         │
-                 joyczl-provider ────── 12 家厂商（含本地 Ollama），两种 wire format + SSE
+                 joyczl-provider ────── 12 家厂商（含本地 Ollama），三种 wire format + SSE
                         │
         ┌───────────────┼────────────────┐
    joyczl-tools    joyczl-loop       joyczl-mcp
@@ -58,7 +58,7 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
   → [记忆检索] facts (FTS5, top_k) + episodes → 进提示的尾巴
   → [Skills] 每轮带目录（名字 + 一句话），命中消息才载入正文
   → [提示装配] 稳定前缀（灵魂 + 模型身份）＋ 每轮尾巴
-      （时钟 · 能力缺口 · 待办 · 记忆命中 · 两份目录 · 滚动摘要）
+      （时钟 · 能力缺口 · 待办 · 项目约定 · 记忆命中 · 两份目录 · 滚动摘要）
       → 同一会话里前缀逐字节不变：这就是缓存断点
   → [THE LOOP] observe → reason → act → repeat
         · 每次模型调用与「取消令牌」竞速（turn/interrupt）
@@ -121,17 +121,27 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
 | history | 账本里的最近 N 轮 | `JOY_HISTORY_TURNS` |
 | summary | 滚动压缩摘要 | `JOY_COMPACT_THRESHOLD` |
 
+还有一段在尾巴里、但**不进计量**：**项目约定**（`agents_md.rs`）。从本轮的 cwd 向上走到
+包住它的 `.git` 为止，每层取一个文件（`AGENTS.override.md` → `AGENTS.md` → `CLAUDE.md`），
+按「根 → cwd」拼起来 —— 外层是通则，内层是本地规矩。总量封顶 32 KB，从内往外装：装不下时
+最内层整份留下、外层丢掉（只有最内层一份就超预算时才截断，并在截断处标注）。它只进尾巴、
+永不进稳定前缀：它跟着工作目录变，而「换一个目录前缀就变」等于每轮都缓存失效。子代理不拿
+这份约定 —— 它只跑一件事、只交一个结论。
+
 三件事拦住它悄悄变大：**压缩**把被挤出去的轮次折进滚动摘要（摘要模型罢工时退化为确定性
 摘录，挤出窗口不等于失忆）；**工具结果换桩**在每次请求前把最旧的超大结果换成桩
 （`JOY_TOOL_RESULT_TOTAL_CHARS`，最新的 `JOY_TOOL_RESULT_KEEP_RECENT` 条整条留着）；
 **迭代预算**限制这一轮本身（`JOY_MAX_ITERATIONS`，最后一步是收尾轮）。
 
-尾巴里还有几行很短的东西 —— 时钟、待办板、能力缺口说明 —— 每轮几十个 token，**故意不计入**
-那六段：六段那条带子是用来看「什么在长」的，混进常量只会变成噪音。
+尾巴里有四样**故意不计入**那六段：时钟、待办板、能力缺口说明（各几十个常量 token），
+以及项目约定（**按目录**恒定，封顶 32 KB）。六段那条带子是用来看「一个会话里什么在长」的，
+混进常量只会变成噪音。已知代价：仓库里有一份很厚的 `AGENTS.md` 时，带子会低估真实占用一个
+文件 —— 这条写在[限制](limitations.zh.md) 里。
 
 ### 工具层（joyczl-tools）
 
-二十多个内置工具 + MCP 外挂，统一进 `ToolRegistry`。契约：`execute`
+内置工具 + MCP 外挂，统一进 `ToolRegistry`（清单在
+[`internals/06-tools.md`](internals/06-tools.md) §6.0，且由脚本对着代码校验）。契约：`execute`
 永不返回 Err——错误作为 `Error: …` 文本回给模型，loop 不崩。工具失败
 是模型可以纠正的信息，不是崩溃理由。
 

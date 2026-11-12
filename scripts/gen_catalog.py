@@ -29,7 +29,7 @@ MODELS_DEV_URL = "https://models.dev/api.json"
 # key_env 留 None = 新厂商，用 models.dev 的 env 字段（没有就 JOY_<ID>_API_KEY）。
 KNOWN: dict[str, tuple[str, str, str | None]] = {
     "anthropic": ("anthropic", "anthropic", "ANTHROPIC_API_KEY"),
-    "openai": ("openai", "openai", "OPENAI_API_KEY"),
+    "openai": ("openai", "responses", "OPENAI_API_KEY"),
     "openrouter": ("openrouter", "openai", "OPENROUTER_API_KEY"),
     "gemini": ("google", "openai", "GEMINI_API_KEY"),
     "deepseek": ("deepseek", "openai", "DEEPSEEK_API_KEY"),

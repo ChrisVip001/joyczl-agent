@@ -58,7 +58,10 @@ fn estimate_message(message: &Message) -> usize {
             .content
             .iter()
             .map(|block| match block {
-                ContentBlock::Text { text } => estimate_text(text),
+                ContentBlock::Text { text } | ContentBlock::OpenAiReasoning { text } => {
+                    estimate_text(text)
+                }
+                ContentBlock::ResponseItem { item } => estimate_text(&item.to_string()),
                 ContentBlock::ToolUse { name, input, .. } => {
                     estimate_text(name) + estimate_text(&input.to_string())
                 }

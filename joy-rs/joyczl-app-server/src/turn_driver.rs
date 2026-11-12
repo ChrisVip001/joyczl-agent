@@ -1,0 +1,465 @@
+//! Shared task driver for fresh turns and recovered checkpoints.
+use super::*;
+
+pub(crate) struct DriveTask<'a> {
+    pub server: &'a Server,
+    pub resolved: &'a Resolved,
+    pub task: Option<TaskRow>,
+    pub run_id: Option<String>,
+    pub frame: TurnFrame<'a>,
+    pub plan: Option<joyczl_agent::plan::Plan>,
+    pub round_no: i32,
+    pub max_rounds: i32,
+    pub started: std::time::Instant,
+    pub wall_offset_ms: i64,
+}
+
+pub(crate) struct DrivenTask {
+    pub full: FullTurn,
+    pub decision: TaskDecision,
+    pub goal_status: Option<String>,
+    pub round_no: i32,
+}
+
+pub(crate) async fn drive_task(
+    ctx: DriveTask<'_>,
+    mut full: FullTurn,
+) -> Result<DrivenTask, ErrorObject> {
+    let DriveTask {
+        server,
+        resolved,
+        task,
+        run_id,
+        frame,
+        mut plan,
+        mut round_no,
+        max_rounds,
+        started,
+        mut wall_offset_ms,
+    } = ctx;
+    let TurnFrame {
+        session_id,
+        turn_id,
+        sink,
+        interrupt,
+        turn_cwd,
+        route_reason: turn_route,
+        checkpoint,
+        steering,
+        ..
+    } = frame;
+    let (session_id, turn_id) = (session_id.to_string(), turn_id.to_string());
+    let task_id = task.as_ref().map(|task| task.id.clone());
+    let goal_condition = task.as_ref().and_then(|task| task.goal_condition.clone());
+    let acceptance = task
+        .as_ref()
+        .map(|task| joyczl_agent::verify::parse(&task.acceptance_json))
+        .unwrap_or_default();
+    let verify_root = turn_cwd.clone();
+    let mut observation = observe_round(&full.result, &turn_id, turn_cwd.as_deref());
+    if let Some(condition) = &goal_condition {
+        eprintln!("(joy) goal loop starts: {condition} (max {max_rounds} rounds)");
+    }
+    let mut round_started = started;
+    // Each loop round has a stable identity; recovered slices reuse its local operation keys.
+
+    // The loop's two products: the verdict (what the task becomes) and the goal status (what
+    // the trace and the notifications say happened). Both are returned by `break`, so there is
+    // no "maybe nothing was decided" state to test for afterwards.
+    let (decision, goal_status) = loop {
+        // Rounds live on the row (written just below); the notification quotes the same number.
+        let goal_rounds = round_no;
+        if let Some(id) = &task_id {
+            if let Err(e) = server.tasks.record_round(id, round_no).await {
+                eprintln!("(joy) round not recorded in the task ledger: {e}");
+            }
+        }
+
+        // ---- Account the round: steps, artifacts, spend — then measure it.
+        let checks = match account_round(
+            server,
+            RoundCtx {
+                task: task.as_ref(),
+                run_id: run_id.as_deref(),
+                acceptance: &acceptance,
+                verify_root: verify_root.clone(),
+                started: round_started,
+                wall_offset_ms,
+            },
+            &observation,
+            &full.result,
+        )
+        .await
+        {
+            Ok(checks) => checks,
+            Err(reason) => {
+                eprintln!("(joy) {reason}; task stopped for review");
+                break (
+                    TaskDecision::NeedsAttention(reason),
+                    Some("accounting-failed".to_string()),
+                );
+            }
+        };
+
+        // ---- 0. A stop is the human's, and it ends the loop here.
+        //
+        // Without this the goal loop happily spends another round after `turn/interrupt`:
+        // the interrupted round's acceptance fails, "keep trying" kicks in, and the user's stop
+        // only takes effect when the rounds run out. The turn tail already turns an interrupted
+        // result into "suspended at the checkpoint"; the decision below never wins over that.
+        if full.result.interrupted {
+            eprintln!("(joy) interrupted; the goal loop stops at this round");
+            break (
+                TaskDecision::NeedsAttention(
+                    "Interrupted by the user; the task stays where it is".to_string(),
+                ),
+                Some("interrupted".to_string()),
+            );
+        }
+
+        // ---- 1. Budget, before anything can spend more.
+        if let Some(id) = &task_id {
+            match server.tasks.get(id).await {
+                Ok(Some(fresh)) => {
+                    if let Some(over) = budget_overrun(&fresh) {
+                        eprintln!("(joy) task {id} stopped on its budget: {over}");
+                        if let Err(e) = server
+                            .events
+                            .append(id, run_id.as_deref(), "budget", Some(&over))
+                            .await
+                        {
+                            eprintln!("(joy) budget event not recorded: {e}");
+                        }
+                        break (
+                            TaskDecision::NeedsAttention(over),
+                            Some("over-budget".to_string()),
+                        );
+                    }
+                }
+                Ok(None) => {
+                    break (
+                        TaskDecision::NeedsAttention("Task disappeared during execution".into()),
+                        Some("task-unavailable".into()),
+                    )
+                }
+                Err(e) => {
+                    break (
+                        TaskDecision::NeedsAttention(format!("Cannot verify task budget: {e}")),
+                        Some("budget-unavailable".into()),
+                    )
+                }
+            }
+        }
+
+        if full.result.stop_reason == joyczl_provider::StopReason::UncertainEffect {
+            break (
+                TaskDecision::NeedsAttention(
+                    "Tool outcome unknown; reconcile external state before continuing".into(),
+                ),
+                Some("unknown-effect".into()),
+            );
+        }
+
+        // An asynchronous command is unfinished work, not a failed acceptance condition
+        // to repair by launching the same command again.
+        if let Some(task) = &task {
+            match joyczl_state::Jobs::new(server.pool.clone())
+                .for_task(&task.id)
+                .await
+            {
+                Ok(jobs) if jobs.iter().any(|job| job.status == "running") => {
+                    eprintln!("(joy) task {} is waiting for background jobs", task.id);
+                    break (
+                        TaskDecision::WaitingForJobs(
+                            jobs.into_iter()
+                                .filter(|job| job.status == "running")
+                                .map(|job| job.id)
+                                .collect(),
+                        ),
+                        Some("waiting-jobs".into()),
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    break (
+                        TaskDecision::NeedsAttention(format!("Cannot verify background jobs: {e}")),
+                        Some("jobs-unavailable".into()),
+                    )
+                }
+            }
+        }
+
+        if matches!(
+            full.result.stop_reason,
+            joyczl_provider::StopReason::MaxTokens | joyczl_provider::StopReason::IterationLimit
+        ) {
+            let reason = match full.result.stop_reason {
+                joyczl_provider::StopReason::MaxTokens => {
+                    "Model output reached its token limit; task completion is not verified"
+                }
+                _ => "The loop reached its step limit; task completion is not verified",
+            };
+            break (
+                TaskDecision::NeedsAttention(reason.into()),
+                Some("response-limit".into()),
+            );
+        }
+
+        // ---- 2. Acceptance: a failing condition is a fact, and facts end rounds.
+        if let Some(reason) = joyczl_agent::verify::failure_summary(&checks) {
+            let who = task_id.as_deref().unwrap_or("(no task)");
+            if round_no >= max_rounds {
+                let reason = format!("{reason} (after {round_no} rounds it still has not passed)");
+                eprintln!("(joy) task {who} stopped at acceptance: {reason}");
+                break (
+                    TaskDecision::NeedsAttention(reason),
+                    Some("verify-failed".to_string()),
+                );
+            }
+            eprintln!("(joy) task {who} failed acceptance on round {round_no}: {reason}");
+            round_no += 1;
+            round_started = std::time::Instant::now();
+            wall_offset_ms = 0;
+            // P1: a failed round is the one moment a plan may change. Capped (initial + one
+            // revision): a plan rewritten after every failure is thrash, not progress.
+            let plan_now = plan.clone();
+            if let (Some(id), Some(current)) = (task_id.as_deref(), plan_now) {
+                if server.settings().plan_enabled
+                    && current.version < joyczl_agent::plan::MAX_VERSIONS
+                {
+                    let labels: Vec<String> = acceptance.iter().map(|item| item.label()).collect();
+                    let title = task
+                        .as_ref()
+                        .map(|row| row.title.as_str())
+                        .unwrap_or("this task");
+                    let goal = task.as_ref().and_then(|row| row.goal_condition.as_deref());
+                    match joyczl_agent::plan::make(
+                        resolved,
+                        title,
+                        goal,
+                        &labels,
+                        Some(&reason),
+                        current.version + 1,
+                    )
+                    .await
+                    {
+                        Ok(revised) => {
+                            match joyczl_agent::plan::record(&server.steps, id, &revised).await {
+                                Ok(()) => {
+                                    eprintln!("(joy) task {id} moved to plan v{}", revised.version);
+                                    plan = Some(revised);
+                                }
+                                Err(why) => eprintln!("(joy) revised plan not committed; keeping the previous version: {why}"),
+                            }
+                        }
+                        Err(why) => eprintln!(
+                            "(joy) re-planning failed (continuing with the old plan): {why}"
+                        ),
+                    }
+                }
+            }
+            // Feed the measurement back — not the judge's opinion, and not "try harder".
+            let mut correction = format!(
+"Acceptance did not pass: {reason}\nKeep working until it is true (the file really written, the change really in place); do not merely claim it is done."
+            );
+            if let Some(current) = &plan {
+                correction.push_str("\n\n");
+                correction.push_str(&current.brief());
+            }
+            let next = full_turn(
+                server,
+                resolved,
+                &correction,
+                Vec::new(),
+                TurnFrame {
+                    session_id: &session_id,
+                    turn_id: &turn_id,
+                    sink,
+                    interrupt: interrupt.clone(),
+                    turn_cwd: turn_cwd.clone(),
+                    route_reason: turn_route.clone(),
+                    steering: steering.clone(),
+                    resume: None,
+                    checkpoint: checkpoint.clone(),
+                },
+                None,
+            )
+            .await;
+            match next {
+                Ok(next) => {
+                    observation = observe_round(&next.result, &turn_id, turn_cwd.as_deref());
+                    full = next;
+                    continue;
+                }
+                Err(e) => {
+                    fail_turn(
+                        server,
+                        sink,
+                        &turn_id,
+                        run_id.as_deref(),
+                        task_id.as_deref(),
+                        &e.message,
+                    )
+                    .await;
+                    return Err(e);
+                }
+            }
+        }
+
+        // ---- 3. A contradiction is never "done": the tool said it wrote, the file is not there.
+        if let Some(contradiction) = observation.contradictions().first() {
+            eprintln!(
+                "(joy) task {} stopped on a contradiction: {contradiction}",
+                task_id.as_deref().unwrap_or("(no task)")
+            );
+            break (
+                TaskDecision::NeedsAttention(contradiction.clone()),
+                Some("contradiction".to_string()),
+            );
+        }
+
+        // ---- 4. The judge, only now, and only when a condition was declared.
+        let Some(condition) = &goal_condition else {
+            // Nothing left to decide: acceptance conditions (if any) just passed; a task with
+            // none is a single-turn task — done when the turn is, exactly as before 0.14.
+            break (
+                TaskDecision::Done,
+                if checks.is_empty() {
+                    None
+                } else {
+                    Some("verified".to_string())
+                },
+            );
+        };
+
+        let transcript = judge_transcript(server, &session_id, &full.result.reply).await;
+        let judgement = match crate::goal::judge(resolved, condition, &transcript).await {
+            Ok(judgement) => judgement,
+            Err(why) => {
+                // The judge broke down: stop continuing, **keep the goal** (don't fake success).
+                notify_goal(sink, &turn_id, goal_rounds, max_rounds, "blocked", &why);
+                eprintln!("(joy) goal loop stopped: {why}");
+                server.notify_goal_finished(&session_id, "blocked", &why);
+                // A broken judge is not "the goal is impossible" — a human should look.
+                break (
+                    TaskDecision::NeedsAttention(format!("Judge failure: {why}")),
+                    Some("blocked".to_string()),
+                );
+            }
+        };
+
+        if judgement.ok {
+            notify_goal(
+                sink,
+                &turn_id,
+                goal_rounds,
+                max_rounds,
+                "satisfied",
+                &judgement.reason,
+            );
+            server.notify_goal_finished(&session_id, "satisfied", &judgement.reason);
+            break (TaskDecision::Done, Some("satisfied".to_string()));
+        }
+        if judgement.impossible {
+            notify_goal(
+                sink,
+                &turn_id,
+                goal_rounds,
+                max_rounds,
+                "impossible",
+                &judgement.reason,
+            );
+            server.notify_goal_finished(&session_id, "impossible", &judgement.reason);
+            break (
+                TaskDecision::Failed(judgement.reason),
+                Some("impossible".to_string()),
+            );
+        }
+        if round_no >= max_rounds {
+            // Cap reached: **say honestly it is not done** — don't fake completion, don't clear the goal.
+            let reason = format!(
+                "After {max_rounds} more rounds the goal is still unmet: {}",
+                judgement.reason
+            );
+            notify_goal(
+                sink,
+                &turn_id,
+                goal_rounds,
+                max_rounds,
+                "round-limit",
+                &reason,
+            );
+            server.notify_goal_finished(&session_id, "round-limit", &judgement.reason);
+            break (
+                TaskDecision::Failed(reason),
+                Some("round-limit".to_string()),
+            );
+        }
+
+        notify_goal(
+            sink,
+            &turn_id,
+            goal_rounds,
+            max_rounds,
+            "continuing",
+            &judgement.reason,
+        );
+        eprintln!(
+            "(joy) goal loop round {goal_rounds} of {max_rounds}: {}",
+            judgement.reason
+        );
+        // Feed the reason back as the next user message and run another round **in the same session**.
+        round_no += 1;
+        round_started = std::time::Instant::now();
+        wall_offset_ms = 0;
+        let mut continuation = judgement.reason.clone();
+        if let Some(current) = &plan {
+            continuation.push_str("\n\n");
+            continuation.push_str(&current.brief());
+        }
+        let next = full_turn(
+            server,
+            resolved,
+            &continuation,
+            Vec::new(),
+            TurnFrame {
+                session_id: &session_id,
+                turn_id: &turn_id,
+                sink,
+                interrupt: interrupt.clone(),
+                turn_cwd: turn_cwd.clone(),
+                route_reason: turn_route.clone(),
+                steering: steering.clone(),
+                resume: None,
+                checkpoint: checkpoint.clone(),
+            },
+            None,
+        )
+        .await;
+        match next {
+            Ok(next) => {
+                observation = observe_round(&next.result, &turn_id, turn_cwd.as_deref());
+                full = next;
+            }
+            Err(e) => {
+                fail_turn(
+                    server,
+                    sink,
+                    &turn_id,
+                    run_id.as_deref(),
+                    task_id.as_deref(),
+                    &e.message,
+                )
+                .await;
+                return Err(e);
+            }
+        }
+    };
+
+    Ok(DrivenTask {
+        full,
+        decision,
+        goal_status,
+        round_no,
+    })
+}

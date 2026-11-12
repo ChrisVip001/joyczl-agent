@@ -36,8 +36,8 @@ fn the_stub_fits_the_budget_and_only_cuts_complete_lines() {
     // half a line (half a JSON, half a log entry) reads worse than one fewer line.
     for line in stub.text.lines() {
         if line.starts_with('…') {
-            assert!(line.contains("已截断"), "省略说明要诚实：{line}");
-            assert!(line.contains("完整输出在"), "有路径就要写出来：{line}");
+            assert!(line.contains("truncated"), "省略说明要诚实：{line}");
+            assert!(line.contains("full output at"), "有路径就要写出来：{line}");
             continue;
         }
         assert!(
@@ -53,11 +53,11 @@ fn without_a_directory_it_still_stubs_but_never_promises_a_path() {
     let stub = stub(None, &text, 300, "tool-result").expect("该做桩");
     assert_eq!(stub.path, None);
     assert!(
-        !stub.text.contains("完整输出在"),
+        !stub.text.contains("full output at"),
         "没落盘就不能说有文件：{}",
         stub.text
     );
-    assert!(stub.text.contains("已截断"), "{}", stub.text);
+    assert!(stub.text.contains("truncated"), "{}", stub.text);
     assert!(stub.text.chars().count() <= 300);
 }
 
@@ -79,7 +79,7 @@ fn one_line_longer_than_the_budget_gets_no_fake_head() {
         "放不下一整行就别放半行：{:?}",
         stub.text
     );
-    assert!(stub.text.contains("完整输出在"), "{}", stub.text);
+    assert!(stub.text.contains("full output at"), "{}", stub.text);
 }
 
 #[test]
@@ -103,4 +103,16 @@ fn the_stub_is_smaller_than_what_it_replaces() {
         stub.text.chars().count() < text.chars().count(),
         "桩不该比原文更长"
     );
+}
+
+#[test]
+fn a_small_preview_keeps_the_recovery_path_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = stub(Some(dir.path()), &"x".repeat(500), 96, "tool-result").unwrap();
+    let path = result.path.unwrap();
+    assert!(result.text.contains(&path), "{}", result.text);
+    assert!(result.text.chars().count() <= 96);
+    let tiny = stub(Some(dir.path()), &"x".repeat(500), 20, "tool-result").unwrap();
+    assert!(!tiny.text.contains("full output at"));
+    assert!(tiny.text.chars().count() <= 20);
 }

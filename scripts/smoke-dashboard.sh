@@ -152,6 +152,9 @@ grep -q '/api/memory/page' "$WORK/main.js" || fail "main.js 里没有 /api/memor
 grep -q '/api/context' "$WORK/main.js" || fail "main.js 里没有 /api/context"
 grep -q '"/api/skills/stats"' "$WORK/main.js" || fail "main.js 里没有 /api/skills/stats"
 grep -q '/api/compact' "$WORK/main.js" || fail "main.js 里没有 /api/compact"
+# 刷新要回到同一个会话：这个字符串没了，说明「记住当前会话」被谁顺手删了，
+# 而它不会让任何 Rust 测试变红 —— 只会让人每次刷新都掉回最老的那个会话。
+grep -q 'joy.session' "$WORK/main.js" || fail "main.js 里没有 joy.session（刷新会丢掉当前会话）"
 grep -q '/api/schedules/jobs' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/jobs"
 grep -q '/api/schedules/save' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/save"
 grep -q '/api/schedules/remove' "$WORK/main.js" || fail "main.js 里没有 /api/schedules/remove"
@@ -233,7 +236,7 @@ curl -sS -X POST "$BASE/api/session/update" -H 'content-type: application/json' 
   -d "{\"sessionId\":\"$SID\",\"title\":\"改名了\"}" | grep -q '"title":"改名了"' \
   || fail "改名没生效"
 curl -sS -X POST "$BASE/api/session/update" -H 'content-type: application/json' \
-  -d "{\"sessionId\":\"$SID\",\"title\":\"\"}" | grep -q '"title":"(空会话)"' \
+  -d "{\"sessionId\":\"$SID\",\"title\":\"\"}" | grep -q '"title":"(empty session)"' \
   || fail "清空标题后该回退「(空会话)」"
 curl -sS "$BASE/api/session/meta?sessionId=$SID" | grep -q "\"cwd\":\"$WORK\"" \
   || fail "改名把工作目录弄丢了"
@@ -319,7 +322,7 @@ grep -q '"sessionId":"default"' "$WORK/task2.json" || fail "任务行该带回�
 curl -sS -X POST "$BASE/api/task" -H 'content-type: application/json' \
   -d "{\"action\":\"create\",\"title\":\"写一份报告\",\"cwd\":\"$WORK\",\"acceptance\":[{\"kind\":\"fileExists\",\"path\":\"report.md\"}]}" \
   >"$WORK/task3.json" || fail "带验收条件的任务没建通"
-grep -q '"label":"report.md 存在"' "$WORK/task3.json" || fail "验收条件没人话标签：$(cat "$WORK/task3.json")"
+grep -q '"label":"report.md exists"' "$WORK/task3.json" || fail "验收条件没人话标签：$(cat "$WORK/task3.json")"
 grep -q '"status":"pending"' "$WORK/task3.json" || fail "带验收条件的任务也该是 pending"
 # A task with no session carries **no** sessionId field at all (absent, not null): absence is
 # the honest shape for "belongs to nothing".
@@ -377,13 +380,13 @@ curl -sS "$BASE/api/skills" | grep -q '"name":"pasted-skill"' \
 # 重名拒绝（从不覆盖 —— 技能是指令，装之前要先读）
 curl -sS -X POST "$BASE/api/skills/install" -H 'content-type: application/json' \
   -d '{"text":"---\nname: pasted-skill\ndescription: another one\n---\n\nbody\n"}' \
-  | grep -q '已有一个' || fail "重名技能该被拒绝"
+  | grep -q 'already exists' || fail "重名技能该被拒绝"
 # 不是 SKILL.md 的拒绝
 curl -sS -X POST "$BASE/api/skills/install" -H 'content-type: application/json' \
-  -d '{"text":"just some text"}' | grep -q '不是合法的技能' || fail "非法内容该被拒绝"
+  -d '{"text":"just some text"}' | grep -q 'not a valid skill' || fail "非法内容该被拒绝"
 # 内置技能删不得；用户技能删得掉
 curl -sS -X POST "$BASE/api/skills/remove" -H 'content-type: application/json' \
-  -d '{"name":"builtin-skill"}' | grep -q '内置' || fail "内置技能该被拒绝删除"
+  -d '{"name":"builtin-skill"}' | grep -q 'built-in' || fail "内置技能该被拒绝删除"
 curl -sS -X POST "$BASE/api/skills/remove" -H 'content-type: application/json' \
   -d '{"name":"pasted-skill"}' >"$WORK/skill-remove.json"
 grep -q '"ok":true' "$WORK/skill-remove.json" || fail "用户技能删不掉：$(cat "$WORK/skill-remove.json")"
@@ -405,18 +408,18 @@ curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
   -d '{"name":"notes","url":"https://notes.example/mcp","authEnv":"NOTES_API_KEY"}' \
   >"$WORK/mcp-save.json"
 grep -q '"ok":true' "$WORK/mcp-save.json" || fail "加连接器没成功：$(cat "$WORK/mcp-save.json")"
-grep -q '重启 Joy 后生效' "$WORK/mcp-save.json" || fail "该说明重启后生效：$(cat "$WORK/mcp-save.json")"
+grep -q 'Effective after a restart' "$WORK/mcp-save.json" || fail "该说明重启后生效：$(cat "$WORK/mcp-save.json")"
 python3 -c "import json;d=json.load(open('$WORK/.joy/mcp.json'));assert [s['name'] for s in d['servers']]==['notes'],d" \
   || fail "mcp.json 没落盘或内容不对"
 curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
-  -d '{"name":"both","url":"https://h/mcp","command":"npx"}' | grep -q '只能填一个' \
+  -d '{"name":"both","url":"https://h/mcp","command":"npx"}' | grep -q 'not both' \
   || fail "两种传输都填该被拒绝"
 curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
-  -d '{"name":"my server","url":"https://h/mcp"}' | grep -q '前缀' \
+  -d '{"name":"my server","url":"https://h/mcp"}' | grep -q 'prefix' \
   || fail "带空格的名字该被拒绝"
 # 和内置包重名的拒绝：运行时先到的赢，用户配置里再写一份也不会生效
 curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
-  -d '{"name":"pack-server","url":"https://mine.example/mcp"}' | grep -q '系统内置' \
+  -d '{"name":"pack-server","url":"https://mine.example/mcp"}' | grep -q 'built-in' \
   || fail "和内置包重名的连接器该被拒绝"
 # 同名是替换不是新增；stdio 的参数照写
 curl -sS -X POST "$BASE/api/mcp/save" -H 'content-type: application/json' \
@@ -442,7 +445,7 @@ PY
 curl -sS -X POST "$BASE/api/mcp/remove" -H 'content-type: application/json' \
   -d '{"name":"notes"}' | grep -q '"ok":true' || fail "用户连接器删不掉"
 curl -sS -X POST "$BASE/api/mcp/remove" -H 'content-type: application/json' \
-  -d '{"name":"pack-server"}' | grep -q '内置' || fail "内置连接器该被拒绝删除"
+  -d '{"name":"pack-server"}' | grep -q 'built-in' || fail "内置连接器该被拒绝删除"
 curl -sS "$BASE/api/mcp" | grep -q '"name":"notes"' && fail "删掉的连接器还在列表里"
 curl -sS "$BASE/api/mcp" | grep -q '"name":"pack-server"' || fail "内置连接器该还在"
 echo "  ✓ 能力中心：内置置灰拒写，用户技能/连接器可增可删，重名与非法输入都有说法"
@@ -465,14 +468,14 @@ echo "  ✓ turn/list：空闲时是空数组"
 # turn "add to what you're doing" into "start something else" without telling anyone.
 STEER_ERR="$(curl -sS -X POST "$BASE/api/turn/steer" -H 'content-type: application/json' \
   -d '{"sessionId":"default","message":"顺便看下 README"}')"
-grep -q '没有在跑的回合' <<<"$STEER_ERR" || fail "空闲时 turn/steer 该明说没有在跑的回合：$STEER_ERR"
+grep -q 'has no turn running' <<<"$STEER_ERR" || fail "空闲时 turn/steer 该明说没有在跑的回合：$STEER_ERR"
 echo "  ✓ turn/steer：没有在跑的回合就说没有，不静默开新一轮"
 
 # 「跑完再说」也需要一个能等的回合：空闲时排队等于把一句话挂在已经结束的轮次后面，
 # 那比拒绝更糟 —— 人会以为它终究会跑。
 FOLLOW_ERR="$(curl -sS -X POST "$BASE/api/turn/follow-up" -H 'content-type: application/json' \
   -d '{"sessionId":"default","message":"把 CHANGELOG 补上"}')"
-grep -q '没有在跑的回合' <<<"$FOLLOW_ERR" \
+grep -q 'has no turn running' <<<"$FOLLOW_ERR" \
   || fail "空闲时 turn/follow-up 该明说没有在跑的回合：$FOLLOW_ERR"
 echo "  ✓ turn/follow-up：没有在跑的回合就不假装排上队"
 
@@ -491,7 +494,7 @@ curl -sS "$BASE/api/context?sessionId=default" | grep -q '"usage"' \
   || fail "/api/context 该回 usage（可以是 null）"
 curl -sS "$BASE/api/skills/stats" | grep -q '"data"' || fail "/api/skills/stats 该回 data"
 # 缺参数要被明确拒绝，而不是拿空字符串去查库。
-curl -sS "$BASE/api/ledger/turns" | grep -q '缺少参数 sessionId' \
+curl -sS "$BASE/api/ledger/turns" | grep -q 'missing parameter sessionId' \
   || fail "缺 sessionId 该明说缺什么"
 echo "  ✓ 记忆中心：账本 / 目录 / 记忆页 / 占用率 / 技能命中都答得上来"
 
@@ -509,7 +512,7 @@ curl -sS "$BASE/api/schedules/jobs" | grep -q 'smoke-digest' \
 # 坏 cron 要被当成一句话拒绝，而不是 500 或者静默保存。
 curl -sS -X POST -H 'content-type: application/json' \
   --data '{"name":"smoke-digest","cron":"0 8 * *","prompt":"x"}' \
-  "$BASE/api/schedules/save" | grep -q '五段' || fail "cron 写错该明说五段"
+  "$BASE/api/schedules/save" | grep -q 'five fields' || fail "cron 写错该明说五段"
 curl -sS -X POST -H 'content-type: application/json' --data '{"name":"smoke-digest"}' \
   "$BASE/api/schedules/remove" | grep -q '"ok":true' || fail "删除定时任务失败"
 echo "  ✓ 定时任务：新建 → 列表可见 → 拒绝坏 cron → 删除"

@@ -70,8 +70,14 @@ pub fn stub(dir: Option<&Path>, text: &str, budget_chars: usize, tag: &str) -> O
     let notice = notice_for(total_lines, total, path.as_deref());
     let notice_len = notice.chars().count();
     if notice_len + 2 >= budget_chars {
-        // Budget too small even for the notice: keep just the notice, saying honestly this is all.
-        let mut text = notice;
+        // Keep the recovery path intact; a clipped filename is not a usable receipt.
+        let compact = path
+            .as_deref()
+            .map(|path| format!("… truncated; full output at {path}"));
+        let mut text = match compact {
+            Some(compact) if compact.chars().count() <= budget_chars => compact,
+            _ => "… truncated (preview budget too small for output location)".to_string(),
+        };
         text.truncate_chars(budget_chars);
         return Some(Stub {
             text,
@@ -104,7 +110,7 @@ pub fn stub(dir: Option<&Path>, text: &str, budget_chars: usize, tag: &str) -> O
     }
     debug_assert!(
         out.chars().count() <= budget_chars.max(notice_len + 2),
-        "桩必须放得下：{} > {budget_chars}",
+        "the stub has to fit: {} > {budget_chars}",
         out.chars().count()
     );
 
@@ -121,10 +127,10 @@ pub fn stub(dir: Option<&Path>, text: &str, budget_chars: usize, tag: &str) -> O
 fn notice_for(omitted_lines: usize, total_chars: usize, path: Option<&str>) -> String {
     match path {
         Some(path) => format!(
-            "…（结果共 {total_chars} 字符，已截断，省略了 {omitted_lines} 行；完整输出在 {path}）"
+            "…({total_chars} chars in total, truncated — {omitted_lines} lines omitted; full output at {path})"
         ),
         // No spill means **no path mention** — "full output at …" without the file is worse than silence.
-        None => format!("…（结果共 {total_chars} 字符，已截断，省略了 {omitted_lines} 行）"),
+        None => format!("…({total_chars} characters in total, truncated — {omitted_lines} lines omitted)"),
     }
 }
 

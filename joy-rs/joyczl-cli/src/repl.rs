@@ -13,18 +13,11 @@ use anyhow::Result;
 use joyczl_app_server::{run_turn, EventSink, Frame, Server};
 use joyczl_protocol::{RequestId, ServerNotification, TurnStartParams, TurnStartedNotification};
 
-const HELP: &str = "\
-命令:
-  /memory [词]   看最近记住的东西（带词就是搜索）
-  /compact [重点] 现在就把较早的轮次折进摘要（最近两轮留在上下文里）
-  /sessions      列出历史会话
-  /new           开一个新会话
-  /quit          退出（/exit 也行）
-其他任何输入都会作为消息发给 Joy。\n/goal <条件>   设一个目标（没达成会自动续轮）；/goal clear 撤掉\n/model          看已配好的模型；/model use <名字> 切换；/model add <名字> <厂商> [模型] [--env 变量] [--vision] 加一套\n/cwd [路径]    看或设本会话的工作目录（/cwd clear 清除）；相对路径都按它解析\n/route          看模型路由表；/route auto|fixed 切模式；/route set <档位> <配置名> 改映射";
+const HELP: &str = "\nCommands:\n  /memory [term]  see what was remembered recently (with a term: search it)\n  /compact [focus] fold earlier turns into the summary now (the last two turns stay in context)\n  /sessions      list past sessions\n  /new           start a new session\n  /quit          quit (/exit works too)\nAny other input is sent to Joy as a message.\n/goal <condition>   set a goal (it auto-continues while unmet); /goal clear removes it\n/model          see the configured models; /model use <name> switches; /model add <name> <provider> [model] [--env VAR] [--vision] adds one\n/cwd [path]     show or set this session's working directory (/cwd clear clears it); relative paths resolve against it\n/route          see the model routing table; /route auto|fixed switches mode; /route set <tier> <profile> edits the mapping";
 
 /// Enters the terminal conversation. Receives an already-assembled Server.
 pub async fn run(server: Server) -> Result<()> {
-    println!("Joy — 本地优先的个人助手。/help 看命令，/quit 退出。");
+    println!("Joy — a local-first personal assistant. /help for commands, /quit to leave.");
     println!();
 
     let mut session_id = new_session_id();
@@ -51,7 +44,7 @@ pub async fn run(server: Server) -> Result<()> {
             "/help" => println!("{HELP}"),
             "/new" => {
                 session_id = new_session_id();
-                println!("新会话：{session_id}");
+                println!("New session: {session_id}");
             }
             "/sessions" => list_sessions(&server).await,
             s if s.starts_with("/memory") => show_memory(&server, s).await,
@@ -61,7 +54,7 @@ pub async fn run(server: Server) -> Result<()> {
             s if s.starts_with("/model") => models(&server, s),
             s if s.starts_with("/route") => route_cmd(&server, s),
             s if s.starts_with('/') => {
-                println!("不认识的命令 {s}。/help 看有哪些。");
+                println!("Unknown command {s}. /help lists them.");
             }
             message => chat_turn(&server, &session_id, cwd.as_ref(), message).await,
         }
@@ -69,7 +62,7 @@ pub async fn run(server: Server) -> Result<()> {
     // A memory run in flight gets a few seconds; whatever it does not finish stays
     // claimed and the next process picks it up (see memory_worker.rs).
     server.stop_memory_worker().await;
-    println!("再见。");
+    println!("Bye.");
     Ok(())
 }
 
@@ -80,27 +73,27 @@ fn set_cwd(cwd: Option<std::path::PathBuf>, input: &str) -> Option<std::path::Pa
     if rest.is_empty() {
         return match &cwd {
             Some(path) => {
-                println!("本轮工作目录：{}", path.display());
+                println!("This turn's working directory: {}", path.display());
                 cwd
             }
             None => {
                 println!(
-                    "本轮工作目录：未设置（按 Joy 启动时所在目录）。用 /cwd <绝对路径> 设置。"
+                    "This turn's working directory: unset (Joy's own directory when it started). Set one with /cwd <absolute path>."
                 );
                 cwd
             }
         };
     }
     if rest == "clear" || rest == "reset" {
-        println!("已清除本轮工作目录。");
+        println!("Cleared this turn's working directory.");
         return None;
     }
     let path = std::path::PathBuf::from(rest);
     if !path.is_absolute() || !path.is_dir() {
-        println!("'{rest}' 必须是已存在的绝对路径 —— 没有设置。");
+        println!("'{rest}' must be an existing absolute path — nothing was set.");
         return cwd;
     }
-    println!("本轮工作目录已设为 {}", path.display());
+    println!("This turn's working directory is now {}", path.display());
     Some(path)
 }
 
@@ -118,7 +111,7 @@ fn route_cmd(server: &Server, input: &str) {
     match rest.get(1).copied() {
         None => {
             println!(
-                "模式：{}（{}）",
+                "Mode: {} ({})",
                 match table.mode {
                     RouteMode::Auto => "auto",
                     RouteMode::Fixed => "fixed",
@@ -129,10 +122,10 @@ fn route_cmd(server: &Server, input: &str) {
                 let mapped = table.routes.get(tier);
                 println!(
                     "  {tier:<10} → {}",
-                    mapped.map(String::as_str).unwrap_or("（缺省链）")
+                    mapped.map(String::as_str).unwrap_or("(default chain)")
                 );
             }
-            println!("缺省链：reasoning/fast → chat → active；改用 /route set <档位> <配置名>。");
+            println!("Default chain: reasoning/fast → chat → active; change it with /route set <tier> <profile>.");
         }
         Some("auto") | Some("fixed") => {
             table.mode = if rest[1] == "auto" {
@@ -142,41 +135,49 @@ fn route_cmd(server: &Server, input: &str) {
             };
             match routes::save_routes(&home, &table) {
                 Ok(()) => println!(
-                    "已切到 {} —— 每轮重读，立即生效。",
+                    "Switched to {} — re-read every turn, effective immediately.",
                     if table.mode == RouteMode::Auto {
                         "auto"
                     } else {
                         "fixed"
                     }
                 ),
-                Err(why) => println!("没写进 {}：{why}", routes::routes_path(&home).display()),
+                Err(why) => println!(
+                    "Could not write {}: {why}",
+                    routes::routes_path(&home).display()
+                ),
             }
         }
         Some("set") => {
             let (Some(tier), Some(profile_id)) = (rest.get(2).copied(), rest.get(3).copied())
             else {
-                println!("用法：/route set <fast|chat|reasoning> <配置名>（/model 看有哪些）");
+                println!("Usage: /route set <fast|chat|reasoning> <profile> (/model lists them)");
                 return;
             };
             if !TIERS.contains(&tier) {
-                println!("档位只有三个：fast / chat / reasoning。");
+                println!("There are only three tiers: fast / chat / reasoning.");
                 return;
             }
             let models = joyczl_config::models::load_models(&home);
             if joyczl_config::models::find(&models, profile_id).is_none() {
-                println!("没有叫 '{profile_id}' 的模型配置 —— /model 看有哪些。");
+                println!("There is no model profile named '{profile_id}' — /model lists them.");
                 return;
             }
             table
                 .routes
                 .insert(tier.to_string(), profile_id.to_string());
             match routes::save_routes(&home, &table) {
-                Ok(()) => println!("{tier} → {profile_id}（每轮重读，立即生效）"),
-                Err(why) => println!("没写进 {}：{why}", routes::routes_path(&home).display()),
+                Ok(()) => {
+                    println!("{tier} → {profile_id} (re-read every turn, effective immediately)")
+                }
+                Err(why) => println!(
+                    "Could not write {}: {why}",
+                    routes::routes_path(&home).display()
+                ),
             }
         }
         Some(other) => {
-            println!("不认识的子命令 '{other}'。/route 看表，/route auto|fixed 切模式，/route set <档位> <配置名> 改映射。");
+            println!("Unknown subcommand '{other}'. /route shows the table, /route auto|fixed switches mode, /route set <tier> <profile> edits the mapping.");
         }
     }
 }
@@ -195,34 +196,33 @@ fn models(server: &Server, input: &str) {
             let response = server.model_profiles();
             if response.profiles.is_empty() {
                 println!(
-                    "还没配任何模型。用 /model add <名字> <厂商> [模型] [--env 变量名] 加一套；\
-                     /model ls 之后再 /model use <名字> 切换。model/list 能看到全部厂商 id（含 \
-                     <home>/models-catalog.json 里自加的）。"
+                    "No model is configured yet. Add one with /model add <name> <provider> [model] [--env VAR];\n                     then /model ls and /model use <name> to switch. model/list shows every provider id (including \
+                     ones added in <home>/models-catalog.json)."
                 );
                 return;
             }
             for profile in &response.profiles {
                 let mark = if profile.active { "*" } else { " " };
-                let model = profile.model.as_deref().unwrap_or("（厂商默认）");
-                let key = profile.key_source.as_deref().unwrap_or("无需 key");
+                let model = profile.model.as_deref().unwrap_or("(provider default)");
+                let key = profile.key_source.as_deref().unwrap_or("no key needed");
                 // `null` is not "no images": it means "whatever the vendor's default does".
                 let vision = match profile.vision {
-                    Some(true) => "视觉",
-                    Some(false) => "纯文本",
-                    None => "跟随厂商",
+                    Some(true) => "vision",
+                    Some(false) => "text only",
+                    None => "follow the provider",
                 };
                 println!(
                     " {mark} {:<12} {:<12} {:<24} {:<10} key: {key}",
                     profile.id, profile.provider, model, vision
                 );
             }
-            println!("（* = 当前生效）");
+            println!("(* = in effect)");
         }
 
         // ---- switch (name only, no re-sent keys) --------------------------
         "use" => {
             let Some(id) = rest.get(2) else {
-                println!("用法：/model use <名字>");
+                println!("Usage: /model use <name>");
                 return;
             };
             match server.model_save(joyczl_protocol::ModelSaveParams {
@@ -238,11 +238,11 @@ fn models(server: &Server, input: &str) {
                 make_active: Some(true),
             }) {
                 Ok(response) => println!(
-                    "已切到 {}（{}）。",
+                    "Switched to {} ({}).",
                     response.id,
-                    response.current.unwrap_or_else(|| "还没配好".to_string())
+                    response.current.unwrap_or_else(|| "not configured yet".to_string())
                 ),
-                Err(why) => println!("切不过去：{why}"),
+                Err(why) => println!("Could not switch: {why}"),
             }
         }
 
@@ -253,9 +253,9 @@ fn models(server: &Server, input: &str) {
             let provider = rest.get(3).map(|s| s.to_string());
             if id.is_empty() || provider.is_none() {
                 println!(
-                    "用法：/model add <名字> <厂商> [模型] [--env 变量名] [--key 密钥] [--url 端点] \
+                    "Usage: /model add <name> <provider> [model] [--env VAR] [--key KEY] [--url endpoint] \
                      [--vision|--no-vision]\n\
-                     例：/model add ds deepseek deepseek-v4.1-flash --env DEEPSEEK_API_KEY --vision"
+                     e.g. /model add ds deepseek deepseek-v4.1-flash --env DEEPSEEK_API_KEY --vision"
                 );
                 return;
             }
@@ -296,7 +296,7 @@ fn models(server: &Server, input: &str) {
                         if positionals == 1 {
                             model = Some(other.to_string());
                         } else {
-                            println!("多余的参数 '{other}' —— 记不住的就用 --key / --env。");
+                            println!("Unexpected argument '{other}' — for anything else use --key / --env.");
                         }
                         i += 1;
                     }
@@ -314,33 +314,33 @@ fn models(server: &Server, input: &str) {
                 make_active: Some(true),
             }) {
                 Ok(response) => println!(
-                    "已存下 {}（{}），现在是当前的。密钥存在：{}\n\
-                     （keychain = 系统钥匙串；file = 明文兜底文件，见 limitations）",
+                    "Saved {} ({}), now in effect. The key is stored in: {}\n\
+                     (keychain = the system keychain; file = plaintext fallback, see limitations)",
                     response.id,
-                    response.current.unwrap_or_else(|| "还没配好".to_string()),
+                    response.current.unwrap_or_else(|| "not configured yet".to_string()),
                     response.key_stored_in,
                 ),
-                Err(why) => println!("存不进去：{why}"),
+                Err(why) => println!("Could not store it: {why}"),
             }
         }
 
         // ---- remove ---------------------------------------------------------
         "rm" | "remove" => {
             let Some(id) = rest.get(2) else {
-                println!("用法：/model rm <名字>");
+                println!("Usage: /model rm <name>");
                 return;
             };
             let response =
                 server.model_remove(joyczl_protocol::ModelRemoveParams { id: id.to_string() });
             if response.removed {
-                println!("已删掉 {id}（连它的凭据一起）。");
+                println!("Deleted {id} (its credentials too).");
             } else {
-                println!("没有叫 {id} 的配置。");
+                println!("There is no profile named {id}.");
             }
         }
 
         other => println!(
-            "不认识 /model {other}。可用：ls / use <名字> / add <名字> <厂商> [模型] / rm <名字>"
+            "Unknown /model {other}. Options: ls / use <name> / add <name> <provider> [model] / rm <name>"
         ),
     }
 }
@@ -361,11 +361,11 @@ async fn set_goal(server: &Server, session_id: &str, input: &str) {
         .await;
 
     let Some(row) = row.filter(|row| row.goal_condition.is_some()) else {
-        println!("目标已清除（这个会话现在没有目标）。");
+        println!("Goal cleared (this session has no goal now).");
         return;
     };
     println!(
-        "目标已设置：{}\n（最多自动续 {} 轮；停下来的理由每次都会打在这里；\n  /goal clear 可以随时撤掉）",
+        "Goal set: {}\n(up to {} automatic continuations; the reason it stops is printed here every time;\n  /goal clear removes it at any point)",
         row.goal_condition.unwrap_or_default(),
         row.max_rounds
     );
@@ -376,9 +376,9 @@ async fn set_goal(server: &Server, session_id: &str, input: &str) {
 /// Ambiguous answers (empty line, mashing keys) all count as refusal — same rule
 /// as the whole approval mechanism: only one source of yes, an explicit "yes".
 async fn ask_approval(server: &Server, ask: joyczl_protocol::ApprovalRequestedNotification) {
-    println!("…需要批准：{}", ask.args_preview);
-    println!("  为什么问：{}", ask.reason);
-    print!("  批准执行？（y = 只这次 / s = 本会话总是允许 / a = 记住这条 / 其他 = 拒绝）: ");
+    println!("…needs approval: {}", ask.args_preview);
+    println!("  why it asks: {}", ask.reason);
+    print!("  Run it? (y = this once / s = always allow in this session / a = remember this one / anything else = deny):");
     std::io::stdout().flush().ok();
 
     // A separate stdin handle: the main loop isn't reading at that moment, no fight.
@@ -398,18 +398,18 @@ async fn ask_approval(server: &Server, ask: joyczl_protocol::ApprovalRequestedNo
 
     let accepted = server.answer_approval(&ask.turn_id, &ask.request_id, approved, remember);
     if !accepted {
-        println!("…这个问题已经过期了（那一轮不再等答案）");
+        println!("…that question has expired (the turn is no longer waiting)");
     } else if approved {
         println!(
-            "…批准了{}",
+            "…allowed{}",
             match remember {
                 joyczl_protocol::RememberScope::Once => "",
-                joyczl_protocol::RememberScope::Session => "，本会话不再问这条",
-                joyczl_protocol::RememberScope::Always => "，并写进 settings.json",
+                joyczl_protocol::RememberScope::Session => ", and this session will not ask again",
+                joyczl_protocol::RememberScope::Always => ", and written to settings.json",
             }
         );
     } else {
-        println!("…拒绝了");
+        println!("…denied");
     }
 }
 
@@ -463,10 +463,10 @@ async fn chat_turn(
             ServerNotification::GateDecided(decided) => {
                 end_streamed_line(&mut streamed);
                 println!(
-                    "…记忆门：{}（{}）",
+                    "…memory gate: {} ({})",
                     match decided.decision.decision {
-                        joyczl_protocol::GateDecisionKind::Retrieve => "检索",
-                        joyczl_protocol::GateDecisionKind::Skip => "跳过",
+                        joyczl_protocol::GateDecisionKind::Retrieve => "retrieve",
+                        joyczl_protocol::GateDecisionKind::Skip => "skip",
                     },
                     decided.decision.reason
                 );
@@ -485,18 +485,21 @@ async fn chat_turn(
                 end_streamed_line(&mut streamed);
                 match round.status.as_str() {
                     "continuing" => println!(
-                        "…目标还没达成（第 {}/{} 轮）：{}",
+                        "…goal not met yet (round {}/{}): {}",
                         round.round, round.max_rounds, round.reason
                     ),
-                    "satisfied" => println!("…目标达成（第 {} 轮）：{}", round.round, round.reason),
+                    "satisfied" => println!("…goal met (round {}): {}", round.round, round.reason),
                     "impossible" => {
-                        println!("…目标做不到（第 {} 轮）：{}", round.round, round.reason)
+                        println!(
+                            "…goal cannot be done (round {}): {}",
+                            round.round, round.reason
+                        )
                     }
                     "round-limit" => println!(
-                        "…到达轮次上限（{} 轮），停在这里：{}",
+                        "…hit the round limit ({}), stopping here: {}",
                         round.max_rounds, round.reason
                     ),
-                    other => println!("…目标循环停了（{other}）：{}", round.reason),
+                    other => println!("…goal loop stopped ({other}): {}", round.reason),
                 }
             }
             // Retries are **never silent**: rather than letting the user guess at a
@@ -504,7 +507,7 @@ async fn chat_turn(
             ServerNotification::Retry(retry) => {
                 end_streamed_line(&mut streamed);
                 println!(
-                    "…模型那边{}，{}ms 后重试（第 {} 次）",
+                    "…the model {}; retrying in {}ms (attempt {})",
                     retry.reason, retry.delay_ms, retry.attempt
                 );
             }
@@ -513,23 +516,23 @@ async fn chat_turn(
             ServerNotification::ToolDelta(_) => {}
             ServerNotification::ToolStarted(started) => {
                 end_streamed_line(&mut streamed);
-                println!("…正在调用 {}…", started.tool);
+                println!("…calling {}…", started.tool);
             }
             ServerNotification::ToolCompleted(done) => {
                 let status = if done.status == joyczl_protocol::ToolStatus::Ok {
                     "ok"
                 } else {
-                    "出错"
+                    "error"
                 };
                 println!(
-                    "…{} 完成（{}，{}ms）",
+                    "…{} done ({}, {}ms)",
                     done.tool,
                     status,
                     done.duration_ms.unwrap_or(0)
                 );
             }
             ServerNotification::ConsolidationCompleted(done) => {
-                println!("…提炼出 {} 条新事实", done.new_facts);
+                println!("…distilled {} new facts", done.new_facts);
             }
             ServerNotification::TurnCompleted(completed) => {
                 end_streamed_line(&mut streamed);
@@ -542,7 +545,7 @@ async fn chat_turn(
                     .map(|u| format!("token {}+{}", u.input_tokens, u.output_tokens))
                     .unwrap_or_default();
                 println!(
-                    "— {} · {} 轮 · {}ms{}{}",
+                    "— {} · {} turns · {}ms{}{}",
                     completed.meta.model,
                     completed.iterations,
                     completed.meta.latency_ms,
@@ -550,13 +553,13 @@ async fn chat_turn(
                     usage,
                 );
                 if completed.meta.interrupted {
-                    println!("（这轮被打断了。）");
+                    println!("(this turn was interrupted.)");
                 }
                 // Guard hits are not normal: the user should know part of this turn's
                 // budget went to spinning in place (which also explains the longer time).
                 if completed.meta.guard_hits > 0 {
                     println!(
-                        "…循环护栏命中 {} 次（模型在重复调用）",
+                        "…loop guard tripped {} times (the model kept repeating itself)",
                         completed.meta.guard_hits
                     );
                 }
@@ -566,7 +569,7 @@ async fn chat_turn(
             ServerNotification::InboxReceived(inbox) => {
                 end_streamed_line(&mut streamed);
                 println!(
-                    "…收件箱新增 {} 封（connector {}），处理方式看 connectors.json 的 inbound.mode",
+                    "…{} new message(s) in the inbox (connector {}); how they are handled is inbound.mode in connectors.json",
                     inbox.added, inbox.connector
                 );
             }
@@ -574,7 +577,7 @@ async fn chat_turn(
             ServerNotification::TaskUpdated(updated) => {
                 end_streamed_line(&mut streamed);
                 println!(
-                    "…任务「{}」：{}（{} 轮）{}",
+                    "…task \"{}\": {} ({} turns){}",
                     updated.task_id,
                     updated.status,
                     updated.rounds_used,
@@ -590,7 +593,7 @@ async fn chat_turn(
             ServerNotification::TurnResumed(resumed) => {
                 end_streamed_line(&mut streamed);
                 println!(
-                    "…从上次中断处继续（已完成 {} 轮，不重跑已完成的工具）",
+                    "…resuming from the interruption ({} turns done; finished tools do not run again)",
                     resumed.from_iterations
                 );
             }
@@ -598,11 +601,14 @@ async fn chat_turn(
             // cannot type mid-turn itself, but it must not look like the reply ignored it.
             ServerNotification::TurnSteered(steered) => {
                 end_streamed_line(&mut streamed);
-                println!("…补了一句（下一轮次生效）：{}", steered.message);
+                println!("…added a line (effective next turn): {}", steered.message);
             }
             ServerNotification::TurnSuspended(suspended) => {
                 end_streamed_line(&mut streamed);
-                println!("…这个回合已暂停（{}），不会自动续跑", suspended.reason);
+                println!(
+                    "…this turn is paused ({}); it will not continue by itself",
+                    suspended.reason
+                );
             }
             // Graph node events are too chatty for the terminal; with triage on, meta shows the route.
             ServerNotification::GraphStarted(_)
@@ -615,8 +621,8 @@ async fn chat_turn(
     }
 
     // On turn failure (e.g. no key configured) TurnCompleted never arrives above — state the error.
-    if let Err(error) = task.await.expect("turn 任务不该 panic") {
-        println!("出错了：{}", error.message);
+    if let Err(error) = task.await.expect("a turn task must not panic") {
+        println!("Something went wrong: {}", error.message);
     }
     println!();
 }
@@ -645,13 +651,13 @@ async fn compact(server: &Server, session_id: &str, input: &str) {
     .await
     {
         Ok(answer) if answer.covered_turns == 0 => {
-            println!("没有更早的轮次可折 —— 摘要已经跟上了。")
+            println!("Nothing older to fold — the summary is caught up.")
         }
         Ok(answer) => println!(
-            "已压缩：摘要现在覆盖 {} 轮（约 {} token）。",
+            "Compacted: the summary now covers {} turns (about {} tokens).",
             answer.covered_turns, answer.summary_tokens
         ),
-        Err(error) => println!("压缩没成：{}", error.message),
+        Err(error) => println!("Compaction failed: {}", error.message),
     }
 }
 
@@ -670,11 +676,11 @@ async fn show_memory(server: &Server, input: &str) {
 
     if facts.is_empty() && episodes.is_empty() {
         println!(
-            "记忆{}还是空的。告诉 Joy 一些关于你的事，它就会记住（state.db 就在 home 里）。",
+            "Memory{} is still empty. Tell Joy something about yourself and it will remember (state.db lives in the home directory).",
             if query.is_empty() {
                 String::new()
             } else {
-                format!("里关于「{query}」的东西")
+                format!(" about “{query}”")
             }
         );
         return;
@@ -693,12 +699,12 @@ async fn show_memory(server: &Server, input: &str) {
 async fn list_sessions(server: &Server) {
     let sessions = server.chat().sessions().await.unwrap_or_default();
     if sessions.is_empty() {
-        println!("还没有历史会话。");
+        println!("No past sessions yet.");
         return;
     }
     for s in sessions {
         println!(
-            "- {}  {}（{} 条，最近 {}）",
+            "- {}  {} ({} messages, latest {})",
             s.id,
             s.title,
             s.messages,

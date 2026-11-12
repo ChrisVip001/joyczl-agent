@@ -18,35 +18,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-const USAGE: &str = "\
-Joy — 本地优先的个人助手
-
-用法:
-    joy                终端对话
-    joy gather         晨报（github/web/calendar/memory 一趟图跑完，草稿进 outbox）
-    joy schedule       常驻：按技能/ schedules.json 里的 cron 定时跑任务
-    joy memory reindex 给还没有向量的事实补上向量（JOY_EMBEDDINGS=1 那条腿）
-    joy skill [update] 列出/更新技能（索引默认 <home>/skills/index.json）
-    joy mcp …          看 MCP 服务器列表；login 跑浏览器 OAuth；serve 把记忆暴露成 MCP 服务器
-    joy skill …        技能：list / export --to claude,codex / install <url>
-    joy eval [路径]    确定性评测（离线 0/1，必须 100% 通过 = release gate）
-    joy eval --replay  回放评测：录制对话 + 期望事件序列（默认读 evals/replay/）
-    joy judge [路径]   真模型答一轮 + 裁判打分（需要 key，出分不拦发版）
-    joy bench [路径]   长任务基准：成功率与中断续跑率（只记录，不拦发版）
-    joy dashboard      起网页驾驶舱（http://localhost:7777）
-    joy app-server     启动 JSON-RPC 服务端（stdin/stdout，换行分隔 JSON）
-    joy hub            多用户模式：--root <目录>，users.json 里每人一枚 token，
-                       各自的 home 完整隔离（state.db/记忆/模型配置全套）
-    joy hub adduser    joy hub adduser <名字> --root <目录>：生成 token 并写进
-                       users.json（0600）—— token 只打印这一次
-    joy --version      打印版本
-
-环境变量:
-    JOY_HOME          状态目录，默认 ./.joy（state.db、SOUL.md、traces/ 都在里面）
-    JOY_PORT          驾驶舱端口，默认 7777
-    JOY_DASHBOARD_DIR 前端构建产物的位置，默认 joy-ts/packages/dashboard/dist
-    JOY_GH_REPO       gather 的 github scan 用的仓库（owner/repo）
-";
+const USAGE: &str = "\nJoy — a local-first personal assistant\n\nUsage:\n    joy                terminal chat\n    joy gather         morning briefing (github/web/calendar/memory in one graph, draft into outbox)\n    joy schedule       resident: run jobs on the cron in skills / schedules.json\n    joy memory reindex give a vector to every fact that has none (the JOY_EMBEDDINGS=1 leg)\n    joy skill [update] list/update skills (index at <home>/skills/index.json by default)\n    joy mcp …          list MCP servers; login runs browser OAuth; serve exposes memory as an MCP server\n    joy skill …        skills: list / export --to claude,codex / install <url>\n    joy eval [path]    deterministic eval (offline 0/1, must be 100% to pass = release gate)\n    joy eval --replay  replay eval: recorded conversations + expected event sequences (reads evals/replay/)\n    joy judge [path]   one real model turn + a judge scores it (needs a key; the score never blocks a release)\n    joy bench [path]   long-task benchmark: success rate and resume rate (recorded only, never blocks)\n    joy dashboard      start the web cockpit (http://localhost:7777)\n    joy app-server     start the JSON-RPC server (stdin/stdout, newline-delimited JSON)\n    joy hub            multi-user mode: --root <dir>, one token per person in users.json,\n                       each home fully isolated (state.db/memory/model config, the lot)\n    joy hub adduser    joy hub adduser <name> --root <dir>: mint a token and write it into\n                       users.json (0600) — the token is printed once\n    joy --version      print the version\n\nEnvironment:\n    JOY_HOME           state directory, ./.joy by default (state.db, SOUL.md, traces/ live here)\n    JOY_PORT           cockpit port, 7777 by default\n    JOY_DASHBOARD_DIR  where the dashboard build lands, joy-ts/packages/dashboard/dist by default\n    JOY_GH_REPO        the repository gather's github scan reads (owner/repo)\n";
 
 /// State directory. Defaults to under the current working directory rather than
 /// ~/.joy — "your memory is a file you can open" must hold true: whichever
@@ -65,12 +37,12 @@ fn home() -> PathBuf {
 fn windows_blocker() -> Option<&'static str> {
     if cfg!(windows) {
         Some(
-            "Joy 暂不支持在 Windows 原生运行：\n  \
-             · 执行沙箱只有 macOS seatbelt / Linux bubblewrap 两个后端，按「无沙箱不执行」的铁律，\
-             run_command 在 Windows 上永远拒绝执行；\n  \
-             · hooks 通过 sh 执行；\n  \
-             · Windows 凭据库读不回密钥，只能落明文 secrets.json。\n\
-             请在 macOS 或 Linux 上运行（WSL2 即可）。支持矩阵见 docs/operations.md。",
+            "Joy does not run natively on Windows:\n  \
+             · the only exec sandboxes are macOS seatbelt and Linux bubblewrap, and with the \"no sandbox, no exec\" rule\
+             run_command would always refuse on Windows;\n  \
+             · hooks run through sh;\n  \
+             · the Windows credential store cannot read keys back, so only plaintext secrets.json is left.\n\
+             Run on macOS or Linux (WSL2 is fine). The support matrix is in docs/operations.md.",
         )
     } else {
         None
@@ -214,7 +186,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(other) => {
-            anyhow::bail!("未知子命令 '{other}'\n\n{USAGE}");
+            anyhow::bail!("Unknown subcommand '{other}'\n\n{USAGE}");
         }
         None => {
             // Terminal conversation: assemble Server in-process, REPL runs the same run_turn.
@@ -236,11 +208,11 @@ fn hub_root(args: &[String]) -> anyhow::Result<String> {
             return args
                 .get(i + 1)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("--root 后面要跟目录"));
+                .ok_or_else(|| anyhow::anyhow!("--root needs a directory"));
         }
     }
     std::env::var("JOY_HUB_ROOT").map_err(|_| {
-        anyhow::anyhow!("多用户模式要一个根目录：joy hub --root <目录>（或设 JOY_HUB_ROOT）")
+        anyhow::anyhow!("Multi-user mode needs a root: joy hub --root <dir> (or set JOY_HUB_ROOT)")
     })
 }
 
@@ -248,11 +220,11 @@ fn hub_root(args: &[String]) -> anyhow::Result<String> {
 /// users.json (0600). The token is printed only once — the ledger stores it.
 fn hub_adduser(args: &[String]) -> anyhow::Result<()> {
     let Some(name) = args.first() else {
-        anyhow::bail!("用法：joy hub adduser <名字> --root <目录>");
+        anyhow::bail!("Usage: joy hub adduser <name> --root <dir>");
     };
     anyhow::ensure!(
         joyczl_ops::hub::valid_user(name),
-        "用户名 '{name}' 不合格：只许小写字母、数字与连字符，≤32 字符（名字会变成目录）"
+        "User name '{name}' is not valid: lowercase letters, digits and hyphens only, at most 32 characters (the name becomes a directory)"
     );
     let root = hub_root(&args[1..])?;
     let path = std::path::Path::new(&root).join("users.json");
@@ -263,9 +235,9 @@ fn hub_adduser(args: &[String]) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     users.save(&path)?;
-    println!("已加用户 {name}（根目录 {root}）。token 只显示这一次：");
+    println!("Added user {name} (root {root}). The token is shown this once:");
     println!("{token}");
-    println!("驾驶舱首次访问时把它填进弹框即可。换一枚：删掉 users.json 里那行再 adduser。");
+    println!("Paste it into the dialog the cockpit shows on first visit. To rotate it, delete that line in users.json and adduser again.");
     Ok(())
 }
 

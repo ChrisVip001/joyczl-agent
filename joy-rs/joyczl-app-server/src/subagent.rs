@@ -102,10 +102,10 @@ async fn run_child(
 /// Squeeze the subagent's conclusion into a "schema-valid JSON string".
 fn coerce_structured(reply: &str, schema: &Value) -> Result<String, String> {
     let Some(json) = joyczl_memory::gate::extract_json(reply) else {
-        return Err("回复里没找到 JSON 对象".to_string());
+        return Err("no JSON object found in the reply".to_string());
     };
     let Ok(value) = serde_json::from_str::<Value>(&json) else {
-        return Err("那段 JSON 解析不了".to_string());
+        return Err("that JSON does not parse".to_string());
     };
     joyczl_tools::validate_value(schema, &value)?;
     serde_json::to_string(&value).map_err(|e| e.to_string())
@@ -132,10 +132,19 @@ impl SubagentRunner for Delegated {
 
         Box::pin(async move {
             // Read now: this turn uses the current provider and settings.
-            let Some(resolved) = resolved.read().expect("resolved 锁不该中毒").clone() else {
-                return Err(anyhow::anyhow!("模型还没配好，子代理起不来"));
+            let Some(resolved) = resolved
+                .read()
+                .expect("the resolved lock should not be poisoned")
+                .clone()
+            else {
+                return Err(anyhow::anyhow!(
+                    "the model is not configured; a subagent cannot start"
+                ));
             };
-            let settings = settings.read().expect("settings 锁不该中毒").clone();
+            let settings = settings
+                .read()
+                .expect("the settings lock should not be poisoned")
+                .clone();
             let home: PathBuf = settings.home.clone();
 
             let iterations = max_iterations
@@ -270,7 +279,7 @@ impl SubagentRunner for Delegated {
                 budget,
             )
             .await
-            .map_err(|e| anyhow::anyhow!("模型调用失败：{e}"))?;
+            .map_err(|e| anyhow::anyhow!("Model call failed: {e}"))?;
 
             crate::fire_hook(
                 &hooks,
@@ -295,8 +304,7 @@ impl SubagentRunner for Delegated {
                     Ok(json) => summary = json,
                     Err(why) => {
                         let nudge = format!(
-                            "上一次的结论不能用作结构化结果：{why}\n\
-                             请**只**回复符合下面 schema 的 JSON（不要代码块、不要多余解释）：\n{schema}"
+                            "The previous answer cannot be used as a structured result: {why}\nReply with **only** JSON that matches the schema below (no code fence, no extra explanation):\n{schema}"
                         );
                         let retry = run_child(
                             &resolved,
@@ -315,25 +323,27 @@ impl SubagentRunner for Delegated {
                         match retry {
                             Ok(second) => match coerce_structured(second.reply.trim(), schema) {
                                 Ok(json) => {
-                                    eprintln!("(joy) 子代理的结构化结果重试一次后通过");
+                                    eprintln!("(joy) the subagent's structured result passed on the retry");
                                     summary = json;
                                 }
                                 Err(again) => {
-                                    eprintln!("(joy) 子代理的结构化结果两次都没过校验：{again}");
+                                    eprintln!("(joy) the subagent's structured result failed validation twice: {again}");
                                     summary.push_str(&format!(
-                                        "\n（结构化结果两次都没通过校验：{again}；上面是它的原始文字）"
+                                        "\n(the structured result failed validation twice: {again}; above is its raw text)"
                                     ));
                                 }
                             },
                             Err(e) => {
-                                summary.push_str(&format!("\n（结构化重试没跑成：{e}）"));
+                                summary.push_str(&format!(
+                                    "\n(the structured retry did not run: {e})"
+                                ));
                             }
                         }
                     }
                 }
             }
             if summary.is_empty() {
-                summary = "（子代理没有给出结论。）".to_string();
+                summary = "(the subagent reached no conclusion.)".to_string();
             }
             // Append "what it used" after the conclusion: the parent turn sees only one tool call, and these
             // details are its only clue for judging "can this conclusion be trusted" — **failures especially
@@ -346,13 +356,13 @@ impl SubagentRunner for Delegated {
                     if call.ok() {
                         call.name.clone()
                     } else {
-                        format!("{}（失败）", call.name)
+                        format!("{} (failed)", call.name)
                     }
                 })
                 .collect();
             if !used.is_empty() {
                 summary.push_str(&format!(
-                    "\n（子代理跑了 {} 轮，用了：{}）",
+                    "\n(the subagent ran {} rounds and used: {})",
                     result.iterations,
                     used.join("、")
                 ));

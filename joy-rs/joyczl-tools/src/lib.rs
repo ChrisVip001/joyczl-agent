@@ -28,6 +28,7 @@ pub mod jobs;
 pub mod memory_admin;
 pub mod messages;
 pub mod notify;
+mod notify_queue;
 pub mod patch;
 pub mod report;
 pub mod roots;
@@ -93,10 +94,16 @@ mod patch_tests;
 #[path = "web_tests.rs"]
 mod web_tests;
 
-/// What a tool's execution can see. Adding a field takes thought: every tool sees all of it.
-/// Deliberately Clone — the handler's Future must own it, so it can be 'static.
+/// Host notification that a tool cannot establish its external outcome.
+pub type UncertainSink = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// The host environment available to tool handlers.
 #[derive(Clone)]
 pub struct ToolCtx {
+    /// Host-only signal that an external operation may have committed without a receipt.
+    pub on_uncertain: Option<UncertainSink>,
+    /// Execution identity assigned by the host; never supplied by tool arguments.
+    pub task_run_id: Option<String>,
     pub facts: Facts,
     pub episodes: Episodes,
     pub chat: Chat,
@@ -285,7 +292,7 @@ impl ToolRegistry {
         // tool fewer than one tool whose executor is unknown.
         if self.tools.contains_key(&tool.name) {
             eprintln!(
-                "(joy) 工具名 '{}' 已经被占用了，后到的这个被拒绝注册（不覆盖已有的）",
+                "(joy) the tool name '{}' is already taken; the later registration is refused (it does not overwrite the existing one)",
                 tool.name
             );
             return;
@@ -294,7 +301,7 @@ impl ToolRegistry {
             Ok(validator) => Some(validator),
             Err(e) => {
                 eprintln!(
-                    "(joy) 工具 '{}' 的 input_schema 编译不了（{e}）—— 这个工具的参数不做校验",
+                    "(joy) tool '{}' has an input_schema that does not compile ({e}) — its arguments are not validated",
                     tool.name
                 );
                 None
@@ -429,7 +436,7 @@ impl ToolRegistry {
     pub async fn execute(&self, ctx: ToolCtx, name: &str, args: Value) -> String {
         let Some(tool) = self.tools.get(name) else {
             return format!(
-                "Error: 没有叫 '{name}' 的工具。可用：{}",
+                "Error: no tool named '{name}'. Available: {}",
                 self.names().join(", ")
             );
         };
@@ -440,7 +447,7 @@ impl ToolRegistry {
         if let Some(Some(validator)) = self.validators.get(name) {
             if let Err(why) = describe_violations(validator, &args) {
                 return format!(
-                    "Error: 参数不符合 {name} 的 schema —— {why}。请重写输入以满足 schema。"
+                    "Error: the arguments do not match the {name} schema — {why}. Rewrite the input to satisfy the schema."
                 );
             }
         }
@@ -459,7 +466,7 @@ impl ToolRegistry {
                 .await;
             if let Some(reason) = outcome.blocked {
                 // Handed over as `Error:`: to the model it's a rejected call, and it should adapt.
-                return format!("Error: {reason}（PreToolUse hook 拒绝执行 {name}）");
+                return format!("Error: {reason} (a PreToolUse hook refused to run {name})");
             }
             if let Some(rewritten) = outcome.input {
                 // **Re-validate after rewriting**: hooks can break things too, and "who broke it"
@@ -467,7 +474,7 @@ impl ToolRegistry {
                 if let Some(Some(validator)) = self.validators.get(name) {
                     if let Err(why) = describe_violations(validator, &rewritten) {
                         return format!(
-                            "Error: PreToolUse hook 改写后的参数不符合 {name} 的 schema —— {why}"
+                            "Error: the arguments rewritten by a PreToolUse hook do not match the {name} schema — {why}"
                         );
                     }
                 }
@@ -477,7 +484,7 @@ impl ToolRegistry {
 
         let output = match (tool.handler)(ctx.clone(), args).await {
             Ok(output) => output,
-            Err(e) => format!("Error: 执行 {name} 失败：{e}"),
+            Err(e) => format!("Error: {name} failed: {e}"),
         };
 
         // ---- PostToolUse / PostToolUseFailure: may rewrite the result; a block replaces it
@@ -500,7 +507,7 @@ impl ToolRegistry {
         let outcome = hooks.fire(event, payload).await;
         if let Some(reason) = outcome.blocked {
             return format!(
-                "Error: {reason}（{} hook 拒绝了 {name} 的结果）",
+                "Error: {reason} (a {} hook refused the result of {name})",
                 event.name()
             );
         }
@@ -513,8 +520,8 @@ impl ToolRegistry {
 /// Tool-argument validation goes through the same path (`describe_violations`), and so does
 /// the subagent's structured result — the wording is identical, so the model learns one dialect.
 pub fn validate_value(schema: &Value, value: &Value) -> Result<(), String> {
-    let validator =
-        jsonschema::validator_for(schema).map_err(|e| format!("这份 schema 本身编译不了：{e}"))?;
+    let validator = jsonschema::validator_for(schema)
+        .map_err(|e| format!("this schema does not compile: {e}"))?;
     describe_violations(&validator, value)
 }
 
@@ -528,7 +535,7 @@ fn describe_violations(validator: &jsonschema::Validator, args: &Value) -> Resul
         .map(|error| {
             let path = error.instance_path();
             if path.is_empty() {
-                format!("参数本身：{error}")
+                format!("the arguments themselves: {error}")
             } else {
                 format!("{path}：{error}")
             }
@@ -540,7 +547,7 @@ fn describe_violations(validator: &jsonschema::Validator, args: &Value) -> Resul
     let shown = all.len().min(3);
     let mut text = all[..shown].join("；");
     if all.len() > shown {
-        text.push_str(&format!("（还有 {} 处）", all.len() - shown));
+        text.push_str(&format!("({} more)", all.len() - shown));
     }
     Err(text)
 }
@@ -552,13 +559,13 @@ fn describe_violations(validator: &jsonschema::Validator, args: &Value) -> Resul
 pub fn require_str(args: &Value, key: &str) -> Result<String> {
     let value = args
         .get(key)
-        .ok_or_else(|| anyhow::anyhow!("缺少参数 '{key}'"))?;
+        .ok_or_else(|| anyhow::anyhow!("Missing parameter '{key}'"))?;
     let text = value
         .as_str()
-        .ok_or_else(|| anyhow::anyhow!("参数 '{key}' 应该是字符串，得到的是 {value}"))?;
+        .ok_or_else(|| anyhow::anyhow!("Parameter '{key}' should be a string, got {value}"))?;
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        anyhow::bail!("参数 '{key}' 不能是空的");
+        anyhow::bail!("Parameter '{key}' must not be empty");
     }
     Ok(trimmed.to_string())
 }
@@ -567,9 +574,8 @@ pub fn require_str(args: &Value, key: &str) -> Result<String> {
 pub fn opt_u32(args: &Value, key: &str, default: u32) -> Result<u32> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(default),
-        Some(v) => v
-            .as_u64()
-            .map(|n| n as u32)
-            .ok_or_else(|| anyhow::anyhow!("参数 '{key}' 应该是非负整数，得到的是 {v}")),
+        Some(v) => v.as_u64().map(|n| n as u32).ok_or_else(|| {
+            anyhow::anyhow!("Parameter '{key}' should be a non-negative integer, got {v}")
+        }),
     }
 }

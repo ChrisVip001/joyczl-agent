@@ -222,7 +222,7 @@ async fn dispatch(
                 .await
                 .map_err(|e| ErrorObject {
                     code: codes::INVALID_PARAMS,
-                    message: format!("分叉失败：{e}"),
+                    message: format!("the branch failed: {e}"),
                     data: None,
                 })?;
             match server.chat.session(&new_id).await.map_err(internal)? {
@@ -300,7 +300,7 @@ async fn dispatch(
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
                         code: codes::INVALID_PARAMS,
-                        message: format!("{method} 不接受参数"),
+                        message: format!("{method} takes no parameters"),
                         data: None,
                     });
                 }
@@ -332,7 +332,7 @@ async fn dispatch(
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
                         code: codes::INVALID_PARAMS,
-                        message: format!("{method} 不接受参数"),
+                        message: format!("{method} takes no parameters"),
                         data: None,
                     });
                 }
@@ -358,7 +358,7 @@ async fn dispatch(
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
                         code: codes::INVALID_PARAMS,
-                        message: format!("{method} 不接受参数"),
+                        message: format!("{method} takes no parameters"),
                         data: None,
                     });
                 }
@@ -373,7 +373,7 @@ async fn dispatch(
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
                         code: codes::INVALID_PARAMS,
-                        message: format!("{method} 不接受参数"),
+                        message: format!("{method} takes no parameters"),
                         data: None,
                     });
                 }
@@ -388,7 +388,7 @@ async fn dispatch(
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
                         code: codes::INVALID_PARAMS,
-                        message: format!("{method} 不接受参数"),
+                        message: format!("{method} takes no parameters"),
                         data: None,
                     });
                 }
@@ -443,7 +443,7 @@ async fn dispatch(
             if message.is_empty() {
                 return Err(ErrorObject {
                     code: codes::INVALID_PARAMS,
-                    message: "要补的那一句是空的 —— 空话不该占掉一个轮次的下一次模型调用。"
+                    message: "The follow-up is empty — an empty message should not cost a turn its next model call."
                         .to_string(),
                     data: None,
                 });
@@ -470,7 +470,7 @@ async fn dispatch(
                 Err(()) => Err(ErrorObject {
                     code: codes::INVALID_PARAMS,
                     message: format!(
-                        "会话 {session_id} 现在没有在跑的回合 —— 直接 turn/start 就行，不用 steer。"
+                        "Session {session_id} has no turn running — just call turn/start, no steer needed."
                     ),
                     data: None,
                 }),
@@ -483,7 +483,9 @@ async fn dispatch(
             if message.is_empty() {
                 return Err(ErrorObject {
                     code: codes::INVALID_PARAMS,
-                    message: "要排的那一句是空的 —— 空话不该占掉一个回合。".to_string(),
+                    message:
+                        "The message to queue is empty — an empty message should not cost a turn."
+                            .to_string(),
                     data: None,
                 });
             }
@@ -500,13 +502,13 @@ async fn dispatch(
                 crate::FollowUp::Idle => Err(ErrorObject {
                     code: codes::INVALID_PARAMS,
                     message: format!(
-                        "会话 {session_id} 现在没有在跑的回合 ——「等这轮结束」没有对象，直接 turn/start 就行。"
+                        "Session {session_id} has no turn running — \"after this turn\" has nothing to wait for; just call turn/start."
                     ),
                     data: None,
                 }),
                 crate::FollowUp::Failed(why) => Err(ErrorObject {
                     code: codes::INTERNAL_ERROR,
-                    message: format!("排队没写进库：{why}"),
+                    message: format!("the queue entry was not written to the database: {why}"),
                     data: None,
                 }),
             }
@@ -524,7 +526,7 @@ async fn dispatch(
                 if value.as_object().is_some_and(|o| !o.is_empty()) {
                     return Err(ErrorObject {
                         code: codes::INVALID_PARAMS,
-                        message: format!("{method} 不接受参数"),
+                        message: format!("{method} takes no parameters"),
                         data: None,
                     });
                 }
@@ -597,7 +599,7 @@ async fn dispatch(
             Some(result) => result.map(Outcome::Value),
             None => Err(ErrorObject {
                 code: codes::METHOD_NOT_FOUND,
-                message: format!("未知方法 '{other}'"),
+                message: format!("unknown method '{other}'"),
                 data: None,
             }),
         },
@@ -626,7 +628,7 @@ fn parse<T: DeserializeOwned>(params: Option<&Value>, method: &str) -> Result<T,
     let value = params.cloned().unwrap_or_else(|| serde_json::json!({}));
     serde_json::from_value(value).map_err(|e| ErrorObject {
         code: codes::INVALID_PARAMS,
-        message: format!("{method} 的参数不对：{e}"),
+        message: format!("{method} got bad parameters: {e}"),
         data: None,
     })
 }
@@ -644,7 +646,7 @@ fn internal(e: impl std::fmt::Display) -> ErrorObject {
 fn no_such_session(id: &str) -> ErrorObject {
     ErrorObject {
         code: codes::INVALID_PARAMS,
-        message: format!("没有这个会话：{id}（先 session/new，或确认 id 没打错）"),
+        message: format!("No such session: {id} (call session/new first, or check the id)"),
         data: None,
     }
 }

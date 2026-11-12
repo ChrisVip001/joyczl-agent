@@ -25,7 +25,7 @@ pub(crate) fn check_dashboard_freshness(dist: &Path) -> Result<(), String> {
             .unwrap_or(SystemTime::UNIX_EPOCH),
         Err(_) => {
             return Err(format!(
-                "驾驶舱前端还没构建：{} 不存在。跑 `just dashboard-build`（或 cd joy-ts && npm run build --workspace @joy/dashboard）",
+                "the cockpit front end has not been built: {} does not exist. Run `just dashboard-build` (or cd joy-ts && npm run build --workspace @joy/dashboard)",
                 dist.display()
             ))
         }
@@ -39,7 +39,7 @@ pub(crate) fn check_dashboard_freshness(dist: &Path) -> Result<(), String> {
     let newest_src = newest_mtime(&src).unwrap_or(SystemTime::UNIX_EPOCH);
     if newest_src > built {
         return Err(format!(
-            "驾驶舱前端过期了：源码（{}）比构建产物（{}）新。跑 `just dashboard-build` 重建，或设 JOY_DASHBOARD_DIR 指向现成的 dist",
+            "the cockpit front end is stale: the source ({}) is newer than the build ({}). Run `just dashboard-build`, or point JOY_DASHBOARD_DIR at an existing dist",
             src.display(),
             dist.display()
         ));
@@ -112,7 +112,7 @@ mod freshness_tests {
         // No dist → the other error (not built), not "stale".
         let empty = tempfile::tempdir().expect("临时目录");
         let error = check_dashboard_freshness(empty.path()).unwrap_err();
-        assert!(error.contains("还没构建"), "{error}");
+        assert!(error.contains("has not been built"), "{error}");
 
         // No src (release scene) → pass, even if dist is old.
         let lonely = tempfile::tempdir().expect("临时目录");

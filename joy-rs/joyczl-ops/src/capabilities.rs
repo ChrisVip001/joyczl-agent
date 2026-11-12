@@ -127,7 +127,7 @@ pub fn skill_rows_in(dirs: &[PathBuf]) -> (Vec<SkillRow>, Option<String>) {
                 // A missing pack is not news (it may not be installed here); the user's
                 // own directory failing to open is.
                 if !builtin && dir.exists() {
-                    error = Some(format!("读不动 {}：{why}", dir.display()));
+                    error = Some(format!("could not read {}: {why}", dir.display()));
                 }
                 continue;
             }
@@ -200,7 +200,7 @@ pub fn mcp_rows_in(paths: &[PathBuf]) -> (Vec<McpRow>, Option<String>) {
                 } else {
                     // A broken pack must not blank the user's own list — but it must be
                     // said, the same way the app-server says it at connect time.
-                    eprintln!("(joy) 能力中心：{why}");
+                    eprintln!("(joy) capability hub: {why}");
                 }
             }
         }
@@ -239,18 +239,18 @@ fn mcp_row_of(spec: &ServerSpec, source: &str) -> McpRow {
 pub fn remove_skill(home: &Path, name: &str) -> Result<String, String> {
     if !skills::is_slug(name) {
         return Err(format!(
-            "'{name}' 不是合法的技能名（小写字母、数字、连字符）—— 拒绝动任何目录"
+            "'{name}' is not a valid skill name (lowercase letters, digits, hyphens) — refusing to touch any directory"
         ));
     }
     let folder = home.join("skills").join(name);
     if !folder.is_dir() {
         return Err(format!(
-            "没有叫 '{name}' 的技能可以删 —— 内置技能（随 Joy 或 JOY_SKILL_DIRS 分发）不归这里管"
+            "no skill named '{name}' to delete — built-in skills (shipped with Joy or JOY_SKILL_DIRS) are not managed here"
         ));
     }
     std::fs::remove_dir_all(&folder)
-        .map_err(|why| format!("删不掉 {}：{why}", folder.display()))?;
-    Ok(format!("已删除技能 '{name}'"))
+        .map_err(|why| format!("could not delete {}: {why}", folder.display()))?;
+    Ok(format!("Deleted skill '{name}'"))
 }
 
 /// Validate what the dashboard's form sent before it touches mcp.json.
@@ -262,13 +262,13 @@ pub fn remove_skill(home: &Path, name: &str) -> Result<String, String> {
 pub fn validate_server(spec: &ServerSpec) -> Result<(), String> {
     let name = spec.name.trim();
     if name.is_empty() || name.chars().count() > 64 {
-        return Err("名称要 1-64 个字符".to_string());
+        return Err("the name must be 1-64 characters".to_string());
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err("名称只能用字母、数字、连字符、下划线 —— 它会变成工具名的前缀".to_string());
+        return Err("the name may only use letters, digits, hyphens and underscores — it becomes the tool-name prefix".to_string());
     }
     let url = spec
         .url
@@ -282,16 +282,17 @@ pub fn validate_server(spec: &ServerSpec) -> Result<(), String> {
         .filter(|value| !value.is_empty());
     match (url, command) {
         (Some(_), Some(_)) => {
-            return Err("url 和 command 只能填一个 —— 一种服务器只有一种传输方式".to_string());
+            return Err("set url or command, not both — one server, one transport".to_string());
         }
         (None, None) => {
             return Err(
-                "填 url（远程 HTTP 服务器）或 command（本地 stdio 服务器）之一".to_string(),
+                "set either url (a remote HTTP server) or command (a local stdio server)"
+                    .to_string(),
             );
         }
         (Some(url), None) => {
             if !url.starts_with("http://") && !url.starts_with("https://") {
-                return Err("url 要以 http:// 或 https:// 开头".to_string());
+                return Err("url must start with http:// or https://".to_string());
             }
         }
         (None, Some(_)) => {}
@@ -302,7 +303,7 @@ pub fn validate_server(spec: &ServerSpec) -> Result<(), String> {
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
         {
             return Err(
-                "鉴权变量名只能用大写字母、数字、下划线 —— 它是环境变量的名字，不是密钥本身"
+                "the auth variable name may only use uppercase letters, digits and underscores — it is the env var's name, not the key itself"
                     .to_string(),
             );
         }
@@ -334,7 +335,7 @@ pub fn save_server_among(
         if let Ok(config) = McpConfig::read(pack) {
             if config.servers.iter().any(|spec| spec.name == name) {
                 return Err(format!(
-                    "'{name}' 已由系统内置配置 {} 提供 —— 用户配置里再写一份不会生效（先到的赢）",
+                    "'{name}' is already provided by the built-in config {} — a second copy in user config has no effect (first one wins)",
                     pack.display()
                 ));
             }
@@ -363,7 +364,7 @@ pub fn save_server_among(
         None => config.servers.push(spec),
     }
     write_config(&path, &config)?;
-    Ok(format!("已保存 MCP 连接器 '{name}' → {}", path.display()))
+    Ok(format!("Saved MCP connector '{name}' → {}", path.display()))
 }
 
 /// Remove one server from `<home>/mcp.json`. A name that only exists in a built-in
@@ -375,22 +376,25 @@ pub fn remove_server(home: &Path, name: &str) -> Result<String, String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
-        return Err("名称只能用字母、数字、连字符、下划线".to_string());
+        return Err("the name may only use letters, digits, hyphens and underscores".to_string());
     }
     let path = home.join("mcp.json");
     if !path.exists() {
-        return Err(format!("还没有 {}，没有可删的连接器", path.display()));
+        return Err(format!(
+            "there is no {} yet, so there is no connector to delete",
+            path.display()
+        ));
     }
     let mut config = McpConfig::read(&path)?;
     let before = config.servers.len();
     config.servers.retain(|spec| spec.name != name);
     if config.servers.len() == before {
         return Err(format!(
-            "mcp.json 里没有叫 '{name}' 的连接器 —— 内置配置里的删不到，也不该删"
+            "no connector named '{name}' in mcp.json — one from the built-in config cannot be deleted, and should not be"
         ));
     }
     write_config(&path, &config)?;
-    Ok(format!("已删除 MCP 连接器 '{name}'"))
+    Ok(format!("Deleted MCP connector '{name}'"))
 }
 
 /// Write mcp.json atomically: a half-written config disables **every** server on the
@@ -398,7 +402,9 @@ pub fn remove_server(home: &Path, name: &str) -> Result<String, String> {
 fn write_config(path: &Path, config: &McpConfig) -> Result<(), String> {
     let text = serde_json::to_string_pretty(config).map_err(|why| why.to_string())?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, &text).map_err(|why| format!("写不了 {}：{why}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|why| format!("换不上 {}：{why}", path.display()))?;
+    std::fs::write(&tmp, &text)
+        .map_err(|why| format!("could not write {}: {why}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|why| format!("could not switch to {}: {why}", path.display()))?;
     Ok(())
 }

@@ -145,12 +145,10 @@ pub fn reminder(verdict: &GuardVerdict) -> Option<String> {
     match verdict {
         GuardVerdict::Ok => None,
         GuardVerdict::Repeated { times } => Some(format!(
-            "\n[guard] 同一个调用（同样的参数、同样的结果）已经出现 {times} 次。\
-             别再重复它了 —— 换一条路，或者把卡住的地方直接告诉用户。"
+            "\n[guard] the same call (same arguments, same result) has already appeared {times} times.\n             Stop repeating it — take another route, or tell the user where you are stuck."
         )),
         GuardVerdict::Cyclic { period } => Some(format!(
-            "\n[guard] 你正在按 {period} 步的周期重复同一组调用。\
-             别再重复了 —— 换一条路，或者把卡住的地方直接告诉用户。"
+            "\n[guard] you are repeating the same group of calls on a {period}-step cycle.\n             Stop repeating it — take another route, or tell the user where you are stuck."
         )),
     }
 }
@@ -167,7 +165,9 @@ fn stub(name: &str, args: &Value, times: u32) -> String {
         .chars()
         .take(STUB_ARGS_PREVIEW_CHARS)
         .collect();
-    format!("[{name} 第 {times} 次相同调用：结果与上一次完全相同，此处省略（参数：{preview}）]")
+    format!(
+        "[{name} called #{times} with identical arguments: the result is the same as last time, omitted here (args: {preview})]"
+    )
 }
 
 /// Decides the "text fed back to the model": stub on a hit when warranted, and append the

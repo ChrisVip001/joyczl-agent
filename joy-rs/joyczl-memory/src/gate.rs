@@ -64,17 +64,22 @@ pub async fn should_retrieve(client: &dyn Provider, small_model: &str, message: 
 
     let response = match client.create(request).await {
         Ok(response) => response,
-        Err(e) => return Decision::fail_open(format!("gate 调用失败，失败开放（{e}）"), message),
+        Err(e) => {
+            return Decision::fail_open(
+                format!("the gate call failed, failing open ({e})"),
+                message,
+            )
+        }
     };
 
     let text = response.text();
     let Some(json_text) = extract_json(&text) else {
         // Only thinking, no JSON: not an error, the model gave no answer — fail-open too.
-        return Decision::fail_open("gate 没返回 JSON — 失败开放", message);
+        return Decision::fail_open("the gate returned no JSON — failing open", message);
     };
 
     let Ok(value) = serde_json::from_str::<Value>(&json_text) else {
-        return Decision::fail_open("gate 的 JSON 解析失败 — 失败开放", message);
+        return Decision::fail_open("the gate JSON could not be parsed — failing open", message);
     };
 
     let retrieve = value

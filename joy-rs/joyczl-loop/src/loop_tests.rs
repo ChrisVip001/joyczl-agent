@@ -21,6 +21,8 @@ async fn ctx() -> joyczl_tools::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     joyczl_tools::ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: None,
@@ -224,7 +226,7 @@ async fn unknown_tool_name_is_surfaced_not_fatal() {
     let result = turn(&mock, &tools, ctx().await, None).await;
     assert!(result.tool_calls[0]
         .output
-        .contains("没有叫 'hack_the_planet' 的工具"));
+        .contains("no tool named 'hack_the_planet'"));
     assert_eq!(result.iterations, 2);
 }
 
@@ -281,7 +283,10 @@ async fn the_last_iteration_is_a_wrap_up_not_a_cliff() {
         last.tools.len()
     );
     let tail = serde_json::to_string(&last.messages).expect("序列化");
-    assert!(tail.contains("预算提示"), "收尾指令要进上下文：{tail:.200}");
+    assert!(
+        tail.contains("Budget note"),
+        "收尾指令要进上下文：{tail:.200}"
+    );
 }
 
 #[tokio::test]
@@ -330,7 +335,7 @@ async fn the_token_budget_also_turns_the_next_round_into_a_wrap_up() {
     );
     let tail = serde_json::to_string(&requests[1].messages).expect("序列化");
     assert!(
-        tail.contains("token 预算到了"),
+        tail.contains("token budget is spent"),
         "要明说是预算停的：{tail:.200}"
     );
 }
@@ -372,7 +377,7 @@ async fn without_a_token_budget_the_loop_keeps_its_tools() {
     let requests = mock.received.lock().expect("锁");
     assert!(!requests[1].tools.is_empty(), "没有预算时第二轮照常带工具");
     let tail = serde_json::to_string(&requests[1].messages).expect("序列化");
-    assert!(!tail.contains("预算提示"), "没预算就不该有收尾指令");
+    assert!(!tail.contains("Budget note"), "没预算就不该有收尾指令");
 }
 
 #[tokio::test]
@@ -698,6 +703,8 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         .await
         .expect("打开库");
     let ctx = joyczl_tools::ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: None,
@@ -774,17 +781,17 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         })
         .expect("第二次请求里该有工具结果");
     assert!(
-        stub.contains("已截断") && stub.chars().count() < 5_000,
+        stub.contains("truncated") && stub.chars().count() < 5_000,
         "超限结果该换成桩：{} 字符",
         stub.chars().count()
     );
-    assert!(stub.contains("完整输出在 spill/"), "{stub}");
+    assert!(stub.contains("full output at spill/"), "{stub}");
 
     // The file the stub points to holds the full original (100k chars).
     let relative = stub
-        .split("完整输出在 ")
+        .split("full output at ")
         .nth(1)
-        .and_then(|rest| rest.split('）').next())
+        .and_then(|rest| rest.split(')').next())
         .expect("路径");
     let saved = std::fs::read_to_string(home.path().join(relative)).expect("读回落盘");
     assert_eq!(saved.chars().count(), 100_000);
@@ -810,8 +817,11 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
         let checkpoints = checkpoints.clone();
         Arc::new(move |cp: crate::Checkpoint| {
             let checkpoints = checkpoints.clone();
-            Box::pin(async move { checkpoints.lock().unwrap().push(cp) })
-                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            Box::pin(async move {
+                checkpoints.lock().unwrap().push(cp);
+                Ok(())
+            })
+                as std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
         }) as crate::CheckpointSink
     };
 
@@ -841,10 +851,12 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
 
     assert_eq!(result.iterations, 2);
     let cps = checkpoints.lock().unwrap();
-    assert_eq!(cps.len(), 1, "只有第一个迭代有工具结果边界");
-    assert_eq!(cps[0].iterations, 1);
+    assert!(cps.iter().all(|cp| cp.round_id == result.round_id));
+    assert!(!result.round_id.is_empty());
+    assert_eq!(cps.len(), 3, "initial input, execution intent, tool result");
+    assert_eq!(cps[0].iterations, 0);
     // The checkpoint's working memory holds the tool round: assistant's tool request + the result.
-    let last = cps[0].messages.last().expect("有结果块");
+    let last = cps[2].messages.last().expect("有结果块");
     assert!(matches!(
         last.content.first(),
         Some(joyczl_provider::ContentBlock::ToolResult { .. })
@@ -904,6 +916,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
         checkpoint: None,
         steering: None,
         resume: Some(crate::Resume {
+            round_id: "test-round".into(),
             messages,
             completed_iterations: 3,
             usage: Usage {
@@ -917,6 +930,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
     .await
     .expect("续跑完成");
 
+    assert_eq!(result.round_id, "test-round");
     assert_eq!(result.reply, "接着上一轮，已经办完了。");
     assert_eq!(result.iterations, 4, "3 个已完成迭代 + 1 个新迭代");
     assert!(result.tool_calls.is_empty(), "已完成的工具绝不重跑");
@@ -1140,4 +1154,91 @@ async fn a_streaming_tool_emits_deltas_and_still_returns_the_real_result() {
         .collect();
     assert_eq!(finished, vec!["完整结果"], "Tool 事件仍然只发最终结果");
     assert_eq!(result.tool_calls[0].output, "完整结果");
+}
+
+#[tokio::test]
+async fn uncertain_effect_stops_remaining_tools_and_keeps_the_intent_checkpoint() {
+    let mock = Mock::new(vec![
+        two_calls(("first", "uncertain"), ("second", "must_not_run")),
+        Mock::text("must not be called"),
+    ]);
+    let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut tools = joyczl_tools::ToolRegistry::new();
+    tools.register_exclusive(joyczl_tools::Tool {
+        name: "uncertain".into(),
+        description: "unknown remote effect".into(),
+        input_schema: json!({"type":"object"}),
+        handler: Arc::new(|ctx, _| {
+            Box::pin(async move {
+                ctx.on_uncertain.as_ref().unwrap()("remote outcome unknown");
+                Ok("Error: remote outcome unknown".into())
+            })
+        }),
+    });
+    let capture = ran.clone();
+    tools.register_exclusive(joyczl_tools::Tool {
+        name: "must_not_run".into(),
+        description: "later effect".into(),
+        input_schema: json!({"type":"object"}),
+        handler: Arc::new(move |_, _| {
+            let capture = capture.clone();
+            Box::pin(async move {
+                capture.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok("ran".into())
+            })
+        }),
+    });
+    let checkpoints = Arc::new(Mutex::new(Vec::new()));
+    let captured = checkpoints.clone();
+    let sink: crate::CheckpointSink = Arc::new(move |checkpoint| {
+        let captured = captured.clone();
+        Box::pin(async move {
+            captured.lock().unwrap().push(checkpoint);
+            Ok(())
+        })
+    });
+    let result = run(Turn {
+        system_prefix: None,
+        user_images: vec![],
+        client: &mock,
+        model: "test",
+        system: "test".into(),
+        history: vec![],
+        user_message: "work".into(),
+        tools: &tools,
+        ctx: ctx().await,
+        max_iterations: 5,
+        max_tokens: 600,
+        token_budget: None,
+        tool_result_budget: Default::default(),
+        observer: None,
+        on_text: None,
+        interrupt: None,
+        checkpoint: Some(sink),
+        steering: None,
+        resume: None,
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.stop_reason, StopReason::UncertainEffect);
+    assert_eq!(mock.received.lock().unwrap().len(), 1);
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(result.tool_calls.len(), 1);
+    let saved = checkpoints.lock().unwrap();
+    assert_eq!(
+        saved.len(),
+        2,
+        "initial input and intent only; unknown results must not become resumable success"
+    );
+    assert!(matches!(
+        saved
+            .last()
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .first(),
+        Some(ContentBlock::ToolUse { .. })
+    ));
 }

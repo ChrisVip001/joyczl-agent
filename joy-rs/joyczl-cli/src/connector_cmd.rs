@@ -23,7 +23,7 @@ pub async fn run(home: &Path, args: &[String]) -> Result<()> {
             Some("status") => feishu_status(home),
             _ => feishu_send(home, &args[1..]).await,
         },
-        Some(other) => bail!("不认识的连接器：{other}（有：email、feishu）"),
+        Some(other) => bail!("Unknown connector: {other} (known: email, feishu)"),
     }
 }
 
@@ -31,26 +31,26 @@ fn list(home: &Path) -> Result<()> {
     let config = config::load(home)?;
     if let Some(feishu) = &config.feishu {
         println!(
-            "feishu —— 应用 {}，receive_id_type={}",
+            "feishu — app {}, receive_id_type={}",
             feishu.app_id, feishu.receive_id_type
         );
         println!(
-            "  模式：{}",
+            "  mode: {}",
             if feishu.live {
-                "live（模型每发一条都会问；从终端直接发不问）"
+                "live (the model asks on every send; sending straight from the terminal does not ask)"
             } else {
-                "草稿（只写 outbox）"
+                "draft (writes to outbox only)"
             }
         );
         if feishu.allow_recipients.is_empty() {
-            println!("  白名单：空 —— 谁都不能发");
+            println!("  allowlist: empty — nobody can be written to");
         } else {
-            println!("  白名单：{}", feishu.allow_recipients.join(", "));
+            println!("  allowlist: {}", feishu.allow_recipients.join(", "));
         }
     }
     if config.email.is_none() && config.feishu.is_none() {
         println!(
-            "还没有连接器。写 {} 就可以启用 email / feishu（白名单留空 = 谁都不能发）。",
+            "No connectors yet. Write {} to enable email / feishu (an empty allowlist means nobody can be written to).",
             home.join("connectors.json").display()
         );
         return Ok(());
@@ -59,21 +59,21 @@ fn list(home: &Path) -> Result<()> {
         None => {}
         Some(email) => {
             println!(
-                "email —— {}:{}，发件人 {}",
+                "email — {}:{}, from {}",
                 email.smtp_host, email.smtp_port, email.from
             );
             println!(
-                "  模式：{}",
+                "  mode: {}",
                 if email.live {
-                    "live（模型每发一封都会问；从终端直接发不问）"
+                    "live (the model asks on every message; sending straight from the terminal does not ask)"
                 } else {
-                    "草稿（只写 outbox）"
+                    "draft (writes to outbox only)"
                 }
             );
             if email.allow_recipients.is_empty() {
-                println!("  白名单：空 —— 谁都不能发");
+                println!("  allowlist: empty — nobody can be written to");
             } else {
-                println!("  白名单：{}", email.allow_recipients.join(", "));
+                println!("  allowlist: {}", email.allow_recipients.join(", "));
             }
         }
     }
@@ -97,18 +97,20 @@ async fn email_send(home: &Path, args: &[String]) -> Result<()> {
                 index += 1;
                 continue;
             }
-            other => bail!("不认识的参数：{other}"),
+            other => bail!("Unknown argument: {other}"),
         }
         index += 2;
     }
     let (Some(to), Some(subject), Some(body)) = (to, subject, body) else {
-        bail!("用法：joy connector email --to 收件人 --subject 主题 --body 正文 [--dry-run]");
+        bail!(
+            "Usage: joy connector email --to recipient --subject subject --body body [--dry-run]"
+        );
     };
 
     let config = config::load(home)?;
     let Some(email_config) = config.email else {
         bail!(
-            "没配置 email 连接器：先写 {}",
+            "No email connector configured: write {} first",
             home.join("connectors.json").display()
         );
     };
@@ -130,19 +132,19 @@ async fn email_send(home: &Path, args: &[String]) -> Result<()> {
     if dry_run || !email_config.live {
         let path = email::write_draft(home, &message).await?;
         println!(
-            "草稿：{}（{}\n  要真发就在 connectors.json 里设 live 并去掉 --dry-run）",
+            "Draft: {} ({}\n  to actually send it, set live in connectors.json and drop --dry-run)",
             path.display(),
             if email_config.live {
-                "这次的 --dry-run 要求"
+                "--dry-run asked for this one"
             } else {
-                "还没开 live"
+                "live is not on yet"
             }
         );
         return Ok(());
     }
     let password = email::password_of(&email_config, home)?;
     email::send_live(&email_config, password, &message).await?;
-    println!("已发给 {}。", recipients.join(", "));
+    println!("Sent to {}.", recipients.join(", "));
     Ok(())
 }
 
@@ -151,14 +153,13 @@ async fn feishu_login(home: &Path) -> Result<()> {
     let config = config::load(home)?;
     let Some(feishu_config) = config.feishu else {
         bail!(
-            "没配置 feishu 连接器：先写 {}",
+            "No feishu connector configured: write {} first",
             home.join("connectors.json").display()
         );
     };
     let expires_at = feishu_oauth::login(&feishu_config, home).await?;
     println!(
-        "已登录飞书用户身份，token 到 {} 过期（文件 {}）。\n\
-         把 connectors.json 里 feishu.as 设成 \"user\" 才会以这个身份发消息。",
+        "Signed in as the Feishu user identity; the token expires at {} (file {}).\n         Set feishu.as to \"user\" in connectors.json to send as this identity.",
         feishu_oauth::expiry_text(expires_at),
         home.join("connector-auth/feishu.json").display()
     );
@@ -167,9 +168,9 @@ async fn feishu_login(home: &Path) -> Result<()> {
 
 fn feishu_logout(home: &Path) -> Result<()> {
     if feishu_oauth::logout(home)? {
-        println!("已删掉飞书用户 token。之后要用用户身份发消息，得重新 login。");
+        println!("Deleted the Feishu user token. To send as the user again, sign in again.");
     } else {
-        println!("本来就没有登录。");
+        println!("There was no session to begin with.");
     }
     Ok(())
 }
@@ -181,15 +182,15 @@ fn feishu_status(home: &Path) -> Result<()> {
         .as_ref()
         .and_then(|feishu| feishu.identity().ok())
         .unwrap_or("app");
-    println!("发送身份：{identity}");
+    println!("Sending identity: {identity}");
     match feishu_oauth::status(home) {
-        None => println!("用户 token：没有（以用户身份发消息前先 login）"),
+        None => println!("User token: none (sign in before sending as the user)"),
         Some((expired, expires_at)) => println!(
-            "用户 token：{}（到 {}）",
+            "User token: {} (until {})",
             if expired {
-                "已过期，下次发送会尝试续期"
+                "expired; the next send will try to refresh it"
             } else {
-                "有效"
+                "valid"
             },
             feishu_oauth::expiry_text(expires_at)
         ),
@@ -212,24 +213,24 @@ async fn feishu_send(home: &Path, args: &[String]) -> Result<()> {
                 index += 1;
                 continue;
             }
-            other => bail!("不认识的参数：{other}"),
+            other => bail!("Unknown argument: {other}"),
         }
         index += 2;
     }
     let (Some(to), Some(text)) = (to, text) else {
-        bail!("用法：joy connector feishu --to 接收方id --text 正文 [--dry-run]");
+        bail!("Usage: joy connector feishu --to recipient-id --text body [--dry-run]");
     };
 
     let config = config::load(home)?;
     let Some(feishu_config) = config.feishu else {
         bail!(
-            "没配置 feishu 连接器：先写 {}",
+            "No feishu connector configured: write {} first",
             home.join("connectors.json").display()
         );
     };
     if !feishu_config.permits(&to) {
         bail!(
-            "接收方 {to} 不在白名单里。白名单在 {} 的 allow_recipients（飞书段）。",
+            "Recipient {to} is not on the allowlist. The allowlist is allow_recipients in {} (feishu section).",
             home.join("connectors.json").display()
         );
     }
@@ -237,19 +238,18 @@ async fn feishu_send(home: &Path, args: &[String]) -> Result<()> {
     if dry_run || !feishu_config.live {
         let path = feishu::write_draft(home, &feishu_config, &to, &text).await?;
         println!(
-            "草稿：{}（{}
-  要真发就在 connectors.json 里设 live 并去掉 --dry-run）",
+            "Draft: {} ({}\n  to actually send it, set live in connectors.json and drop --dry-run)",
             path.display(),
             if feishu_config.live {
-                "这次的 --dry-run 要求"
+                "--dry-run asked for this one"
             } else {
-                "还没开 live"
+                "live is not on yet"
             }
         );
         return Ok(());
     }
     // The CLI is the human acting directly: no approval card. The tool path still asks.
     let message_id = feishu::send_live(&feishu_config, home, &to, &text).await?;
-    println!("已发给 {to}（message_id {message_id}）。");
+    println!("Sent to {to} (message_id {message_id}).");
     Ok(())
 }

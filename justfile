@@ -30,6 +30,12 @@ check-app-server-schema:
 check-tool-docs:
     {{ python }} {{ justfile_directory() }}/scripts/check_tool_docs.py
 
+# The dashboard's English table must cover every string the code uses. `t()` falls back to
+# Chinese, so a missing entry never throws — it just leaves one Chinese label on an English
+# screen, which is exactly the kind of thing nobody notices in review.
+check-i18n:
+    {{ python }} {{ justfile_directory() }}/scripts/check_i18n.py
+
 # Every `JOY_*` the code can read must exist in `.env.example` and in both configuration docs.
 # Same reason as above: four copies of one knob (code + sample + two docs) is four places to
 # forget, and a knob missing from the sample is a feature nobody can turn on.
@@ -193,6 +199,6 @@ smoke-sdk-python: build
 
 # ---- Run all checks in one command ----------------------------------------------
 # gate sits last: beyond green tests and lint, the deterministic eval must also pass 100%.
-check: fmt-check check-app-server-schema check-tool-docs check-config-docs ts-check py-check eval eval-replay
+check: fmt-check check-app-server-schema check-tool-docs check-config-docs check-i18n ts-check py-check eval eval-replay
     cd {{ rust_dir }} && cargo clippy --workspace --all-targets -- -D warnings
     cd {{ rust_dir }} && cargo test --workspace

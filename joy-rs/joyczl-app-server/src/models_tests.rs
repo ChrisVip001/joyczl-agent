@@ -35,7 +35,7 @@ fn views_carry_the_key_pointer_but_never_the_secret() {
     assert!(!out[1].active);
     assert_eq!(out[0].key_source.as_deref(), Some("keychain"));
     assert_eq!(out[1].key_source.as_deref(), Some("env:OPENAI_API_KEY"));
-    let serialized = serde_json::to_string(&out).expect("序列化");
+    let serialized = serde_json::to_string(&out).expect("serialize");
     assert!(!serialized.contains("sk-"), "视图不该带密钥：{serialized}");
 }
 
@@ -47,14 +47,14 @@ fn provider_validation_accepts_known_ids_and_self_hosted_endpoints() {
     assert!(validate_provider(&catalog, known, None).is_ok());
 
     let err = validate_provider(&catalog, "不存在的厂", None).unwrap_err();
-    assert!(err.contains("不认识的 provider"), "{err}");
+    assert!(err.contains("unknown provider"), "{err}");
     assert!(err.contains(known), "报错该列出可用的：{err}");
 
     // Self-hosted endpoint: the provider only decides which wire format is used.
     assert!(validate_provider(&catalog, "不存在的厂", Some("http://localhost:8000/v1")).is_ok());
 
     // A catalog the user extended with a custom provider accepts that id too.
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     std::fs::write(
         dir.path().join("models-catalog.json"),
         r#"[{"id":"mybox","wire":"openai","model":"qwen3:8b","base_url":"http://127.0.0.1:9/v1"}]"#,
@@ -89,7 +89,7 @@ fn the_current_label_names_provider_and_model() {
 // ---- End to end: really save, really switch, really remove (temp home, never touching the system keychain) ------------
 
 async fn server() -> (Server, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -107,7 +107,7 @@ async fn server() -> (Server, tempfile::TempDir) {
     server
         .secrets
         .lock()
-        .expect("secrets 锁不该中毒")
+        .expect("the secrets lock should not be poisoned")
         .set_backend(joyczl_config::models::SecretBackend::File);
     (server, dir)
 }
@@ -190,7 +190,7 @@ async fn an_unknown_provider_is_refused_with_the_list() {
     let err = server
         .model_save(save("x", "不存在的厂", None))
         .unwrap_err();
-    assert!(err.contains("不认识的 provider"), "{err}");
+    assert!(err.contains("unknown provider"), "{err}");
     assert!(
         err.contains(joyczl_provider::PROVIDERS[0].id),
         "报错该列出可用的：{err}"
@@ -211,7 +211,7 @@ async fn a_new_profile_needs_a_provider() {
             ..save("裸", "", None)
         })
         .unwrap_err();
-    assert!(err.contains("第一次配置"), "{err}");
+    assert!(err.contains("first configuration"), "{err}");
 }
 
 /// 加配置时顺手声明视觉：一次写清，不必等发图被拦再回头改目录文件。

@@ -103,7 +103,7 @@ echo "  ✓ 路由表：fixed → auto 已落盘"
 # A typo is refused before it can cost money.
 curl -sS -X POST "$BASE/api/model/routes/save" -H 'content-type: application/json' \
   -d '{"mode":"auto","routes":[{"tier":"reasoning","profileId":"nope"}]}' >"$WORK/routes3.json"
-grep -q '不存在' "$WORK/routes3.json" || fail "不存在的 profile 该被拒：$(cat "$WORK/routes3.json")"
+grep -q 'does not exist' "$WORK/routes3.json" || fail "不存在的 profile 该被拒：$(cat "$WORK/routes3.json")"
 echo "  ✓ 路由表：指向不存在的 profile 会被拒"
 
 # ---- The task API: one turn in, one JSON answer out ---------------------------------
@@ -120,7 +120,7 @@ echo "  ✓ 任务 API：一轮进、一段 JSON 出，档位压过 fixed 模式
 # A typo in the tier is an error, not a silent fallback.
 curl -sS -X POST "$BASE/api/run" -H 'content-type: application/json' \
   -d '{"message":"你好","tier":"reasoining"}' >"$WORK/run2.json"
-grep -q 'tier 只能是' "$WORK/run2.json" || fail "拼错的档位该被拒：$(cat "$WORK/run2.json")"
+grep -q 'tier must be one of' "$WORK/run2.json" || fail "拼错的档位该被拒：$(cat "$WORK/run2.json")"
 echo "  ✓ 任务 API：拼错的档位当场拒绝（不猜）"
 
 # ---- Inbound webhook ---------------------------------------------------------------

@@ -124,22 +124,22 @@ impl ReplayCase {
 /// error**, not a silently-passing case. "A replay that asserts nothing" would be a green light
 /// with nothing behind it.
 pub fn load_all(paths: &[PathBuf]) -> Result<Vec<ReplayCase>> {
-    crate::jsonl::read_jsonl(paths, "回放用例", |case: &ReplayCase, at| {
+    crate::jsonl::read_jsonl(paths, "replay case", |case: &ReplayCase, at| {
         let where_ = format!("{at}（{}）", case.id);
         if case.schema_version != SCHEMA_VERSION {
             anyhow::bail!(
-                "{where_}：schemaVersion={} 不认识（这份构建只读 {SCHEMA_VERSION}）。\
-                 老的录制文件不能猜着读 —— 换一份，或按 evals/replay/README.md 重录。",
+                "{where_}: schemaVersion={} is not recognised (this build only reads {SCHEMA_VERSION}).\
+                 An old recording cannot be read by guessing — use another one, or re-record following evals/replay/README.md.",
                 case.schema_version
             );
         }
         if case.recorded.turns.is_empty() {
-            anyhow::bail!("{where_}：recorded.turns 是空的，没有任何对话可回放");
+            anyhow::bail!("{where_}: recorded.turns is empty, there is no conversation to replay");
         }
         if case.expect.events.is_empty() {
             anyhow::bail!(
-                "{where_}：expect.events 是空的 —— 回放用例必须声明它期望的事件序列，\
-                 否则它只是在重复一条确定性用例"
+                "{where_}: expect.events is empty — a replay case must declare the event sequence it expects,\
+                 otherwise it is just repeating a deterministic case"
             );
         }
         Ok(())

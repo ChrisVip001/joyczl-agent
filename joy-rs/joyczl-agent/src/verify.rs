@@ -48,19 +48,19 @@ impl Acceptance {
                     .map(str::trim)
                     .filter(|text| !text.is_empty())
                     .map(str::to_string)
-                    .ok_or_else(|| "缺少 path".to_string()),
+                    .ok_or_else(|| "missing path".to_string()),
                 "pattern" => view
                     .pattern
                     .clone()
                     .filter(|text| !text.is_empty())
-                    .ok_or_else(|| "缺少 pattern".to_string()),
+                    .ok_or_else(|| "missing pattern".to_string()),
                 _ => view
                     .tool
                     .as_deref()
                     .map(str::trim)
                     .filter(|text| !text.is_empty())
                     .map(str::to_string)
-                    .ok_or_else(|| "缺少 tool".to_string()),
+                    .ok_or_else(|| "missing tool".to_string()),
             }
         };
         let min = |fallback: i32| -> usize { view.min.unwrap_or(fallback).max(1) as usize };
@@ -78,7 +78,7 @@ impl Acceptance {
                 min: min(1) as u32,
             }),
             other => Err(format!(
-                "不认识的验收类型 '{other}'（支持 fileExists / fileContains / toolsOk）"
+                "unknown acceptance kind '{other}' (supported: fileExists / fileContains / toolsOk)"
             )),
         }
     }
@@ -87,11 +87,11 @@ impl Acceptance {
     /// measurement beside it.
     pub fn label(&self) -> String {
         match self {
-            Self::FileExists { path } => format!("{path} 存在"),
+            Self::FileExists { path } => format!("{path} exists"),
             Self::FileContains { path, pattern, min } => {
-                format!("{path} 里至少 {min} 处「{pattern}」")
+                format!("{path} contains at least {min} × “{pattern}”")
             }
-            Self::ToolsOk { tool, min } => format!("{tool} 成功调用至少 {min} 次"),
+            Self::ToolsOk { tool, min } => format!("{tool} succeeds at least {min} times"),
         }
     }
 }
@@ -102,7 +102,7 @@ pub fn parse(json: &str) -> Vec<Acceptance> {
     let views: Vec<AcceptanceView> = match serde_json::from_str(json) {
         Ok(views) => views,
         Err(e) => {
-            eprintln!("(joy) 验收条件读不出来（当作没有验收条件）：{e}");
+            eprintln!("(joy) acceptance criteria could not be read (continuing as if there were none): {e}");
             return Vec::new();
         }
     };
@@ -110,7 +110,7 @@ pub fn parse(json: &str) -> Vec<Acceptance> {
     for (index, view) in views.iter().enumerate() {
         match Acceptance::from_view(view) {
             Ok(acceptance) => parsed.push(acceptance),
-            Err(why) => eprintln!("(joy) 第 {index} 条验收条件跳过：{why}"),
+            Err(why) => eprintln!("(joy) acceptance check #{index} skipped: {why}"),
         }
     }
     parsed
@@ -140,6 +140,7 @@ impl CheckResult {
 /// Everything a check needs to look at the world. Constructed once per round.
 #[derive(Clone)]
 pub struct Verifier {
+    pub run_id: String,
     /// The task's working directory. **`None` refuses every path check** — there is no
     /// fallback to the process cwd or the home directory: an unbounded path check is not a
     /// check, and "where did it read that from" must never be the answer.
@@ -174,7 +175,7 @@ impl Verifier {
     /// Resolve one condition's path inside the root, or say why it cannot be looked at.
     fn locate(&self, path: &str) -> Result<PathBuf, String> {
         let Some(root) = &self.root else {
-            return Err("没有工作目录（cwd 为空），路径检查一律拒绝".to_string());
+            return Err("no working directory (empty cwd) — path checks are refused".to_string());
         };
         let candidate = if Path::new(path).is_absolute() {
             PathBuf::from(path)
@@ -192,8 +193,8 @@ impl Verifier {
                 Ok(meta) if meta.is_file() => {
                     (true, format!("{} {}", path, human_bytes(meta.len())))
                 }
-                Ok(_) => (false, format!("{path} 存在但不是文件")),
-                Err(_) => (false, format!("{path} 不存在")),
+                Ok(_) => (false, format!("{path} exists but is not a file")),
+                Err(_) => (false, format!("{path} does not exist")),
             },
         }
     }
@@ -206,30 +207,38 @@ impl Verifier {
         let text = match std::fs::read_to_string(&full) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return (false, format!("{path} 不存在"))
+                return (false, format!("{path} does not exist"))
             }
-            Err(e) => return (false, format!("{path} 读不了：{e}")),
+            Err(e) => return (false, format!("could not read {path}: {e}")),
         };
         // Plain substring count, deliberately not JSON/regex aware: the condition came from a
         // human's config file, and "a broken pattern must not stall the round" wins.
         let found = text.matches(pattern).count();
         if found >= min {
-            (true, format!("{path} 里找到 {found} 处（要求 {min}）"))
+            (true, format!("found {found} in {path} (needs {min})"))
         } else {
             (
                 false,
-                format!("{path} 里只找到 {found} 处「{pattern}」（要求 {min}）"),
+                format!("only {found} × “{pattern}” in {path} (needs {min})"),
             )
         }
     }
 
     async fn tools_ok(&self, tool: &str, min: u32) -> (bool, String) {
-        match self.steps.count_ok_by_tool(&self.task_id, tool).await {
-            Ok(count) if count >= min as i64 => {
-                (true, format!("{tool} 已成功 {count} 次（要求 {min}）"))
-            }
-            Ok(count) => (false, format!("{tool} 只成功 {count} 次（要求 {min}）")),
-            Err(e) => (false, format!("查不到 {tool} 的执行记录：{e}")),
+        match self
+            .steps
+            .count_ok_by_tool_in_run(&self.task_id, &self.run_id, tool)
+            .await
+        {
+            Ok(count) if count >= min as i64 => (
+                true,
+                format!("{tool} succeeded {count} times (needs {min})"),
+            ),
+            Ok(count) => (
+                false,
+                format!("{tool} only succeeded {count} times (needs {min})"),
+            ),
+            Err(e) => (false, format!("no execution record for {tool}: {e}")),
         }
     }
 }
@@ -252,7 +261,7 @@ pub fn failure_summary(results: &[CheckResult]) -> Option<String> {
         .map(|r| r.detail.as_str())
         .collect::<Vec<_>>()
         .join("；");
-    Some(format!("验收未通过：{listed}"))
+    Some(format!("acceptance not met: {listed}"))
 }
 
 /// Bytes in human units. Three significant-ish digits are enough to tell 12 KB from 1 MB.

@@ -459,7 +459,7 @@ test("回答太长：切成几条发，每条都在上限以内", async () => {
   ready(socket);
   message(socket);
 
-  await stopWhen(adapter, running, () => discord.sent.length >= 2, "分批发");
+  await stopWhen(adapter, running, () => discord.sent.join("\n") === long, "分批发完整答复");
 
   assert.ok(
     discord.sent.every((chunk) => chunk.length <= 2000),

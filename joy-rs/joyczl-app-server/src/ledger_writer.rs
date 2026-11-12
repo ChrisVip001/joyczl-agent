@@ -70,7 +70,7 @@ fn payload_of(
         // a missing one — the whole point of the record is that nothing disappears.
         Err(error) => {
             eprintln!(
-                "(joy) 账本转存失败，改为整段落库（{}）：{error}",
+                "(joy) ledger spill failed; storing whole payloads instead ({}): {error}",
                 path.display()
             );
             body.to_string()
@@ -172,6 +172,39 @@ pub fn entries_for_turn(
                             ));
                             ordinal += 1;
                         }
+                        ContentBlock::OpenAiReasoning { text } => {
+                            let body =
+                                json!({ "wire": "openai", "reasoningContent": text }).to_string();
+                            entries.push(NewEntry::exact(
+                                "provider_item",
+                                payload_of(
+                                    sink,
+                                    session_id,
+                                    turn_id,
+                                    ordinal,
+                                    "provider_item",
+                                    &body,
+                                    false,
+                                ),
+                            ));
+                            ordinal += 1;
+                        }
+                        ContentBlock::ResponseItem { item } => {
+                            let body = json!({ "wire": "responses", "item": item }).to_string();
+                            entries.push(NewEntry::exact(
+                                "provider_item",
+                                payload_of(
+                                    sink,
+                                    session_id,
+                                    turn_id,
+                                    ordinal,
+                                    "provider_item",
+                                    &body,
+                                    false,
+                                ),
+                            ));
+                            ordinal += 1;
+                        }
                         _ => {}
                     }
                 }
@@ -227,6 +260,39 @@ pub fn entries_for_turn(
                             ));
                             ordinal += 1;
                         }
+                        ContentBlock::OpenAiReasoning { text } => {
+                            let body =
+                                json!({ "wire": "openai", "reasoningContent": text }).to_string();
+                            entries.push(NewEntry::exact(
+                                "provider_item",
+                                payload_of(
+                                    sink,
+                                    session_id,
+                                    turn_id,
+                                    ordinal,
+                                    "provider_item",
+                                    &body,
+                                    false,
+                                ),
+                            ));
+                            ordinal += 1;
+                        }
+                        ContentBlock::ResponseItem { item } => {
+                            let body = json!({ "wire": "responses", "item": item }).to_string();
+                            entries.push(NewEntry::exact(
+                                "provider_item",
+                                payload_of(
+                                    sink,
+                                    session_id,
+                                    turn_id,
+                                    ordinal,
+                                    "provider_item",
+                                    &body,
+                                    false,
+                                ),
+                            ));
+                            ordinal += 1;
+                        }
                         ContentBlock::ToolUse { .. } => {}
                     }
                 }
@@ -277,11 +343,14 @@ pub fn payload_text(home: &Path, payload: &str) -> Result<String> {
     };
     let path = home.join(ptr);
     let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("账本内容丢了：{}", path.display()))?;
+        .with_context(|| format!("ledger content is missing: {}", path.display()))?;
     if let Some(expected) = parsed.get("digest").and_then(|value| value.as_str()) {
         let actual = joyczl_state::ledger::digest_of(text.as_bytes());
         if actual != expected {
-            anyhow::bail!("账本内容被改过：{}（摘要对不上）", path.display());
+            anyhow::bail!(
+                "ledger content was modified: {} (digest mismatch)",
+                path.display()
+            );
         }
     }
     Ok(text)

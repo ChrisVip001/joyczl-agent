@@ -160,11 +160,11 @@ pub fn trim_tool_results(
         report.omitted_chars += saved;
         report.total_chars = report.total_chars.saturating_sub(saved);
         eprintln!(
-            "(joy) [{session_id}] 轮内工具结果超预算，已换成桩：省下 {saved} 字符（共 {} 条）{}",
+            "(joy) [{session_id}] this turn's tool results are over budget; replaced with stubs: saved {saved} characters ({} of them){}",
             report.trimmed,
             match path {
-                Some(path) => format!("，完整输出在 {path}"),
-                None => "（落盘失败，桩里没有可回查的路径）".to_string(),
+                Some(path) => format!(", full output at {path}"),
+                None => "(spill failed; the stub carries no path to look up)".to_string(),
             }
         );
         let _ = len;
@@ -175,12 +175,12 @@ pub fn trim_tool_results(
         // Not silent: when everything big enough is stubbed and we are still over, this is a pile
         // of medium-sized results — a file per result costs more than the context saved, so stop.
         eprintln!(
-            "(joy) [{session_id}] 轮内工具结果仍然超出预算（{} > {}）：剩下的单条都没超过 {} 字符{}",
+            "(joy) [{session_id}] this turn's tool results are still over budget ({} > {}): none of the remaining ones exceeds {} characters{}",
             report.total_chars,
             budget.total_chars,
             budget.per_result_chars,
             if keep > 0 {
-                format!("，最新的 {keep} 条按策略保留")
+                format!("; the newest {keep} are kept as the policy says")
             } else {
                 String::new()
             }
@@ -195,12 +195,17 @@ pub fn trim_tool_results(
 /// a floor at or above the threshold causes a dud — "eligible for stubbing, but the stub cannot
 /// hold the original" — a real failure seen in practice. The 2000 cap matches head/tail previews.
 fn stub_budget(budget: &ToolResultBudget) -> usize {
-    budget.per_result_chars.clamp(64, 2_000)
+    budget.per_result_chars.clamp(96, 2_000)
 }
 
 /// Already a stub (idempotent: runs once per turn).
+///
+/// The Chinese forms are still matched: rows written before the messages were translated sit
+/// in ledgers and are re-read on every resume. Dropping them would re-stub an existing stub.
 fn is_stub(text: &str) -> bool {
-    text.contains("完整输出在") || text.contains("已截断，省略了")
+    text.contains("full output at")
+        || text.contains("完整输出在")
+        || text.contains("已截断，省略了")
 }
 
 fn collect_results(messages: &[Message]) -> Vec<(usize, usize)> {

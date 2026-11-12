@@ -1,0 +1,30 @@
+name: Question / setup help
+description: Ask how to run or configure Joy
+title: "[question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For open-ended design discussion, use [Discussions](https://github.com/ChrisVip001/joyczl-agent/discussions) instead.
+        This template is for "I followed the docs and it still does not work" questions.
+  - type: input
+    id: version
+    attributes:
+      label: Version and platform
+      placeholder: v0.17.0 / macOS arm64
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you already tried
+      description: Which docs you read, which commands you ran
+    validations:
+      required: true

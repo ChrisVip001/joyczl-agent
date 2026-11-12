@@ -27,7 +27,7 @@ async fn boot(mock: Option<Arc<Mock>>) -> (Server, PathBuf) {
 
 /// Same boot, with the planner switch (`JOY_PLAN`) set explicitly — planning is opt-in.
 async fn boot_with(mock: Option<Arc<Mock>>, plan_enabled: bool) -> (Server, PathBuf) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -248,6 +248,11 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
     let (server, _home) = boot(Some(mock)).await;
     let task = create_task(&server, "default", "盯三天服务器", Some("盯满三天")).await;
 
+    server
+        .runs
+        .start("t-pause", &task.task.id, Some("default"), Some("t-pause"))
+        .await
+        .expect("run");
     // Plant the paused turn exactly as a real pause leaves it: a checkpoint with working memory.
     let messages = vec![
         Message::user_text("帮我盯三天服务器"),
@@ -264,7 +269,7 @@ async fn suspending_keeps_the_checkpoint_and_resuming_continues_it() {
             "t-pause",
             "default",
             "帮我盯三天服务器",
-            &serde_json::to_string(&messages).expect("序列化"),
+            &serde_json::to_string(&messages).expect("serialize"),
             1,
             "{}",
             Some("t-pause"),
@@ -433,7 +438,7 @@ async fn a_restart_marks_a_running_task_suspended_honestly() {
     assert!(
         row.suspend_reason
             .as_deref()
-            .is_some_and(|r| r.contains("进程重启")),
+            .is_some_and(|r| r.contains("the process restarted")),
         "理由得说清楚：{:?}",
         row.suspend_reason
     );
@@ -449,7 +454,7 @@ async fn an_unknown_task_id_is_an_error_not_a_panic() {
     )
     .await
     .expect_err("不存在的任务要报错");
-    assert!(error.contains("不存在"), "{error}");
+    assert!(error.contains("no such task"), "{error}");
 
     // And a task that already finished cannot be resumed either.
     let task = create_task(&server, "default", "已完成", None).await;
@@ -466,7 +471,7 @@ async fn an_unknown_task_id_is_an_error_not_a_panic() {
     .await
     .expect_err("完成的任务不能继续");
     assert_eq!(codes::INVALID_PARAMS, -32602);
-    assert!(error.contains("挂起"), "{error}");
+    assert!(error.contains("suspended"), "{error}");
 }
 
 /// The task pings on the event bus carry the state, so another device's card can update
@@ -539,7 +544,7 @@ async fn a_task_can_exist_without_any_session() {
     // The condition is normalised at creation, so the card and the checker always agree.
     assert_eq!(
         created["task"]["acceptance"][0]["label"],
-        json!("index.md 存在")
+        json!("index.md exists")
     );
     assert_eq!(created["task"]["acceptance"][0]["min"], json!(1));
 
@@ -570,7 +575,7 @@ async fn a_task_whose_acceptance_fails_needs_a_human_not_a_done() {
         Mock::text("报告已经写好了，请查收。"),
     ]));
     let (server, _home) = boot(Some(mock)).await;
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().display().to_string();
 
     let created = call(
@@ -598,12 +603,12 @@ async fn a_task_whose_acceptance_fails_needs_a_human_not_a_done() {
         row.last_stop_reason
     );
     let reason = row.last_stop_reason.as_deref().expect("要说清为什么停");
-    assert!(reason.contains("report.md 不存在"), "{reason}");
+    assert!(reason.contains("report.md does not exist"), "{reason}");
 
     // The card shows the measurement per condition, not a vague "failed".
     let checks: serde_json::Value = serde_json::from_str(&row.checks_json).expect("验收结果");
     assert_eq!(checks[0]["passed"], json!(false));
-    assert_eq!(checks[0]["label"], json!("report.md 存在"));
+    assert_eq!(checks[0]["label"], json!("report.md exists"));
 }
 
 /// The positive twin: a real write makes the same condition pass — and the artifact list
@@ -620,7 +625,7 @@ async fn a_condition_passes_only_after_the_file_really_exists() {
         Mock::text("写好了。"),
     ]));
     let (server, _home) = boot(Some(mock)).await;
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().display().to_string();
 
     let created = call(
@@ -703,7 +708,7 @@ async fn a_task_over_budget_stops_before_it_spends_more() {
     assert!(row.spent_tokens >= 10, "花费要记上：{}", row.spent_tokens);
     let reason = row.last_stop_reason.as_deref().expect("要说清是哪一条超了");
     assert!(
-        reason.contains("预算超了") && reason.contains("Token"),
+        reason.contains("Over budget") && reason.contains("tokens"),
         "{reason}"
     );
 }
@@ -719,7 +724,7 @@ async fn each_turn_that_carries_the_task_is_its_own_run() {
         Mock::text("第二趟。"),
     ]));
     let (server, _home) = boot(Some(mock)).await;
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().display().to_string();
 
     // `needs_attention` is open on purpose: a human may look at the failed condition and just
@@ -786,7 +791,7 @@ async fn each_round_keeps_its_own_step_so_tools_ok_counts_them_all() {
         Mock::text("两批都好了。"),
     ]));
     let (server, _home) = boot(Some(mock)).await;
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().display().to_string();
 
     let created = call(
@@ -839,7 +844,7 @@ async fn an_interrupted_round_suspends_the_task_instead_of_spending_another() {
         Mock::text("我先把思路理清楚，然后就开始动手写这份报告，还有很多话没有说完。"),
     ]));
     let (server, _home) = boot(Some(mock)).await;
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().display().to_string();
 
     let created = call(
@@ -928,7 +933,7 @@ async fn the_planner_writes_plan_steps_without_touching_acceptance() {
         Mock::text("写好了。"),
     ]));
     let (server, _home) = boot_with(Some(mock), true).await;
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().display().to_string();
 
     let created = call(
@@ -988,7 +993,7 @@ async fn a_broken_plan_is_ignored_not_fatal() {
         Mock::text("写好了。"),
     ]));
     let (server, _home) = boot_with(Some(mock), true).await;
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().display().to_string();
 
     let created = call(

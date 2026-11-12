@@ -70,7 +70,7 @@ fn a_bad_name_refuses_to_load() {
     let path = dir.path().join("users.json");
     std::fs::write(&path, r#"{"../evil": "t"}"#).expect("造坏条目");
     let error = Users::load(&path).unwrap_err();
-    assert!(error.to_string().contains("不合格"), "{error}");
+    assert!(error.to_string().contains("is not valid"), "{error}");
 }
 
 /// Name rules: whatever gets in is a safe path segment.

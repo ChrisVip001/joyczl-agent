@@ -1,0 +1,151 @@
+{
+  "budgetCny": 10.0,
+  "cases": [
+    {
+      "id": "continuity",
+      "latencyMs": 8256,
+      "passed": true,
+      "reply": {
+        "reply": "猫叫 **Momo**。你担心的是**明天的项目汇报**让你紧张。\n\n我没有替你做什么实际操作：没查日程，没记笔记，也没做任何安排，上一条只是在跟你聊。",
+        "tools": []
+      }
+    },
+    {
+      "artifact": "# 执行计划\n\n1. 检查输入\n2. 执行处理\n3. 验证结果\n",
+      "id": "artifact",
+      "latencyMs": 4849,
+      "passed": true,
+      "task": {
+        "task": {
+          "acceptance": [
+            {
+              "kind": "fileContains",
+              "label": "plan.md contains at least 1 × “检查”",
+              "min": 1,
+              "path": "plan.md",
+              "pattern": "检查"
+            }
+          ],
+          "checks": [
+            {
+              "detail": "found 1 in plan.md (needs 1)",
+              "label": "plan.md contains at least 1 × “检查”",
+              "passed": true
+            }
+          ],
+          "createdAt": "2026-11-12 17:07:14",
+          "cwd": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmpQNwAmh",
+          "finishedAt": "2026-11-12 17:07:19",
+          "id": "task1794503234321",
+          "maxRounds": 2,
+          "roundsUsed": 1,
+          "runCount": 1,
+          "sessionId": "task",
+          "spent": {
+            "tokens": 4324,
+            "tools": 3,
+            "wallMs": 4806
+          },
+          "status": "done",
+          "title": "live reliability sample"
+        }
+      },
+      "turn": {
+        "reply": "已写好并读回确认，三条内容都在（检查输入、执行处理、验证结果）。\n\n文件路径：`/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmpQNwAmh/plan.md`（工作目录下的 `plan.md`，64 字节，5 行）",
+        "tools": [
+          {
+            "durationMs": 0,
+            "output": "Wrote \"/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmpQNwAmh/plan.md\": 5 lines / 64 bytes\n(new, 5 lines)",
+            "status": "ok",
+            "tool": "write_file",
+            "toolUseId": "call_00_j5wDbmazynP0WwTtKSPN8956",
+            "turnId": "t1794503234322780000"
+          },
+          {
+            "durationMs": 0,
+            "output": "SOUL.md  (634 B)\nplan.md  (64 B)\nstate.db  (4096 B)\nstate.db-shm  (32768 B)\nstate.db-wal  (1067112 B)\nworkspaces.json  (94 B)\n\n[6 entries]",
+            "status": "ok",
+            "tool": "list_dir",
+            "toolUseId": "call_01_gthtYQo3eW7ArspgITuQ1019",
+            "turnId": "t1794503234322780000"
+          },
+          {
+            "durationMs": 0,
+            "output": "     1\t# 执行计划\n     2\t\n     3\t1. 检查输入\n     4\t2. 执行处理\n     5\t3. 验证结果\n\n[Showing lines 1–5 of 5]",
+            "status": "ok",
+            "tool": "read_file",
+            "toolUseId": "call_00_DNxaFhOTBIE4Zj2LVtX79732",
+            "turnId": "t1794503234322780000"
+          }
+        ]
+      }
+    },
+    {
+      "commitCount": 1,
+      "id": "uncertain-effect",
+      "latencyMs": 6185,
+      "passed": false,
+      "task": {
+        "task": {
+          "acceptance": [
+            {
+              "kind": "toolsOk",
+              "label": "lab_commit succeeds at least 1 times",
+              "min": 1,
+              "tool": "lab_commit"
+            }
+          ],
+          "checks": [
+            {
+              "detail": "lab_commit only succeeded 0 times (needs 1)",
+              "label": "lab_commit succeeds at least 1 times",
+              "passed": false
+            }
+          ],
+          "createdAt": "2026-11-12 17:07:19",
+          "cwd": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp4JpsR3",
+          "id": "task1794503239212",
+          "lastStopReason": "Tool outcome unknown; reconcile external state before continuing",
+          "maxRounds": 2,
+          "roundsUsed": 1,
+          "runCount": 1,
+          "sessionId": "fault",
+          "spent": {
+            "tokens": 646,
+            "tools": 1,
+            "wallMs": 6106
+          },
+          "status": "needs_attention",
+          "suspendReason": "Tool outcome unknown; reconcile external state before continuing",
+          "title": "live reliability sample"
+        }
+      },
+      "turn": {
+        "reply": "A tool's outcome is unknown. Reconcile the external state before continuing.",
+        "tools": [
+          {
+            "durationMs": 36,
+            "output": "Error: MCP 调用 lab_commit 失败：outcome unknown; connection restored but call was not replayed. Reconcile remote state before retrying: 服务器把连接关了",
+            "status": "error",
+            "tool": "lab_commit",
+            "toolUseId": "call_00_QZweBvjWrEBw8jLrFm5b9812",
+            "turnId": "t1794503239213510000"
+          }
+        ]
+      }
+    }
+  ],
+  "model": "deepseek-flash",
+  "peakRateEstimateCny": 0.03208,
+  "pricingSource": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "profile": "ds",
+  "provider": "deepseek",
+  "reportedInputTokens": 7492,
+  "reportedOutputTokens": 2137,
+  "requests": 10,
+  "requestsWithoutUsage": 0,
+  "reservedUpperCny": 0.7618479999999999,
+  "evaluationDate": "2026-11-13",
+  "scope": "Synthetic isolated smoke samples; no production user history.",
+  "evaluatorNote": "The uncertain-effect runtime behaved correctly; the original assertion expected needsAttention instead of the actual needs_attention wire value. Preserved without regrading."
+}

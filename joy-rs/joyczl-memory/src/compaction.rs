@@ -117,13 +117,13 @@ fn fallback_summary(previous: &str, newly_evicted: &[(String, String)]) -> Strin
     }
     for (user, assistant) in newly_evicted {
         text.push_str(&format!(
-            "用户：{} ｜ 助手：{} ",
+            "user: {} | assistant: {} ",
             clip(user, 120),
             clip(assistant, 160)
         ));
     }
     let clipped = clip(text.trim(), FALLBACK_CHARS);
-    format!("（模型摘要不可用，以下是原对话的截断摘录：{clipped}）")
+    format!("(the model summary is unavailable; here is a truncated excerpt of the conversation: {clipped})")
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -227,12 +227,14 @@ pub async fn refresh(
     let (covered_now, summary) = roll_forward(client, model, previous, &fresh).await;
     // A save failure only costs a recompute next time (one extra call) — never this turn.
     match chat.save_rollup(session_id, covered_now, &summary).await {
-        Err(e) => eprintln!("(joy) 滚动摘要落库失败（这轮照常用）：{e}"),
+        Err(e) => eprintln!(
+            "(joy) the rolling summary could not be stored (this turn carries on regardless): {e}"
+        ),
         // Blocked by the monotonic guard: the store already holds a newer summary
         // (concurrent compaction, see chat.rs); not silent, or nobody learns this
         // round's summary never landed.
         Ok(false) => {
-            eprintln!("(joy) 滚动摘要没写进去：库里已有一份覆盖更多轮次的（并发压缩，按新的算）")
+            eprintln!("(joy) the rolling summary was not written: the database already has one covering more turns (concurrent compaction; the new one counts)")
         }
         Ok(true) => {}
     }

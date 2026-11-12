@@ -69,7 +69,7 @@ async fn gate_fails_open_on_model_error() {
     assert!(d.retrieve, "门坏了必须失败开放");
     assert_eq!(d.query, "我什么时候和阿明开会", "检索词退回原消息");
     assert!(
-        d.reason.contains("失败开放"),
+        d.reason.contains("failing open"),
         "理由要说明是失败开放：{}",
         d.reason
     );
@@ -81,7 +81,7 @@ async fn gate_fails_open_when_model_only_thinks() {
     let mock = Mock::new(vec![Mock::text("让我想想……这是一个关于日程的问题。")]);
     let d = should_retrieve(&mock, "small", "我什么时候和阿明开会").await;
     assert!(d.retrieve);
-    assert!(d.reason.contains("失败开放"));
+    assert!(d.reason.contains("failing open"));
 }
 
 #[tokio::test]
@@ -341,7 +341,7 @@ fn a_reference_to_an_unknown_skill_becomes_a_hint_not_an_error() {
     assert_eq!(hits.message, "帮我做点什么");
     assert_eq!(hits.hints.len(), 1);
     assert!(
-        hits.hints[0].contains("没有叫 'nope' 的技能"),
+        hits.hints[0].contains("no skill is named 'nope'"),
         "{:?}",
         hits.hints
     );

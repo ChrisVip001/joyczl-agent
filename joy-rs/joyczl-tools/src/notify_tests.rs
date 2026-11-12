@@ -8,12 +8,12 @@ fn messages_carry_the_essentials() {
         turn_id: "t1".into(),
         tool: "run_command".into(),
         args_preview: "rm -rf /tmp/x".into(),
-        reason: "放行表没盖住".into(),
+        reason: "allowed表没盖住".into(),
     }
     .message();
     assert!(approval.contains("run_command"), "{approval}");
     assert!(approval.contains("rm -rf"), "{approval}");
-    assert!(approval.contains("批准"), "{approval}");
+    assert!(approval.contains("asks for approval"), "{approval}");
 
     let job = NotifyEvent::JobFinished {
         id: "j1".into(),

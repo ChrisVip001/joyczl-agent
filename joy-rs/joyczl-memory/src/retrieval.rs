@@ -112,7 +112,7 @@ pub async fn search_hybrid(
         Ok(hits) => hits,
         Err(e) => {
             // One broken leg isn't fatal: the keyword leg still stands.
-            eprintln!("(joy) 向量检索不可用，这次只用关键词：{e}");
+            eprintln!("(joy) vector search unavailable; keywords only this time: {e}");
             return keyword;
         }
     };
@@ -143,7 +143,10 @@ pub async fn reindex(facts: &Facts, embedder: &Embedder) -> Result<usize> {
                     done += 1;
                 }
                 Err(e) => {
-                    anyhow::bail!("第 {} 条算不出来（{e}）—— 已补 {done} 条", row.id);
+                    anyhow::bail!(
+                        "could not compute entry {} ({e}) — {done} filled in",
+                        row.id
+                    );
                 }
             }
         }

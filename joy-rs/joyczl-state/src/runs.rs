@@ -65,6 +65,16 @@ pub struct RunRow {
 const COLS: &str = "id, task_id, session_id, turn_id, status, rounds, tokens_in, tokens_out, \
                     tools_ok, tools_failed, stop_reason, started_at, ended_at";
 
+/// Cumulative observations of one stable loop round (including resumed slices).
+#[derive(Debug, Clone, Default, sqlx::FromRow)]
+pub struct RoundAccount {
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub tools_ok: i64,
+    pub tools_failed: i64,
+    pub wall_ms: i64,
+}
+
 /// The run store. Clone is cheap (one pool handle).
 #[derive(Clone)]
 pub struct Runs {
@@ -98,6 +108,20 @@ impl Runs {
         Ok(())
     }
 
+    /// Restore the same interrupted attempt without erasing its counters.
+    /// A terminal attempt cannot be reopened by a stale checkpoint.
+    pub async fn reopen(&self, id: &str) -> Result<bool> {
+        Ok(sqlx::query(
+            "UPDATE task_runs SET status = 'running', ended_at = NULL, stop_reason = NULL
+             WHERE id = ? AND status IN ('running', 'waiting', 'suspended')",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            == 1)
+    }
+
     /// Add one round's numbers to the run's account. Called at every round boundary, so a
     /// crash leaves "how much this run already spent" behind.
     pub async fn add_round(
@@ -120,6 +144,46 @@ impl Runs {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    pub async fn round_account(&self, run_id: &str, round_id: &str) -> Result<RoundAccount> {
+        Ok(sqlx::query_as("SELECT tokens_in, tokens_out, tools_ok, tools_failed, wall_ms FROM run_round_accounts WHERE run_id = ? AND round_id = ?")
+            .bind(run_id).bind(round_id).fetch_optional(&self.pool).await?.unwrap_or_default())
+    }
+
+    /// Task totals, run totals and the round watermark commit together. Re-observing a
+    /// recovered round charges only the new cumulative delta, never its checkpointed prefix.
+    pub async fn account_round(
+        &self,
+        run_id: &str,
+        round_id: &str,
+        current: &RoundAccount,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        // Acquire the write lock before reading watermarks, including for concurrent callers.
+        sqlx::query("INSERT INTO run_round_accounts (run_id, round_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
+            .bind(run_id).bind(round_id).execute(&mut *tx).await?;
+        let previous: RoundAccount = sqlx::query_as("SELECT tokens_in, tokens_out, tools_ok, tools_failed, wall_ms FROM run_round_accounts WHERE run_id = ? AND round_id = ?")
+            .bind(run_id).bind(round_id).fetch_one(&mut *tx).await?;
+        let input = current.tokens_in.saturating_sub(previous.tokens_in).max(0);
+        let output = current
+            .tokens_out
+            .saturating_sub(previous.tokens_out)
+            .max(0);
+        let ok = current.tools_ok.saturating_sub(previous.tools_ok).max(0);
+        let failed = current
+            .tools_failed
+            .saturating_sub(previous.tools_failed)
+            .max(0);
+        let wall = current.wall_ms.saturating_sub(previous.wall_ms).max(0);
+        sqlx::query("UPDATE agent_tasks SET spent_tokens = spent_tokens + ?, spent_tools = spent_tools + ?, spent_wall_ms = spent_wall_ms + ?, updated_at = datetime('now') WHERE id = (SELECT task_id FROM task_runs WHERE id = ?)")
+            .bind(input.saturating_add(output)).bind(ok.saturating_add(failed)).bind(wall).bind(run_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE task_runs SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, tools_ok = tools_ok + ?, tools_failed = tools_failed + ?, rounds = (SELECT COUNT(*) FROM run_round_accounts WHERE run_id = ?) WHERE id = ?")
+            .bind(input).bind(output).bind(ok).bind(failed).bind(run_id).bind(run_id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE run_round_accounts SET tokens_in = MAX(tokens_in, ?), tokens_out = MAX(tokens_out, ?), tools_ok = MAX(tools_ok, ?), tools_failed = MAX(tools_failed, ?), wall_ms = MAX(wall_ms, ?) WHERE run_id = ? AND round_id = ?")
+            .bind(current.tokens_in.max(0)).bind(current.tokens_out.max(0)).bind(current.tools_ok.max(0)).bind(current.tools_failed.max(0)).bind(current.wall_ms.max(0)).bind(run_id).bind(round_id).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 

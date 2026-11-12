@@ -14,6 +14,8 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm
     ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: None,
@@ -53,7 +55,7 @@ fn disallowed_ips_cover_loopback_private_and_metadata() {
     }
     for good in ["8.8.8.8", "1.1.1.1", "2606:4700::1111"] {
         let ip: std::net::IpAddr = good.parse().unwrap();
-        assert!(!is_disallowed_ip(ip), "{good} 该放行");
+        assert!(!is_disallowed_ip(ip), "{good} 该allowed");
     }
 }
 
@@ -62,7 +64,7 @@ fn disallowed_ips_cover_loopback_private_and_metadata() {
 async fn non_http_schemes_are_refused() {
     let url = reqwest::Url::parse("file:///etc/passwd").unwrap();
     let err = check_url(&url, true).await.unwrap_err().to_string();
-    assert!(err.contains("只支持 http/https"), "{err}");
+    assert!(err.contains("only http/https is supported"), "{err}");
 }
 
 /// HTML → plain text: script/style vanish whole, entities decode, block tags break lines, whitespace collapses.
@@ -160,7 +162,10 @@ async fn follows_redirects_and_wraps_the_body_as_external_data() {
         ),
     ]);
     let out = execute_fetch(&format!("{base}/start"), true).await.unwrap();
-    assert!(out.starts_with("以下是外部网页的正文"), "{out}");
+    assert!(
+        out.starts_with("Below is the body of an external web page"),
+        "{out}"
+    );
     assert!(out.contains("正文标题"), "{out}");
     assert!(out.contains("你好"), "{out}");
     assert!(!out.contains("alert"), "script 不该留下：{out}");
@@ -175,7 +180,7 @@ async fn a_redirect_to_a_private_target_is_refused() {
     // check_url rejects the private literal directly (the tool's behavior is pinned by the loopback case).
     let url = reqwest::Url::parse("http://10.0.0.1/x").unwrap();
     let err = check_url(&url, false).await.unwrap_err().to_string();
-    assert!(err.contains("内网/保留地址"), "{err}");
+    assert!(err.contains("internal or reserved address"), "{err}");
 }
 
 /// Redirect loop: stops at the hop cap, with an explanatory error.
@@ -192,7 +197,7 @@ async fn redirect_loops_stop_at_the_cap() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("重定向超过"), "{err}");
+    assert!(err.contains("redirected more than"), "{err}");
 }
 
 /// HTTP errors report the status code honestly.
@@ -214,7 +219,7 @@ async fn the_output_is_capped_with_an_honest_marker() {
     assert!(out.contains("truncated at 50000"), "{out}");
     assert!(
         out.chars().count() < 51_000,
-        "超过 50k 还在往里塞：{}",
+        "over 50k 还在往里塞：{}",
         out.chars().count()
     );
 }
@@ -234,7 +239,7 @@ async fn the_tool_refuses_loopback_without_the_test_knob() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("内网/保留地址"), "{out}");
+    assert!(out.contains("internal or reserved address"), "{out}");
 }
 
 // ---- Search: provider plan, per-turn budget, untrusted wrapping --------------
@@ -330,7 +335,7 @@ async fn search_cap_stops_the_turn_before_any_network() {
         .execute(c, "search_web", json!({"query": "anything"}))
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("上限"), "{out}");
+    assert!(out.contains("limit"), "{out}");
 }
 
 /// Fresh budget: a new TurnLimits starts at zero used.

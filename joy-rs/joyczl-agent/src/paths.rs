@@ -17,12 +17,15 @@ use std::path::{Path, PathBuf};
 pub fn inside_workspace(path: &Path, root: &Path) -> Result<PathBuf, String> {
     let root_real = root
         .canonicalize()
-        .map_err(|e| format!("工作目录不可用（{}）：{e}", root.display()))?;
+        .map_err(|e| format!("working directory unavailable ({}): {e}", root.display()))?;
     let real = existing_ancestor(path);
     if real.starts_with(&root_real) {
         Ok(path.to_path_buf())
     } else {
-        Err(format!("{path:?} 在工作目录（{}）之外", root.display()))
+        Err(format!(
+            "{path:?} is outside the working directory ({})",
+            root.display()
+        ))
     }
 }
 

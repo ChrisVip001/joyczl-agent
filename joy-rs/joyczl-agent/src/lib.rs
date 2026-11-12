@@ -27,3 +27,6 @@ mod observe_tests;
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod verify_tests;
+
+#[cfg(test)]
+mod plan_tests;

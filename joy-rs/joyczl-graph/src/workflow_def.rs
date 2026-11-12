@@ -33,11 +33,11 @@ pub fn builtin_routes() -> RouteBuilders {
         let key = params
             .get("key")
             .and_then(Value::as_str)
-            .ok_or("key_router 需要 params.key")?;
+            .ok_or("key_router needs params.key")?;
         let default = params
             .get("default")
             .and_then(Value::as_str)
-            .ok_or("key_router 需要 params.default")?;
+            .ok_or("key_router needs params.default")?;
         Ok(key_router(key.to_string(), default.to_string()))
     });
     routes.insert("needs_action".to_string(), |_| {
@@ -95,7 +95,8 @@ pub struct WorkflowDef {
 
 impl WorkflowDef {
     pub fn parse(json: &str) -> Result<Self, String> {
-        serde_json::from_str(json).map_err(|e| format!("工作流 JSON 解析失败：{e}"))
+        serde_json::from_str(json)
+            .map_err(|e| format!("the workflow JSON could not be parsed: {e}"))
     }
 
     /// Build a runnable `Graph`. `bindings` must cover **every** node name — a JSON
@@ -110,7 +111,7 @@ impl WorkflowDef {
         for def in &self.nodes {
             let f = bindings.get(&def.name).ok_or_else(|| {
                 format!(
-                    "节点 '{}' 没有绑定的实现 —— JSON 只声明拓扑，行为来自按名注入的代码",
+                    "node '{}' has no bound implementation — JSON declares topology only; behaviour comes from code injected by name",
                     def.name
                 )
             })?;
@@ -119,24 +120,23 @@ impl WorkflowDef {
             node.on_error = def.on_error.clone();
             graph
                 .add_node(node)
-                .map_err(|e| format!("节点 '{}'：{e}", def.name))?;
+                .map_err(|e| format!("node '{}': {e}", def.name))?;
         }
         for (src, dst) in &self.edges {
             graph
                 .add_edge(src, dst)
-                .map_err(|e| format!("边 {src}→{dst}：{e}"))?;
+                .map_err(|e| format!("edge {src}→{dst}: {e}"))?;
         }
         for router in &self.routers {
             let builder = routes.get(&router.router).ok_or_else(|| {
                 format!(
-                    "路由 '{}' 未注册 —— 控制流只能交给内置路由函数（绝不交给模型），\
-                     可用：{:?}",
+                    "route '{}' is not registered — control flow may only go to built-in route functions (never to the model); available: {:?}",
                     router.router,
                     routes.keys().collect::<Vec<_>>()
                 )
             })?;
             let route = builder(&router.params)
-                .map_err(|e| format!("路由 '{}' 的参数错误：{e}", router.router))?;
+                .map_err(|e| format!("bad parameters for route '{}': {e}", router.router))?;
             let targets: Vec<(&str, &str)> = router
                 .targets
                 .iter()
@@ -144,13 +144,13 @@ impl WorkflowDef {
                 .collect();
             graph
                 .add_router(&router.src, route, &targets)
-                .map_err(|e| format!("路由 '{}'：{e}", router.src))?;
+                .map_err(|e| format!("route '{}': {e}", router.src))?;
         }
         if !self.entry.is_empty() {
             let names: Vec<&str> = self.entry.iter().map(String::as_str).collect();
             graph
                 .entry(&names)
-                .map_err(|e| format!("入口声明错误：{e}"))?;
+                .map_err(|e| format!("bad entry declaration: {e}"))?;
         }
         Ok(graph)
     }
@@ -178,7 +178,9 @@ impl WorkflowDef {
             seen += 1;
             if let Some(nexts) = adjacency.get(name) {
                 for next in nexts {
-                    let degree = indegree.get_mut(next).expect("边端点已登记");
+                    let degree = indegree
+                        .get_mut(next)
+                        .expect("the edge endpoints are registered");
                     *degree -= 1;
                     if *degree == 0 {
                         queue.push_back(next);
@@ -193,8 +195,7 @@ impl WorkflowDef {
                 .map(|(&name, _)| name)
                 .collect();
             return Err(format!(
-                "工作流 '{}' 的静态边有环（{stuck:?}）—— 并行波需要无环结构；\
-                 有意的循环请用路由跳转 + max_visits 表达",
+                "the static edges of workflow '{}' have a cycle ({stuck:?}) — parallel waves need an acyclic shape; express deliberate loops with a route jump + max_visits",
                 self.name
             ));
         }

@@ -1,0 +1,44 @@
+name: Feature idea
+description: Propose a change or a new capability
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Design arguments are welcome. Please describe the problem before the solution —
+        Joy has deliberate boundaries (see docs/limitations.md and SECURITY.md), and
+        proposals that change them need to say why the tradeoff is worth it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you unable to do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including "keep it as-is"
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Rust core / memory
+        - Tools / MCP
+        - Dashboard
+        - Gateways
+        - Providers
+        - Docs / packaging
+    validations:
+      required: true

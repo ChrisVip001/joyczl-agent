@@ -14,7 +14,7 @@ use crate::{run_turn, EventSink, Frame};
 async fn server_with(
     responses: Vec<joyczl_provider::CreateResponse>,
 ) -> (crate::Server, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         provider: "openai".to_string(),
@@ -101,7 +101,7 @@ async fn a_structured_result_is_validated_and_retried_once() {
 
     assert!(reply.contains("4"), "{reply}");
     assert!(
-        tool_output.contains("转述"),
+        tool_output.contains("reported"),
         "报告要标明是转述：{tool_output}"
     );
     assert!(
@@ -139,7 +139,7 @@ async fn a_structured_result_falls_back_to_prose_after_two_failures() {
     let (tool_output, _) = collect(&server, "派个子代理去算 2+2").await;
 
     assert!(
-        tool_output.contains("两次都没通过校验"),
+        tool_output.contains("failed validation twice"),
         "两次都不合规要如实说出来：{tool_output}"
     );
     assert!(

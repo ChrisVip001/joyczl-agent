@@ -88,7 +88,7 @@ fn only_user_skills_can_be_deleted() {
 
     // The built-in one does not live under home/skills — refused, not "not found".
     let refusal = remove_skill(home.path(), "bundled").expect_err("内置技能删不得");
-    assert!(refusal.contains("内置"), "{refusal}");
+    assert!(refusal.contains("built-in"), "{refusal}");
 
     // A traversal attempt is not even a name.
     assert!(remove_skill(home.path(), "../pack").is_err());
@@ -96,7 +96,7 @@ fn only_user_skills_can_be_deleted() {
 
     assert_eq!(
         remove_skill(home.path(), "mine").expect("删得掉"),
-        "已删除技能 'mine'"
+        "Deleted skill 'mine'"
     );
     assert!(!user.join("mine").exists(), "目录该没了");
     // Deleting twice says so instead of pretending.
@@ -110,14 +110,14 @@ fn the_form_fence_says_what_is_wrong_with_the_input() {
         ..ServerSpec::default()
     };
     // Neither transport: the one mistake a form makes that a file rarely does.
-    assert!(validate_server(&base).unwrap_err().contains("之一"));
+    assert!(validate_server(&base).unwrap_err().contains("set either"));
     // Both transports: same refusal the runtime gives, in form language.
     let both = ServerSpec {
         url: Some("https://h/mcp".to_string()),
         command: Some("npx".to_string()),
         ..base.clone()
     };
-    assert!(both_url_err(&both).contains("只能填一个"));
+    assert!(both_url_err(&both).contains("not both"));
     // A url that is not http(s), a name with spaces, an auth_env that is not a name.
     let bad_url = ServerSpec {
         url: Some("ftp://h".to_string()),
@@ -128,13 +128,13 @@ fn the_form_fence_says_what_is_wrong_with_the_input() {
         name: "my server".to_string(),
         ..base.clone()
     };
-    assert!(validate_server(&bad_name).unwrap_err().contains("前缀"));
+    assert!(validate_server(&bad_name).unwrap_err().contains("prefix"));
     let bad_key = ServerSpec {
         url: Some("https://h/mcp".to_string()),
         auth_env: Some("my-token".to_string()),
         ..base.clone()
     };
-    assert!(validate_server(&bad_key).unwrap_err().contains("环境变量"));
+    assert!(validate_server(&bad_key).unwrap_err().contains("env var"));
 
     // The documented shapes pass.
     let stdio = ServerSpec {
@@ -236,7 +236,7 @@ fn saving_a_server_refuses_a_name_the_builtin_pack_owns() {
     // Shadowing would be worse than refusing: the runtime's first-wins would make the
     // user's edit do nothing at all.
     let refusal = save_server_among(home.path(), &spec, &[pack]).expect_err("内置占用的名字拒写");
-    assert!(refusal.contains("系统内置"), "{refusal}");
+    assert!(refusal.contains("built-in"), "{refusal}");
     assert!(!home.path().join("mcp.json").exists(), "被拒就不该落盘");
 }
 
@@ -302,7 +302,7 @@ fn removing_a_server_only_touches_the_users_file() {
 
     assert!(remove_server(home.path(), "cloud")
         .unwrap_err()
-        .contains("没有叫"));
+        .contains("no connector named"));
     assert!(remove_server(home.path(), "../escape").is_err());
     remove_server(home.path(), "fs").expect("删得掉");
 
@@ -315,5 +315,5 @@ fn removing_a_server_only_touches_the_users_file() {
 fn removing_from_a_missing_file_says_so() {
     let home = tempfile::tempdir().expect("临时目录");
     let refusal = remove_server(home.path(), "fs").expect_err("没有文件");
-    assert!(refusal.contains("还没有"), "{refusal}");
+    assert!(refusal.contains("there is no"), "{refusal}");
 }

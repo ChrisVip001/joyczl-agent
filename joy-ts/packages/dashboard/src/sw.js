@@ -8,7 +8,7 @@
 // Bump on every shipped frontend change: a stale cache means a stale layout.
 // Bump on every shipped change: a stale cache keeping the old main.js alive is the one bug
 // the version string exists to prevent (it has happened once).
-const VERSION = "joy-v24";
+const VERSION = "joy-v29";
 const CORE = ["./", "./index.html", "./style.css", "./icon.svg", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

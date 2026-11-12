@@ -26,7 +26,7 @@ structure that makes that possible; running and configuring it live in
                  joyczl-protocol  ←──── single source of truth (TS/JSON Schema/pydantic artifacts)
                  joyczl-config    ←──── JOY_* env vars, read once at boot
                         │
-                 joyczl-provider ────── 12 providers (incl. local Ollama), two wire formats + SSE
+                 joyczl-provider ────── 12 providers (incl. local Ollama), three wire formats + SSE
                         │
         ┌───────────────┼────────────────┐
    joyczl-tools    joyczl-loop       joyczl-mcp
@@ -64,7 +64,8 @@ user message
   → [memory retrieval] facts (FTS5, top_k) + episodes → the prompt tail
   → [Skills] catalog every turn (name + one line); bodies only on a match
   → [prompt assembly] stable prefix (soul + model identity) + per-turn tail
-      (clock · capability gaps · todo · memory hits · catalogs · summary)
+      (clock · capability gaps · todo · project conventions · memory hits ·
+       catalogs · summary)
       the prefix is byte-identical within a session: that is the cache boundary
   → [THE LOOP] observe → reason → act → repeat
         · every model call races the cancellation token (turn/interrupt)
@@ -137,18 +138,35 @@ measured by the memory center's meter:
 | history | the last N turns, read from the ledger | `JOY_HISTORY_TURNS` |
 | summary | the rolling compaction summary | `JOY_COMPACT_THRESHOLD` |
 
+One more section rides in the tail, and it is **not** measured: **project conventions**
+(`agents_md.rs`). From the turn's working directory up to the `.git` that encloses it, one
+file per directory is taken in order — `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md` — and
+concatenated root-first, so broad rules come before local ones. The total is capped at
+32 KB and filled from the inside out: when the budget runs out the file nearest the
+workspace stays whole and the outer one is dropped (only when the innermost file alone is
+over budget is it truncated, and the cut says so). It lives in the tail and never in the
+stable prefix — it changes with the directory, and a prefix that changes per directory is a
+cache miss on every turn. A subagent gets none of it: it runs one errand, returns one
+conclusion.
+
 Three things keep that budget from quietly growing: **compaction** folds evicted turns
 into the rolling summary (deterministic excerpt fallback, so eviction is never amnesia);
 **tool-result trimming** stubs the oldest oversized results before each request
 (`JOY_TOOL_RESULT_TOTAL_CHARS`, newest `JOY_TOOL_RESULT_KEEP_RECENT` kept whole); and the
 **iteration budget** bounds the turn itself (`JOY_MAX_ITERATIONS`; the last step is a
-wrap-up). The short lines that ride in the tail — clock, todo board, capability note — are
-a few dozen tokens and are deliberately **not** part of the six-section meter: the band
-exists to show what grows, and constants only add noise.
+wrap-up).
+
+Four things in the tail are deliberately **outside** the six-section meter: the clock, the
+todo board and the capability note (a few dozen constant tokens each), and project
+conventions (constant *per directory*, capped at 32 KB). The band exists to show what grows
+**within a session**; constants only add noise. The known price: in a repository with a fat
+`AGENTS.md` the band understates the prompt by that file — it is written down in
+[limitations](limitations.md).
 
 ### Tools (joyczl-tools)
 
-Some two dozen built-in tools + MCP, merged into one `ToolRegistry`. The contract:
+Built-in tools + MCP, merged into one `ToolRegistry` (the exact inventory lives in
+[`internals/06-tools.md`](internals/06-tools.md) §6.0 and is checked against the code). The contract:
 `execute` never returns Err — errors return to the model as `Error: …` text
 and the loop keeps going. A tool failure is information the model can correct,
 not a crash.

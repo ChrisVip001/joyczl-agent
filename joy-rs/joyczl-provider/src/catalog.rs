@@ -110,10 +110,10 @@ impl CatalogPatch {
     /// Turn a patch for an **unknown** id into a full row — a new provider needs enough
     /// fields to actually make a request. `Ok(None)` = nothing usable to add.
     fn into_entry(self) -> Result<CatalogEntry, String> {
-        let model = self.model.ok_or("新 provider 需要 model")?;
+        let model = self.model.ok_or("a new provider needs model")?;
         let wire = self
             .wire
-            .ok_or("新 provider 需要 wire（anthropic 或 openai）")?;
+            .ok_or("a new provider needs wire (anthropic or openai)")?;
         // small_model defaults to the main model: one model serving both tiers is honest
         // (a bit pricier gate calls) and better than an invented name that resolves to nothing.
         let small_model = self
@@ -160,7 +160,7 @@ impl Catalog {
             Ok(patches) => patches,
             Err(e) => {
                 eprintln!(
-                    "(joy) {} 解析失败（{e}）—— 本次启动只用内置厂商表",
+                    "(joy) {} could not be parsed ({e}) — this start uses the built-in provider table only",
                     path.display()
                 );
                 return catalog;
@@ -170,12 +170,12 @@ impl Catalog {
         for patch in patches {
             match patch.apply_or_add(&mut catalog) {
                 Ok(()) => merged += 1,
-                Err(why) => eprintln!("(joy) 目录条目被跳过：{why}"),
+                Err(why) => eprintln!("(joy) a catalog entry was skipped: {why}"),
             }
         }
         if merged > 0 {
             eprintln!(
-                "(joy) 模型目录：{} 合并了 {} 条（内置 {} 家，现共 {} 家）",
+                "(joy) model catalog: {} merged {} entries ({} built in, {} in total now)",
                 path.display(),
                 merged,
                 PROVIDERS.len(),
@@ -201,7 +201,7 @@ impl Catalog {
 impl CatalogPatch {
     fn apply_or_add(self, catalog: &mut Catalog) -> Result<(), String> {
         if self.id.is_empty() {
-            return Err("目录条目缺少 id".to_string());
+            return Err("a catalog entry is missing its id".to_string());
         }
         match catalog.entries.iter_mut().find(|e| e.id == self.id) {
             Some(entry) => {

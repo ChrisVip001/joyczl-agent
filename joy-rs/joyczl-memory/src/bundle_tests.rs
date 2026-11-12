@@ -62,7 +62,7 @@ fn the_catalog_is_regenerated_from_the_pages() {
         .expect("写");
 
     let index = bundle.index_text().expect("目录");
-    assert!(index.contains("2 页"), "计数要对：{index}");
+    assert!(index.contains("2 pages"), "计数要对：{index}");
     assert!(
         index.contains("[Alex](alex.md) · person — 喜欢早会"),
         "{index}"

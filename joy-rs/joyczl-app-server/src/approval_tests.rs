@@ -16,7 +16,7 @@ use crate::{run_turn, EventSink, Frame, Server};
 /// An unregistered request number → an honest false ("nobody heard your answer"), not an error.
 #[tokio::test]
 async fn answering_an_unknown_request_is_false_not_an_error() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         ..Default::default()
@@ -32,7 +32,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
         return; // Consistent with the other sandbox tests: skip on machines without a sandbox (CI)
     }
 
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         provider: "openai".to_string(),
@@ -123,7 +123,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
         output.contains("approved-ok"),
         "批准之后命令要真的在沙箱里跑起来：{output}"
     );
-    assert!(output.contains("退出码 0"), "{output}");
+    assert!(output.contains("exit code 0"), "{output}");
 }
 
 /// `JOY_APPROVAL=never` (the default): nobody is asked, the command is refused outright — the old behavior unchanged.
@@ -132,7 +132,7 @@ async fn without_on_request_the_command_is_simply_refused() {
     if !joyczl_tools::exec::sandbox_available() {
         return;
     }
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         provider: "openai".to_string(),
@@ -197,7 +197,10 @@ async fn without_on_request_the_command_is_simply_refused() {
     let (asked, output) = watcher.await.expect("观察任务");
     assert!(!asked, "never 模式不该问任何问题");
     assert!(output.starts_with("Error:"), "{output}");
-    assert!(output.contains("放行"), "拒因要指向放行表：{output}");
+    assert!(
+        output.contains("No allow rule matched"),
+        "拒因要指向放行表：{output}"
+    );
 }
 
 // ---- The three remember scopes --------------------------------------------------------------
@@ -216,7 +219,7 @@ fn ask(
     server
         .approvals
         .lock()
-        .expect("approvals 锁不该中毒")
+        .expect("the approvals lock should not be poisoned")
         .entry(turn_id.to_string())
         .or_default()
         .insert(
@@ -237,7 +240,7 @@ fn settings_json(home: &std::path::Path) -> String {
 /// sees it — the old "takes effect after a restart" is gone.
 #[tokio::test]
 async fn remembering_a_command_persists_and_takes_effect_at_once() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         ..Default::default()
@@ -276,7 +279,7 @@ async fn remembering_a_command_persists_and_takes_effect_at_once() {
 /// `once` leaves no trace; `session` stays in memory and never reaches the disk.
 #[tokio::test]
 async fn once_and_session_leave_different_traces() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         ..Default::default()
@@ -323,7 +326,7 @@ async fn once_and_session_leave_different_traces() {
 /// A rejected answer remembers nothing — a "no" must never be turned into a standing rule.
 #[tokio::test]
 async fn a_denial_is_never_remembered() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let settings = joyczl_config::Settings {
         home: dir.path().to_path_buf(),
         ..Default::default()
@@ -345,7 +348,7 @@ async fn a_denial_is_never_remembered() {
 /// The naming difference matters: the human approved the folder, not the file name.
 #[tokio::test]
 async fn a_remembered_write_directory_needs_no_answer() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().join("ws");
     std::fs::create_dir_all(&workspace).expect("建工作目录");
     let settings = joyczl_config::Settings {
@@ -376,7 +379,7 @@ async fn a_remembered_write_directory_needs_no_answer() {
             serde_json::json!({"path": path.display().to_string(), "content": "hi\n"}),
         )
         .await;
-    assert!(out.starts_with("已写入"), "{out}");
+    assert!(out.starts_with("Wrote"), "{out}");
     assert!(path.exists(), "真写了");
     assert!(
         settings_json(&settings.home).contains(workspace.to_string_lossy().as_ref()),

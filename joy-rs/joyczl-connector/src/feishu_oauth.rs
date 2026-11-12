@@ -76,7 +76,7 @@ pub fn load(home: &Path) -> Option<UserToken> {
 /// Save with 0600 — same discipline as `mcp-auth/<name>.json`.
 pub(crate) fn save(home: &Path, token: &UserToken) -> Result<()> {
     let path = token_path(home);
-    std::fs::create_dir_all(path.parent().expect("有父目录"))?;
+    std::fs::create_dir_all(path.parent().expect("it has a parent"))?;
     let body = serde_json::to_vec_pretty(token)?;
     std::fs::write(&path, body)?;
     #[cfg(unix)]
@@ -112,8 +112,7 @@ pub fn status(home: &Path) -> Option<(bool, i64)> {
 pub async fn access_token(config: &FeishuConfig, home: &Path) -> Result<String> {
     let Some(token) = load(home) else {
         bail!(
-            "还没以用户身份登录飞书：先跑 `joy connector feishu login`\n\
-             （或者把 connectors.json 里 feishu.as 改回默认的 app）"
+            "Not signed in to Feishu as a user yet: run `joy connector feishu login` first\n\n             (or set feishu.as back to the default app)"
         );
     };
     if token.expires_at - 300 > now() {
@@ -134,7 +133,7 @@ pub async fn refresh_now(config: &FeishuConfig, home: &Path) -> Result<UserToken
     let _lock = lock(home).await?;
     let Some(token) = load(home) else {
         bail!(
-            "没有飞书用户 token 文件（{} 不在）",
+            "no Feishu user token file ({} is not there)",
             token_path(home).display()
         );
     };
@@ -144,7 +143,7 @@ pub async fn refresh_now(config: &FeishuConfig, home: &Path) -> Result<UserToken
     }
     let Some(secret) = config.secret(home) else {
         bail!(
-            "飞书 app_secret 找不到，续不了用户 token（{}）",
+            "the Feishu app_secret could not be found, so the user token cannot be refreshed ({})",
             config.app_secret
         );
     };
@@ -158,7 +157,7 @@ pub async fn refresh_now(config: &FeishuConfig, home: &Path) -> Result<UserToken
         }),
     )
     .await
-    .context("续期飞书用户 token 失败；重新跑 `joy connector feishu login`")?;
+    .context("refreshing the Feishu user token failed; run `joy connector feishu login` again")?;
     save(home, &refreshed)?;
     Ok(refreshed)
 }
@@ -197,7 +196,7 @@ async fn renew_forever(config: FeishuConfig, home: PathBuf) {
         match refresh_now(&config, &home).await {
             Ok(token) => {
                 eprintln!(
-                    "(joy) 飞书用户 token 已在后台续期，到 {} 过期",
+                    "(joy) the Feishu user token was refreshed in the background; it expires at {}",
                     expiry_text(token.expires_at)
                 );
                 // A successful refresh usually leaves hours on the clock; the floor only
@@ -208,12 +207,12 @@ async fn renew_forever(config: FeishuConfig, home: PathBuf) {
                 // The refresh token itself is dead (revoked, expired, wrong app). No amount of
                 // retrying fixes that, and silence would leave sends failing with no clue.
                 eprintln!(
-                    "(joy) 飞书用户 token 续不上了，需要人重新登录：joy connector feishu login\n      {error:#}"
+                    "(joy) the Feishu user token could not be refreshed and needs a fresh sign-in: joy connector feishu login\n      {error:#}"
                 );
                 return;
             }
             Err(error) => {
-                eprintln!("(joy) 飞书用户 token 这次没续上，5 分钟后再试：{error:#}");
+                eprintln!("(joy) the Feishu user token was not refreshed this time; trying again in 5 minutes: {error:#}");
                 tokio::time::sleep(RETRY_BACKOFF).await;
             }
         }
@@ -257,7 +256,7 @@ impl Drop for Lock {
 
 async fn lock(home: &Path) -> Result<Lock> {
     let path = home.join(AUTH_DIR).join("feishu.lock");
-    std::fs::create_dir_all(path.parent().expect("有父目录"))?;
+    std::fs::create_dir_all(path.parent().expect("it has a parent"))?;
     for _ in 0..50 {
         match std::fs::OpenOptions::new()
             .write(true)
@@ -285,7 +284,7 @@ async fn lock(home: &Path) -> Result<Lock> {
         }
     }
     bail!(
-        "另一个进程正在续期飞书 token（{}），这次先跳过",
+        "another process is refreshing the Feishu token ({}); skipping this time",
         path.display()
     )
 }
@@ -295,7 +294,7 @@ async fn lock(home: &Path) -> Result<Lock> {
 pub async fn login(config: &FeishuConfig, home: &Path) -> Result<i64> {
     let Some(secret) = config.secret(home) else {
         bail!(
-            "飞书 app_secret 找不到（{}），没法换 token",
+            "the Feishu app_secret could not be found ({}), so the token cannot be exchanged",
             config.app_secret
         );
     };
@@ -311,13 +310,20 @@ pub async fn login(config: &FeishuConfig, home: &Path) -> Result<i64> {
 
     let listener = TcpListener::bind(("127.0.0.1", CALLBACK_PORT))
         .await
-        .with_context(|| format!("端口 {CALLBACK_PORT} 被占了（可能上一次登录还开着）"))?;
-    eprintln!("(joy) 浏览器里完成授权。打不开就把这个地址粘进去：\n{url}");
+        .with_context(|| {
+            format!("port {CALLBACK_PORT} is taken (perhaps the last sign-in is still open)")
+        })?;
+    eprintln!("(joy) finish the authorisation in the browser. If it does not open, paste this address:\n{url}");
     let _ = open_browser(&url);
 
     let code = tokio::time::timeout(SIGN_IN_TIMEOUT, wait_for_code(listener, &state))
         .await
-        .map_err(|_| anyhow::anyhow!("等了 {}s 没等到授权，放弃了", SIGN_IN_TIMEOUT.as_secs()))??;
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "waited {}s for the authorisation and gave up",
+                SIGN_IN_TIMEOUT.as_secs()
+            )
+        })??;
 
     let body = exchange(
         config,
@@ -346,15 +352,18 @@ async fn exchange(config: &FeishuConfig, payload: &Value) -> Result<UserToken> {
         .json(payload)
         .send()
         .await
-        .context("连不上飞书授权端点")?;
-    let body: Value = response.json().await.context("飞书授权端点没回 JSON")?;
+        .context("could not reach the Feishu authorisation endpoint")?;
+    let body: Value = response
+        .json()
+        .await
+        .context("the Feishu authorisation endpoint did not return JSON")?;
     // v2 answers 0 on success; some deployments answer without a code at all.
     if let Some(code) = body.get("code").and_then(Value::as_i64) {
         if code != 0 {
             // A refusal, not a hiccup: the background renewer stops on this and asks for a
             // human instead of retrying into the void.
             return Err(anyhow::Error::new(Rejected(format!(
-                "飞书拒绝换 token：{} {}（redirect_uri 必须在应用控制台精确登记）",
+                "Feishu refused to exchange the token: {} {} (redirect_uri must be registered exactly in the app console)",
                 code,
                 body.get("error_description")
                     .or_else(|| body.get("msg"))
@@ -366,7 +375,7 @@ async fn exchange(config: &FeishuConfig, payload: &Value) -> Result<UserToken> {
     let access_token = body
         .get("access_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("飞书应答里没有 access_token：{body}"))?
+        .ok_or_else(|| anyhow::anyhow!("the Feishu reply has no access_token: {body}"))?
         .to_string();
     let refresh_token = body
         .get("refresh_token")
@@ -387,7 +396,10 @@ async fn exchange(config: &FeishuConfig, payload: &Value) -> Result<UserToken> {
 /// Wait for `GET /callback?code=…&state=…`, answer the browser with a small page.
 async fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<String> {
     loop {
-        let (mut stream, _) = listener.accept().await.context("回调端口接不上")?;
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .context("the callback port would not accept a connection")?;
         let mut buffer = vec![0u8; 8192];
         let n = stream.read(&mut buffer).await.unwrap_or(0);
         let request = String::from_utf8_lossy(&buffer[..n]).to_string();
@@ -404,9 +416,9 @@ async fn wait_for_code(listener: TcpListener, expected_state: &str) -> Result<St
         let params = parse_query(query);
         let (code, state) = (params.0, params.1);
         let page = if state.as_deref() == Some(expected_state) && code.is_some() {
-            "授权完成，可以关掉这个页面回到终端。"
+            "Authorised — you can close this page and go back to the terminal."
         } else {
-            "授权没完成（state 不对或没有 code）—— 回终端重试。"
+            "Authorisation did not complete (wrong state, or no code) — retry from the terminal."
         };
         let body = format!("<!doctype html><meta charset=utf-8><p>{page}</p>");
         let reply = format!(
@@ -508,7 +520,10 @@ fn open_browser(url: &str) -> Result<()> {
         let _ = url;
         return Ok(());
     }
-    command.arg(url).status().context("打不开浏览器")?;
+    command
+        .arg(url)
+        .status()
+        .context("could not open the browser")?;
     Ok(())
 }
 

@@ -82,11 +82,14 @@ impl MemoryWorker {
                     break;
                 }
                 if let Err(error) = run_once(&deps, &pending, &mut last_facts).await {
-                    eprintln!("(joy) 记忆整理这一轮没做成（下一轮再试）：{error}");
+                    eprintln!("(joy) memory consolidation did not get done this round (trying again next round): {error}");
                 }
             }
         });
-        *worker.handle.lock().expect("worker 句柄锁不该中毒") = Some(handle);
+        *worker
+            .handle
+            .lock()
+            .expect("the worker-handle lock should not be poisoned") = Some(handle);
         worker
     }
 
@@ -106,10 +109,14 @@ impl MemoryWorker {
     pub async fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
         self.wake.notify_one();
-        let handle = self.handle.lock().expect("worker 句柄锁不该中毒").take();
+        let handle = self
+            .handle
+            .lock()
+            .expect("the worker-handle lock should not be poisoned")
+            .take();
         if let Some(handle) = handle {
             if tokio::time::timeout(SHUTDOWN_GRACE, handle).await.is_err() {
-                eprintln!("(joy) 记忆整理还在跑，先关；没做完的那批下次启动会重新认领");
+                eprintln!("(joy) memory consolidation was still running; shutting it down — the unfinished batch will be claimed again at the next start");
             }
         }
     }
@@ -118,7 +125,10 @@ impl MemoryWorker {
 /// One pass: distill if due, then mirror if anything changed.
 async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> anyhow::Result<()> {
     let resolved = {
-        let guard = deps.resolved.read().expect("resolved 锁不该中毒");
+        let guard = deps
+            .resolved
+            .read()
+            .expect("the resolved lock should not be poisoned");
         guard.clone()
     };
     // No model configured (yet): nothing can be distilled, and saying so every minute
@@ -127,7 +137,10 @@ async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> any
         return Ok(());
     };
     let settings = {
-        let guard = deps.settings.read().expect("settings 锁不该中毒");
+        let guard = deps
+            .settings
+            .read()
+            .expect("the settings lock should not be poisoned");
         guard.clone()
     };
 
@@ -144,7 +157,9 @@ async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> any
     .await?;
     if new_facts > 0 {
         pending.fetch_add(new_facts as i32, Ordering::SeqCst);
-        eprintln!("(joy) 记忆整理：新增 {new_facts} 条事实（下一轮对话会告诉你）");
+        eprintln!(
+            "(joy) memory consolidation: {new_facts} new facts (the next turn will mention them)"
+        );
     }
 
     // Mirror only when the store changed: rewriting identical pages every minute would
@@ -158,21 +173,26 @@ async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> any
     let bundle = joyczl_memory::bundle::Bundle::new(&settings.home);
     match joyczl_memory::mirror::mirror_facts(&deps.facts, &bundle).await {
         Ok(report) if report.written > 0 || report.skipped > 0 => eprintln!(
-            "(joy) 记忆库：写了 {} 页{}",
+            "(joy) memory library: wrote {} pages{}",
             report.written,
             if report.skipped > 0 {
-                format!("，{} 页被人改过没动", report.skipped)
+                format!(
+                    ", {} pages were edited by hand and left alone",
+                    report.skipped
+                )
             } else {
                 String::new()
             }
         ),
         Ok(_) => {}
-        Err(error) => eprintln!("(joy) 记忆库镜像失败（事实本身没问题）：{error}"),
+        Err(error) => {
+            eprintln!("(joy) memory-library mirror failed (the facts themselves are fine): {error}")
+        }
     }
     if let Err(error) =
         joyczl_memory::export_markdown(&deps.facts, &deps.episodes, &settings.home).await
     {
-        eprintln!("(joy) MEMORY.md 镜像失败（记忆本身不受影响）：{error}");
+        eprintln!("(joy) MEMORY.md mirror failed (the memory itself is unaffected): {error}");
     }
     Ok(())
 }

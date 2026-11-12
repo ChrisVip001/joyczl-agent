@@ -14,8 +14,9 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 pub async fn open(path: &Path) -> Result<SqlitePool> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("创建 state 目录失败：{}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("could not create the state directory: {}", parent.display())
+            })?;
         }
     }
 
@@ -31,7 +32,7 @@ pub async fn open(path: &Path) -> Result<SqlitePool> {
     if !sqlx::Sqlite::database_exists(&url).await.unwrap_or(false) {
         sqlx::Sqlite::create_database(&url)
             .await
-            .with_context(|| format!("创建数据库失败：{url}"))?;
+            .with_context(|| format!("could not create the database: {url}"))?;
     }
 
     // Concurrency knobs must sit on the **connect options**, not a later `PRAGMA`:
@@ -53,8 +54,8 @@ pub async fn open(path: &Path) -> Result<SqlitePool> {
         .max_connections(8)
         .connect_with(options)
         .await
-        .with_context(|| format!("连接失败：{url}"))?;
+        .with_context(|| format!("could not connect: {url}"))?;
 
-    MIGRATOR.run(&pool).await.context("跑迁移失败")?;
+    MIGRATOR.run(&pool).await.context("migrations failed")?;
     Ok(pool)
 }

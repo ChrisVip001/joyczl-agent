@@ -83,7 +83,10 @@ fn only_long_repeated_results_are_replaced_by_a_stub() {
     // Long results are stubbed from the 2nd repeat on, with an args preview in the stub.
     let twice = GuardVerdict::Repeated { times: 2 };
     let text = for_model(&long, "read", &args, &twice);
-    assert!(text.contains("第 2 次相同调用"), "{text}");
+    assert!(
+        text.contains("called #2 with identical arguments"),
+        "{text}"
+    );
     assert!(text.contains("/tmp/a"), "桩里要有参数预览：{text}");
     assert!(!text.contains("xxxx"), "长正文该被省略：{text}");
     // The 1st repeat (times=1) is not stubbed yet: two calls can be perfectly normal.

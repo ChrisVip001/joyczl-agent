@@ -39,12 +39,15 @@ means "we would like this, nobody has built it".
 
 ## Notifications and audit
 
-- **Notifications are best-effort**: a failed send (network down, endpoint 5xx)
-  is one stderr line — **no retries, no delivery ledger**. A five-state
-  delivery ledger (pending/attempting/delivered/…) waits for tier B (when job
-  results can wake a session); today a notification is a shout that may not
-  carry. The Slack `{"text": …}` format also works with self-hosted ntfy/Gotify
-  endpoints; DingTalk/WeCom signed formats are not implemented.
+- **Completion notifications have a durable outbox**: with `JOY_NOTIFY` enabled,
+  job, schedule and goal outcomes are committed under `<home>/outbox/notifications/`
+  before delivery. Failures remain for retry every 30 seconds and on restart; each sweep
+  sends at most 32 receipts. Acknowledged receipts are deleted. Delivery is at least once:
+  a crash after a remote acknowledgement can cause a duplicate. Pending receipts are bound
+  to the configured destination; changing the webhook leaves old receipts retained, not
+  forwarded to the new target. Approval prompts remain best-effort and are never replayed.
+  Notification delivery itself does not wake tasks; durable job waits use the local job ledger. Slack-compatible `{"text": …}` endpoints are supported;
+  DingTalk/WeCom signed formats are not implemented.
 
 - **Hub accounts are real but bare**: register/login issues per-device
   tokens (登录即配对), yet there is **no password recovery flow** (the owner
@@ -418,9 +421,9 @@ no image library, no decode).
 * **Deliberate** — Temporary-statement filtering is a marker list (both
   languages), not a classifier. It will miss unusual phrasing.
   → `joy-rs/joyczl-memory/src/consolidation.rs` (`TEMPORARY_MARKERS`)
-* **Gap** — Skill triggering tokenises ASCII alphanumerics only, so a skill's
-  trigger words must be written in English even when the conversation is in
-  Chinese. CJK tokenisation (or a per-skill `triggers:` list) is the fix.
+* **Deliberate** — Skill discovery is lexical: ASCII words and adjacent Han-character pairs,
+  with at least two distinct overlaps. It does not understand synonyms; the skill catalog
+  remains available to the model for semantic selection.
   → `joy-rs/joyczl-memory/src/skills.rs` (`tokens`)
 * **Deliberate** — The bundle catalog injected into the prompt is truncated
   (`index_text`). An unpruned catalog becomes the context problem it was meant
@@ -455,15 +458,28 @@ no image library, no decode).
 * **Deliberate** — A dead summariser degrades to a deterministic excerpt (and
   says so in the prompt) rather than dropping the evicted turns.
   → `joy-rs/joyczl-memory/src/compaction.rs` (`fallback_summary`)
-* **Gap** — Summaries are never re-summarised: a very long session keeps one
-  growing paragraph. Compaction of the compaction (hierarchical rollups) is
-  not implemented.
+* **Deliberate** — Each rollup re-summarises the previous summary plus newly evicted turns
+  with a 700-token output budget; model failure falls back to a 600-character excerpt.
+  Details can be lost through repeated compression. Original chat rows remain available;
+  the summary is not a durable record of authorization or task commitments.
   → `joy-rs/joyczl-memory/src/compaction.rs` (`roll_forward`)
+* **One language, two audiences** — the runtime speaks English to the model *and* to the
+  human: soul seeds, prompt sections, tool results, planner prompt, the CLI's own output, the
+  app-server's errors, connector and MCP messages, the eval harness. What stays in the language
+  it was written in is *data*: model output, session titles, task text, memory pages,
+  `AGENTS.md`, a hand-edited `SOUL.md`, and the two `上下文长度` needles in
+  `looks_like_context_overflow` (a Chinese gateway words the error in Chinese; the needles must
+  match, not read well). The only switcher is the dashboard's zh/en button — there is no
+  server-side `t()`: an error message is not localised per request.
 * **Deliberate** — The six-section meter covers only what grows with a session.
   The clock, the todo board and the capability note ride in the prompt uncounted:
-  they are a few dozen constant tokens, and a growth chart that includes
-  constants stops being one.
-  → `joy-rs/joyczl-app-server/src/turn.rs` (`usage_of` call), `memory_center.rs`
+  a few dozen constant tokens each. Project conventions (`AGENTS.md` and friends,
+  `agents_md.rs`) are uncounted too, even though they are capped at 32 KB rather
+  than at a few dozen tokens — they are constant *per directory*, which is the
+  axis the band is not about. The price is explicit: in a repository with a fat
+  `AGENTS.md` the band understates the prompt by that file.
+  → `joy-rs/joyczl-app-server/src/turn.rs` (`usage_of` call), `memory_center.rs`,
+  `agents_md.rs`
 * **Deliberate** — `JOY_MAX_ITERATIONS` (default 32) is a spend budget, not a
   verdict on what is possible. The last step is a wrap-up with the tools removed,
   so hitting it yields "done / stuck / next" instead of an apology. A hard stop
@@ -486,7 +502,9 @@ no image library, no decode).
   turn's last model call takes effect on the next call or the next turn. One added just before the
   turn ends is still written to `chat_log` (`meta.steer`), so it is never lost. "Do this once you
   are done" is `turn/follow-up` instead (migration 0019 `session_queue`: survives a restart, one
-  message at a time).
+  message at a time). Claims now remain durable until completion (migration 0022).
+  After a restart, uncertain claims are retained as `needs_attention` and reported in the
+  transcript; they are never automatically replayed. Later pending messages may continue.
   → `joy-rs/joyczl-loop/src/lib.rs` (`Steering`), `joyczl-state/src/queue.rs`
 * **Deliberate** — a queued follow-up only shows up in an SSE stream once the **next turn
   starts**: one stream still covers exactly one turn, and queueing sends no notification.
@@ -539,10 +557,13 @@ no image library, no decode).
   judge entirely. Three kinds only — anything else ("the report is good") is not checkable and
   is not accepted as a condition. `FileContains` is a plain substring, never a regex.
   → `joy-rs/joyczl-agent/src/verify.rs`
-* **Boundary** — A side effect interrupted mid-flight is **never replayed**: a step left
-  `running` becomes `waiting` at boot and waits for a human. The engine would rather stop and
-  ask than send the same write twice.
-  → `joy-rs/joyczl-state/src/steps.rs` (`settle_running`), `joy-rs/joyczl-app-server/src/lib.rs`
+* **Boundary** — Recovery does not automatically replay an unknown tool batch: its
+  persisted intent suspends for reconciliation. Recorded running steps become waiting at boot.
+  MCP transport errors and timeouts also report an unknown outcome; reconnect prepares the
+  next explicit call and never automatically repeats the failed call. These are conservative
+  guards, not end-to-end exactly-once execution: operation-level external reconciliation is
+  still needed, and a model can issue a new call after reading an error.
+  → `joy-rs/joyczl-loop/src/lib.rs`, `joy-rs/joyczl-mcp/src/lib.rs`
 * **Boundary** — Budgets are checked **once per round**, before the next model call. A single
   round can overshoot a cap (one very long model call); the ledger reports the overshoot instead
   of pretending a hard cut happened mid-call.
@@ -696,3 +717,23 @@ no image library, no decode).
   A checkpoint is a crash-recovery device, so its honest span is seconds to minutes; past
   that, "today" has moved and answering costs a model call nobody asked for on that day.
   The row stays in the ledger — `abandoned` is a status, not a deletion.
+
+Recovered tasks use the normal round accounting and acceptance checks before finalization. Failed checks, exhausted budgets, accounting failures and judge failures become `needs_attention`. Fresh and recovered tasks use the same driver for budget, acceptance, goal judgement and authorized subsequent rounds. Task identity comes from the checkpoint run, not the newest task in the session.
+
+Tool batches persist intent before execution. A failed checkpoint stops execution. Recovery suspends batches with unknown results for reconciliation; it never automatically replays them. This is conservative batch-level protection, not external exactly-once delivery.
+
+Background jobs use restart-safe random IDs and persist intent before starting a process. A ledger failure prevents execution; spawn failures are recorded as failed.
+
+Quick replies retain up to 12 recent messages from their own session, capped at 8,000 characters total and 2,000 per message, plus SOUL. They still skip long-term memory retrieval and rolling summaries; they do not provide complete relationship continuity. Job completion waits up to two seconds for output pipes; incomplete drains are marked in output rather than silently treated as complete.
+
+Goal and schedule state updates and notification production are still separate commits: a crash between them can omit a notice. Background jobs commit their completion-production receipt atomically. The outbox records transport acknowledgement, not user readership.
+
+Round accounts have stable checkpoint identities (migration 0023). Task/run totals and cumulative watermarks commit atomically; recovery charges new deltas and accounting failure stops the task for review. A legacy checkpoint with prior run accounting but no round identity is suspended. Wall time lost before a crash is approximate, not a hard cap.
+
+Background jobs started in a task carry the exact host run/task identity (migration 0024); foreign, missing or terminal run bindings are rejected before process launch. Job outcome, task timeline event and completion-production receipt commit atomically (migration 0025). Requested notices retry from those receipts after enqueue failure or restart and remain tied to the original notification destination. A crash between enqueue and acknowledgement may duplicate a notice. Goal and schedule outcome production still has a separate-commit gap; job completion can wake a durable wait for an already authorized task.
+
+Task job waits persist their exact dependency set (migration 0026). A task with unfinished background work becomes suspended with the reason `waiting for background jobs`; it resumes after those jobs finish, including after restart. Unknown/interrupted or killed jobs require review. Human pause/cancel takes precedence, and cancelling a task stops its live jobs when the job host is available. Task-control admission and wake claims prevent duplicate continuations. Waiting does not grant additional permissions or goal rounds. Other kinds of external-event waits are not implemented.
+
+Plans now commit a whole immutable version with readable step rows (migration 0027). Fresh and resumed tasks restore the latest complete version, including subsequent goal rounds; legacy partial step rows are not inferred to be a complete plan. Plans remain advisory and do not change acceptance or authorization. Tool-count acceptance is scoped to the current run. A truncated or iteration-limited model response cannot finish a task; MCP uncertainty also stops remaining tools and model continuation.
+
+The `deepseek` Chat adapter preserves `reasoning_content` across tool turns and checkpoints. It supplies an empty continuation field for legacy text-only history; it cannot reconstruct previously discarded reasoning. Native continuation blocks are rejected by incompatible wire adapters rather than silently dropped. The budgeted live smoke and its sample limits are recorded in [live reliability](live-reliability.md).

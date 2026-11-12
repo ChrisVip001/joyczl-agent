@@ -127,7 +127,9 @@ async fn persist(distilled: &Value, facts: &Facts, episodes: &Episodes) -> Resul
                 // Temporary statements don't enter long-term memory — "leave it here for
                 // this session" isn't a fact about the world; keeping it files a draft.
                 if let Some(marker) = temporary_marker(content) {
-                    eprintln!("(joy) 跳过一条临时陈述（命中 '{marker}'）：{content}");
+                    eprintln!(
+                        "(joy) skipped a temporary statement (matched '{marker}'): {content}"
+                    );
                     continue;
                 }
                 // Duplicates don't count as written: `written` means "how many were new
@@ -136,7 +138,7 @@ async fn persist(distilled: &Value, facts: &Facts, episodes: &Episodes) -> Resul
                 if is_new {
                     written += 1;
                 } else {
-                    eprintln!("(joy) 跳过一条已经存在的事实：{subject} —— {content}");
+                    eprintln!("(joy) skipped a fact that already exists: {subject} — {content}");
                 }
             }
         }

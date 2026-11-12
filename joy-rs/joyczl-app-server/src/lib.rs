@@ -21,6 +21,7 @@ mod dispatch;
 mod goal;
 mod image_meta;
 mod inbox;
+mod job_delivery;
 mod jobs;
 mod ledger_writer;
 /// Guardian lock: only one app-server per home (`joyczl_app_server::lock`).
@@ -35,6 +36,7 @@ mod route;
 mod stdio;
 mod subagent;
 mod task;
+mod task_waits;
 mod trace;
 mod turn;
 
@@ -322,7 +324,7 @@ impl Server {
                 let max_rounds = self
                     .settings
                     .read()
-                    .expect("settings 锁不该中毒")
+                    .expect("the settings lock should not be poisoned")
                     .goal_max_rounds;
                 let id = format!("task{}", chrono::Local::now().timestamp_millis());
                 if let Err(e) = self
@@ -340,19 +342,19 @@ impl Server {
                     })
                     .await
                 {
-                    eprintln!("(joy) 目标没建成任务：{e}");
+                    eprintln!("(joy) the goal could not be turned into a task: {e}");
                     return None;
                 }
             }
             (Some(condition), Some(task)) => {
                 if let Err(e) = self.tasks.set_goal(&task.id, Some(condition)).await {
-                    eprintln!("(joy) 目标没写进任务台账：{e}");
+                    eprintln!("(joy) the goal was not written to the task ledger: {e}");
                 }
             }
             // Clearing: the task survives as a single-turn one (its title remains the record).
             (None, Some(task)) => {
                 if let Err(e) = self.tasks.set_goal(&task.id, None).await {
-                    eprintln!("(joy) 清目标没写进任务台账：{e}");
+                    eprintln!("(joy) clearing the goal was not written to the task ledger: {e}");
                 }
             }
             (None, None) => return None,
@@ -365,7 +367,7 @@ impl Server {
     pub(crate) fn home(&self) -> std::path::PathBuf {
         self.settings
             .read()
-            .expect("settings 锁不该中毒")
+            .expect("the settings lock should not be poisoned")
             .home
             .clone()
     }
@@ -379,7 +381,7 @@ impl Server {
         let routes_boot = joyczl_config::routes::load_routes(&settings.home);
         if routes_boot.mode == joyczl_config::routes::RouteMode::Auto {
             eprintln!(
-                "(joy) 模型路由：auto（{}，{} 个档位映射）",
+                "(joy) model routing: auto ({} profiles, {} tier mappings)",
                 joyczl_config::routes::routes_path(&settings.home).display(),
                 routes_boot.routes.len()
             );
@@ -388,7 +390,10 @@ impl Server {
         let settings = Arc::new(RwLock::new(settings));
         // The read lock is taken only inside an expression: **never held across an await** (clippy would
         // stop it, and rightly so — a read lock stuck on an await would clog the whole server).
-        let snapshot = settings.read().expect("settings 锁不该中毒").clone();
+        let snapshot = settings
+            .read()
+            .expect("the settings lock should not be poisoned")
+            .clone();
         // The merged model catalog: built-in table + the user's override file. Loaded once —
         // switching models re-resolves, it does not re-read the catalog.
         let catalog = joyczl_provider::catalog::Catalog::load(&snapshot.home);
@@ -396,7 +401,7 @@ impl Server {
             Ok(resolved) => Some(resolved),
             Err(reason) => {
                 // Log to stderr: stdout is the protocol channel and must not mix in logs.
-                eprintln!("(joy) 模型还没配好，turn/* 暂不可用 —— {reason}");
+                eprintln!("(joy) no model configured yet, turn/* unavailable — {reason}");
                 None
             }
         };
@@ -410,7 +415,7 @@ impl Server {
                 joyczl_memory::skills::SkillLoader::dirs_for(&snapshot.home),
             );
             for (skill, missing) in loader.dangling_dependencies() {
-                eprintln!("(joy) 技能 '{skill}' 依赖的 '{missing}' 不在，它不参与隐式触发");
+                eprintln!("(joy) skill '{skill}' depends on '{missing}', which is missing; it takes no part in implicit triggering");
             }
         }
 
@@ -424,12 +429,12 @@ impl Server {
                 )),
             ) {
                 Some(hooks) => {
-                    eprintln!("(joy) hooks 已启用：{}", hooks.summary());
+                    eprintln!("(joy) hooks enabled: {}", hooks.summary());
                     Some(Arc::new(hooks))
                 }
                 None => {
                     eprintln!(
-                        "(joy) JOY_HOOKS=1 但 {} 不存在或一条都没配 —— 这次不启用",
+                        "(joy) JOY_HOOKS=1 but {} does not exist or has no hooks — not enabling this time",
                         snapshot.home.join("hooks.json").display()
                     );
                     None
@@ -459,11 +464,11 @@ impl Server {
         if let Ok(0) = ledger.count().await {
             match joyczl_state::ledger::backfill_from_chat(&pool).await {
                 Ok(report) if report.turns > 0 => eprintln!(
-                    "(joy) 首次启动：把 {} 个会话的 {} 轮历史回填进账本（标为 folded —— 当时的工具输出只剩摘要）",
+                    "(joy) first start: backfilling {} turns from {} sessions into the ledger (marked folded — the tool output of those turns survives only as a summary)",
                     report.sessions, report.turns
                 ),
                 Ok(_) => {}
-                Err(e) => eprintln!("(joy) 账本回填失败（不影响启动，可稍后跑 `joy memory backfill`）：{e}"),
+                Err(e) => eprintln!("(joy) ledger backfill failed (not blocking startup; run `joy memory backfill` later): {e}"),
             }
         }
         let usage = joyczl_state::Usage::new(pool.clone());
@@ -481,7 +486,7 @@ impl Server {
 
         if snapshot.delegate_enabled {
             eprintln!(
-                "(joy) 子代理已启用：delegate_task 可用了（子代理不能再派生子代理、不参与批准）"
+                "(joy) subagents enabled: delegate_task is available (a subagent cannot delegate further and is not approval-gated)"
             );
             tools.register_exclusive(joyczl_tools::subagent::delegate_task(Arc::new(
                 subagent::Delegated {
@@ -551,22 +556,40 @@ impl Server {
     /// There is no goal to restore any more: a goal is a column on the row, so step 3 already
     /// brings it back with everything else.
     async fn restore_tasks(&self) {
+        // Ledger reconciliation is independent of whether execution is enabled this boot.
+        if self.jobs.is_none() {
+            match joyczl_state::Jobs::new(self.pool.clone())
+                .reconcile_interrupted()
+                .await
+            {
+                Ok(jobs) => {
+                    for job in jobs {
+                        eprintln!(
+                            "(joy) job {} interrupted at restart; execution host is disabled",
+                            job.id
+                        );
+                    }
+                }
+                Err(e) => eprintln!("(joy) disabled job host reconciliation failed: {e}"),
+            }
+        }
+
         match self
             .steps
-            .settle_running("进程在这一步落盘前退出，结果未知 —— 需要你确认要不要重做")
+            .settle_running("the process exited before this step was recorded, so the outcome is unknown — confirm whether to redo it")
             .await
         {
             Ok(0) => {}
             Ok(count) => eprintln!(
-                "(joy) 对账：{count} 个执行步骤在结果落盘前中断，已标 waiting（不重放，等你确认）"
+                "(joy) reconcile: {count} step(s) were interrupted before their result was recorded; marked waiting (not replayed — waiting on you)"
             ),
-            Err(e) => eprintln!("(joy) 步骤对账读不了库（不挡启动）：{e}"),
+            Err(e) => eprintln!("(joy) step reconciliation could not read the database (not blocking startup): {e}"),
         }
         match self.runs.open_runs().await {
             Ok(runs) => {
                 for run in runs {
                     eprintln!(
-                        "(joy) 对账：执行 {}（任务 {}）上次没跑完，标 waiting",
+                        "(joy) reconcile: run {} (task {}) did not finish last time; marked waiting",
                         run.id, run.task_id
                     );
                     let _ = self
@@ -574,44 +597,94 @@ impl Server {
                         .close(
                             &run.id,
                             joyczl_state::RunStatus::Waiting,
-                            Some("进程重启时还没收尾，等你确认"),
+                            Some("the process restarted before this run finished; waiting for confirmation"),
                         )
                         .await;
                 }
             }
-            Err(e) => eprintln!("(joy) 执行记录对账读不了库（不挡启动）：{e}"),
+            Err(e) => eprintln!("(joy) run-ledger reconciliation could not read the database (not blocking startup): {e}"),
         }
         match self.tasks.reconcile_restart().await {
             Ok(rows) if !rows.is_empty() => {
                 for row in &rows {
                     eprintln!(
-                        "(joy) 对账：任务「{}」在进程退出时还在跑，先标挂起（会话 {}）",
+                        "(joy) reconcile: task \"{}\" was still running when the process exited; marked suspended (session {})",
                         row.title,
-                        row.session_id.as_deref().unwrap_or("（无会话）")
+                        row.session_id.as_deref().unwrap_or("(no session)")
                     );
                 }
             }
             Ok(_) => {}
-            Err(e) => eprintln!("(joy) 任务对账读不了库（不挡启动）：{e}"),
+            Err(e) => eprintln!(
+                "(joy) task reconciliation could not read the database (not blocking startup): {e}"
+            ),
+        }
+        match self.queue.reconcile_interrupted().await {
+            Ok(rows) => {
+                for row in rows {
+                    let note = "(this queued instruction was interrupted; its outcome is unknown. Review the transcript and confirm before retrying.)";
+                    eprintln!(
+                        "(joy) queued instruction {} in session {} needs attention after restart",
+                        row.id, row.session_id
+                    );
+                    if let Err(e) = self
+                        .chat
+                        .append_exchange_for(
+                            &row.message,
+                            note,
+                            &row.session_id,
+                            "app-server",
+                            None,
+                            None,
+                        )
+                        .await
+                    {
+                        eprintln!("(joy) interrupted queue notice could not be recorded: {e}");
+                    }
+                }
+            }
+            Err(e) => eprintln!("(joy) queued instruction reconciliation failed: {e}"),
+        }
+        match joyczl_state::waits::JobWaits::new(self.pool.clone())
+            .pending()
+            .await
+        {
+            Ok(waits) => {
+                let (sink, receiver) = EventSink::channel();
+                drop(receiver);
+                for wait in waits {
+                    eprintln!(
+                        "(joy) restored background-job wait for task {}",
+                        wait.task_id
+                    );
+                    crate::task_waits::arm(self.clone(), sink.clone(), wait);
+                }
+            }
+            Err(e) => eprintln!("(joy) durable job waits could not be restored: {e}"),
         }
         // A queued follow-up is a promise made before the restart: "do this when you are done".
         // Handing it back to a turn is the difference between a queue and a note to self.
         match self.queue.sessions_with_pending().await {
             Ok(sessions) => {
                 for session in sessions {
-                    eprintln!("(joy) 对账：会话 {session} 还有排队消息，接着跑");
+                    eprintln!("(joy) reconcile: session {session} still has queued messages; it carries on");
                     let server = self.clone();
                     tokio::spawn(async move { crate::turn::drain_queue(&server, &session).await });
                 }
             }
-            Err(e) => eprintln!("(joy) 排队消息读不了库（不挡启动）：{e}"),
+            Err(e) => {
+                eprintln!("(joy) queued messages could not be read (not blocking startup): {e}")
+            }
         }
     }
 
     /// The session's write-section lock — created on first use, held forever.
     /// Two hash lookups are nothing next to what the lock actually protects.
     pub(crate) fn session_write_lock(&self, session_id: &str) -> Arc<AsyncMutex<()>> {
-        let mut locks = self.session_locks.lock().expect("session_locks 中毒");
+        let mut locks = self
+            .session_locks
+            .lock()
+            .expect("the session_locks should not be poisoned");
         locks
             .entry(session_id.to_string())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
@@ -711,7 +784,7 @@ impl Server {
         let waiting = self
             .approvals
             .lock()
-            .expect("approvals 锁不该中毒")
+            .expect("the approvals lock should not be poisoned")
             .get_mut(turn_id)
             .and_then(|per_turn| per_turn.remove(request_id));
         let Some(waiting) = waiting else {
@@ -772,8 +845,8 @@ impl Server {
             ..Default::default()
         };
         match self.apply_config_patch(&patch) {
-            Ok(_) => eprintln!("(joy) 已记住这条命令：{command}（已写入 settings.json，立即生效）"),
-            Err(why) => eprintln!("(joy) 没能记住这条命令：{why}"),
+            Ok(_) => eprintln!("(joy) remembered this command: {command} (written to settings.json; effective now)"),
+            Err(why) => eprintln!("(joy) could not remember this command: {why}"),
         }
     }
 
@@ -804,9 +877,9 @@ impl Server {
         };
         match self.apply_config_patch(&patch) {
             Ok(_) => {
-                eprintln!("(joy) 已记住这个目录：{entry}（写这个目录不再逐次确认）")
+                eprintln!("(joy) remembered this directory: {entry} (writing here will not ask each time)")
             }
-            Err(why) => eprintln!("(joy) 没能记住这个目录：{why}"),
+            Err(why) => eprintln!("(joy) could not remember this directory: {why}"),
         }
     }
 
@@ -823,7 +896,10 @@ impl Server {
     }
 
     pub fn settings(&self) -> Settings {
-        self.settings.read().expect("settings 锁不该中毒").clone()
+        self.settings
+            .read()
+            .expect("the settings lock should not be poisoned")
+            .clone()
     }
 
     // ---- Read surface for in-process clients (terminal REPL) ------------------------------
@@ -858,15 +934,24 @@ impl Server {
 
     /// A snapshot of the current provider resolution (None when no key is configured).
     pub fn resolved(&self) -> Option<Resolved> {
-        self.resolved.read().expect("resolved 锁不该中毒").clone()
+        self.resolved
+            .read()
+            .expect("the resolved lock should not be poisoned")
+            .clone()
     }
 
     pub(crate) fn set_settings(&self, settings: Settings) {
-        *self.settings.write().expect("settings 锁不该中毒") = settings;
+        *self
+            .settings
+            .write()
+            .expect("the settings lock should not be poisoned") = settings;
     }
 
     pub(crate) fn set_resolved(&self, resolved: Option<Resolved>) {
-        *self.resolved.write().expect("resolved 锁不该中毒") = resolved;
+        *self
+            .resolved
+            .write()
+            .expect("the resolved lock should not be poisoned") = resolved;
     }
 
     /// Inject a provider resolution. The injection point for eval and tests: the normal path goes
@@ -874,6 +959,18 @@ impl Server {
     /// pin harness behavior offline and deterministically — that is when one is plugged in from outside.
     pub fn install_provider(&self, resolved: Resolved) {
         self.set_resolved(Some(resolved));
+    }
+
+    /// Restrict an embedded host's tool surface. This can only remove capabilities.
+    pub fn restrict_tools(&mut self, allowed: &[&str]) {
+        let names: Vec<String> = self.tools.names().into_iter().map(str::to_string).collect();
+        let mut tools = (*self.tools).clone();
+        for name in names {
+            if !allowed.contains(&name.as_str()) {
+                tools = tools.without(&name);
+            }
+        }
+        self.tools = Arc::new(tools);
     }
 
     /// Claim a session for one turn, handing out its cancellation token and steering channel.
@@ -887,7 +984,10 @@ impl Server {
         turn_id: &str,
         session_id: &str,
     ) -> Result<(Arc<Interrupt>, Arc<Mutex<Steering>>), String> {
-        let mut turns = self.turns.lock().expect("turns 锁不该中毒");
+        let mut turns = self
+            .turns
+            .lock()
+            .expect("the turns lock should not be poisoned");
         if let Some((holder, _)) = turns.iter().find(|(_, turn)| turn.session_id == session_id) {
             return Err(holder.clone());
         }
@@ -910,7 +1010,7 @@ impl Server {
     pub(crate) fn steering_of(&self, turn_id: &str) -> Option<Arc<Mutex<Steering>>> {
         self.turns
             .lock()
-            .expect("turns 锁不该中毒")
+            .expect("the turns lock should not be poisoned")
             .get(turn_id)
             .map(|turn| turn.steering.clone())
     }
@@ -921,12 +1021,18 @@ impl Server {
     /// new turn silently would be a lie about what happened). `Ok` carries the turn id and how
     /// many additions it has accepted, this one included.
     pub(crate) fn steer(&self, session_id: &str, message: &str) -> Result<(String, i32), ()> {
-        let turns = self.turns.lock().expect("turns 锁不该中毒");
+        let turns = self
+            .turns
+            .lock()
+            .expect("the turns lock should not be poisoned");
         let Some((turn_id, turn)) = turns.iter().find(|(_, turn)| turn.session_id == session_id)
         else {
             return Err(());
         };
-        let mut steering = turn.steering.lock().expect("steering 锁不该中毒");
+        let mut steering = turn
+            .steering
+            .lock()
+            .expect("the steering lock should not be poisoned");
         steering.push(message);
         Ok((turn_id.clone(), steering.all().len() as i32))
     }
@@ -949,7 +1055,10 @@ impl Server {
     /// The turns running right now (optionally for one session), oldest first — a list that
     /// reshuffles between two polls reads as "something changed" when nothing did.
     pub(crate) fn active_turns(&self, session: Option<&str>) -> Vec<(String, String, String)> {
-        let turns = self.turns.lock().expect("turns 锁不该中毒");
+        let turns = self
+            .turns
+            .lock()
+            .expect("the turns lock should not be poisoned");
         let mut rows: Vec<(String, String, String)> = turns
             .iter()
             .filter(|(_, turn)| session.is_none_or(|id| turn.session_id == id))
@@ -961,12 +1070,15 @@ impl Server {
 
     /// Remove a turn. Once finished, there is nothing left to interrupt.
     pub(crate) fn finish_turn(&self, turn_id: &str) {
-        self.turns.lock().expect("turns 锁不该中毒").remove(turn_id);
+        self.turns
+            .lock()
+            .expect("the turns lock should not be poisoned")
+            .remove(turn_id);
         // Same principle: unanswered approval requests for this turn are invalidated too (their receiver
         // is already gone; keeping them only takes up space).
         self.approvals
             .lock()
-            .expect("approvals 锁不该中毒")
+            .expect("the approvals lock should not be poisoned")
             .remove(turn_id);
     }
 
@@ -978,7 +1090,7 @@ impl Server {
         let interrupt = self
             .turns
             .lock()
-            .expect("turns 锁不该中毒")
+            .expect("the turns lock should not be poisoned")
             .get(turn_id)
             .map(|turn| turn.interrupt.clone());
         let Some(interrupt) = interrupt else {
@@ -986,7 +1098,7 @@ impl Server {
         };
         self.suspending
             .lock()
-            .expect("suspending 锁不该中毒")
+            .expect("the suspending lock should not be poisoned")
             .insert(turn_id.to_string());
         interrupt.cancel();
         true
@@ -996,7 +1108,7 @@ impl Server {
     pub(crate) fn take_suspending(&self, turn_id: &str) -> bool {
         self.suspending
             .lock()
-            .expect("suspending 锁不该中毒")
+            .expect("the suspending lock should not be poisoned")
             .remove(turn_id)
     }
 
@@ -1006,7 +1118,7 @@ impl Server {
         let found = self
             .turns
             .lock()
-            .expect("turns 锁不该中毒")
+            .expect("the turns lock should not be poisoned")
             .get(turn_id)
             .map(|turn| turn.interrupt.clone());
         match found {
@@ -1031,7 +1143,7 @@ impl Server {
         let mut saved = joyczl_config::load_patch(&home);
         saved.merge_newer(patch);
         joyczl_config::save_patch(&home, &saved)
-            .map_err(|e| format!("写 settings.json 失败：{e}"))?;
+            .map_err(|e| format!("could not write settings.json: {e}"))?;
 
         let mut settings = self.settings();
         joyczl_config::apply_patch(&saved, &mut settings);
@@ -1041,7 +1153,7 @@ impl Server {
         let resolved = match joyczl_provider::resolve(&settings) {
             Ok(resolved) => Some(resolved),
             Err(reason) => {
-                eprintln!("(joy) config/write 后模型还没配好，turn/* 暂不可用 —— {reason}");
+                eprintln!("(joy) after config/write no model is configured; turn/* unavailable — {reason}");
                 None
             }
         };
@@ -1076,9 +1188,7 @@ pub async fn open(settings: &Settings) -> Result<Server> {
     // gets reported in this one place, and it reports which variable/field is wrong.
     if let Err(why) = settings.validate() {
         anyhow::bail!(
-            "配置有问题，Joy 不启动：{why}\n\
-             （改好那个变量，或删掉 <home>/settings.json 里对应的覆盖；\
-             边界表见 joyczl-config 的 BOUNDS 与 docs/configuration.md）"
+            "The configuration has a problem, so Joy will not start: {why}\n( fix that variable, or drop the override in <home>/settings.json; the boundary table is in joyczl-config's BOUNDS and docs/configuration.md)"
         );
     }
 
@@ -1121,8 +1231,7 @@ async fn builtin_tools(
     if !joyczl_tools::web::search_ready() {
         // Not silent: the model's tool table lost an entry — the human should know why.
         eprintln!(
-            "(joy) 搜索未就绪：没有配置搜索 key 且 DDG 已关（JOY_SEARCH_DDG=0），\
-             search_web 未注册"
+            "(joy) search not ready: no search key configured and DDG is off (JOY_SEARCH_DDG=0); search_web was not registered"
         );
     }
     let mut jobs_handle: Option<Arc<dyn joyczl_tools::jobs::JobRegistry>> = None;
@@ -1130,25 +1239,25 @@ async fn builtin_tools(
     // see its name. The highest-privilege thing there is; the switch must be pressed by the user's own hand.
     if settings.exec_enabled {
         let sandbox = if joyczl_tools::exec::sandbox_available() {
-            "可用"
+            "available"
         } else {
-            "不可用（命令会被拒绝执行）"
+            "unavailable (commands will be refused)"
         };
         let allow = if settings.exec_allow.is_empty() {
-            "空（什么都不放行）".to_string()
+            "empty (nothing is allowed)".to_string()
         } else {
             settings.exec_allow.join(", ")
         };
         let network = if settings.exec_network {
-            "可联网"
+            "network allowed"
         } else {
-            "沙箱内断网（JOY_EXEC_NETWORK=1 可开）"
+            "network cut inside the sandbox (JOY_EXEC_NETWORK=1 enables it)"
         };
         let extra = if settings.exec_writable_roots.is_empty() {
             String::new()
         } else {
             format!(
-                "，额外可写根：{}",
+                ", extra writable roots: {}",
                 settings
                     .exec_writable_roots
                     .iter()
@@ -1159,14 +1268,15 @@ async fn builtin_tools(
         };
         let approval = if settings.approval == "on-request" {
             format!(
-                "，没匹配上时问你（{}秒没人答就拒绝）",
+                ", asks you when nothing matches ({}s without an answer counts as a denial)",
                 settings.approval_timeout_secs
             )
         } else {
-            "，没匹配上直接拒绝（JOY_APPROVAL=on-request 可以改成问一句）".to_string()
+            ", refuses outright when nothing matches (JOY_APPROVAL=on-request asks instead)"
+                .to_string()
         };
         eprintln!(
-            "(joy) 执行工具已启用：沙箱 {sandbox}，{network}，放行规则：{allow}{approval}{extra}"
+            "(joy) exec tool enabled: sandbox {sandbox}, {network}, allow rules: {allow}{approval}{extra}"
         );
         // Say up front what the sandbox will *not* write: the home is the control plane
         // (settings.json decides this very allow table), so only the workspace and the
@@ -1176,7 +1286,7 @@ async fn builtin_tools(
                 .dropped;
         if !dropped.is_empty() {
             eprintln!(
-                "(joy) 这些额外可写根被拒绝（它们会交出控制面：home 本身、home 的祖先或 HOME_CONTROL 里的条目）：{}",
+                "(joy) these extra writable roots were refused (they would hand over the control plane: home itself, an ancestor of home, or an entry in HOME_CONTROL): {}",
                 dropped
                     .iter()
                     .map(|p| p.display().to_string())
@@ -1213,7 +1323,7 @@ async fn builtin_tools(
         tools.register(joyczl_tools::jobs::job_kill(Some(jobs.clone())));
         jobs_handle = Some(jobs);
         eprintln!(
-            "(joy) 后台作业可用：run_command 的 background=true，配 job_output / job_list / job_kill"
+            "(joy) background jobs available: run_command with background=true, plus job_output / job_list / job_kill"
         );
     }
     // File-write tools: **off by default**, registered only when JOY_WRITE=1 — same discipline
@@ -1232,9 +1342,7 @@ async fn builtin_tools(
         tools.register_exclusive(joyczl_tools::fs_write::edit(policy.clone()));
         tools.register_exclusive(joyczl_tools::patch::apply_patch(policy));
         eprintln!(
-            "(joy) 文件写入工具已启用：write_file / edit / apply_patch（可写范围 = 本轮选的\
-             工作目录 + 额外可写根；没选目录就一处也写不了；JOY_APPROVAL=on-request 时每次\
-             写入都会问）"
+            "(joy) file-writing tools enabled: write_file / edit / apply_patch (writable = this turn's working directory + extra roots; with no directory picked nothing can be written; with JOY_APPROVAL=on-request every write asks)"
         );
     }
     // Connectors: `<home>/connectors.json` **is** the switch — no file, no connector tools
@@ -1251,43 +1359,43 @@ async fn builtin_tools(
                         feishu.clone(),
                         settings.home.clone(),
                     );
-                    eprintln!("(joy) 飞书以用户身份发送：用户 token 在后台自动续期");
+                    eprintln!("(joy) Feishu sends as the user: the user token renews itself in the background");
                 }
                 if feishu.allow_recipients.is_empty() {
                     eprintln!(
-                        "(joy) 连接器 feishu 配置了但白名单是空的（谁都不能收）—— \
-                         feishu_send 未注册；在 {} 里填 allow_recipients",
+                        "(joy) connector feishu is configured but its allowlist is empty (nobody can receive) — feishu_send was not registered; fill in allow_recipients in {}",
                         settings.home.join("connectors.json").display()
                     );
                 } else {
                     let mode = if feishu.live {
-                        "live（每次实际发送都会问人）"
+                        "live (every send asks a person first)"
                     } else {
-                        "草稿模式（只写 outbox，不发）"
+                        "draft mode (writes to outbox only, never sends)"
                     };
                     tools.register(joyczl_connector::feishu_send_tool(feishu));
-                    eprintln!("(joy) 连接器 feishu 已启用：feishu_send —— {mode}");
+                    eprintln!("(joy) connector feishu enabled: feishu_send — {mode}");
                 }
             }
             if let Some(email) = config.email {
                 if email.allow_recipients.is_empty() {
                     eprintln!(
-                        "(joy) 连接器 email 配置了但白名单是空的（谁都不能发）—— \
-                         email_send 未注册；在 {} 里填 allow_recipients",
+                        "(joy) connector email is configured but its allowlist is empty (nobody can send) — email_send was not registered; fill in allow_recipients in {}",
                         settings.home.join("connectors.json").display()
                     );
                 } else {
                     let mode = if email.live {
-                        "live（每次实际发送都会问人）"
+                        "live (every send asks a person first)"
                     } else {
-                        "草稿模式（只写 outbox，不发）"
+                        "draft mode (writes to outbox only, never sends)"
                     };
                     tools.register(joyczl_connector::email_send_tool(email));
-                    eprintln!("(joy) 连接器 email 已启用：email_send —— {mode}");
+                    eprintln!("(joy) connector email enabled: email_send — {mode}");
                 }
             }
         }
-        Err(e) => eprintln!("(joy) 连接器配置有问题，未注册任何连接器：{e}"),
+        Err(e) => eprintln!(
+            "(joy) the connector configuration has a problem; no connectors registered: {e}"
+        ),
     }
     // Sweep spill/ while at it at startup: keep only the last 7 days (see the "no quota rotation" item
     // in docs/limitations.md). Unrelated to the exec switch — if the files are there, they get swept.
@@ -1308,7 +1416,7 @@ async fn builtin_tools(
     }
     if !servers.is_empty() {
         eprintln!(
-            "(joy) MCP：接上 {} 个服务器（{count} 个工具）：{}",
+            "(joy) MCP: connected {} servers ({count} tools): {}",
             servers.len(),
             servers.join(", ")
         );
@@ -1356,6 +1464,8 @@ pub(crate) fn tool_ctx(
     injected: Injections,
 ) -> ToolCtx {
     ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         facts: facts.clone(),

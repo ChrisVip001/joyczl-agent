@@ -40,7 +40,10 @@ pub fn acquire(home: &Path) -> Result<DaemonLock, String> {
             Ok(mut file) => {
                 write!(file, "{}", std::process::id()).map_err(|e| {
                     let _ = std::fs::remove_file(&path);
-                    format!("锁文件写不进去（{}）：{e}", path.display())
+                    format!(
+                        "the lock file could not be written ({}): {e}",
+                        path.display()
+                    )
                 })?;
                 return Ok(DaemonLock { path });
             }
@@ -57,14 +60,13 @@ pub fn acquire(home: &Path) -> Result<DaemonLock, String> {
                 match pid.parse::<u32>() {
                     Ok(pid) if process_alive(pid) => {
                         return Err(format!(
-                            "这个 home 的 app-server 已经在跑（pid {pid}，锁文件 {}）。\
-                             先停掉它，或用别的 JOY_HOME。",
+                            "An app-server for this home is already running (pid {pid}, lock file {}). Stop it first, or use a different JOY_HOME.",
                             path.display()
                         ));
                     }
                     _ => {
                         eprintln!(
-                            "(joy) 清掉残留的守护锁（pid {pid} 已不存在）：{}",
+                            "(joy) cleared a stale daemon lock (pid {pid} no longer exists): {}",
                             path.display()
                         );
                         let _ = std::fs::remove_file(&path);
@@ -72,13 +74,16 @@ pub fn acquire(home: &Path) -> Result<DaemonLock, String> {
                 }
             }
             Err(e) => {
-                return Err(format!("锁文件建不了（{}）：{e}", path.display()));
+                return Err(format!(
+                    "the lock file could not be created ({}): {e}",
+                    path.display()
+                ));
             }
         }
         let _ = attempt;
     }
     Err(format!(
-        "锁文件反复建不出来（{}）—— 检查目录权限",
+        "the lock file could not be created after several attempts ({}) — check the directory permissions",
         path.display()
     ))
 }

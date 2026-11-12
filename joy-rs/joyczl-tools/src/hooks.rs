@@ -204,7 +204,9 @@ impl Hooks {
         let parsed: Value = match serde_json::from_str(&text) {
             Ok(parsed) => parsed,
             Err(e) => {
-                eprintln!("(joy) hooks.json 解析不了（{e}）—— 这次不启用 hooks");
+                eprintln!(
+                    "(joy) hooks.json could not be parsed ({e}) — hooks are not enabled this time"
+                );
                 return None;
             }
         };
@@ -214,7 +216,7 @@ impl Hooks {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if disable_all {
-            eprintln!("(joy) hooks.json 里 disableAllHooks = true —— 一条都不跑");
+            eprintln!("(joy) disableAllHooks = true in hooks.json — none of them run");
             return Some(Self {
                 entries: HashMap::new(),
                 disable_all: true,
@@ -231,11 +233,11 @@ impl Hooks {
         if let Some(map) = parsed.get("hooks").and_then(Value::as_object) {
             for (name, list) in map {
                 let Some(event) = HookEvent::parse(name) else {
-                    eprintln!("(joy) hooks.json 里有不认识的事件 '{name}' —— 跳过");
+                    eprintln!("(joy) hooks.json has an unknown event '{name}' — skipped");
                     continue;
                 };
                 let Some(list) = list.as_array() else {
-                    eprintln!("(joy) hooks.json 的 '{name}' 该是一个数组 —— 跳过");
+                    eprintln!("(joy) '{name}' in hooks.json should be an array — skipped");
                     continue;
                 };
                 for raw in list {
@@ -251,13 +253,13 @@ impl Hooks {
                         (None, Some(url)) => (None, Some(url)),
                         (Some(_), Some(_)) => {
                             eprintln!(
-                                "(joy) hooks.json 的 '{name}' 里有一条同时写了 command 和 url —— 跳过"
+                                "(joy) an entry under '{name}' in hooks.json sets both command and url — skipped"
                             );
                             continue;
                         }
                         (None, None) => {
                             eprintln!(
-                                "(joy) hooks.json 的 '{name}' 里有一条没写 command 也没写 url —— 跳过"
+                                "(joy) an entry under '{name}' in hooks.json sets neither command nor url — skipped"
                             );
                             continue;
                         }
@@ -307,7 +309,7 @@ impl Hooks {
     pub fn summary(&self) -> String {
         if self.disable_all {
             return format!(
-                "{} 里 disableAllHooks = true，一条都不跑",
+                "disableAllHooks = true in {}, so none of them run",
                 self.path.display()
             );
         }
@@ -318,7 +320,7 @@ impl Hooks {
             .collect();
         per_event.sort();
         format!(
-            "{} 条（{}），来自 {}",
+            "{} of them ({}), from {}",
             self.count,
             per_event.join("、"),
             self.path.display()
@@ -352,8 +354,7 @@ impl Hooks {
                 continue;
             }
             if self.changed() {
-                let why = "hooks.json 在运行中被改过了 —— 这次不执行（改动可能是别的进程写的；\
-                           重启 Joy 会按新内容装载）。"
+                let why = "hooks.json was changed while running — not executing this time (the change may come from another process; restarting Joy loads the new content)."
                     .to_string();
                 eprintln!("(joy) {why}");
                 outcome.note = Some(why);
@@ -375,7 +376,7 @@ impl Hooks {
         let command = entry
             .command
             .as_deref()
-            .expect("command/url 二选一由加载器保证");
+            .expect("the loader guarantees exactly one of command/url");
         let mut body = payload.clone();
         if let Some(object) = body.as_object_mut() {
             object.insert("hook_event_name".to_string(), json!(event.name()));
@@ -394,7 +395,7 @@ impl Hooks {
             Ok(child) => child,
             Err(e) => {
                 // Spawn failures always fail-open: a wrong path must not paralyze all tools (but say it).
-                let note = format!("hook '{}' 起不来（{e}）—— 跳过", entry.label());
+                let note = format!("hook '{}' would not start ({e}) — skipped", entry.label());
                 eprintln!("(joy) {note}");
                 return HookOutcome::note(note);
             }
@@ -416,19 +417,19 @@ impl Hooks {
         let output = match waited {
             Ok(Ok(output)) => output,
             Ok(Err(e)) => {
-                let note = format!("hook '{}' 跑挂了（{e}）", entry.label());
+                let note = format!("hook '{}' failed ({e})", entry.label());
                 eprintln!("(joy) {note}");
                 return HookOutcome::note(note);
             }
             Err(_) => {
                 let note = format!(
-                    "hook '{}' 超过 {} 秒没结束 —— {}",
+                    "hook '{}' did not finish within {} seconds — {}",
                     entry.label(),
                     timeout.as_secs(),
                     if event.is_policy() {
-                        "策略事件，按阻断处理"
+                        "a policy event, treated as blocking"
                     } else {
-                        "观察事件，放行"
+                        "an observation event, allowed"
                     }
                 );
                 eprintln!("(joy) {note}");
@@ -452,7 +453,7 @@ impl Hooks {
             2 => {
                 let reason = json_reason(&stdout).unwrap_or_else(|| {
                     if stderr.is_empty() {
-                        format!("hook '{}' 拒绝了这次动作", entry.label())
+                        format!("hook '{}' refused this action", entry.label())
                     } else {
                         stderr.clone()
                     }
@@ -466,10 +467,10 @@ impl Hooks {
             // Other exit codes: non-blocking error — note it, the action proceeds.
             other => {
                 let note = format!(
-                    "hook '{}' 以退出码 {other} 结束（只有 2 才是阻断）：{}",
+                    "hook '{}' exited with code {other} (only 2 blocks): {}",
                     entry.label(),
                     if stderr.is_empty() {
-                        "没有输出"
+                        "no output"
                     } else {
                         &stderr
                     }
@@ -516,12 +517,12 @@ impl Hooks {
             Ok(response) => response,
             Err(e) if e.is_timeout() => {
                 let note = format!(
-                    "hook <{url}> 超过 {} 秒没应答 —— {}",
+                    "hook <{url}> did not answer within {} seconds — {}",
                     timeout.as_secs(),
                     if event.is_policy() {
-                        "策略事件，按阻断处理"
+                        "a policy event, treated as blocking"
                     } else {
-                        "观察事件，放行"
+                        "an observation event, allowed"
                     }
                 );
                 eprintln!("(joy) {note}");
@@ -535,7 +536,7 @@ impl Hooks {
                 return HookOutcome::note(note);
             }
             Err(e) => {
-                let note = format!("hook <{url}> 连不上（{e}）—— 跳过");
+                let note = format!("hook <{url}> is unreachable ({e}) — skipped");
                 eprintln!("(joy) {note}");
                 return HookOutcome::note(note);
             }
@@ -544,7 +545,9 @@ impl Hooks {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if !status.is_success() {
-            let note = format!("hook <{url}> 返回 HTTP {status}：这次应答不算数 —— 跳过");
+            let note = format!(
+                "hook <{url}> returned HTTP {status}: that answer does not count — skipped"
+            );
             eprintln!("(joy) {note}");
             return HookOutcome::note(note);
         }
@@ -581,7 +584,7 @@ fn parse_decision(stdout: &str, stderr: &str, entry: &Entry, event: HookEvent) -
             value
                 .get("reason")
                 .and_then(Value::as_str)
-                .unwrap_or("hook 拒绝了这次动作")
+                .unwrap_or("a hook refused this action")
                 .to_string(),
         );
     }
@@ -613,7 +616,7 @@ fn parse_decision(stdout: &str, stderr: &str, entry: &Entry, event: HookEvent) -
                 .get("hookSpecificOutput")
                 .and_then(|v| v.get("permissionDecisionReason"))
                 .and_then(Value::as_str)
-                .unwrap_or("hook 拒绝了这次动作")
+                .unwrap_or("a hook refused this action")
                 .to_string()
         });
     }

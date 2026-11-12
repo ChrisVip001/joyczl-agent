@@ -219,10 +219,10 @@ fn check_bound(key: &str, value: i64) -> Result<(), String> {
     let bound = BOUNDS
         .iter()
         .find(|b| b.env_name == key || b.patch_name == Some(key))
-        .expect("边界表里没有这个旋钮 —— 这是代码 bug，不是用户配错了");
+        .expect("no such knob in the bounds table — that is a code bug, not a misconfiguration");
     if value < bound.min || value > bound.max {
         return Err(format!(
-            "{key} 应该在 {} 到 {} 之间，收到 {value}",
+            "{key} must be between {} and {}, got {value}",
             bound.min, bound.max
         ));
     }
@@ -660,7 +660,7 @@ impl Settings {
         check_bound("JOY_CONTEXT_WARN_RATIO", self.context_warn_ratio as i64)?;
         if !matches!(self.approval.as_str(), "never" | "on-request") {
             return Err(format!(
-                "JOY_APPROVAL 只能是 never 或 on-request，收到 '{}'",
+                "JOY_APPROVAL must be never or on-request, got '{}'",
                 self.approval
             ));
         }
@@ -668,13 +668,13 @@ impl Settings {
         // silently fall back to the default (that is the failure mode this table exists for).
         if !matches!(self.soul_mode.as_str(), "auto" | "thin" | "full") {
             return Err(format!(
-                "JOY_SOUL_MODE 只能是 auto / thin / full，收到 '{}'",
+                "JOY_SOUL_MODE must be auto / thin / full, got '{}'",
                 self.soul_mode
             ));
         }
         if !matches!(self.tool_policy.as_str(), "eager" | "deferred") {
             return Err(format!(
-                "JOY_TOOL_POLICY 只能是 eager / deferred，收到 '{}'",
+                "JOY_TOOL_POLICY must be eager / deferred, got '{}'",
                 self.tool_policy
             ));
         }
@@ -684,13 +684,12 @@ impl Settings {
         if let Some(window) = self.context_window {
             if !(1_024..=10_000_000).contains(&window) {
                 return Err(format!(
-                    "JOY_CONTEXT_WINDOW 应该在 1024 到 10000000 之间，收到 {window}"
+                    "JOY_CONTEXT_WINDOW must be between 1024 and 10000000, got {window}"
                 ));
             }
             if self.max_tokens as u32 >= window {
                 return Err(format!(
-                    "JOY_MAX_TOKENS（{}）不能大于等于 JOY_CONTEXT_WINDOW（{window}）—— \
-                     那样连答案都放不下",
+                    "JOY_MAX_TOKENS ({}) must be smaller than JOY_CONTEXT_WINDOW ({window}) — otherwise even the answer will not fit",
                     self.max_tokens
                 ));
             }
@@ -699,7 +698,7 @@ impl Settings {
         // Ratio-type knobs validated separately (not integers, so they cannot enter BOUNDS).
         if !(0.05..=0.95).contains(&self.compact_threshold) {
             return Err(format!(
-                "JOY_COMPACT_THRESHOLD 应该在 0.05 到 0.95 之间，收到 {}",
+                "JOY_COMPACT_THRESHOLD must be between 0.05 and 0.95, got {}",
                 self.compact_threshold
             ));
         }
@@ -710,13 +709,13 @@ impl Settings {
         for root in &self.exec_writable_roots {
             if !root.is_absolute() {
                 return Err(format!(
-                    "JOY_EXEC_WRITABLE_ROOTS 里必须是绝对路径，收到 {}",
+                    "an entry in JOY_EXEC_WRITABLE_ROOTS must be an absolute path, got {}",
                     root.display()
                 ));
             }
             if !root.is_dir() {
                 return Err(format!(
-                    "JOY_EXEC_WRITABLE_ROOTS 里的目录不存在：{}",
+                    "a directory in JOY_EXEC_WRITABLE_ROOTS does not exist: {}",
                     root.display()
                 ));
             }
@@ -728,7 +727,7 @@ impl Settings {
         for dir in &self.write_allow_dirs {
             if !dir.is_absolute() {
                 return Err(format!(
-                    "JOY_WRITE_ALLOW_DIRS 里必须是绝对路径，收到 {}",
+                    "an entry in JOY_WRITE_ALLOW_DIRS must be an absolute path, got {}",
                     dir.display()
                 ));
             }
@@ -791,19 +790,26 @@ pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(
     if let Some(dirs) = &patch.write_allow_dirs {
         if dirs.len() > MAX_EXEC_RULES {
             return Err(format!(
-                "writeAllowDirs 最多 {MAX_EXEC_RULES} 条，收到 {} 条",
+                "writeAllowDirs takes at most {MAX_EXEC_RULES} entries, got {}",
                 dirs.len()
             ));
         }
         for dir in dirs {
             if dir.trim().is_empty() {
-                return Err("writeAllowDirs 里有空路径 —— 空串不是一条记录".to_string());
+                return Err(
+                    "writeAllowDirs has an empty path — an empty string is not an entry"
+                        .to_string(),
+                );
             }
             if dir.contains(['\n', '\r']) {
-                return Err(format!("writeAllowDirs 的路径不能含换行：{dir:?}"));
+                return Err(format!(
+                    "a writeAllowDirs path must not contain a newline: {dir:?}"
+                ));
             }
             if !std::path::Path::new(dir).is_absolute() {
-                return Err(format!("writeAllowDirs 里必须是绝对路径，收到 {dir:?}"));
+                return Err(format!(
+                    "an entry in writeAllowDirs must be an absolute path, got {dir:?}"
+                ));
             }
         }
     }
@@ -816,21 +822,25 @@ pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(
 fn check_exec_rules(rules: &[String]) -> Result<(), String> {
     if rules.len() > MAX_EXEC_RULES {
         return Err(format!(
-            "JOY_EXEC_ALLOW 最多 {MAX_EXEC_RULES} 条规则，收到 {} 条",
+            "JOY_EXEC_ALLOW takes at most {MAX_EXEC_RULES} rules, got {}",
             rules.len()
         ));
     }
     for rule in rules {
         let rule = rule.trim();
         if rule.is_empty() {
-            return Err("JOY_EXEC_ALLOW 里有空规则 —— 空串不是一条规则".to_string());
+            return Err(
+                "JOY_EXEC_ALLOW has an empty rule — an empty string is not a rule".to_string(),
+            );
         }
         if rule.contains(['\n', '\r']) {
-            return Err(format!("JOY_EXEC_ALLOW 的规则不能含换行：{rule:?}"));
+            return Err(format!(
+                "a JOY_EXEC_ALLOW rule must not contain a newline: {rule:?}"
+            ));
         }
         if rule.chars().count() > MAX_EXEC_RULE_CHARS {
             return Err(format!(
-                "JOY_EXEC_ALLOW 的规则最长 {MAX_EXEC_RULE_CHARS} 字符：{rule:?}"
+                "a JOY_EXEC_ALLOW rule is at most {MAX_EXEC_RULE_CHARS} characters: {rule:?}"
             ));
         }
     }
@@ -861,7 +871,7 @@ pub fn save_patch(
             Err(e) => return Err(e),
         }
     }
-    let raw = serde_json::to_string_pretty(patch).expect("SettingsPatch 序列化");
+    let raw = serde_json::to_string_pretty(patch).expect("SettingsPatch serialisation");
     std::fs::write(&path, raw)
 }
 
@@ -1085,28 +1095,40 @@ mod config_tests {
             exec_allow: vec!["cargo test".to_string(), "   ".to_string()],
             ..Settings::default()
         };
-        assert!(s.validate().expect_err("空规则要被抓到").contains("空规则"));
+        assert!(s
+            .validate()
+            .expect_err("空规则要被抓到")
+            .contains("empty rule"));
 
         // Newline: most likely a whole script pasted into an env var.
         let s = Settings {
             exec_allow: vec!["cargo test\nrm -rf /".to_string()],
             ..Settings::default()
         };
-        assert!(s.validate().expect_err("换行规则要被抓到").contains("换行"));
+        assert!(s
+            .validate()
+            .expect_err("换行规则要被抓到")
+            .contains("newline"));
 
         // Overlong.
         let s = Settings {
             exec_allow: vec!["x".repeat(300)],
             ..Settings::default()
         };
-        assert!(s.validate().expect_err("超长规则要被抓到").contains("最长"));
+        assert!(s
+            .validate()
+            .expect_err("超长规则要被抓到")
+            .contains("at most"));
 
         // Too many entries.
         let s = Settings {
             exec_allow: vec!["ls".to_string(); 100],
             ..Settings::default()
         };
-        assert!(s.validate().expect_err("规则太多要被抓到").contains("最多"));
+        assert!(s
+            .validate()
+            .expect_err("规则太多要被抓到")
+            .contains("at most"));
 
         // An empty list is legal: allowing nothing is the **default**, not an error.
         let s = Settings {
@@ -1182,7 +1204,10 @@ mod config_tests {
             ..Settings::default()
         };
         let why = missing.validate().expect_err("不存在的目录要被抓到");
-        assert!(why.contains("不存在"), "要落在「不存在」这条分支上：{why}");
+        assert!(
+            why.contains("does not exist"),
+            "要落在「不存在」这条分支上：{why}"
+        );
 
         let relative = Settings {
             exec_writable_roots: vec![PathBuf::from("build")],
@@ -1191,7 +1216,7 @@ mod config_tests {
         assert!(relative
             .validate()
             .expect_err("相对路径没法塞进沙箱规则")
-            .contains("绝对路径"));
+            .contains("absolute path"));
     }
 
     #[test]

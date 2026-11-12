@@ -12,6 +12,8 @@ async fn ctx() -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm
     ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: None,
@@ -95,8 +97,8 @@ async fn an_offset_past_the_end_says_so() {
         json!({"path": file, "offset": 99}),
     )
     .await;
-    assert!(out.contains("文件共 1 行"), "{out}");
-    assert!(out.contains("超出范围"), "{out}");
+    assert!(out.contains("the file has 1 lines"), "{out}");
+    assert!(out.contains("out of range"), "{out}");
 }
 
 /// Byte cap: cut on a **line boundary** — never half a line; the footer offers the resume offset.
@@ -140,7 +142,7 @@ async fn a_binary_file_is_refused_with_directions() {
 
     let out = run(&registry, &ctx, "read_file", json!({"path": file})).await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("二进制"), "{out}");
+    assert!(out.contains("binary"), "{out}");
 }
 
 /// Missing file: an Error text, stated honestly.
@@ -156,7 +158,7 @@ async fn a_missing_file_is_an_honest_error() {
     )
     .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("找不到"), "{out}");
+    assert!(out.contains("not found"), "{out}");
 }
 
 /// A directory passed to read_file: pointed at list_dir.
@@ -294,7 +296,7 @@ async fn list_dir_edge_cases_are_honest() {
     let empty = ctx.home.join("空");
     std::fs::create_dir(&empty).unwrap();
     let out = run(&registry, &ctx, "list_dir", json!({"path": empty})).await;
-    assert!(out.contains("空目录"), "{out}");
+    assert!(out.contains("empty directory"), "{out}");
 
     let out = run(
         &registry,
@@ -357,6 +359,8 @@ async fn a_spill_address_resolves_against_home_not_only_the_cwd() {
     // 目录故意选在 home 之外：这正是真实情形（本轮工作目录是某个项目）。
     let elsewhere = tempfile::tempdir().expect("临时目录");
     let ctx = ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         cwd: Some(elsewhere.path().to_path_buf()),
         ..ctx
     };
@@ -371,13 +375,15 @@ async fn a_spill_address_resolves_against_home_not_only_the_cwd() {
     assert!(out.contains("完整输出在这里"), "{out}");
 }
 
-/// 回落只认 `spill/` 前缀：普通相对路径找不到时**不能**去 home 下猜（那是无声扩权）。
+/// 回落只认 `spill/` 前缀：普通相对路径not found时**不能**去 home 下猜（那是无声扩权）。
 #[tokio::test]
 async fn a_plain_relative_path_never_falls_back_to_home() {
     let ctx = ctx().await;
     std::fs::write(ctx.home.join("notes.md"), "home 下的同名文件\n").expect("写文件");
     let elsewhere = tempfile::tempdir().expect("临时目录");
     let ctx = ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         cwd: Some(elsewhere.path().to_path_buf()),
         ..ctx
     };

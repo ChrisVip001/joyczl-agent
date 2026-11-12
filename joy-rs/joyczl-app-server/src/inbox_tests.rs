@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use crate::{EventSink, Frame, Server};
 
 async fn boot(mock: Option<Arc<Mock>>) -> Server {
-    let dir = tempdir().expect("临时目录");
+    let dir = tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -98,7 +98,7 @@ async fn an_empty_inbox_answers_zero_and_starts_nothing() {
     )
     .expect("形态");
     assert_eq!(response.count, 0);
-    assert!(response.message.contains("没有"), "{}", response.message);
+    assert!(response.message.contains("waiting"), "{}", response.message);
     assert_eq!(response.session_id, "inbox", "默认进收件箱会话");
 }
 
@@ -148,12 +148,15 @@ async fn handling_mail_runs_a_turn_and_marks_it_seen() {
     let prompt = &history[0].0;
     assert!(prompt.contains("服务器周报"), "邮件主题要进回合：{prompt}");
     assert!(prompt.contains("发票"), "两封都要进去：{prompt}");
-    assert!(prompt.contains("不要替我发信"), "边界要写进指令：{prompt}");
+    assert!(
+        prompt.contains("do not send anything on my behalf"),
+        "边界要写进指令：{prompt}"
+    );
 
     // And the model saw the mail body, not just subjects.
     let received = mock.received.lock().expect("锁").clone();
     let last = received.last().expect("至少一次模型调用");
-    let prompt_text = serde_json::to_string(&last.messages).expect("序列化");
+    let prompt_text = serde_json::to_string(&last.messages).expect("serialize");
     assert!(prompt_text.contains("CPU 一切正常"), "正文要带上");
 
     assert_eq!(
@@ -171,7 +174,7 @@ async fn without_a_model_the_mail_keeps_waiting() {
     let error = call(&server, methods::INBOX_SUMMARIZE, json!({}))
         .await
         .expect_err("没模型就该失败");
-    assert!(error.contains("模型还没配好"), "{error}");
+    assert!(error.contains("No model is configured"), "{error}");
     assert_eq!(
         server.inbox.unseen_count("email").await.expect("数"),
         1,

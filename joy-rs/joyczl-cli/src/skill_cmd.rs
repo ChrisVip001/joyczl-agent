@@ -28,12 +28,14 @@ pub async fn run(home: &Path, args: &[String]) -> Result<()> {
         Some("install") => {
             let source = args
                 .get(1)
-                .ok_or_else(|| anyhow::anyhow!("用法：joy skill install <url 或本地路径>"))?;
+                .ok_or_else(|| anyhow::anyhow!("Usage: joy skill install <url or local path>"))?;
             install(home, source).await
         }
         Some("update") => update(home, args.get(1).map(String::as_str)).await,
         Some(other) => {
-            println!("不认识的子命令 '{other}'。可用：list（默认）、export、install、update。");
+            println!(
+                "Unknown subcommand '{other}'. Options: list (default), export, install, update."
+            );
             Ok(())
         }
     }
@@ -43,7 +45,7 @@ fn list(home: &Path) -> Result<()> {
     let loaded = skills::loaded_skills(home);
     if loaded.is_empty() {
         println!(
-            "还没有技能。放一个 SKILL.md 到 {} 下，或 joy skill install <url>。",
+            "No skills yet. Drop a SKILL.md under {}, or joy skill install <url>.",
             home.join("skills").display()
         );
         return Ok(());
@@ -59,7 +61,7 @@ fn list(home: &Path) -> Result<()> {
         // wasn't it triggered" — the answer is here (no implicit trigger / deps absent).
         let mut notes = Vec::new();
         if !skill.allow_model_invocation {
-            notes.push("只走 $名字 显式引用".to_string());
+            notes.push("only via an explicit $name reference".to_string());
         }
         let missing: Vec<&str> = skill
             .dependencies
@@ -68,7 +70,7 @@ fn list(home: &Path) -> Result<()> {
             .map(String::as_str)
             .collect();
         if !missing.is_empty() {
-            notes.push(format!("依赖缺失：{}", missing.join(", ")));
+            notes.push(format!("missing dependencies: {}", missing.join(", ")));
         }
         let note = if notes.is_empty() {
             String::new()
@@ -92,7 +94,7 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
                 i += 1;
                 to = args
                     .get(i)
-                    .ok_or_else(|| anyhow::anyhow!("--to 后面要跟目标"))?
+                    .ok_or_else(|| anyhow::anyhow!("--to needs a target"))?
                     .clone();
             }
             "--project" => project = true,
@@ -102,9 +104,9 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
                 names = args
                     .get(i)
                     .map(|v| v.split(',').map(str::trim).map(String::from).collect())
-                    .ok_or_else(|| anyhow::anyhow!("--names 后面要跟逗号分隔的技能名"))?;
+                    .ok_or_else(|| anyhow::anyhow!("--names needs comma-separated skill names"))?;
             }
-            other => anyhow::bail!("不认识的参数 '{other}'"),
+            other => anyhow::bail!("Unknown argument '{other}'"),
         }
         i += 1;
     }
@@ -123,7 +125,9 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
         .map(|t| match t {
             "claude" => Ok((t.to_string(), base.join(".claude"))),
             "codex" => Ok((t.to_string(), base.join(".codex"))),
-            other => Err(anyhow::anyhow!("未知目标 '{other}'。可选：claude, codex")),
+            other => Err(anyhow::anyhow!(
+                "Unknown target '{other}'. Options: claude, codex"
+            )),
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -139,7 +143,7 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
         .filter(|line| names.iter().any(|name| line.contains(name)))
         .collect();
     if filtered.is_empty() {
-        println!("没有匹配 {} 的导出记录。", names.join(", "));
+        println!("No export record matches {}.", names.join(", "));
     }
     for line in filtered {
         println!("{line}");
@@ -151,7 +155,7 @@ async fn install(home: &Path, source: &str) -> Result<()> {
     // 抓取、校验、落盘都在 joyczl_memory::skills 里（驾驶舱的能力中心走同一条路）——
     // 三个入口各写一遍 fetch 规则，迟早对不上。
     let outcome = if source.starts_with("http://") || source.starts_with("https://") {
-        println!("拉取 {source}");
+        println!("Fetching {source}");
         skills::install_from_url(home, source).await
     } else {
         let text = std::fs::read_to_string(source)?;
@@ -159,13 +163,15 @@ async fn install(home: &Path, source: &str) -> Result<()> {
     }
     .map_err(anyhow::Error::msg)?;
     println!("{outcome}");
-    println!("下次启动即生效。技能是指令 —— 装之前先读一遍。");
+    println!(
+        "Effective on the next start. Skills are instructions — read one before installing it."
+    );
     Ok(())
 }
 
 fn dirs_home() -> Result<PathBuf> {
     Ok(PathBuf::from(std::env::var("HOME").map_err(|_| {
-        anyhow::anyhow!("读不到 HOME，--project 或手动指定")
+        anyhow::anyhow!("HOME could not be read; use --project or name it explicitly")
     })?))
 }
 
@@ -183,7 +189,8 @@ async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
             .await
             .map_err(anyhow::Error::msg)?
     } else {
-        std::fs::read_to_string(&source).map_err(|e| anyhow::anyhow!("读不到索引 {source}：{e}"))?
+        std::fs::read_to_string(&source)
+            .map_err(|e| anyhow::anyhow!("Could not read the index {source}: {e}"))?
     };
 
     let (entries, warnings) = installer::parse_index(&text).map_err(anyhow::Error::msg)?;
@@ -191,7 +198,7 @@ async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
         eprintln!("(joy) {warning}");
     }
     if entries.is_empty() {
-        println!("索引里没有可用的技能条目。");
+        println!("The index has no usable skill entries.");
         return Ok(());
     }
 
@@ -212,7 +219,7 @@ async fn update(home: &Path, index_arg: Option<&str>) -> Result<()> {
         }
     }
     if failed > 0 {
-        anyhow::bail!("{failed} 个技能没更新成功（上面逐条写了原因）");
+        anyhow::bail!("{failed} skills did not update (the reasons are printed above)");
     }
     Ok(())
 }

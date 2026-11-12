@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question or argue about a design
+    url: https://github.com/ChrisVip001/joyczl-agent/discussions
+    about: Open-ended discussion, showcase your setup, or a design tradeoff — please use Discussions rather than an issue.
+  - name: Security issue
+    url: https://github.com/ChrisVip001/joyczl-agent/blob/main/SECURITY.md
+    about: Please follow SECURITY.md rather than opening a public issue for a vulnerability.

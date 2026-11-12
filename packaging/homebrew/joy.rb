@@ -18,7 +18,7 @@
 class Joy < Formula
   desc "Local-first personal assistant with long-term memory"
   homepage "https://github.com/ChrisVip001/joyczl-agent"
-  url "https://github.com/ChrisVip001/joyczl-agent/archive/refs/tags/v0.16.0.tar.gz"
+  url "https://github.com/ChrisVip001/joyczl-agent/archive/refs/tags/v0.17.0.tar.gz"
   # sha256 在打完 v0.8.0 tag 后由 `just release-hash v0.8.0` 自动重写（见
   # packaging/RELEASING.md）。注意别拿 GitHub API 的 /tarball/ 端点去算：
   # 它那边是 legacy 归档，字节不同。

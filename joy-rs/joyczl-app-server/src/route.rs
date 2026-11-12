@@ -59,7 +59,7 @@ pub(crate) fn clean_tier(raw: Option<&str>) -> Result<Option<String>, ErrorObjec
     }
     Err(ErrorObject {
         code: codes::INVALID_PARAMS,
-        message: format!("tier 只能是 {} —— 收到 '{text}'", TIERS.join(" / ")),
+        message: format!("tier must be one of {} — got '{text}'", TIERS.join(" / ")),
         data: None,
     })
 }
@@ -90,8 +90,7 @@ async fn classify_tier(cheap: &Resolved, message: &str) -> Option<String> {
     use joyczl_provider::{ContentBlock, CreateRequest, Message};
 
     const MAX_TOKENS: i32 = 256;
-    let system = "判断这条用户消息是不是需要深度推理的任务（多步数学、长链推导、复杂规划、代码架构设计）。\
-                  日常问答、工具调用、写作改写都算 chat。\n只回一个词：reasoning 或 chat。不要别的话。";
+    let system = "Decide whether this user message needs deep reasoning (multi-step arithmetic, long chains of derivation, complex planning, code architecture design). Everyday Q&A, tool calls and rewriting all count as chat.\nReply with one word: reasoning or chat. Nothing else.";
     let response = cheap
         .client
         .create(CreateRequest {
@@ -131,7 +130,10 @@ impl Server {
     ) -> (Resolved, Option<String>) {
         let routes = load_routes(&self.settings().home);
         let active_id = {
-            let file = self.models.read().expect("models 锁不该中毒");
+            let file = self
+                .models
+                .read()
+                .expect("the models lock should not be poisoned");
             file.active.clone()
         };
         // A **declared** tier wins over the mode. `fixed` is the default policy, not a veto: a task
@@ -141,11 +143,13 @@ impl Server {
             let Some(profile_id) = profile_for_tier(&routes, tier, active_id.as_deref()) else {
                 return (
                     base,
-                    Some(format!("tier:{tier}: 没有可用的 profile，按 active 跑")),
+                    Some(format!(
+                        "tier:{tier}: no profile available, running the active one"
+                    )),
                 );
             };
             if active_id.as_deref() == Some(profile_id.as_str()) {
-                return (base, Some(format!("tier:{tier} → {profile_id}（当前）")));
+                return (base, Some(format!("tier:{tier} → {profile_id} (current)")));
             }
             return match self.resolved_profile(&profile_id) {
                 Ok(resolved) => (resolved, Some(format!("tier:{tier} → {profile_id}"))),
@@ -175,7 +179,7 @@ impl Server {
         let Some(profile_id) = profile_for_tier(&routes, &tier, active_id.as_deref()) else {
             return (
                 base,
-                Some("auto: 没有可用的 profile，按 active 跑".to_string()),
+                Some("auto: no profile available, running the active one".to_string()),
             );
         };
         if active_id.as_deref() == Some(profile_id.as_str()) {
@@ -194,26 +198,35 @@ impl Server {
         if let Some(hit) = self
             .route_cache
             .lock()
-            .expect("route 缓存锁不该中毒")
+            .expect("the route-cache lock should not be poisoned")
             .get(profile_id)
         {
             return Ok(hit.clone());
         }
-        let file = self.models.read().expect("models 锁不该中毒").clone();
+        let file = self
+            .models
+            .read()
+            .expect("the models lock should not be poisoned")
+            .clone();
         let profile = joyczl_config::models::find(&file, profile_id)
-            .ok_or_else(|| format!("路由表引用的 '{profile_id}' 不存在"))?
+            .ok_or_else(|| {
+                format!("the routing table references '{profile_id}', which does not exist")
+            })?
             .clone();
         let mut settings = self.settings();
         let home = settings.home.clone();
         {
-            let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
+            let mut store = self
+                .secrets
+                .lock()
+                .expect("the secrets lock should not be poisoned");
             joyczl_config::models::apply_profile(&profile, &home, &mut *store, &mut settings);
         }
         let resolved = joyczl_provider::resolve_with(&settings, &self.catalog)
-            .map_err(|why| format!("'{profile_id}' 解析失败：{why}"))?;
+            .map_err(|why| format!("'{profile_id}' could not be resolved: {why}"))?;
         self.route_cache
             .lock()
-            .expect("route 缓存锁不该中毒")
+            .expect("the route-cache lock should not be poisoned")
             .insert(profile_id.to_string(), resolved.clone());
         Ok(resolved)
     }

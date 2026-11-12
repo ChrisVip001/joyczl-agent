@@ -27,6 +27,8 @@ impl Fixture {
             .await
             .expect("打开库");
         ToolCtx {
+            on_uncertain: None,
+            task_run_id: None,
             activate: None,
             embedder: None,
             cwd: None,
@@ -193,7 +195,7 @@ async fn a_dry_run_is_only_a_draft() {
     let reply = call(&tool, ctx, json!({"to": "ou_alice", "text": "明天见"}))
         .await
         .expect("草稿该成功");
-    assert!(reply.contains("草稿"), "{reply}");
+    assert!(reply.contains("draft"), "{reply}");
     let outbox = fixture.dir.path().join("outbox");
     let entry = std::fs::read_dir(&outbox)
         .expect("outbox")
@@ -233,7 +235,7 @@ async fn a_denied_approval_never_touches_the_network() {
     let error = call(&tool, ctx, json!({"to": "ou_alice", "text": "hi"}))
         .await
         .expect_err("没批准不发");
-    assert!(error.to_string().contains("没有被批准"), "{error}");
+    assert!(error.to_string().contains("not approved"), "{error}");
     assert_eq!(broker.seen.lock().expect("锁").len(), 1);
     assert!(
         broker.seen.lock().expect("锁")[0]

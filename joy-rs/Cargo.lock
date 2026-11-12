@@ -1038,20 +1038,21 @@ dependencies = [
 
 [[package]]
 name = "joyczl-agent"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "joyczl-memory",
  "joyczl-protocol",
  "joyczl-provider",
  "joyczl-state",
  "serde_json",
+ "sqlx",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
 name = "joyczl-app-server"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1076,7 +1077,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-cli"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1101,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-config"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "joyczl-protocol",
  "keyring",
@@ -1112,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-connector"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1133,7 +1134,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-eval"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1141,6 +1142,7 @@ dependencies = [
  "joyczl-config",
  "joyczl-protocol",
  "joyczl-provider",
+ "joyczl-state",
  "joyczl-tools",
  "serde",
  "serde_json",
@@ -1150,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-graph"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "futures-util",
@@ -1164,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-loop"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "joyczl-provider",
@@ -1177,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-mcp"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "joyczl-state",
@@ -1192,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-memory"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1208,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-ops"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1233,7 +1235,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-protocol"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "joyczl-protocol-noop-macros",
  "schemars",
@@ -1244,11 +1246,11 @@ dependencies = [
 
 [[package]]
 name = "joyczl-protocol-noop-macros"
-version = "0.16.0"
+version = "0.17.0"
 
 [[package]]
 name = "joyczl-provider"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "bytes",
  "futures-util",
@@ -1264,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-schedule"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1274,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-state"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -1286,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "joyczl-tools"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "chrono",

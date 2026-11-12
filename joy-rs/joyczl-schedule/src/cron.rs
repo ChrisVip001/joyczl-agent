@@ -58,11 +58,13 @@ pub fn next_after(cron: &str, from: NaiveDateTime) -> Option<NaiveDateTime> {
 /// about what "next" means the moment the clock crosses a minute.
 pub fn next_run(cron: &str, from: NaiveDateTime) -> Result<String, String> {
     if !valid(cron) {
-        return Err("cron 写得不对（五段：分 时 日 月 周）".to_string());
+        return Err(
+            "the cron expression is wrong (five fields: minute hour day month weekday)".to_string(),
+        );
     }
     next_after(cron, from)
         .map(|at| at.format("%Y-%m-%d %H:%M").to_string())
-        .ok_or_else(|| "这个 cron 一年内不会触发".to_string())
+        .ok_or_else(|| "this cron will not fire within a year".to_string())
 }
 
 /// Is this a well-formed five-field cron?

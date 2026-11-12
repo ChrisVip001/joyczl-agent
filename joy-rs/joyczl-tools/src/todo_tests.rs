@@ -15,6 +15,8 @@ async fn ctx(session: &str) -> super::ToolCtx {
         .expect("打开库");
     let _ = dir.keep();
     super::ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         facts: joyczl_state::Facts::new(pool.clone()),
@@ -54,7 +56,7 @@ async fn writing_replaces_the_whole_list_and_bumps_the_revision() {
         ]}),
     )
     .await;
-    assert!(first.contains("第 1 版"), "{first}");
+    assert!(first.contains("revision 1"), "{first}");
     assert!(first.contains("in_progress: 写测试"), "{first}");
     assert!(first.contains("pending: 改实现"), "{first}");
 
@@ -65,10 +67,10 @@ async fn writing_replaces_the_whole_list_and_bumps_the_revision() {
         json!({"todos": [{"content": "只剩这一项", "status": "completed"}]}),
     )
     .await;
-    assert!(second.contains("第 2 版"), "{second}");
+    assert!(second.contains("revision 2"), "{second}");
     assert!(second.contains("completed: 只剩这一项"), "{second}");
     assert!(!second.contains("写测试"), "没列出来的项该消失：{second}");
-    assert!(second.contains("1 项"), "{second}");
+    assert!(second.contains("1 items"), "{second}");
 }
 
 /// Omitting `todos` = read the full list back only.
@@ -77,7 +79,7 @@ async fn omitting_todos_reads_the_list_back() {
     let board = Arc::new(TodoBoard::new());
 
     let empty = call(&board, "s1", json!({})).await;
-    assert!(empty.contains("还没有待办清单"), "{empty}");
+    assert!(empty.contains("There is no to-do list yet"), "{empty}");
 
     call(
         &board,
@@ -120,7 +122,7 @@ async fn the_three_hard_limits_are_enforced() {
         .collect();
     let out = call(&board, "s", json!({"todos": too_many})).await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains(&format!("最多 {MAX_ITEMS} 项")), "{out}");
+    assert!(out.contains(&format!("at most {MAX_ITEMS} items")), "{out}");
 
     let out = call(
         &board,
@@ -128,7 +130,7 @@ async fn the_three_hard_limits_are_enforced() {
         json!({"todos": [{"content": "   ", "status": "pending"}]}),
     )
     .await;
-    assert!(out.contains("content 是空的"), "{out}");
+    assert!(out.contains("has empty content"), "{out}");
 
     let long = "字".repeat(MAX_CONTENT_CHARS + 1);
     let out = call(
@@ -137,7 +139,7 @@ async fn the_three_hard_limits_are_enforced() {
         json!({"todos": [{"content": long, "status": "pending"}]}),
     )
     .await;
-    assert!(out.contains("超过"), "{out}");
+    assert!(out.contains("over"), "{out}");
 
     let out = call(
         &board,
@@ -148,7 +150,7 @@ async fn the_three_hard_limits_are_enforced() {
         ]}),
     )
     .await;
-    assert!(out.contains("只能有一项 in_progress"), "{out}");
+    assert!(out.contains("Only one item may be in_progress"), "{out}");
 }
 
 /// When validation fails, **nothing changes**: a half-written list is worse than none.
@@ -161,7 +163,7 @@ async fn a_rejected_write_leaves_the_old_list_alone() {
         json!({"todos": [{"content": "好的", "status": "pending"}]}),
     )
     .await;
-    assert!(good.contains("第 1 版"), "{good}");
+    assert!(good.contains("revision 1"), "{good}");
 
     let out = call(
         &board,
@@ -175,7 +177,7 @@ async fn a_rejected_write_leaves_the_old_list_alone() {
     assert!(out.starts_with("Error:"), "{out}");
 
     let after = call(&board, "s", json!({})).await;
-    assert!(after.contains("第 1 版"), "版本号不该动：{after}");
+    assert!(after.contains("revision 1"), "版本号不该动：{after}");
     assert!(after.contains("pending: 好的"), "{after}");
 }
 
@@ -189,7 +191,7 @@ async fn an_unknown_status_says_which_item_and_what_was_seen() {
         json!({"todos": [{"content": "甲", "status": "done"}]}),
     )
     .await;
-    assert!(out.contains("第 1 项"), "{out}");
+    assert!(out.contains("item 1"), "{out}");
     assert!(out.contains("done"), "{out}");
     assert!(out.contains("in_progress"), "要把认得的列出来：{out}");
 }

@@ -76,7 +76,9 @@ type Verdict = Vec<String>;
 fn check_contains(where_: &str, text: &str, needles: &[String], fails: &mut Verdict) {
     for needle in needles {
         if !text.contains(needle.as_str()) {
-            fails.push(format!("{where_}应包含 {needle:?}，实际：{text:?}"));
+            fails.push(format!(
+                "{where_} should contain {needle:?}, actually: {text:?}"
+            ));
         }
     }
 }
@@ -84,50 +86,61 @@ fn check_contains(where_: &str, text: &str, needles: &[String], fails: &mut Verd
 fn check_not_contains(where_: &str, text: &str, banned: &[String], fails: &mut Verdict) {
     for needle in banned {
         if text.contains(needle.as_str()) {
-            fails.push(format!("{where_}不应包含 {needle:?}，实际：{text:?}"));
+            fails.push(format!(
+                "{where_} should not contain {needle:?}, actually: {text:?}"
+            ));
         }
     }
 }
 
 fn score(expect: &Expectations, out: &TurnOutput) -> Verdict {
     let mut fails = Verdict::new();
-    check_contains("回复", &out.reply, &expect.reply_contains, &mut fails);
-    check_not_contains("回复", &out.reply, &expect.reply_not_contains, &mut fails);
+    check_contains("reply", &out.reply, &expect.reply_contains, &mut fails);
+    check_not_contains("reply", &out.reply, &expect.reply_not_contains, &mut fails);
     if !expect.tools_used.is_empty() && out.tools != expect.tools_used {
         fails.push(format!(
-            "工具序列应为 {:#?}，实际 {:#?}",
+            "tool sequence should be {:#?}, actually {:#?}",
             expect.tools_used, out.tools
         ));
     }
     for needle in &expect.tool_output_contains {
         if !out.tool_outputs.iter().any(|o| o.contains(needle.as_str())) {
             fails.push(format!(
-                "没有工具的输出包含 {needle:?}（实际输出 {:#?}）",
+                "no tool output contains {needle:?} (actual outputs {:#?})",
                 out.tool_outputs
             ));
         }
     }
     if let Some(gate) = &expect.gate {
         if out.gate.as_deref() != Some(gate.as_str()) {
-            fails.push(format!("检索门应为 {gate:?}，实际 {:?}", out.gate));
+            fails.push(format!(
+                "the retrieval gate should be {gate:?}, actually {:?}",
+                out.gate
+            ));
         }
     }
     if let Some(iterations) = expect.iterations {
         if out.iterations != iterations {
-            fails.push(format!("应为 {iterations} 轮，实际 {} 轮", out.iterations));
+            fails.push(format!(
+                "expected {iterations} rounds, actually {}",
+                out.iterations
+            ));
         }
     }
     if let Some(want) = expect.consolidation_new_facts {
         if out.consolidation_new_facts != want {
             fails.push(format!(
-                "consolidation 应提炼 {want} 条，实际 {} 条",
+                "consolidation should distil {want}, actually {}",
                 out.consolidation_new_facts
             ));
         }
     }
     if let Some(want) = expect.approvals {
         if out.approvals != want {
-            fails.push(format!("审批提问应为 {want} 次，实际 {} 次", out.approvals));
+            fails.push(format!(
+                "approval should be asked {want} times, actually {}",
+                out.approvals
+            ));
         }
     }
     if !expect.events.is_empty() {
@@ -142,10 +155,10 @@ fn score(expect: &Expectations, out: &TurnOutput) -> Verdict {
                 Some(offset) => cursor += offset + 1,
                 None => {
                     fails.push(format!(
-                        "事件序列第 {} 个是 {want:?}，但第 {cursor} 个之后没再出现；实际：{}",
+                        "event {} should be {want:?}, but it does not appear after {cursor}; actual: {}",
                         index + 1,
                         if out.events.is_empty() {
-                            "（一个事件都没有）".to_string()
+                            "(not a single event)".to_string()
                         } else {
                             out.events.join(" → ")
                         }
@@ -157,18 +170,24 @@ fn score(expect: &Expectations, out: &TurnOutput) -> Verdict {
     }
     if let Some(want) = expect.interrupted {
         if out.interrupted != want {
-            fails.push(format!("interrupted 应为 {want}，实际 {}", out.interrupted));
+            fails.push(format!(
+                "interrupted should be {want}, actually {}",
+                out.interrupted
+            ));
         }
     }
     if let Some(want) = &expect.task_status {
         if out.task_status.as_deref() != Some(want.as_str()) {
-            fails.push(format!("任务状态应为 {want:?}，实际 {:?}", out.task_status));
+            fails.push(format!(
+                "task status should be {want:?}, actually {:?}",
+                out.task_status
+            ));
         }
     }
     if let Some(want) = expect.task_checks_passed {
         if out.task_checks_passed != Some(want) {
             fails.push(format!(
-                "验收结论应为 passed={want}，实际 {:?}",
+                "acceptance should be passed={want}, actually {:?}",
                 out.task_checks_passed
             ));
         }
@@ -176,26 +195,36 @@ fn score(expect: &Expectations, out: &TurnOutput) -> Verdict {
     if let Some(want) = expect.task_artifacts {
         if out.task_artifacts != want {
             fails.push(format!(
-                "交付物应为 {want} 个，实际 {} 个",
+                "expected {want} deliverables, actually {}",
                 out.task_artifacts
             ));
         }
     }
     let all = out.prompts.join("\n---\n");
-    check_contains("模型请求", &all, &expect.prompt_contains, &mut fails);
-    check_not_contains("模型请求", &all, &expect.prompt_not_contains, &mut fails);
+    check_contains("model request", &all, &expect.prompt_contains, &mut fails);
+    check_not_contains(
+        "model request",
+        &all,
+        &expect.prompt_not_contains,
+        &mut fails,
+    );
     match out.prompts.last() {
         Some(last) => {
-            check_contains("最后请求", last, &expect.last_prompt_contains, &mut fails);
+            check_contains(
+                "the last request",
+                last,
+                &expect.last_prompt_contains,
+                &mut fails,
+            );
             check_not_contains(
-                "最后请求",
+                "the last request",
                 last,
                 &expect.last_prompt_not_contains,
                 &mut fails,
             );
         }
         None if !expect.last_prompt_contains.is_empty() => {
-            fails.push("没有任何模型请求可断言".to_string());
+            fails.push("there is no model request to assert on".to_string());
         }
         None => {}
     }
@@ -233,6 +262,10 @@ fn render(request: &CreateRequest) -> String {
                 joyczl_provider::ContentBlock::Image { media_type, data } => {
                     text.push_str(&format!("[image {media_type} {}b]", data.len()));
                 }
+                // Opaque provider-side reasoning: retained for continuation in checkpoints,
+                // but it is not text the model reads, so it contributes nothing here.
+                joyczl_provider::ContentBlock::ResponseItem { .. } => {}
+                joyczl_provider::ContentBlock::OpenAiReasoning { .. } => {}
             }
         }
     }
@@ -249,7 +282,7 @@ type ProviderFuture<'a> = std::pin::Pin<
 
 impl joyczl_provider::Provider for RecordingProvider {
     fn create(&self, request: CreateRequest) -> ProviderFuture<'_> {
-        self.prompts.lock().expect("锁").push(render(&request));
+        self.prompts.lock().expect("lock").push(render(&request));
         self.inner.create(request)
     }
 
@@ -258,7 +291,7 @@ impl joyczl_provider::Provider for RecordingProvider {
         request: CreateRequest,
         on_text: joyczl_provider::TextSink,
     ) -> ProviderFuture<'_> {
-        self.prompts.lock().expect("锁").push(render(&request));
+        self.prompts.lock().expect("lock").push(render(&request));
         self.inner.stream(request, on_text)
     }
 }
@@ -319,7 +352,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
     settings.ensure_home()?;
     for (relative, content) in scenario.files.iter().flatten() {
         if relative.contains("..") {
-            anyhow::bail!("用例文件路径不允许越出 home：{relative}");
+            anyhow::bail!("a case file path may not escape home: {relative}");
         }
         let path = home.join(relative);
         if let Some(parent) = path.parent() {
@@ -367,7 +400,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                 context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
                 vision: false,
             });
-            eprintln!("(joy) eval：模拟进程重启（同一个 home），接着跑下一轮");
+            eprintln!("(joy) eval: simulating a process restart (same home), carrying on with the next round");
         }
         let session_id = turn.session_id.unwrap_or_else(|| "eval".to_string());
         let (sink, mut rx) = EventSink::channel();
@@ -409,7 +442,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                     if turn.interrupt_after_deltas.is_some_and(|n| deltas == n)
                         && !server.interrupt_turn(&turn_id)
                     {
-                        anyhow::bail!("打断失败：turn {turn_id} 已经不在跑");
+                        anyhow::bail!("interrupt failed: turn {turn_id} is no longer running");
                     }
                 }
                 ServerNotification::ConsolidationCompleted(done) => {
@@ -459,7 +492,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                                     approved,
                                     remember,
                                 ) {
-                                    eprintln!("(joy) eval：这个问题已经过期了（不再等答案）");
+                                    eprintln!("(joy) eval: that question has expired (no longer waiting for an answer)");
                                 }
                             }
                             _ => {}
@@ -486,8 +519,8 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
             }
         }
         task.await
-            .map_err(|e| anyhow::anyhow!("eval turn 任务崩了：{e}"))?
-            .map_err(|e| anyhow::anyhow!("这一轮没跑通：{}", e.message))?;
+            .map_err(|e| anyhow::anyhow!("the eval turn task crashed: {e}"))?
+            .map_err(|e| anyhow::anyhow!("this turn did not get through: {}", e.message))?;
 
         if let Some(patch) = &turn.apply_patch {
             apply_config(&server, patch).await?;
@@ -504,7 +537,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         }
     }
 
-    output.prompts = recording.prompts.lock().expect("锁").clone();
+    output.prompts = recording.prompts.lock().expect("lock").clone();
 
     // Read the task back through the protocol: the assertions are about what a human sees.
     if let Some(id) = &task_id {
@@ -552,12 +585,12 @@ async fn protocol_call(
             return match message {
                 joyczl_protocol::JsonRpcMessage::Response(response) => Ok(response.result),
                 joyczl_protocol::JsonRpcMessage::Error(error) => {
-                    anyhow::bail!("{method} 被拒：{}", error.error.message)
+                    anyhow::bail!("{method} was refused: {}", error.error.message)
                 }
             };
         }
     }
-    anyhow::bail!("{method} 没有应答")
+    anyhow::bail!("{method} has no reply")
 }
 
 /// Create the case's task through `task/create` and hand back its id.
@@ -592,7 +625,7 @@ async fn create_case_task(
     created["task"]["id"]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("task/create 没给出 id：{created}"))
+        .ok_or_else(|| anyhow::anyhow!("task/create gave no id: {created}"))
 }
 
 /// Writes config through the real protocol — evals and the dashboard share the same
@@ -608,7 +641,7 @@ async fn apply_config(server: &Server, patch: &serde_json::Value) -> Result<()> 
     handle(server, request, sink).await;
     while let Some(frame) = rx.recv().await {
         if let Frame::Response(joyczl_protocol::JsonRpcMessage::Error(error)) = frame {
-            anyhow::bail!("config/write 被拒：{}", error.error.message);
+            anyhow::bail!("config/write was refused: {}", error.error.message);
         }
     }
     Ok(())
@@ -618,10 +651,16 @@ async fn apply_config(server: &Server, patch: &serde_json::Value) -> Result<()> 
 pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
     let scenarios = scenario::load_all(paths)?;
     if scenarios.is_empty() {
-        anyhow::bail!("没有加载到任何确定性用例 —— 检查路径（evals/deterministic/）");
+        anyhow::bail!("no deterministic cases were loaded — check the path (evals/deterministic/)");
     }
     // The label stays byte-identical to what it has always been: other tooling greps this line.
-    run_suite(scenarios, report_home, "确定性 eval", "deterministic").await
+    run_suite(
+        scenarios,
+        report_home,
+        "deterministic eval",
+        "deterministic",
+    )
+    .await
 }
 
 /// Replay evals: recordings whose contract is the **event sequence**.
@@ -632,13 +671,13 @@ pub async fn run_deterministic(paths: &[PathBuf], report_home: &Path) -> Result<
 pub async fn run_replay(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
     let cases = replay::load_all(paths)?;
     if cases.is_empty() {
-        anyhow::bail!("没有加载到任何回放用例 —— 检查路径（evals/replay/）");
+        anyhow::bail!("no replay cases were loaded — check the path (evals/replay/)");
     }
     let scenarios: Vec<scenario::Scenario> = cases
         .into_iter()
         .map(replay::ReplayCase::into_scenario)
         .collect();
-    run_suite(scenarios, report_home, "回放评测", "replay").await
+    run_suite(scenarios, report_home, "replay eval", "replay").await
 }
 
 /// The one loop both suites share: temp home per case → run → score → print → report.
@@ -662,7 +701,7 @@ async fn run_suite(
         if let Some(why) = missing {
             skipped += 1;
             println!(
-                "  ⊙ {} {}（跳过：{why}）",
+                "  ⊙ {} {} (skipped: {why})",
                 scenario.id, scenario.description
             );
             results.push(serde_json::json!({"id": scenario.id, "skipped": true}));
@@ -677,7 +716,7 @@ async fn run_suite(
                 let ok = verdict.is_empty();
                 (verdict, ok)
             }
-            Err(error) => (vec![format!("跑不起来：{error}")], false),
+            Err(error) => (vec![format!("could not run it: {error}")], false),
         };
         if ok {
             passed += 1;
@@ -698,7 +737,7 @@ async fn run_suite(
 
     let failed = scenarios.len() - passed - skipped;
     println!(
-        "{label}：{} 通过 / {} 失败 / {} 跳过 / 共 {}",
+        "{label}: {} passed / {} failed / {} skipped / {} total",
         passed,
         failed,
         skipped,
@@ -731,7 +770,7 @@ async fn run_suite(
 pub async fn run_long(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
     let scenarios = scenario::load_all(paths)?;
     if scenarios.is_empty() {
-        anyhow::bail!("没有加载到任何长任务用例 —— 检查路径（evals/long/）");
+        anyhow::bail!("no long-task cases were loaded — check the path (evals/long/)");
     }
 
     let mut passed = 0usize;
@@ -744,7 +783,7 @@ pub async fn run_long(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
         if let Some(why) = prereq_missing(scenario) {
             skipped += 1;
             println!(
-                "  ⊙ {} {}（跳过：{why}）",
+                "  ⊙ {} {} (skipped: {why})",
                 scenario.id, scenario.description
             );
             results.push(serde_json::json!({"id": scenario.id, "skipped": true}));
@@ -761,7 +800,7 @@ pub async fn run_long(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
                 let ok = verdict.is_empty();
                 (verdict, ok)
             }
-            Err(error) => (vec![format!("跑不起来：{error}")], false),
+            Err(error) => (vec![format!("could not run it: {error}")], false),
         };
         if ok {
             passed += 1;
@@ -796,7 +835,7 @@ pub async fn run_long(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
         recovered as f64 / recovery_total as f64
     };
     println!(
-        "长任务基准：{} 达成 / {} 未达成 / {} 跳过 / 共 {}（成功率 {:.0}%）",
+        "long-task benchmark: {} met / {} not met / {} skipped / {} total (success {:.0}%)",
         passed,
         failed,
         skipped,
@@ -804,12 +843,12 @@ pub async fn run_long(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
         rate * 100.0
     );
     println!(
-        "中断恢复：{}/{}（{:.0}%）—— 打断后重启进程，再跑下一轮是否仍然收尾",
+        "resume after interruption: {}/{} ({:.0}%) — kill the process mid-run and see whether the next round still finishes",
         recovered,
         recovery_total,
         recovery_rate * 100.0
     );
-    println!("长任务基准只记录，不拦发版（exit 0）。");
+    println!("The long-task benchmark only records; it never blocks a release (exit 0).");
     report::write(
         report_home,
         "long",
@@ -829,13 +868,13 @@ pub async fn run_long(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
 fn prereq_missing(scenario: &Scenario) -> Option<&'static str> {
     match scenario.prereq.as_deref() {
         Some("python3") if !runnable("python3", &["--version"]) => {
-            Some("这台机器上没有能跑的 python3")
+            Some("there is no usable python3 on this machine")
         }
         Some("sh") if !runnable("sh", &["-c", "exit 0"]) => {
-            Some("这台机器上没有 sh（钩子用例跑的是 shell 命令）")
+            Some("there is no sh on this machine (the hook cases run shell commands)")
         }
         Some("sandbox") if !joyczl_tools::exec::sandbox_available() => {
-            Some("这台机器上没有可用的沙箱（sandbox-exec / bubblewrap）")
+            Some("there is no usable sandbox on this machine (sandbox-exec / bubblewrap)")
         }
         _ => None,
     }
@@ -891,8 +930,8 @@ async fn collect_turn(server: &Server, message: &str) -> Result<TurnOutput> {
         }
     }
     task.await
-        .map_err(|e| anyhow::anyhow!("eval turn 任务崩了：{e}"))?
-        .map_err(|e| anyhow::anyhow!("这轮没跑通：{}", e.message))?;
+        .map_err(|e| anyhow::anyhow!("the eval turn task crashed: {e}"))?
+        .map_err(|e| anyhow::anyhow!("this round did not get through: {}", e.message))?;
     Ok(output)
 }
 
@@ -903,17 +942,19 @@ async fn collect_turn(server: &Server, message: &str) -> Result<TurnOutput> {
 pub async fn run_judge(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
     let scenarios = scenario::load_judge(paths)?;
     if scenarios.is_empty() {
-        anyhow::bail!("没有加载到任何 judge 用例 —— 检查路径（evals/judge/）");
+        anyhow::bail!("no judge cases were loaded — check the path (evals/judge/)");
     }
     let Some(server) = server_from_env(report_home).await? else {
-        println!("judge 需要 API key（环境里没配到），整组跳过 —— 不拦发版。");
+        println!("the judge needs an API key (none configured in the environment); skipping the whole group — this does not block a release.");
         return Ok(0);
     };
-    let resolved = server.resolved().expect("上面刚验过 resolved 存在");
+    let resolved = server
+        .resolved()
+        .expect("resolved was just checked to exist above");
     let judge_model =
         std::env::var("JOY_JUDGE_MODEL").unwrap_or_else(|_| resolved.small_model.clone());
     println!(
-        "judge：选手 {}，裁判 {}（{} 个用例）",
+        "judge: player {}, judge {} ({} cases)",
         resolved.model,
         judge_model,
         scenarios.len()
@@ -930,7 +971,7 @@ pub async fn run_judge(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
             &output.reply,
         )
         .await
-        .map_err(|e| anyhow::anyhow!("用例 {} 的裁判环节失败：{e}", scenario.id))?;
+        .map_err(|e| anyhow::anyhow!("the judging step of case {} failed: {e}", scenario.id))?;
         println!(
             "  {} {} → {}/10  {}",
             scenario.id, scenario.description, verdict.0, verdict.1
@@ -944,7 +985,10 @@ pub async fn run_judge(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
         }));
     }
     if !scores.is_empty() {
-        println!("judge 均分：{:.1}/10", total as f64 / scores.len() as f64);
+        println!(
+            "judge average: {:.1}/10",
+            total as f64 / scores.len() as f64
+        );
     }
     report::write(report_home, "judge", serde_json::json!({"cases": scores}))?;
     Ok(0)

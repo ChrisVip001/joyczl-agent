@@ -56,7 +56,7 @@ impl MemoryServer {
                     .await
             }
             "ping" => Ok(json!({})),
-            other => Err((-32601, format!("未知方法 '{other}'"))),
+            other => Err((-32601, format!("unknown method '{other}'"))),
         };
 
         Some(match result {
@@ -72,7 +72,7 @@ impl MemoryServer {
         let name = params
             .get("name")
             .and_then(Value::as_str)
-            .ok_or((-32602, "tools/call 少了 name".to_string()))?;
+            .ok_or((-32602, "tools/call is missing name".to_string()))?;
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
         // Tool execution failures are **text inside the result** (isError: true), not a
@@ -84,7 +84,7 @@ impl MemoryServer {
             "memory_list" => self.list(&args).await,
             "memory_episodes" => self.episodes(&args).await,
             other => {
-                return Err((-32602, format!("没有叫 '{other}' 的工具")));
+                return Err((-32602, format!("no tool named '{other}'")));
             }
         };
         match text {
@@ -111,7 +111,7 @@ impl MemoryServer {
             .await
             .map_err(|e| e.to_string())?;
         if facts.is_empty() && episodes.is_empty() {
-            return Ok(format!("没有找到和「{query}」相关的记忆。"));
+            return Ok(format!("Nothing in memory matches “{query}”."));
         }
         let mut lines = Vec::new();
         for fact in &facts {
@@ -132,10 +132,10 @@ impl MemoryServer {
             .await
             .map_err(|e| e.to_string())?;
         Ok(if is_new {
-            format!("已记住（#{id}）：{subject} — {content}", id = fact.id)
+            format!("Remembered (#{id}): {subject} — {content}", id = fact.id)
         } else {
             format!(
-                "这条已经记过了（没重复入库）：#{id} {subject} — {content}",
+                "Already remembered (not stored twice): #{id} {subject} — {content}",
                 id = fact.id
             )
         })
@@ -149,9 +149,9 @@ impl MemoryServer {
             .await
             .map_err(|e| e.to_string())?;
         if removed == 0 {
-            Ok(format!("没有关于「{subject}」的记忆可忘。"))
+            Ok(format!("There is no memory about “{subject}” to forget."))
         } else {
-            Ok(format!("已忘掉「{subject}」下的 {removed} 条事实。"))
+            Ok(format!("Forgot {removed} facts about “{subject}”."))
         }
     }
 
@@ -163,7 +163,7 @@ impl MemoryServer {
             .await
             .map_err(|e| e.to_string())?;
         if facts.is_empty() {
-            return Ok("记忆里还没有事实。".to_string());
+            return Ok("Memory has no facts yet.".to_string());
         }
         Ok(facts
             .iter()
@@ -181,7 +181,7 @@ impl MemoryServer {
             .await
             .map_err(|e| e.to_string())?;
         if episodes.is_empty() {
-            return Ok("记忆里还没有情景。".to_string());
+            return Ok("Memory has no episodes yet.".to_string());
         }
         Ok(episodes
             .iter()
@@ -204,7 +204,7 @@ impl MemoryServer {
                 Err(e) => {
                     let error = json!({
                         "jsonrpc": "2.0", "id": null,
-                        "error": {"code": -32700, "message": format!("解析失败：{e}")},
+                        "error": {"code": -32700, "message": format!("parse failed: {e}")},
                     });
                     write_line(&mut out, &error).await?;
                     continue;
@@ -231,7 +231,7 @@ fn require_str(args: &Value, key: &str) -> Result<String, String> {
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| format!("参数 '{key}' 必须是非空字符串。"))
+        .ok_or_else(|| format!("Parameter '{key}' must be a non-empty string."))
 }
 
 /// The five memory tools exposed outside. **Memory only** — see the module header for why.

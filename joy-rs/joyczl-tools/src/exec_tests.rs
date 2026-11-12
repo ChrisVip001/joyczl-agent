@@ -36,9 +36,12 @@ fn the_hard_deny_list_is_not_configurable() {
     ] {
         let verdict = vet(command, &policy(&["*"]));
         let Gate::Deny(why) = &verdict else {
-            panic!("{command} 必须被硬拒，实际 {verdict:?}");
+            panic!("{command} 必须被hard block，实际 {verdict:?}");
         };
-        assert!(why.contains("硬拒"), "{command} 的拒因要说清是硬拒名单挡的");
+        assert!(
+            why.contains("hard block"),
+            "{command} 的拒因要说清是hard block名单挡的"
+        );
     }
 }
 
@@ -59,7 +62,7 @@ fn allowlist_verdict(command: &str, rules: &[&str]) -> Result<(), String> {
         // Matched — whether it needs approval is another matter (dedicated tests below).
         Gate::Allow | Gate::NeedsApproval { .. } => Ok(()),
         // Blocked by the allowlist: this is the outcome to observe.
-        Gate::Deny(why) if why.contains("放行") => Err(why),
+        Gate::Deny(why) if why.contains("No allow rule matched") => Err(why),
         // Blocked by the later gate (sandbox) — meaning the rule check passed.
         Gate::Deny(_) => Ok(()),
     }
@@ -86,9 +89,9 @@ fn the_sandbox_requirement_is_the_last_gate() {
         assert!(matches!(verdict, Gate::Allow), "{verdict:?}");
     } else {
         let Gate::Deny(error) = &verdict else {
-            panic!("没有沙箱就该拒绝，实际 {verdict:?}");
+            panic!("没有sandbox就该拒绝，实际 {verdict:?}");
         };
-        assert!(error.contains("沙箱"), "{error}");
+        assert!(error.contains("sandbox"), "{error}");
     }
 }
 
@@ -107,7 +110,7 @@ async fn an_allowed_command_runs_and_reports_its_exit_code() {
     )
     .await;
     assert!(output.contains("hello-sandbox"), "{output}");
-    assert!(output.contains("退出码 0"), "{output}");
+    assert!(output.contains("exit code 0"), "{output}");
 }
 
 #[tokio::test]
@@ -126,7 +129,7 @@ async fn the_sandbox_confines_writes_to_the_allowed_roots() {
     )
     .await;
     assert!(
-        output.contains("退出码 0"),
+        output.contains("exit code 0"),
         "允许的根里必须写得进去：{output}"
     );
     assert!(probe.exists());
@@ -149,7 +152,7 @@ async fn the_sandbox_confines_writes_to_the_allowed_roots() {
     }
     assert!(
         !leaked,
-        "沙箱没拦住越界写：{output}\n（命令逃出了允许的根）"
+        "sandbox没拦住越界写：{output}\n（命令逃出了允许的根）"
     );
 }
 
@@ -168,7 +171,7 @@ async fn a_refused_command_never_reaches_the_shell() {
     )
     .await;
     assert!(output.starts_with("Error:"), "{output}");
-    assert!(output.contains("硬拒"), "{output}");
+    assert!(output.contains("hard block"), "{output}");
     assert!(!probe.exists(), "被拒的命令不该有任何副作用");
 }
 
@@ -251,7 +254,7 @@ async fn an_extra_root_is_writable_inside_the_sandbox() {
     )
     .await;
     assert!(
-        output.contains("退出码 0") && probe.exists(),
+        output.contains("exit code 0") && probe.exists(),
         "额外放开的根必须真的可写：{output}"
     );
 }
@@ -278,12 +281,12 @@ async fn an_over_long_output_is_spilled_and_the_path_reported() {
     .await;
 
     assert!(
-        output.contains("完整输出在 spill/"),
+        output.contains("full output at spill/"),
         "要说清完整输出在哪儿：{output}"
     );
     assert!(
         output.chars().count() < 9000,
-        "喂回模型的仍然是截断后的（上下文要保住）"
+        "喂回模型的仍然是截断后的（context要保住）"
     );
     // What's spilled must be the **full** output, not the truncated copy.
     let day = std::fs::read_dir(home.path().join("spill"))
@@ -322,9 +325,9 @@ async fn without_a_spill_directory_it_just_truncates() {
         None,
     )
     .await;
-    assert!(output.contains("已截断"), "{output}");
+    assert!(output.contains("truncated"), "{output}");
     assert!(
-        !output.contains("完整输出在"),
+        !output.contains("full output at"),
         "没落盘就不该说有文件：{output}"
     );
 }
@@ -354,7 +357,7 @@ fn spill_cleanup_removes_only_old_days() {
 
     prune_spill(home.path(), 7);
 
-    assert!(!old_day.exists(), "超过 7 天的该被清掉");
+    assert!(!old_day.exists(), "over 7 天的该被清掉");
     assert!(new_day.exists() && new_file.exists(), "新的要留着");
 }
 

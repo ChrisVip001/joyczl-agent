@@ -69,7 +69,7 @@ pub fn read(home: &Path) -> (Vec<FileJob>, Option<String>) {
         Err(error) => {
             return (
                 Vec::new(),
-                Some(format!("读不了 {}：{error}", path.display())),
+                Some(format!("could not read {}: {error}", path.display())),
             )
         }
     };
@@ -79,9 +79,9 @@ pub fn read(home: &Path) -> (Vec<FileJob>, Option<String>) {
             return (
                 Vec::new(),
                 Some(format!(
-                    "{} 不是合法 JSON（{error}）—— 不会覆盖它，先手工修好",
-                    path.display()
-                )),
+                "{} is not valid JSON ({error}) — it will not be overwritten; fix it by hand first",
+                path.display()
+            )),
             )
         }
     };
@@ -128,19 +128,21 @@ pub fn save(home: &Path, body: &JobBody, reserved: &[String]) -> Result<String, 
     validate_name(name)?;
     if reserved.iter().any(|taken| taken == name) {
         return Err(format!(
-            "「{name}」已经被一个带 schedule 的技能占用 —— 换个名字，或去改那个技能的 SKILL.md"
+            "{name} is already taken by a skill that carries a schedule — pick another name, or edit that skill's SKILL.md"
         ));
     }
     let cron = body.cron.split_whitespace().collect::<Vec<_>>().join(" ");
     if !crate::cron::valid(&cron) {
         return Err(format!(
-            "cron「{}」不合法：五段，如 `0 8 * * 1-5`（工作日八点）",
+            "cron \"{}\" is invalid: five fields, e.g. `0 8 * * 1-5` (08:00 on weekdays)",
             body.cron.trim()
         ));
     }
     let prompt = body.prompt.trim();
     if prompt.is_empty() {
-        return Err("要写清楚触发时做什么 —— 这一句会作为一次对话发给 Joy".to_string());
+        return Err(
+            "say what to do when it fires — this sentence is sent to Joy as a turn".to_string(),
+        );
     }
     let delivery = if body.delivery.trim().is_empty() {
         "outbox".to_string()
@@ -149,7 +151,7 @@ pub fn save(home: &Path, body: &JobBody, reserved: &[String]) -> Result<String, 
     };
     if !DELIVERIES.contains(&delivery.as_str()) {
         return Err(format!(
-            "投递方式「{delivery}」不认识：outbox（写文件）/ notify（文件 + 通知）/ quiet（只记日志）"
+            "unknown delivery \"{delivery}\": outbox (write a file) / notify (file + notification) / quiet (log only)"
         ));
     }
 
@@ -160,13 +162,21 @@ pub fn save(home: &Path, body: &JobBody, reserved: &[String]) -> Result<String, 
     };
     let object = match root.as_object_mut() {
         Some(object) => object,
-        None => return Err(format!("{} 的顶层不是对象，先手工修好", path.display())),
+        None => {
+            return Err(format!(
+                "the top level of {} is not an object; fix it by hand first",
+                path.display()
+            ))
+        }
     };
     let jobs = object
         .entry("jobs")
         .or_insert_with(|| Value::Array(Vec::new()));
     let Some(array) = jobs.as_array_mut() else {
-        return Err(format!("{} 里的 jobs 不是数组，先手工修好", path.display()));
+        return Err(format!(
+            "jobs in {} is not an array; fix it by hand first",
+            path.display()
+        ));
     };
 
     let catch_up = body.catch_up.unwrap_or(true);
@@ -193,52 +203,58 @@ pub fn save(home: &Path, body: &JobBody, reserved: &[String]) -> Result<String, 
     }
 
     write_root(&path, &root)?;
-    Ok(format!("已保存「{name}」：{cron}，投递 {delivery}"))
+    Ok(format!("saved \"{name}\": {cron}, delivery {delivery}"))
 }
 
 /// Delete one file-declared job. A name a skill owns is refused with the way out.
 pub fn remove(home: &Path, name: &str, reserved: &[String]) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err("要删哪一个？名字是空的".to_string());
+        return Err("Which one should be deleted? The name is empty".to_string());
     }
     if reserved.iter().any(|taken| taken == name) {
         return Err(format!(
-            "「{name}」随技能走 —— 删掉那个技能，或把 SKILL.md 里的 schedule 行去掉"
+            "{name} belongs to a skill — delete that skill, or remove the schedule line from its SKILL.md"
         ));
     }
 
     let path = path_of(home);
-    let mut root =
-        read_root(&path)?.ok_or_else(|| format!("{} 还不存在，没有可删的任务", path.display()))?;
+    let mut root = read_root(&path)?.ok_or_else(|| {
+        format!(
+            "{} does not exist yet, so there is no job to delete",
+            path.display()
+        )
+    })?;
     let Some(array) = root.get_mut("jobs").and_then(Value::as_array_mut) else {
-        return Err(format!("{} 里没有 jobs 数组", path.display()));
+        return Err(format!("{} has no jobs array", path.display()));
     };
     let before = array.len();
     array.retain(|entry| entry.get("name").and_then(Value::as_str) != Some(name));
     if array.len() == before {
-        return Err(format!("schedules.json 里没有「{name}」"));
+        return Err(format!("schedules.json has no \"{name}\""));
     }
     write_root(&path, &root)?;
-    Ok(format!("已删除「{name}」"))
+    Ok(format!("deleted \"{name}\""))
 }
 
 /// Lowercase letters, digits and hyphens — the name is the scheduler's key, and it travels
 /// into `schedule:<name>` session ids.
 fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
-        return Err("任务要有名字：小写字母、数字、连字符，如 morning-news".to_string());
+        return Err(
+            "a job needs a name: lowercase letters, digits, hyphens, e.g. morning-news".to_string(),
+        );
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
         return Err(format!(
-            "名字「{name}」不合法：只能用小写字母、数字和连字符（它也是日程的键）"
+            "the name \"{name}\" is invalid: only lowercase letters, digits and hyphens are allowed (it is the schedule key too)"
         ));
     }
     if name.len() > 64 {
-        return Err("名字太长了（最多 64 个字符）".to_string());
+        return Err("the name is too long (64 characters at most)".to_string());
     }
     Ok(())
 }
@@ -248,24 +264,24 @@ fn read_root(path: &Path) -> Result<Option<Value>, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).map(Some).map_err(|error| {
             format!(
-                "{} 不是合法 JSON（{error}）—— 为了不覆盖它，这次不写",
+                "{} is not valid JSON ({error}) — not writing, so as not to overwrite it",
                 path.display()
             )
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("读不了 {}：{error}", path.display())),
+        Err(error) => Err(format!("could not read {}: {error}", path.display())),
     }
 }
 
 /// Write through a temp file in the same directory, then rename: a crash mid-write leaves
 /// the old file intact instead of a truncated one the scheduler would refuse to parse.
 fn write_root(path: &Path, root: &Value) -> Result<(), String> {
-    let text =
-        serde_json::to_string_pretty(root).map_err(|error| format!("序列化失败：{error}"))?;
+    let text = serde_json::to_string_pretty(root)
+        .map_err(|error| format!("serialisation failed: {error}"))?;
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, format!("{text}\n"))
-        .map_err(|error| format!("写不了 {}：{error}", temp.display()))?;
-    std::fs::rename(&temp, path).map_err(|error| format!("改名失败：{error}"))
+        .map_err(|error| format!("could not write {}: {error}", temp.display()))?;
+    std::fs::rename(&temp, path).map_err(|error| format!("rename failed: {error}"))
 }
 
 /// The next fire as `YYYY-MM-DD HH:MM`, or the reason there is none.
@@ -351,13 +367,15 @@ mod tests {
         assert!(save(&home, &body("Bad Name", "0 8 * * *"), &[]).is_err());
         assert!(save(&home, &body("ok", "0 8 * *"), &[])
             .unwrap_err()
-            .contains("五段"));
+            .contains("five fields"));
         let mut empty = body("ok", "0 8 * * *");
         empty.prompt = "  ".to_string();
-        assert!(save(&home, &empty, &[]).unwrap_err().contains("做什么"));
+        assert!(save(&home, &empty, &[]).unwrap_err().contains("what to do"));
         let mut weird = body("ok", "0 8 * * *");
         weird.delivery = "telepathy".to_string();
-        assert!(save(&home, &weird, &[]).unwrap_err().contains("投递方式"));
+        assert!(save(&home, &weird, &[])
+            .unwrap_err()
+            .contains("unknown delivery"));
         assert!(remove(&home, "nothing", &[]).is_err());
     }
 

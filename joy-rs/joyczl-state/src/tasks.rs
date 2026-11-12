@@ -103,7 +103,7 @@ impl<'q> Encode<'q, Sqlite> for TaskStatus {
 impl<'r> Decode<'r, Sqlite> for TaskStatus {
     fn decode(value: SqliteValueRef<'r>) -> std::result::Result<Self, sqlx::error::BoxDynError> {
         let raw = <&str as Decode<Sqlite>>::decode(value)?;
-        Self::parse(raw).ok_or_else(|| format!("不认识的任务状态：{raw}").into())
+        Self::parse(raw).ok_or_else(|| format!("unknown task status: {raw}").into())
     }
 }
 
@@ -351,7 +351,7 @@ impl Tasks {
     pub async fn finish(&self, id: &str, status: TaskStatus) -> Result<()> {
         if !status.is_terminal() {
             return Err(anyhow::anyhow!(
-                "finish 只收终态，收到的是 {status}（非终态请用 suspend / needs_attention）"
+                "finish only takes terminal states; got {status} (for anything else use suspend / needs_attention)"
             ));
         }
         sqlx::query(
@@ -427,11 +427,7 @@ impl Tasks {
         .fetch_all(&self.pool)
         .await?;
         sqlx::query(
-            "UPDATE agent_tasks SET status = 'suspended',
-             suspend_reason = '进程重启，未完成的回合若可续跑会自动继续',
-             last_stop_reason = '进程重启，未完成的回合若可续跑会自动继续',
-             updated_at = datetime('now')
-             WHERE status = 'running'",
+            "UPDATE agent_tasks SET status = 'suspended',\n             suspend_reason = 'the process restarted; an unfinished turn resumes automatically if it can',\n             last_stop_reason = 'the process restarted; an unfinished turn resumes automatically if it can',\n             updated_at = datetime('now')\n             WHERE status = 'running'",
         )
         .execute(&self.pool)
         .await?;

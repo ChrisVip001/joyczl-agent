@@ -49,13 +49,14 @@ pub fn valid_device(name: &str) -> bool {
 /// auth tests keep the count small by unit-testing the table, not the KDF cost.
 /// PBKDF2 iterations: OWASP's PBKDF2-SHA256 guidance (~210k).
 fn pbkdf2_iters() -> std::num::NonZeroU32 {
-    std::num::NonZeroU32::new(210_000).expect("210_000 非 0")
+    std::num::NonZeroU32::new(210_000).expect("210_000 is not zero")
 }
 
 /// Password → stored credential (hex salt + hex hash). Salt is 16 random bytes.
 fn hash_password(password: &str) -> Result<Credential> {
     let mut salt = [0u8; 16];
-    getrandom::fill(&mut salt).map_err(|e| anyhow::anyhow!("系统随机源读不了：{e}"))?;
+    getrandom::fill(&mut salt)
+        .map_err(|e| anyhow::anyhow!("could not read the system entropy source: {e}"))?;
     let mut hash = [0u8; 32];
     pbkdf2::derive(
         pbkdf2::PBKDF2_HMAC_SHA256,
@@ -154,18 +155,21 @@ impl Users {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Users::default());
             }
-            Err(e) => return Err(e).context(format!("users.json 读不了：{}", path.display())),
+            Err(e) => {
+                return Err(e).context(format!("could not read users.json: {}", path.display()))
+            }
         };
         let raw: serde_json::Value =
-            serde_json::from_str(&text).context("users.json 不是合法 JSON")?;
+            serde_json::from_str(&text).context("users.json is not valid JSON")?;
         // v2: {"users": {name: account}}. v1 (flat user→token) migrates in memory: the
         // token becomes device "cli" and no credential — the holder keeps access, the
         // web login appears after they register a password (same username or new).
         let accounts: HashMap<String, Account> = if raw.get("users").is_some() {
-            serde_json::from_value(raw["users"].clone()).context("users.json v2 字段不合法")?
+            serde_json::from_value(raw["users"].clone())
+                .context("users.json v2 has invalid fields")?
         } else {
             let flat: HashMap<String, String> =
-                serde_json::from_value(raw).context("users.json 不是合法 JSON")?;
+                serde_json::from_value(raw).context("users.json is not valid JSON")?;
             flat.into_iter()
                 .map(|(user, token)| {
                     (
@@ -181,7 +185,7 @@ impl Users {
         for name in accounts.keys() {
             anyhow::ensure!(
                 valid_user(name),
-                "users.json 里的用户名 '{name}' 不合格（只许小写字母数字与连字符，≤32）"
+                "user name '{name}' in users.json is not valid (lowercase letters, digits and hyphens only, at most 32)"
             );
         }
         Ok(Users {
@@ -194,13 +198,13 @@ impl Users {
         let map: HashMap<&String, &Account> = self.users.iter().map(|(u, a)| (u, a)).collect();
         let text = serde_json::to_string_pretty(&serde_json::json!({ "users": map }))?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, text).context("users.json 写不进去")?;
+        std::fs::write(&tmp, text).context("could not write users.json")?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
         }
-        std::fs::rename(&tmp, path).context("users.json 换名失败")?;
+        std::fs::rename(&tmp, path).context("could not rewrite users.json")?;
         Ok(())
     }
 
@@ -211,7 +215,7 @@ impl Users {
             Some((_, account)) => account,
             None => {
                 self.users.push((user.to_string(), Account::default()));
-                let (_, account) = self.users.last_mut().expect("刚 push 的");
+                let (_, account) = self.users.last_mut().expect("the one just pushed");
                 account
             }
         };
@@ -253,14 +257,18 @@ impl Users {
     ) -> Result<(), AuthError> {
         if !valid_user(user) {
             return Err(AuthError::BadInput(
-                "用户名只许小写字母、数字与连字符，≤32 字符",
+                "user names may only use lowercase letters, digits and hyphens, at most 32 characters",
             ));
         }
         if password.len() < 8 {
-            return Err(AuthError::BadInput("密码至少 8 个字符"));
+            return Err(AuthError::BadInput(
+                "the password needs at least 8 characters",
+            ));
         }
         if !valid_device(device) {
-            return Err(AuthError::BadInput("设备名要是 1–32 个可见字符"));
+            return Err(AuthError::BadInput(
+                "the device name must be 1-32 visible characters",
+            ));
         }
         if self.users.iter().any(|(name, _)| name == user) {
             return Err(AuthError::Exists);
@@ -391,8 +399,8 @@ impl Hub {
         let users = Users::load(&path)?;
         if users.is_empty() {
             eprintln!(
-                "(joy) hub：{} 里还没有用户。本机打开驾驶舱即可注册第一个账号，\
-                 或 `joy hub adduser <名字> --root {}`。",
+                "(joy) hub: {} has no users yet. Open the cockpit locally to register the first account, \
+                 or run `joy hub adduser <name> --root {}`.",
                 path.display(),
                 root.display()
             );
@@ -412,19 +420,22 @@ impl Hub {
         *self
             .first_registration_open
             .lock()
-            .expect("注册门锁不该中毒") = allowed;
+            .expect("the registration gate lock should not be poisoned") = allowed;
     }
 
     /// Web registration: seat check + first-user policy + credential + first device.
     /// Persists immediately — a hub restart must not lose an account.
     pub fn register(&self, user: &str, password: &str, device: &str) -> Result<String, AuthError> {
         let token = generate_token().map_err(|_| AuthError::Internal)?;
-        let mut users = self.users.lock().expect("users 锁不该中毒");
+        let mut users = self
+            .users
+            .lock()
+            .expect("the users lock should not be poisoned");
         if users.is_empty()
             && !*self
                 .first_registration_open
                 .lock()
-                .expect("注册门锁不该中毒")
+                .expect("the registration gate lock should not be poisoned")
         {
             return Err(AuthError::Closed);
         }
@@ -439,18 +450,23 @@ impl Hub {
     /// returns the same token), persist when a new device joined.
     pub fn login(&self, user: &str, password: &str, device: &str) -> Result<String, AuthError> {
         if !valid_device(device) {
-            return Err(AuthError::Invalid("设备名要是 1–32 个可见字符"));
+            return Err(AuthError::Invalid(
+                "the device name must be 1-32 visible characters",
+            ));
         }
         let fresh = generate_token().map_err(|_| AuthError::Internal)?;
-        let mut users = self.users.lock().expect("users 锁不该中毒");
+        let mut users = self
+            .users
+            .lock()
+            .expect("the users lock should not be poisoned");
         if !users.password_ok(user, password) {
             // A short, constant-ish delay: online guessing pays wall-clock even if the
             // KDF is somehow fast. Not a rate limiter — that is documented, not solved.
             std::thread::sleep(std::time::Duration::from_millis(200));
-            return Err(AuthError::Invalid("用户名或密码不对"));
+            return Err(AuthError::Invalid("the user name or password is wrong"));
         }
         let Some((token, added)) = users.device_token(user, device, &fresh) else {
-            return Err(AuthError::Invalid("用户名或密码不对"));
+            return Err(AuthError::Invalid("the user name or password is wrong"));
         };
         if added {
             users
@@ -465,7 +481,10 @@ impl Hub {
     }
 
     pub fn user_count(&self) -> usize {
-        self.users.lock().expect("users 锁不该中毒").len()
+        self.users
+            .lock()
+            .expect("the users lock should not be poisoned")
+            .len()
     }
 
     /// A user's home (lazy creation is left to app-server's ensure_home).
@@ -479,14 +498,20 @@ impl Hub {
             .strip_prefix("Bearer ")
             .map(str::trim)
             .filter(|t| !t.is_empty())?;
-        self.users.lock().expect("users 锁不该中毒").verify(token)
+        self.users
+            .lock()
+            .expect("the users lock should not be poisoned")
+            .verify(token)
     }
 
     /// This user's app-server, spawned if absent (lazy — cold users cost no memory).
     /// The guard lock is per-home: two hubs do not fight, and a hub is also blocked
     /// from the same home as a manually started `joy app-server`.
     pub async fn client(&self, user: &str) -> Result<Arc<AppServer>> {
-        let mut clients = self.clients.lock().expect("clients 锁不该中毒");
+        let mut clients = self
+            .clients
+            .lock()
+            .expect("the clients lock should not be poisoned");
         if let Some(entry) = clients.get_mut(user) {
             entry.last_used = Instant::now();
             return Ok(Arc::clone(&entry.app));
@@ -503,9 +528,9 @@ impl Hub {
             let Some(victim) = lru_victim(&snapshot) else {
                 break;
             };
-            let evicted = clients.remove(&victim).expect("刚选出来的受害者");
+            let evicted = clients.remove(&victim).expect("the victim just chosen");
             eprintln!(
-                "(joy) hub：用户 {victim} 的 app-server 闲置已关（池满 {}）",
+                "(joy) hub: closed the idle app-server of user {victim} (pool full, {})",
                 self.max_open
             );
             drop(evicted); // kill_on_drop — the child process exits here.
@@ -519,9 +544,9 @@ impl Hub {
                 .map(|(u, e)| (u.clone(), e.last_used, Arc::strong_count(&e.app) == 1))
                 .collect();
             for victim in stale_entries(&snapshot, self.idle_secs, now) {
-                let evicted = clients.remove(&victim).expect("刚选出来的受害者");
+                let evicted = clients.remove(&victim).expect("the victim just chosen");
                 eprintln!(
-                    "(joy) hub：用户 {victim} 的 app-server 闲置已关（超 {} 秒）",
+                    "(joy) hub: closed the idle app-server of user {victim} (idle over {} seconds)",
                     self.idle_secs
                 );
                 drop(evicted);
@@ -541,13 +566,17 @@ impl Hub {
 
     /// Number of instances currently in the pool (for tests and observation).
     pub fn open_count(&self) -> usize {
-        self.clients.lock().expect("clients 锁不该中毒").len()
+        self.clients
+            .lock()
+            .expect("the clients lock should not be poisoned")
+            .len()
     }
 }
 
 /// Generate a token: 32 random bytes → 64 hex characters.
 pub fn generate_token() -> Result<String> {
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("系统随机源读不了：{e}"))?;
+    getrandom::fill(&mut bytes)
+        .map_err(|e| anyhow::anyhow!("could not read the system entropy source: {e}"))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }

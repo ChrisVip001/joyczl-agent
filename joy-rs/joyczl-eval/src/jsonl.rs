@@ -31,15 +31,15 @@ where
     for path in paths {
         for file in files_of(path, label)? {
             let text = std::fs::read_to_string(&file)
-                .with_context(|| format!("读不了{label}文件：{}", file.display()))?;
+                .with_context(|| format!("could not read the {label} file: {}", file.display()))?;
             for (index, line) in text.lines().enumerate() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {
                     continue;
                 }
-                let at = format!("{} 第 {} 行", file.display(), index + 1);
+                let at = format!("{} line {}", file.display(), index + 1);
                 let case: T = serde_json::from_str(line)
-                    .map_err(|e| anyhow::anyhow!("{at} 不是合法{label}：{e}"))?;
+                    .map_err(|e| anyhow::anyhow!("{at} is not valid {label}: {e}"))?;
                 check(&case, &at)?;
                 cases.push(case);
             }
@@ -54,7 +54,7 @@ fn files_of(path: &Path, label: &str) -> Result<Vec<PathBuf>> {
         return Ok(vec![path.to_path_buf()]);
     }
     let mut files: Vec<PathBuf> = std::fs::read_dir(path)
-        .with_context(|| format!("读不了{label}目录：{}", path.display()))?
+        .with_context(|| format!("could not read the {label} directory: {}", path.display()))?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))

@@ -581,8 +581,18 @@ async fn the_follow_up_queue_is_fifo_per_session_and_pops_once() {
 
     let first = queue.pop("s1").await.expect("取").expect("该有一条");
     assert_eq!(first.message, "第一句", "先进先出");
+    assert!(queue.pop("s1").await.expect("claim blocked").is_none());
+    queue.release(first.id).await.expect("release");
+    let reclaimed = queue.pop("s1").await.unwrap().unwrap();
+    assert_eq!(reclaimed.id, first.id);
+    queue.complete(first.id).await.expect("complete");
     let second = queue.pop("s1").await.expect("取").expect("该有一条");
     assert_eq!(second.message, "第二句");
+    let interrupted = queue.reconcile_interrupted().await.unwrap();
+    assert_eq!(interrupted.len(), 1);
+    assert_eq!(interrupted[0].id, second.id);
+    assert_eq!(interrupted[0].message, second.message);
+    assert!(queue.reconcile_interrupted().await.unwrap().is_empty());
     assert!(
         queue.pop("s1").await.expect("取").is_none(),
         "取走就不再来一次"
@@ -851,7 +861,7 @@ async fn forking_copies_the_last_turns_and_leaves_the_original_alone() {
     let meta = chat.session("branch").await.unwrap().expect("分支有元数据");
     assert_eq!(meta.forked_from.as_deref(), Some("src"), "记下来源");
     assert_eq!(meta.cwd.as_deref(), Some("/tmp/work"), "工作目录要继承");
-    assert!(meta.title.contains("分支"), "标题带后缀：{}", meta.title);
+    assert!(meta.title.contains("branch"), "标题带后缀：{}", meta.title);
 }
 
 #[tokio::test]
@@ -873,4 +883,344 @@ async fn a_session_that_was_never_forked_has_no_source() {
         .unwrap();
     let meta = chat.session("plain").await.unwrap().expect("有元数据");
     assert_eq!(meta.forked_from, None);
+}
+
+#[tokio::test]
+async fn concurrent_queue_drains_claim_an_instruction_only_once() {
+    let queue = crate::Queue::new(temp_db("queue_concurrent_claim").await);
+    queue.push("s", "first").await.unwrap();
+    queue.push("s", "second").await.unwrap();
+    let (a, b) = tokio::join!(queue.pop("s"), queue.pop("s"));
+    let claimed: Vec<_> = [a.unwrap(), b.unwrap()].into_iter().flatten().collect();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].message, "first");
+    assert_eq!(queue.count("s").await.unwrap(), 1);
+    queue.complete(claimed[0].id).await.unwrap();
+    assert_eq!(queue.pop("s").await.unwrap().unwrap().message, "second");
+}
+
+#[tokio::test]
+async fn reopening_an_interrupted_run_preserves_spend_and_refuses_terminal_runs() {
+    let pool = temp_db("run_reopen").await;
+    let tasks = crate::Tasks::new(pool.clone());
+    tasks
+        .create(crate::NewTask {
+            id: "task-reopen",
+            title: "resume",
+            session_id: Some("s"),
+            goal_condition: None,
+            cwd: None,
+            acceptance_json: "[]",
+            budget_json: "{}",
+            max_rounds: 1,
+            tier: None,
+        })
+        .await
+        .unwrap();
+    let runs = crate::Runs::new(pool);
+    runs.start("r", "task-reopen", Some("s"), Some("t"))
+        .await
+        .unwrap();
+    runs.add_round("r", 10, 5, 1, 0).await.unwrap();
+    runs.close("r", crate::RunStatus::Waiting, Some("restarted"))
+        .await
+        .unwrap();
+    assert!(runs.reopen("r").await.unwrap());
+    let row = runs.get("r").await.unwrap().unwrap();
+    assert_eq!(row.status, "running");
+    assert_eq!(row.tokens_in, 10);
+    assert_eq!(row.tools_ok, 1);
+    assert!(row.ended_at.is_none());
+    runs.close("r", crate::RunStatus::Completed, None)
+        .await
+        .unwrap();
+    assert!(!runs.reopen("r").await.unwrap());
+}
+
+#[tokio::test]
+async fn recovered_round_charges_only_new_work_and_accounting_rolls_back_together() {
+    let pool = temp_db("round_accounting").await;
+    let tasks = crate::Tasks::new(pool.clone());
+    tasks
+        .create(crate::NewTask {
+            id: "account-task",
+            title: "accounting",
+            session_id: None,
+            goal_condition: None,
+            cwd: None,
+            acceptance_json: "[]",
+            budget_json: "{}",
+            max_rounds: 2,
+            tier: None,
+        })
+        .await
+        .unwrap();
+    let runs = crate::Runs::new(pool.clone());
+    runs.start("account-run", "account-task", None, None)
+        .await
+        .unwrap();
+    let original = crate::runs::RoundAccount {
+        tokens_in: 100,
+        tokens_out: 20,
+        tools_ok: 2,
+        wall_ms: 50,
+        ..Default::default()
+    };
+    runs.account_round("account-run", "round-1", &original)
+        .await
+        .unwrap();
+    runs.account_round("account-run", "round-1", &original)
+        .await
+        .unwrap();
+    let recovered = crate::runs::RoundAccount {
+        tokens_in: 150,
+        tokens_out: 30,
+        tools_ok: 3,
+        wall_ms: 80,
+        ..Default::default()
+    };
+    runs.account_round("account-run", "round-1", &recovered)
+        .await
+        .unwrap();
+    let task = tasks.get("account-task").await.unwrap().unwrap();
+    assert_eq!(
+        (task.spent_tokens, task.spent_tools, task.spent_wall_ms),
+        (180, 3, 80)
+    );
+    let run = runs.get("account-run").await.unwrap().unwrap();
+    assert_eq!(
+        (run.rounds, run.tokens_in, run.tokens_out, run.tools_ok),
+        (1, 150, 30, 3)
+    );
+    sqlx::query("CREATE TRIGGER fail_run_account BEFORE UPDATE ON task_runs BEGIN SELECT RAISE(ABORT, 'injected accounting failure'); END").execute(&pool).await.unwrap();
+    assert!(runs
+        .account_round("account-run", "round-2", &original)
+        .await
+        .is_err());
+    let task = tasks.get("account-task").await.unwrap().unwrap();
+    assert_eq!(
+        (task.spent_tokens, task.spent_tools, task.spent_wall_ms),
+        (180, 3, 80)
+    );
+    assert_eq!(
+        runs.round_account("account-run", "round-2")
+            .await
+            .unwrap()
+            .tokens_in,
+        0
+    );
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM run_round_accounts WHERE round_id = 'round-2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        count, 0,
+        "failed receipt must not suppress the eventual retry"
+    );
+}
+
+#[tokio::test]
+async fn jobs_bind_to_the_exact_host_run_and_reject_cross_session_binding() {
+    let pool = temp_db("job_run_binding").await;
+    let tasks = crate::Tasks::new(pool.clone());
+    for id in ["older", "newer"] {
+        tasks
+            .create(crate::NewTask {
+                id,
+                title: id,
+                session_id: Some("s"),
+                goal_condition: None,
+                cwd: None,
+                acceptance_json: "[]",
+                budget_json: "{}",
+                max_rounds: 1,
+                tier: None,
+            })
+            .await
+            .unwrap();
+    }
+    let runs = crate::Runs::new(pool.clone());
+    runs.start("older-run", "older", Some("s"), None)
+        .await
+        .unwrap();
+    runs.start("newer-run", "newer", Some("s"), None)
+        .await
+        .unwrap();
+    let jobs = crate::Jobs::new(pool);
+    jobs.record_started_for_run("job-old", "s", "echo", "log", Some("older-run"))
+        .await
+        .unwrap();
+    let row = jobs.get("job-old").await.unwrap().unwrap();
+    assert_eq!(row.run_id.as_deref(), Some("older-run"));
+    assert_eq!(row.task_id.as_deref(), Some("older"));
+    assert!(jobs
+        .record_started_for_run("foreign", "other", "echo", "log", Some("older-run"))
+        .await
+        .is_err());
+    assert!(jobs.get("foreign").await.unwrap().is_none());
+    runs.close("older-run", crate::RunStatus::Completed, None)
+        .await
+        .unwrap();
+    assert!(jobs
+        .record_started_for_run("stale", "s", "echo", "log", Some("older-run"))
+        .await
+        .is_err());
+    assert!(jobs.get("stale").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn job_outcome_and_completion_event_commit_together() {
+    let pool = temp_db("job_completion_atomic").await;
+    let jobs = crate::Jobs::new(pool.clone());
+    jobs.record_started_with_delivery("job", "s", "echo", "log", None, true, Some("target"))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER fail_completion BEFORE INSERT ON job_completions BEGIN SELECT RAISE(ABORT, 'injected completion failure'); END").execute(&pool).await.unwrap();
+    assert!(jobs
+        .record_finished("job", "completed", Some(0))
+        .await
+        .is_err());
+    assert_eq!(jobs.get("job").await.unwrap().unwrap().status, "running");
+    assert!(jobs.pending_notifications().await.unwrap().is_empty());
+    sqlx::query("DROP TRIGGER fail_completion")
+        .execute(&pool)
+        .await
+        .unwrap();
+    jobs.record_finished("job", "completed", Some(0))
+        .await
+        .unwrap();
+    jobs.record_finished("job", "failed", Some(1))
+        .await
+        .unwrap();
+    let pending = jobs.pending_notifications().await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        pending[0].status, "completed",
+        "repeated completion must not rewrite the known outcome"
+    );
+    assert_eq!(pending[0].notify_target.as_deref(), Some("target"));
+    jobs.notification_enqueued("job").await.unwrap();
+    assert!(jobs.pending_notifications().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn durable_job_waits_roll_back_bad_dependencies_and_honor_human_pause() {
+    let pool = temp_db("durable_job_waits").await;
+    let tasks = crate::Tasks::new(pool.clone());
+    tasks
+        .create(crate::NewTask {
+            id: "wait-task",
+            title: "wait",
+            session_id: Some("s"),
+            goal_condition: None,
+            cwd: None,
+            acceptance_json: "[]",
+            budget_json: "{}",
+            max_rounds: 2,
+            tier: None,
+        })
+        .await
+        .unwrap();
+    tasks.set_running("wait-task", "wait-run").await.unwrap();
+    let runs = crate::Runs::new(pool.clone());
+    runs.start("wait-run", "wait-task", Some("s"), Some("wait-run"))
+        .await
+        .unwrap();
+    let checkpoints = crate::Checkpoints::new(pool.clone());
+    checkpoints
+        .save_round(
+            "wait-run",
+            "s",
+            "work",
+            "[]",
+            0,
+            "{}",
+            Some("wait-run"),
+            Some("round"),
+        )
+        .await
+        .unwrap();
+    let jobs = crate::Jobs::new(pool.clone());
+    jobs.record_started_for_run("old", "s", "historical", "log", Some("wait-run"))
+        .await
+        .unwrap();
+    jobs.record_finished("old", "interrupted", None)
+        .await
+        .unwrap();
+    jobs.record_started_for_run("current", "s", "work", "log", Some("wait-run"))
+        .await
+        .unwrap();
+    let waits = crate::waits::JobWaits::new(pool);
+    assert!(waits
+        .register(
+            "wait-task",
+            "wait-run",
+            "wait-run",
+            "s",
+            &["missing".into()]
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        tasks.get("wait-task").await.unwrap().unwrap().status,
+        crate::TaskStatus::Running
+    );
+    assert_eq!(
+        checkpoints.get("wait-run").await.unwrap().unwrap().status,
+        "open"
+    );
+    assert_eq!(
+        runs.get("wait-run").await.unwrap().unwrap().status,
+        "running"
+    );
+    waits
+        .register(
+            "wait-task",
+            "wait-run",
+            "wait-run",
+            "s",
+            &["current".into()],
+        )
+        .await
+        .unwrap();
+    let wait = waits.get("wait-task").await.unwrap().unwrap();
+    assert_eq!(waits.jobs("wait-task").await.unwrap().len(), 1);
+    assert!(!waits.claim(&wait, "[]").await.unwrap());
+    tasks
+        .suspend("wait-task", Some("human pause"))
+        .await
+        .unwrap();
+    jobs.record_finished("current", "completed", Some(0))
+        .await
+        .unwrap();
+    assert!(!waits.claim(&wait, "[]").await.unwrap());
+    assert_eq!(
+        tasks
+            .get("wait-task")
+            .await
+            .unwrap()
+            .unwrap()
+            .suspend_reason
+            .as_deref(),
+        Some("human pause")
+    );
+    tasks.resume("wait-task").await.unwrap();
+    runs.reopen("wait-run").await.unwrap();
+    waits
+        .register(
+            "wait-task",
+            "wait-run",
+            "wait-run",
+            "s",
+            &["current".into()],
+        )
+        .await
+        .unwrap();
+    let resumed_memory = r#"[{"role":"user","content":[{"type":"text","text":"job completed"}]}]"#;
+    assert!(waits.claim(&wait, resumed_memory).await.unwrap());
+    assert!(!waits.claim(&wait, resumed_memory).await.unwrap());
+    let checkpoint = checkpoints.get("wait-run").await.unwrap().unwrap();
+    assert_eq!(checkpoint.status, "open");
+    assert_eq!(checkpoint.messages_json, resumed_memory);
 }

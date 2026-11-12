@@ -5,7 +5,7 @@ use joyczl_provider::{ContentBlock, Message, Role};
 use crate::ledger_writer::{entries_for_turn, payload_text, rebuild_turn, LedgerSink};
 
 fn temp_home(name: &str) -> std::path::PathBuf {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().join(name);
     let _ = dir.keep();
     home

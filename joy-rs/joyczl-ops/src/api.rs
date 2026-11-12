@@ -159,7 +159,7 @@ pub async fn events(Extension(app): Extension<Arc<AppServer>>) -> Response {
     })
     .map(|ping| {
         Ok::<_, std::convert::Infallible>(
-            Event::default().data(serde_json::to_string(&ping).expect("ping 装得进 JSON")),
+            Event::default().data(serde_json::to_string(&ping).expect("ping serialises into JSON")),
         )
     });
 
@@ -207,7 +207,10 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
         .request(methods::INBOX_LIST, json!({}))
         .await
         .unwrap_or_else(|error| {
-            eprintln!("(joy) 收件箱读不了（面板会显示空）：{}", error.message);
+            eprintln!(
+                "(joy) could not read the inbox (the panel will show it empty): {}",
+                error.message
+            );
             InboxListView {
                 items: Vec::new(),
                 unseen: 0,
@@ -239,7 +242,7 @@ async fn collect(app: &AppServer, session: Option<&str>) -> Result<DashboardData
                     .await
                     .map(|response| response.artifacts)
                     .unwrap_or_else(|error| {
-                        eprintln!("(joy) 任务的交付物读不了（面板显示空）：{}", error.message);
+                        eprintln!("(joy) could not read the task deliverables (the panel shows them empty): {}", error.message);
                         Vec::new()
                     }),
                 None => Vec::new(),
@@ -277,7 +280,7 @@ pub async fn session(
     Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<SessionMessagesParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("SessionMessagesParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("SessionMessagesParams always serialises");
     match app
         .request::<SessionMessagesResponse>(methods::SESSION_MESSAGES, payload)
         .await
@@ -295,7 +298,7 @@ pub async fn session_meta(
     Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<SessionGetParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("SessionGetParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("SessionGetParams always serialises");
     match app
         .request::<SessionGetResponse>(methods::SESSION_GET, payload)
         .await
@@ -314,7 +317,7 @@ pub async fn session_new(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<SessionNewParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("SessionNewParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("SessionNewParams always serialises");
     match app
         .request::<SessionNewResponse>(methods::SESSION_NEW, payload)
         .await
@@ -329,7 +332,7 @@ pub async fn session_update(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<SessionUpdateParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("SessionUpdateParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("SessionUpdateParams always serialises");
     match app
         .request::<SessionUpdateResponse>(methods::SESSION_UPDATE, payload)
         .await
@@ -345,7 +348,7 @@ pub async fn session_fork(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<SessionForkParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("SessionForkParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("SessionForkParams always serialises");
     match app
         .request::<SessionForkResponse>(methods::SESSION_FORK, payload)
         .await
@@ -363,7 +366,7 @@ pub async fn turns(
     Extension(app): Extension<Arc<AppServer>>,
     Query(params): Query<TurnListParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("TurnListParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("TurnListParams always serialises");
     match app
         .request::<TurnListResponse>(methods::TURN_LIST, payload)
         .await
@@ -382,7 +385,7 @@ pub async fn steer(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<TurnSteerParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("TurnSteerParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("TurnSteerParams always serialises");
     match app
         .request::<TurnSteerResponse>(methods::TURN_STEER, payload)
         .await
@@ -401,7 +404,7 @@ pub async fn follow_up(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<TurnFollowUpParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("TurnFollowUpParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("TurnFollowUpParams always serialises");
     match app
         .request::<TurnFollowUpResponse>(methods::TURN_FOLLOW_UP, payload)
         .await
@@ -453,7 +456,7 @@ pub async fn inbox(
                 StatusCode::BAD_REQUEST,
                 ErrorObject {
                     code: codes::INVALID_PARAMS,
-                    message: format!("收件箱参数不对：{e}"),
+                    message: format!("bad inbox parameters: {e}"),
                     data: None,
                 },
             )
@@ -462,7 +465,7 @@ pub async fn inbox(
     match app
         .request::<InboxSummarizeResponse>(
             methods::INBOX_SUMMARIZE,
-            serde_json::to_value(params).expect("可序列化"),
+            serde_json::to_value(params).expect("serialisable"),
         )
         .await
     {
@@ -501,12 +504,12 @@ pub async fn task(
             .map(|params| {
                 (
                     methods::TASK_CREATE,
-                    serde_json::to_value(params).expect("可序列化"),
+                    serde_json::to_value(params).expect("serialisable"),
                 )
             })
             .map_err(|e| ErrorObject {
                 code: codes::INVALID_PARAMS,
-                message: format!("建任务的参数不对：{e}"),
+                message: format!("bad task-create parameters: {e}"),
                 data: None,
             }),
         "suspend" | "resume" | "cancel" => serde_json::from_value::<TaskActionParams>(body.clone())
@@ -516,16 +519,16 @@ pub async fn task(
                     "resume" => methods::TASK_RESUME,
                     _ => methods::TASK_CANCEL,
                 };
-                (method, serde_json::to_value(params).expect("可序列化"))
+                (method, serde_json::to_value(params).expect("serialisable"))
             })
             .map_err(|e| ErrorObject {
                 code: codes::INVALID_PARAMS,
-                message: format!("任务动作的参数不对：{e}"),
+                message: format!("bad task-action parameters: {e}"),
                 data: None,
             }),
         other => Err(ErrorObject {
             code: codes::INVALID_PARAMS,
-            message: format!("不认识的任务动作：{other}（create/suspend/resume/cancel）"),
+            message: format!("unknown task action: {other} (create/suspend/resume/cancel)"),
             data: None,
         }),
     };
@@ -612,7 +615,7 @@ pub async fn schedule_save(
 ) -> Response {
     match crate::schedules::save(app.home(), &body) {
         Ok(message) => {
-            eprintln!("(joy) 能力中心：{message}");
+            eprintln!("(joy) capability hub: {message}");
             outcome(true, message)
         }
         Err(message) => refusal(message),
@@ -626,7 +629,7 @@ pub async fn schedule_remove(
 ) -> Response {
     match crate::schedules::remove(app.home(), body.name.trim()) {
         Ok(message) => {
-            eprintln!("(joy) 能力中心：{message}");
+            eprintln!("(joy) capability hub: {message}");
             outcome(true, message)
         }
         Err(message) => refusal(message),
@@ -660,7 +663,7 @@ pub async fn upload(
             StatusCode::PAYLOAD_TOO_LARGE,
             ErrorObject {
                 code: codes::INVALID_PARAMS,
-                message: format!("文件超过 20MB 上限（{} 字节）", body.len()),
+                message: format!("the file is over the 20MB limit ({} bytes)", body.len()),
                 data: None,
             },
         );
@@ -670,7 +673,7 @@ pub async fn upload(
             StatusCode::BAD_REQUEST,
             ErrorObject {
                 code: codes::INVALID_PARAMS,
-                message: "空文件不收。".into(),
+                message: "Empty files are not accepted.".into(),
                 data: None,
             },
         );
@@ -693,7 +696,7 @@ pub async fn upload(
             StatusCode::INTERNAL_SERVER_ERROR,
             ErrorObject {
                 code: codes::INTERNAL_ERROR,
-                message: format!("建目录失败：{why}"),
+                message: format!("could not create the directory: {why}"),
                 data: None,
             },
         );
@@ -713,7 +716,7 @@ pub async fn upload(
             StatusCode::INTERNAL_SERVER_ERROR,
             ErrorObject {
                 code: codes::INTERNAL_ERROR,
-                message: format!("写文件失败：{why}"),
+                message: format!("could not write the file: {why}"),
                 data: None,
             },
         );
@@ -742,13 +745,13 @@ pub struct FsEntry {
 pub fn list_dirs(raw: &str, include_hidden: bool) -> Result<FsListing, String> {
     let path = std::path::PathBuf::from(raw);
     if !path.is_absolute() {
-        return Err(format!("'{raw}' 必须是绝对路径"));
+        return Err(format!("'{raw}' must be an absolute path"));
     }
     if !path.is_dir() {
-        return Err(format!("'{raw}' 不存在或不是目录"));
+        return Err(format!("'{raw}' does not exist or is not a directory"));
     }
     let mut entries: Vec<FsEntry> = std::fs::read_dir(&path)
-        .map_err(|why| format!("读不动 {raw}：{why}"))?
+        .map_err(|why| format!("could not read {raw}: {why}"))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let is_dir = entry.file_type().ok()?.is_dir();
@@ -829,24 +832,28 @@ pub async fn fs_browse(
 pub fn create_subdir(parent_raw: &str, name: &str) -> Result<String, String> {
     let parent = std::path::PathBuf::from(parent_raw);
     if !parent.is_absolute() {
-        return Err(format!("父目录 '{parent_raw}' 必须是绝对路径"));
+        return Err(format!("parent '{parent_raw}' must be an absolute path"));
     }
     if !parent.is_dir() {
-        return Err(format!("父目录 '{parent_raw}' 不存在或不是目录"));
+        return Err(format!(
+            "parent '{parent_raw}' does not exist or is not a directory"
+        ));
     }
     let name = name.trim();
-    let bad = |why: &str| format!("目录名 '{name}' 不合格：{why}");
+    let bad = |why: &str| format!("directory name '{name}' is not valid: {why}");
     if name.is_empty() || name.len() > 64 {
-        return Err(bad("1-64 个字符"));
+        return Err(bad("1-64 characters"));
     }
     if name.contains('/') || name.contains('\\') || name.contains("..") || name.starts_with('.') {
-        return Err(bad("不能包含路径形状（分隔符、..、点开头）"));
+        return Err(bad(
+            "no path shapes allowed (separators, .., a leading dot)",
+        ));
     }
     let target = parent.join(name);
     if target.exists() {
-        return Err(format!("'{name}' 在 {parent_raw} 下已经存在"));
+        return Err(format!("'{name}' already exists under {parent_raw}"));
     }
-    std::fs::create_dir(&target).map_err(|why| format!("建不动：{why}"))?;
+    std::fs::create_dir(&target).map_err(|why| format!("could not create it: {why}"))?;
     Ok(target.to_string_lossy().to_string())
 }
 
@@ -921,7 +928,7 @@ pub async fn model_save(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ModelSaveParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("ModelSaveParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("ModelSaveParams always serialises");
     match app
         .request::<ModelSaveResponse>(methods::MODEL_SAVE, payload)
         .await
@@ -936,7 +943,7 @@ pub async fn model_remove(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ModelRemoveParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("ModelRemoveParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("ModelRemoveParams always serialises");
     match app
         .request::<ModelRemoveResponse>(methods::MODEL_REMOVE, payload)
         .await
@@ -962,7 +969,7 @@ pub async fn model_routes_save(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ModelRoutesSaveParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("ModelRoutesSaveParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("ModelRoutesSaveParams always serialises");
     match app
         .request::<ModelRoutesResponse>(methods::MODEL_ROUTES_SAVE, payload)
         .await
@@ -976,7 +983,7 @@ pub async fn approval(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<ApprovalRespondParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("ApprovalRespondParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("ApprovalRespondParams always serialises");
     // Same path as turn: the app-server is a subprocess, answering is one of its methods.
     match app
         .request::<ApprovalRespondResponse>(methods::APPROVAL_RESPOND, payload)
@@ -996,7 +1003,7 @@ pub async fn interrupt(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<TurnInterruptParams>,
 ) -> Response {
-    let payload = serde_json::to_value(&params).expect("TurnInterruptParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("TurnInterruptParams always serialises");
     match app
         .request::<TurnInterruptResponse>(methods::TURN_INTERRUPT, payload)
         .await
@@ -1024,7 +1031,7 @@ pub async fn turn(
             StatusCode::BAD_REQUEST,
             ErrorObject {
                 code: codes::INVALID_PARAMS,
-                message: "消息是空的".to_string(),
+                message: "the message is empty".to_string(),
                 data: None,
             },
         );
@@ -1039,7 +1046,7 @@ pub async fn turn(
     let events = app.subscribe();
     let (tx, rx) = mpsc::channel::<ServerNotification>(TURN_BUFFER);
 
-    let payload = serde_json::to_value(&params).expect("TurnStartParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("TurnStartParams always serialises");
     tokio::spawn(async move {
         forward(&app, payload, session_id, tx, events).await;
     });
@@ -1063,7 +1070,7 @@ pub async fn run(
             StatusCode::BAD_REQUEST,
             ErrorObject {
                 code: codes::INVALID_PARAMS,
-                message: "消息是空的".to_string(),
+                message: "the message is empty".to_string(),
                 data: None,
             },
         );
@@ -1089,7 +1096,7 @@ pub(crate) async fn run_headless(
         .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "default".to_string());
-    let payload = serde_json::to_value(&params).expect("TurnStartParams 一定能序列化");
+    let payload = serde_json::to_value(&params).expect("TurnStartParams always serialises");
     let mut events = app.subscribe();
     let request = app.request::<TurnStartResponse>(methods::TURN_START, payload);
     tokio::pin!(request);
@@ -1107,7 +1114,7 @@ pub(crate) async fn run_headless(
                 let notification = match received {
                     Ok(notification) => notification,
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
-                        eprintln!("(joy) 任务 API 的通知晚了一步，丢了 {missed} 条");
+                        eprintln!("(joy) the task API's notifications arrived too late; {missed} were dropped");
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -1144,7 +1151,7 @@ pub(crate) async fn run_headless(
         .find(|message| matches!(message.role, MessageRole::Assistant))
         .ok_or_else(|| ErrorObject {
             code: codes::INTERNAL_ERROR,
-            message: "这一轮跑完了，但答复没读到（通知队列溢出且历史里没有）".to_string(),
+            message: "the turn finished, but the reply could not be read (the notification queue overflowed and it is not in the history)".to_string(),
             data: None,
         })?;
     let meta = reply.meta;
@@ -1178,12 +1185,14 @@ pub async fn hook(
         Ok(config) => config,
         Err(error) => {
             // A broken file disables every hook loudly — same discipline as connectors.json.
-            eprintln!("(joy) webhooks.json 有问题，入站 hook 全部不启用：{error:#}");
+            eprintln!(
+                "(joy) webhooks.json has a problem; inbound hooks are all disabled: {error:#}"
+            );
             return failed(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 ErrorObject {
                     code: codes::INTERNAL_ERROR,
-                    message: format!("webhooks.json 有问题：{error}"),
+                    message: format!("webhooks.json has a problem: {error}"),
                     data: None,
                 },
             );
@@ -1270,11 +1279,14 @@ fn refuse(status: StatusCode, message: &str) -> Response {
 fn refusal_response(refusal: webhooks::Refusal) -> Response {
     match refusal {
         webhooks::Refusal::Unauthorized(reason) => refuse(StatusCode::UNAUTHORIZED, reason),
-        webhooks::Refusal::Replay => refuse(StatusCode::CONFLICT, "这个签名已经用过（重放被拒）"),
+        webhooks::Refusal::Replay => refuse(
+            StatusCode::CONFLICT,
+            "this signature has already been used (replay refused)",
+        ),
         webhooks::Refusal::TooFast(wait) => {
             let mut response = refuse(
                 StatusCode::TOO_MANY_REQUESTS,
-                &format!("这个 hook 每分钟的额度用完了，{wait} 秒后再试"),
+                &format!("this hook's per-minute quota is spent; try again in {wait} seconds"),
             );
             if let Ok(value) = axum::http::HeaderValue::from_str(&wait.to_string()) {
                 response.headers_mut().insert("retry-after", value);
@@ -1317,7 +1329,7 @@ async fn forward(
                     // Lapped: intermediate notifications fell behind. Received content is
                     // kept, but it must be said, or the page shows "a chunk mysteriously gone".
                     Err(broadcast::error::RecvError::Lagged(missed)) => {
-                        eprintln!("(joy) 通知推得太快，这一轮丢了 {missed} 条");
+                        eprintln!("(joy) notifications came too fast; {missed} were dropped this turn");
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -1421,7 +1433,7 @@ fn bytes_stream(
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     stream::unfold(rx, |mut rx| async move {
         let notification = rx.recv().await?;
-        let json = serde_json::to_string(&notification).expect("通知一定能序列化");
+        let json = serde_json::to_string(&notification).expect("a notification always serialises");
         Some((Ok(Event::default().data(json)), rx))
     })
 }
@@ -1479,11 +1491,14 @@ pub async fn skills_install(
     } else if !body.text.trim().is_empty() {
         joyczl_memory::skills::install_from_text(&home, &body.text)
     } else {
-        Err("粘贴 SKILL.md 内容，或填一个网址 —— 两样都空着没法装".to_string())
+        Err(
+            "Paste SKILL.md content or give a URL — with both empty there is nothing to install"
+                .to_string(),
+        )
     };
     match result {
         Ok(message) => {
-            eprintln!("(joy) 能力中心：{message}");
+            eprintln!("(joy) capability hub: {message}");
             outcome(true, message)
         }
         Err(message) => refusal(message),
@@ -1497,7 +1512,7 @@ pub async fn skills_remove(
 ) -> Response {
     match capabilities::remove_skill(app.home(), body.name.trim()) {
         Ok(message) => {
-            eprintln!("(joy) 能力中心：{message}");
+            eprintln!("(joy) capability hub: {message}");
             outcome(true, message)
         }
         Err(message) => refusal(message),
@@ -1520,14 +1535,14 @@ pub async fn mcp_save(
 ) -> Response {
     let spec: ServerSpec = match serde_json::from_value(body) {
         Ok(spec) => spec,
-        Err(why) => return refusal(format!("连接器参数不对：{why}")),
+        Err(why) => return refusal(format!("bad connector parameters: {why}")),
     };
     match capabilities::save_server(app.home(), &spec) {
         Ok(message) => {
-            eprintln!("(joy) 能力中心：{message}");
+            eprintln!("(joy) capability hub: {message}");
             outcome(
                 true,
-                format!("{message}\n重启 Joy 后生效 —— 连接发生在启动时"),
+                format!("{message}\nEffective after a restart — connections happen at startup"),
             )
         }
         Err(message) => refusal(message),
@@ -1541,10 +1556,10 @@ pub async fn mcp_remove(
 ) -> Response {
     match capabilities::remove_server(app.home(), body.name.trim()) {
         Ok(message) => {
-            eprintln!("(joy) 能力中心：{message}");
+            eprintln!("(joy) capability hub: {message}");
             outcome(
                 true,
-                format!("{message}\n重启 Joy 后生效 —— 连接发生在启动时"),
+                format!("{message}\nEffective after a restart — connections happen at startup"),
             )
         }
         Err(message) => refusal(message),

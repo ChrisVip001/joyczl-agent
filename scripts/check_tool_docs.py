@@ -56,6 +56,14 @@ HEADING_RE = re.compile(r"^## 6\.0 清单：(\d+) 个常驻 \+ (\d+) 个门控",
 # 阶段表和时间线里，那样一条「表里漏了」的漂移永远不会被发现。
 README_SECTION_RE = re.compile(r"^### (Built-in tools|内置工具)\s*$", re.M)
 
+# README 开头那句「N 个内置工具（A 常驻，B 门控）」。名字齐全但总数写错，一样是漂移 ——
+# 而且更难发现：表格看着是全的，只有那行数字在撒谎。两种语言各一条，rewording 会让这条
+# 检查报「找不到数量句」，而不是静默跳过。
+COUNT_RE = re.compile(
+    r"(\d+) built-in tools \((\d+) always on, (\d+) behind switches\)"
+    r"|(\d+) 个内置工具（(\d+) 个默认常驻，(\d+) 个在开关后面）"
+)
+
 
 def fail(message: str) -> None:
     print(f"✗ {message}", file=sys.stderr)
@@ -136,8 +144,22 @@ def main() -> int:
             f"{DOC} §6.0 标题说 {got[0]} 个常驻 + {got[1]} 个门控，代码里是 {want[0]} + {want[1]}"
         )
 
+    counts = (want[0] + want[1], want[0], want[1])
     for readme in READMES:
-        table = readme_table(readme.read_text(encoding="utf-8"), readme.name)
+        text = readme.read_text(encoding="utf-8")
+        found = COUNT_RE.search(text)
+        if found is None:
+            fail(
+                f"{readme.name} 里找不到「N 个内置工具（A 常驻，B 门控）」这一句 —— "
+                "它是读者看到的第一个数字，不能没有"
+            )
+        said = tuple(int(g) for g in found.groups() if g is not None)
+        if said != counts:
+            fail(
+                f"{readme.name} 说内置工具 {said[0]} 个（{said[1]} 常驻 + {said[2]} 门控），"
+                f"代码里是 {counts[0]}（{counts[1]} + {counts[2]}）"
+            )
+        table = readme_table(text, readme.name)
         missing = sorted(t for t in always | gated if f"`{t}`" not in table)
         if missing:
             fail(f"{readme.name} 的工具表里漏了：{', '.join(missing)}")

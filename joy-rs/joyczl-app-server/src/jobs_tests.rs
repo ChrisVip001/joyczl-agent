@@ -12,7 +12,7 @@ use joyczl_tools::jobs::JobRegistry;
 use crate::jobs::{Jobs, Ring};
 
 async fn jobs(allow: &[&str]) -> (Arc<Jobs>, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let policy = ExecPolicy {
         allow: allow.iter().map(|rule| rule.to_string()).collect(),
         timeout_secs: 10,
@@ -73,7 +73,7 @@ async fn a_job_runs_reads_and_lands_in_the_outbox() {
         .join(format!("{}-{id}.txt", std::process::id()));
     assert!(outbox.exists(), "该落到 {}：{:?}", outbox.display(), again);
     let text = std::fs::read_to_string(&outbox).expect("读得回来");
-    assert!(text.contains("退出码 0"), "{text}");
+    assert!(text.contains("exit code 0"), "{text}");
     assert!(text.contains("第一行"), "环里剩下的内容该在里面：{text}");
 }
 
@@ -154,7 +154,7 @@ async fn the_ledger_records_how_jobs_end() {
     if !joyczl_tools::exec::sandbox_available() {
         return;
     }
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
@@ -202,7 +202,7 @@ async fn the_ledger_records_how_jobs_end() {
 /// can be listed, output read back; **never auto-rerun**.
 #[tokio::test]
 async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
         .expect("打开库");
@@ -259,4 +259,62 @@ async fn a_crash_leaves_an_interrupted_record_not_a_zombie() {
         .output("someone-else", &"j1".to_string(), 0, false)
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn job_ids_survive_registry_recreation() {
+    if !joyczl_tools::exec::sandbox_available() {
+        return;
+    }
+    let (first, dir) = jobs(&["echo*"]).await;
+    let id = first.spawn("s1", "echo first", None).await.unwrap();
+    first.output("s1", &id, 0, true).await.unwrap();
+    let pool = joyczl_state::open(&dir.path().join("state.db"))
+        .await
+        .unwrap();
+    let rows = joyczl_state::Jobs::new(pool);
+    let second = Jobs::new(
+        ExecPolicy::default(),
+        dir.path().to_path_buf(),
+        rows.clone(),
+    );
+    let second_id = second.spawn("s1", "echo second", None).await.unwrap();
+    second.output("s1", &second_id, 0, true).await.unwrap();
+    assert_ne!(id, second_id);
+    assert_eq!(rows.get(&id).await.unwrap().unwrap().command, "echo first");
+    assert_eq!(
+        rows.get(&second_id).await.unwrap().unwrap().command,
+        "echo second"
+    );
+}
+
+#[tokio::test]
+async fn failed_job_ledger_prevents_process_start() {
+    let (registry, dir) = jobs(&[]).await;
+    let pool = joyczl_state::open(&dir.path().join("state.db"))
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE jobs").execute(&pool).await.unwrap();
+    let result = registry
+        .spawn(
+            "s1",
+            "touch should-not-exist",
+            Some(dir.path().display().to_string()),
+        )
+        .await;
+    assert!(result.unwrap_err().contains("Cannot persist job intent"));
+    assert!(!dir.path().join("should-not-exist").exists());
+}
+
+#[tokio::test]
+async fn unavailable_task_run_prevents_background_process_start() {
+    let (jobs, home) = jobs(&["echo*"]).await;
+    let marker = home.path().join("must-not-run");
+    let command = format!("echo started > {}", marker.display());
+    assert!(jobs
+        .spawn_for_run("s", &command, None, Some("missing-run".into()))
+        .await
+        .is_err());
+    assert!(!marker.exists());
+    assert!(jobs.list("s").is_empty());
 }

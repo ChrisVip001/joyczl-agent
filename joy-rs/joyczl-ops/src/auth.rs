@@ -32,7 +32,7 @@ pub async fn register(State(gate): State<Gate>, Json(params): Json<AuthParams>) 
     let Some(hub) = gate.hub_ref() else {
         return error_response(
             axum::http::StatusCode::BAD_REQUEST,
-            "本机模式不需要登录——这个驾驶舱就是你自己的服务器",
+            "Local mode needs no sign-in — this cockpit is your own server",
         );
     };
     match hub.register(&params.username, &params.password, &params.device) {
@@ -45,7 +45,7 @@ pub async fn login(State(gate): State<Gate>, Json(params): Json<AuthParams>) -> 
     let Some(hub) = gate.hub_ref() else {
         return error_response(
             axum::http::StatusCode::BAD_REQUEST,
-            "本机模式不需要登录——这个驾驶舱就是你自己的服务器",
+            "Local mode needs no sign-in — this cockpit is your own server",
         );
     };
     match hub.login(&params.username, &params.password, &params.device) {
@@ -69,12 +69,12 @@ fn status_of(error: &AuthError) -> axum::http::StatusCode {
 fn message_of(error: &AuthError) -> &'static str {
     match error {
         AuthError::BadInput(message) | AuthError::Invalid(message) => message,
-        AuthError::Exists => "这个用户名已经被注册了",
-        AuthError::Full => "用户名额已满（max_open）——注册关闭",
+        AuthError::Exists => "that user name is already taken",
+        AuthError::Full => "no seats left (max_open) — registration is closed",
         AuthError::Closed => {
-            "这台服务器还不允许公网注册第一个用户（先在本机注册，或 joy hub adduser）"
+            "this server will not let the first user register over the public internet (register locally first, or use joy hub adduser)"
         }
-        AuthError::Internal => "服务器内部错误（token 生成或存盘失败）",
+        AuthError::Internal => "internal server error (token generation or write failed)",
     }
 }
 

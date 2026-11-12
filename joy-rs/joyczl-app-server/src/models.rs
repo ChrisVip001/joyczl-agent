@@ -38,7 +38,9 @@ pub(crate) fn new_secrets() -> Secrets {
 pub(crate) fn apply_at_boot(settings: &mut joyczl_config::Settings, secrets: &Secrets) {
     let file = cfg::load_models(&settings.home);
     let home = settings.home.clone();
-    let mut store = secrets.lock().expect("secrets 锁不该中毒");
+    let mut store = secrets
+        .lock()
+        .expect("the secrets lock should not be poisoned");
     cfg::apply_active(&file, &home, &mut *store, settings);
 }
 
@@ -116,7 +118,7 @@ fn validate_provider(
         return Ok(());
     }
     Err(format!(
-        "不认识的 provider '{provider}'。可用的：{}；走自建端点就同时给 base_url。",
+        "unknown provider '{provider}'. Available: {}; for a self-hosted endpoint, give base_url as well.",
         catalog.ids().join("、")
     ))
 }
@@ -141,7 +143,7 @@ impl Server {
                     .collect(),
             },
             Err(e) => {
-                eprintln!("(joy) 调度状态读不了：{e}");
+                eprintln!("(joy) the schedule state could not be read: {e}");
                 ScheduleListResponse { jobs: Vec::new() }
             }
         }
@@ -166,7 +168,7 @@ impl Server {
                     .collect(),
             },
             Err(e) => {
-                eprintln!("(joy) 审批审计读不了：{e}");
+                eprintln!("(joy) the approval audit could not be read: {e}");
                 ApprovalLogResponse {
                     entries: Vec::new(),
                 }
@@ -197,7 +199,7 @@ impl Server {
                     .collect(),
             },
             Err(e) => {
-                eprintln!("(joy) 用量汇总读不了：{e}");
+                eprintln!("(joy) the usage rollup could not be read: {e}");
                 UsageSummaryResponse {
                     turns: 0,
                     input_tokens: 0,
@@ -209,7 +211,10 @@ impl Server {
     }
 
     pub fn model_profiles(&self) -> ModelProfilesResponse {
-        let file = self.models.read().expect("models 锁不该中毒");
+        let file = self
+            .models
+            .read()
+            .expect("the models lock should not be poisoned");
         ModelProfilesResponse {
             active_id: file.active.clone(),
             profiles: views(&file),
@@ -221,10 +226,15 @@ impl Server {
     pub fn model_save(&self, p: ModelSaveParams) -> Result<ModelSaveResponse, String> {
         let id = p.id.trim().to_string();
         if id.is_empty() {
-            return Err("id 不能为空（给它起个短名，比如 ds、公司-openai）".to_string());
+            return Err(
+                "id must not be empty (give it a short name, e.g. ds, acme-openai)".to_string(),
+            );
         }
 
-        let mut file = self.models.write().expect("models 锁不该中毒");
+        let mut file = self
+            .models
+            .write()
+            .expect("the models lock should not be poisoned");
         let existing = cfg::find(&file, &id).cloned();
 
         // provider: required when creating; when editing, absent means keep the old.
@@ -233,7 +243,7 @@ impl Server {
             (None, Some(e)) => e.provider.clone(),
             (None, None) => {
                 return Err(format!(
-                    "第一次配置 '{id}' 要给 provider（model/list 里有各家的 id）"
+                    "the first configuration of '{id}' needs a provider (model/list has each provider's id)"
                 ))
             }
         };
@@ -243,10 +253,13 @@ impl Server {
         let home = self.settings().home.clone();
         let key_stored_in = match (p.api_key.as_deref(), p.key_env.as_deref()) {
             (Some(key), _) if !key.trim().is_empty() => {
-                let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
+                let mut store = self
+                    .secrets
+                    .lock()
+                    .expect("the secrets lock should not be poisoned");
                 store
                     .put(&home, &id, key.trim())
-                    .map_err(|e| format!("凭据存不进去：{e}"))?
+                    .map_err(|e| format!("the credential could not be stored: {e}"))?
                     .to_string()
             }
             (_, Some(var)) if !var.trim().is_empty() => format!("env:{}", var.trim()),
@@ -290,7 +303,7 @@ impl Server {
         let active = file.active.as_deref() == Some(id.as_str());
 
         // If persisting fails, memory is left untouched — "changed but not remembered" lies harder than "not changed".
-        cfg::save_models(&home, &file).map_err(|e| format!("写 models.json 失败：{e}"))?;
+        cfg::save_models(&home, &file).map_err(|e| format!("could not write models.json: {e}"))?;
         let current = self.reapply(&file);
         drop(file);
 
@@ -300,7 +313,7 @@ impl Server {
             active_id: self
                 .models
                 .read()
-                .expect("models 锁不该中毒")
+                .expect("the models lock should not be poisoned")
                 .active
                 .clone(),
             key_stored_in,
@@ -310,7 +323,10 @@ impl Server {
 
     pub fn model_remove(&self, p: ModelRemoveParams) -> ModelRemoveResponse {
         let home = self.settings().home.clone();
-        let mut file = self.models.write().expect("models 锁不该中毒");
+        let mut file = self
+            .models
+            .write()
+            .expect("the models lock should not be poisoned");
         let removed = cfg::remove(&mut file, &p.id);
         if removed {
             // Credentials go with it: leaving an unreferenced key in the keychain is garbage.
@@ -318,7 +334,10 @@ impl Server {
             // This lock must be **released before reapply** — reapply itself locks
             // secrets too, and std Mutex is not reentrant (locking it again on the same thread deadlocks).
             {
-                let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
+                let mut store = self
+                    .secrets
+                    .lock()
+                    .expect("the secrets lock should not be poisoned");
                 store.remove(&home, &p.id);
             }
             let _ = cfg::save_models(&home, &file);
@@ -345,10 +364,13 @@ impl Server {
         let mode = match p.mode.trim() {
             "fixed" => RouteMode::Fixed,
             "auto" => RouteMode::Auto,
-            other => return Err(format!("mode 只能是 fixed / auto —— 收到 '{other}'")),
+            other => return Err(format!("mode must be fixed or auto — got '{other}'")),
         };
         let known: Vec<String> = {
-            let file = self.models.read().expect("models 锁不该中毒");
+            let file = self
+                .models
+                .read()
+                .expect("the models lock should not be poisoned");
             file.profiles
                 .iter()
                 .map(|profile| profile.id.clone())
@@ -358,7 +380,10 @@ impl Server {
         for entry in p.routes {
             let tier = entry.tier.trim();
             if !TIERS.contains(&tier) {
-                return Err(format!("档位只能是 {} —— 收到 '{tier}'", TIERS.join(" / ")));
+                return Err(format!(
+                    "the tier must be one of {} — got '{tier}'",
+                    TIERS.join(" / ")
+                ));
             }
             let Some(id) = entry
                 .profile_id
@@ -370,14 +395,14 @@ impl Server {
             };
             if !known.iter().any(|known| known == id) {
                 return Err(format!(
-                    "路由表引用的 '{id}' 不存在 —— 先把这套模型配好再挂到档位上"
+                    "the routing table references '{id}', which does not exist — configure that profile before attaching it to a tier"
                 ));
             }
             routes.insert(tier.to_string(), id.to_string());
         }
         let file = RouteFile { mode, routes };
         save_routes(&self.settings().home, &file)
-            .map_err(|e| format!("写 model-routes.json 失败：{e}"))?;
+            .map_err(|e| format!("could not write model-routes.json: {e}"))?;
         Ok(routes_view(&file))
     }
 
@@ -387,13 +412,16 @@ impl Server {
         let mut settings = self.settings();
         {
             let home = settings.home.clone();
-            let mut store = self.secrets.lock().expect("secrets 锁不该中毒");
+            let mut store = self
+                .secrets
+                .lock()
+                .expect("the secrets lock should not be poisoned");
             cfg::apply_active(file, &home, &mut *store, &mut settings);
         }
         let resolved = match joyczl_provider::resolve_with(&settings, &self.catalog) {
             Ok(resolved) => Some(resolved),
             Err(reason) => {
-                eprintln!("(joy) 切换模型后还没配好，turn/* 暂不可用 —— {reason}");
+                eprintln!("(joy) after switching models nothing is configured yet; turn/* unavailable — {reason}");
                 None
             }
         };
@@ -403,7 +431,7 @@ impl Server {
         // The profile was just edited/deleted: all tier-cached resolutions are invalidated; re-resolve next turn.
         self.route_cache
             .lock()
-            .expect("route 缓存锁不该中毒")
+            .expect("the route-cache lock should not be poisoned")
             .clear();
         label
     }

@@ -63,6 +63,10 @@ impl Steps {
         Self { pool }
     }
 
+    pub fn plans(&self) -> crate::Plans {
+        crate::Plans::new(self.pool.clone())
+    }
+
     /// Record a step as `running` — "it is being sent right now". Returns the row id.
     ///
     /// A duplicate `idempotency_key` does not insert: it returns the existing row's id, so a
@@ -140,7 +144,7 @@ impl Steps {
     /// One run's steps, in order — the readable execution trace.
     pub async fn list_by_run(&self, run_id: &str) -> Result<Vec<StepRow>> {
         Ok(sqlx::query_as::<_, StepRow>(&format!(
-            "SELECT {COLS} FROM task_steps WHERE run_id = ? ORDER BY seq ASC, id ASC"
+            "SELECT {COLS} FROM task_steps WHERE run_id = ? ORDER BY id ASC"
         ))
         .bind(run_id)
         .fetch_all(&self.pool)
@@ -163,6 +167,17 @@ impl Steps {
 
     /// How many steps of this task already succeeded — `ToolsOk` acceptance reads this
     /// (it counts what actually ran, not what the model claims).
+    /// Evidence for the current execution, excluding successful calls from older runs.
+    pub async fn count_ok_by_tool_in_run(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        tool: &str,
+    ) -> Result<i64> {
+        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM task_steps WHERE task_id = ? AND run_id = ? AND tool = ? AND status = 'ok'")
+            .bind(task_id).bind(run_id).bind(tool).fetch_one(&self.pool).await?)
+    }
+
     pub async fn count_ok_by_tool(&self, task_id: &str, tool: &str) -> Result<i64> {
         Ok(sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM task_steps WHERE task_id = ? AND tool = ? AND status = 'ok'",

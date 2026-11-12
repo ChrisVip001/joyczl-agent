@@ -17,6 +17,8 @@ async fn test_ctx(approval: Option<Arc<dyn ApprovalBroker>>) -> ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         // The suite writes under `home`; treat it as the human's chosen workspace.
@@ -78,8 +80,8 @@ async fn write_file_creates_a_file_and_reports_it() {
             json!({"path": path.display().to_string(), "content": "第一行\n第二行\n"}),
         )
         .await;
-    assert!(out.starts_with("已写入"), "{out}");
-    assert!(out.contains("（新建，2 行）"), "{out}");
+    assert!(out.starts_with("Wrote"), "{out}");
+    assert!(out.contains("(new, 2 lines)"), "{out}");
     assert_eq!(
         std::fs::read_to_string(&path).expect("文件应存在"),
         "第一行\n第二行\n"
@@ -95,11 +97,11 @@ async fn writing_identical_content_skips_the_disk() {
     let first = reg
         .execute(ctx.clone(), "write_file", args("同一段内容\n"))
         .await;
-    assert!(first.starts_with("已写入"), "{first}");
+    assert!(first.starts_with("Wrote"), "{first}");
     let again = reg
         .execute(ctx.clone(), "write_file", args("同一段内容\n"))
         .await;
-    assert!(again.contains("内容未变，没有写盘"), "{again}");
+    assert!(again.contains("content is unchanged"), "{again}");
 }
 
 #[tokio::test]
@@ -114,7 +116,7 @@ async fn a_write_outside_the_roots_is_refused_without_asking() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("可写范围之外"), "{out}");
+    assert!(out.contains("outside the writable scope"), "{out}");
     assert!(!std::path::Path::new("/etc/joy-fs-write-test-denied.txt").exists());
 }
 
@@ -134,7 +136,10 @@ async fn no_chosen_workspace_means_no_writes_at_all() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("还没有选择工作目录"), "{out}");
+    assert!(
+        out.contains("No working directory has been chosen yet"),
+        "{out}"
+    );
     assert!(!path.exists());
 }
 
@@ -153,7 +158,7 @@ async fn a_write_outside_the_chosen_workspace_is_refused_even_under_home() {
             json!({"path": path.display().to_string(), "content": "hi\n"}),
         )
         .await;
-    assert!(out.contains("可写范围之外"), "{out}");
+    assert!(out.contains("outside the writable scope"), "{out}");
     assert!(!path.exists());
 }
 
@@ -187,7 +192,7 @@ async fn oversized_content_is_refused() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("上限"), "{out}");
+    assert!(out.contains("limit"), "{out}");
 }
 
 #[tokio::test]
@@ -207,7 +212,7 @@ async fn edit_replaces_the_single_match_and_shows_the_hunk() {
             }),
         )
         .await;
-    assert!(out.starts_with("已编辑"), "{out}");
+    assert!(out.starts_with("Edited"), "{out}");
     assert!(out.contains("- alpha beta gamma"), "{out}");
     assert!(out.contains("+ alpha delta gamma"), "{out}");
     assert_eq!(
@@ -230,7 +235,7 @@ async fn edit_refuses_zero_matches_with_a_hint() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("没有找到"), "{out}");
+    assert!(out.contains("was not found"), "{out}");
     assert!(out.contains("read_file"), "{out}");
 }
 
@@ -248,7 +253,7 @@ async fn edit_refuses_ambiguous_matches() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("2 次"), "{out}");
+    assert!(out.contains("2 times"), "{out}");
     assert_eq!(
         std::fs::read_to_string(&path).expect("被拒绝时文件不能动"),
         "beta here\nbeta there\n"
@@ -269,7 +274,7 @@ async fn edit_refuses_a_no_op_and_a_missing_file() {
         )
         .await;
     assert!(same.starts_with("Error:"), "{same}");
-    assert!(same.contains("相同"), "{same}");
+    assert!(same.contains("the same"), "{same}");
 
     let missing_path = ctx.home.join("nope.md");
     let missing = reg
@@ -280,7 +285,7 @@ async fn edit_refuses_a_no_op_and_a_missing_file() {
         )
         .await;
     assert!(missing.starts_with("Error:"), "{missing}");
-    assert!(missing.contains("找不到文件"), "{missing}");
+    assert!(missing.contains("File not found"), "{missing}");
 }
 
 #[tokio::test]
@@ -322,7 +327,7 @@ async fn on_request_mode_asks_once_per_write() {
             json!({"path": path.display().to_string(), "content": "hi\n"}),
         )
         .await;
-    assert!(out.starts_with("已写入"), "{out}");
+    assert!(out.starts_with("Wrote"), "{out}");
     {
         let seen = yes.seen.lock().expect("锁");
         assert_eq!(seen.len(), 1, "问一次，不是零次也不是多次");
@@ -341,7 +346,7 @@ async fn on_request_mode_asks_once_per_write() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("没有被批准"), "{out}");
+    assert!(out.contains("not approved"), "{out}");
     assert!(!denied_path.exists());
 }
 
@@ -368,7 +373,7 @@ async fn an_approved_directory_stops_asking() {
             json!({"path": first.display().to_string(), "content": "1\n"}),
         )
         .await;
-    assert!(out.starts_with("已写入"), "{out}");
+    assert!(out.starts_with("Wrote"), "{out}");
     {
         let seen = yes.seen.lock().expect("锁");
         assert_eq!(seen.len(), 1, "第一次要问");
@@ -389,11 +394,11 @@ async fn an_approved_directory_stops_asking() {
             json!({"path": second.display().to_string(), "content": "2\n"}),
         )
         .await;
-    assert!(out.starts_with("已写入"), "{out}");
+    assert!(out.starts_with("Wrote"), "{out}");
     assert_eq!(
         yes.seen.lock().expect("锁").len(),
         1,
-        "已批准的目录不该再问第二次"
+        "已approved的目录不该再问第二次"
     );
 }
 
@@ -424,7 +429,7 @@ async fn an_approved_directory_cannot_widen_the_boundary() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("可写范围"), "{out}");
+    assert!(out.contains("writable scope"), "{out}");
     assert!(!path.exists(), "越界的写入不该落盘");
 }
 
@@ -447,13 +452,13 @@ async fn on_request_mode_without_a_broker_refuses() {
         )
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("没人能回答"), "{out}");
+    assert!(out.contains("nobody can answer"), "{out}");
 }
 
 #[test]
 fn render_change_pins_the_hunk_format() {
     // New file.
-    assert_eq!(render_change(None, "a\nb\n"), "（新建，2 行）");
+    assert_eq!(render_change(None, "a\nb\n"), "(new, 2 lines)");
 
     // In-place edit keeps shared head/tail and marks the middle.
     let hunk = render_change(
@@ -466,7 +471,10 @@ fn render_change_pins_the_hunk_format() {
     assert!(hunk.contains("  one"), "{hunk}");
 
     // Identical content says so.
-    assert_eq!(render_change(Some("same\n"), "same\n"), "（内容未变）");
+    assert_eq!(
+        render_change(Some("same\n"), "same\n"),
+        "(content unchanged)"
+    );
 }
 
 #[test]
@@ -474,6 +482,6 @@ fn render_change_truncates_honestly() {
     let old = "x\n".repeat(100);
     let new = "y\n".repeat(100);
     let hunk = render_change(Some(&old), &new);
-    assert!(hunk.contains("diff 截断"), "{hunk}");
+    assert!(hunk.contains("diff truncated"), "{hunk}");
     assert!(hunk.contains("read_file"), "{hunk}");
 }

@@ -8,8 +8,8 @@
 //!   2. **One at a time.** The next message is taken only when a turn ends, so the session gate
 //!      is never fought over by the queue itself.
 //!
-//! There is no status column: a row exists exactly while it has not been handed to a turn
-//! (claim-then-run, see [`Queue::pop`]). Once it runs, chat_log is the record.
+//! Claimed rows survive until completion. A restart marks uncertain claims for attention;
+//! it never automatically repeats an instruction that may already have caused side effects.
 
 use sqlx::SqlitePool;
 
@@ -48,37 +48,59 @@ impl Queue {
 
     /// How many messages are waiting in this session.
     pub async fn count(&self, session_id: &str) -> Result<i64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM session_queue WHERE session_id = ?")
-            .bind(session_id)
-            .fetch_one(&self.pool)
-            .await?;
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM session_queue WHERE session_id = ? AND status = 'pending'",
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 
-    /// Take the oldest message for a session, **removing it**.
-    ///
-    /// Claim-then-run on purpose. Keeping the row until the turn succeeds would replay an
-    /// instruction whose outcome is unknown after a crash — exactly the failure mode 0013/0017
-    /// exist to avoid ("a step left running is never replayed"). The cost is the opposite
-    /// failure: a crash between this delete and the turn's first write loses that one
-    /// instruction. It is documented, and it is the cheaper of the two.
+    /// Atomically claim the oldest instruction, retaining its identity and contents.
+    /// Only one claim per session can be outstanding, including across drain races.
     pub async fn pop(&self, session_id: &str) -> Result<Option<QueuedMessage>, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-        let row: Option<QueuedMessage> = sqlx::query_as(
-            "SELECT id, session_id, message, created_at FROM session_queue
-             WHERE session_id = ? ORDER BY id LIMIT 1",
+        sqlx::query_as(
+            "UPDATE session_queue SET status = 'claimed' WHERE id = (
+                SELECT id FROM session_queue WHERE session_id = ? AND status = 'pending'
+                AND NOT EXISTS (SELECT 1 FROM session_queue WHERE session_id = ? AND status = 'claimed')
+                ORDER BY id LIMIT 1
+             ) RETURNING id, session_id, message, created_at",
         )
         .bind(session_id)
-        .fetch_optional(&mut *tx)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Complete after the turn or its failure has been durably recorded.
+    pub async fn complete(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM session_queue WHERE id = ? AND status = 'claimed'")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Admission was refused before execution: preserve FIFO position for the next drain.
+    pub async fn release(&self, id: i64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE session_queue SET status = 'pending' WHERE id = ? AND status = 'claimed'",
+        )
+        .bind(id)
+        .execute(&self.pool)
         .await?;
-        if let Some(row) = &row {
-            sqlx::query("DELETE FROM session_queue WHERE id = ?")
-                .bind(row.id)
-                .execute(&mut *tx)
-                .await?;
-        }
-        tx.commit().await?;
-        Ok(row)
+        Ok(())
+    }
+
+    /// Unknown outcomes remain inspectable and are never automatically replayed.
+    pub async fn reconcile_interrupted(&self) -> Result<Vec<QueuedMessage>, sqlx::Error> {
+        sqlx::query_as(
+            "UPDATE session_queue SET status = 'needs_attention' WHERE status = 'claimed'
+             RETURNING id, session_id, message, created_at",
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 
     /// Sessions that still have something queued — the boot drain's work list.
@@ -87,7 +109,7 @@ impl Queue {
     /// not matter, since the session gate serialises each one anyway.
     pub async fn sessions_with_pending(&self) -> Result<Vec<String>, sqlx::Error> {
         let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT DISTINCT session_id FROM session_queue ORDER BY session_id")
+            sqlx::query_as("SELECT DISTINCT session_id FROM session_queue WHERE status = 'pending' ORDER BY session_id")
                 .fetch_all(&self.pool)
                 .await?;
         Ok(rows.into_iter().map(|row| row.0).collect())

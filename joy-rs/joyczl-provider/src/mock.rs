@@ -62,12 +62,16 @@ impl Mock {
     }
 
     fn take(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
-        self.received.lock().expect("锁").push(request);
+        self.received.lock().expect("lock").push(request);
         self.responses
             .lock()
-            .expect("锁")
+            .expect("lock")
             .pop_front()
-            .unwrap_or_else(|| Err(ProviderError::Api("mock 的应答用完了".to_string())))
+            .unwrap_or_else(|| {
+                Err(ProviderError::Api(
+                    "the mock has run out of replies".to_string(),
+                ))
+            })
     }
 
     /// A plain-text response, the most common shape.
@@ -121,7 +125,7 @@ impl Provider for Mock {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<CreateResponse, ProviderError>> + Send + '_>>
     {
         let response = self.take(request);
-        self.streamed.lock().expect("锁").push(true);
+        self.streamed.lock().expect("lock").push(true);
         let text = match response.as_ref().ok().and_then(|r| r.content.first()) {
             Some(ContentBlock::Text { text }) => Some(text.clone()),
             _ => None,

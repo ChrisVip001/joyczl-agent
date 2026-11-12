@@ -49,6 +49,7 @@ scripts/                schema generation + four end-to-end smokes
 just check                    # every gate: fmt + schema drift + tool docs drift + ts-check
                               # + py-check + clippy -D warnings + cargo test + deterministic eval
 just check-tool-docs          # 06-tools §6.0 / README 的工具表 vs. 代码里的工具名单
+just check-i18n               # 驾驶舱 t("…") 的每条文案 vs. i18n.ts 的英文表
 just eval / just judge        # deterministic eval (exit 0 = releasable) / judge scores
 just write-app-server-schema  # required after any protocol change;
                               # just check-app-server-schema is the CI drift check

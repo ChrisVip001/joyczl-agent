@@ -27,7 +27,7 @@ impl Embedder {
             http: HttpClient::builder()
                 .timeout(timeout)
                 .build()
-                .expect("构建 HTTP 客户端"),
+                .expect("build the HTTP client"),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
@@ -40,13 +40,13 @@ impl Embedder {
         let model = settings
             .embed_model
             .clone()
-            .ok_or("没有配 embedding 模型：设 JOY_EMBED_MODEL，例如 nomic-embed-text")?;
+            .ok_or("no embedding model configured: set JOY_EMBED_MODEL, e.g. nomic-embed-text")?;
         let info = crate::lookup(&settings.provider);
         let base = settings
             .base_url
             .clone()
             .or_else(|| info.and_then(|i| i.base_url.map(str::to_string)))
-            .ok_or("这个 provider 没有默认端点：在 <home>/models.json 里给这套模型配 base_url（或 /model add 时带上）")?;
+            .ok_or("this provider has no default endpoint: give this profile a base_url in <home>/models.json (or pass it to /model add)")?;
         // Send even without a key (local services need none) — the same rule as chat.
         let key = settings
             .api_key
@@ -80,8 +80,9 @@ impl Embedder {
         if status >= 400 {
             return Err(ProviderError::from_http(status, body));
         }
-        let parsed: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| ProviderError::Parse(format!("embedding 应答不是 JSON：{e}")))?;
+        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            ProviderError::Parse(format!("the embedding response is not JSON: {e}"))
+        })?;
         let vector: Vec<f32> = parsed
             .get("data")
             .and_then(|d| d.get(0))
@@ -97,7 +98,7 @@ impl Embedder {
             .unwrap_or_default();
         if vector.is_empty() {
             return Err(ProviderError::Api(format!(
-                "embedding 应答里没有向量：{body}"
+                "the embedding response has no vectors: {body}"
             )));
         }
         Ok(vector)

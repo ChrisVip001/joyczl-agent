@@ -89,12 +89,11 @@ fn scan_lines(path: PathBuf, offset: u32, limit: u32) -> Result<(Vec<String>, u6
             Ok(line) => line,
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                 return Err(anyhow!(
-                    "{:?} 不是 UTF-8 文本（可能是二进制文件），read_file 只读文本；\
-                     要看原始字节用 run_command（需 JOY_EXEC=1）。",
+                    "{:?} is not UTF-8 text (probably binary); read_file only reads text — for raw bytes use run_command (needs JOY_EXEC=1).",
                     path
                 ));
             }
-            Err(e) => return Err(anyhow!("读 {path:?} 出错：{e}")),
+            Err(e) => return Err(anyhow!("Could not read {path:?}: {e}")),
         };
         total += 1;
         let n = (index + 1) as u64;
@@ -109,7 +108,7 @@ fn scan_lines(path: PathBuf, offset: u32, limit: u32) -> Result<(Vec<String>, u6
         }
         if line.contains('\0') {
             return Err(anyhow!(
-                "{:?} 看起来是二进制文件（含 NUL 字节），read_file 只读文本。",
+                "{:?} looks like a binary file (it contains a NUL byte); read_file only reads text.",
                 path
             ));
         }
@@ -133,25 +132,22 @@ pub fn read_file() -> Tool {
     let cache: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
     Tool {
         name: "read_file".to_string(),
-        description: "读一个文本文件，带行号、按页返回（默认 2000 行 / 50KB，\
-                      绝不切半行）。返回里带 [Use offset=N to continue.] 时，\
-                      用那个 offset 继续读。同一会话里重复读同一段会得到\
-                      「没变」占位符 —— 内容你已经有了，别再读。"
+        description: "Read a text file with line numbers, one page at a time (2000 lines / 50KB by default, and it never splits a line). When the reply says [Use offset=N to continue.], carry on with that offset. Reading the same stretch twice in one session returns a \"not changed\" placeholder — you already have it, so do not read it again."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "文件路径。支持 ~ 展开；相对路径相对 Joy 进程的工作目录。"
+                    "description": "The file path. ~ is expanded; a relative path is relative to Joy's working directory."
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "从第几行开始（1 起，默认 1）。续读用上一页页脚给的值。"
+                    "description": "Which line to start at (1-based, default 1). For a continuation, use the value from the previous page's footer."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "最多读多少行（默认与上限 2000）。"
+                    "description": "How many lines at most (default and ceiling 2000)."
                 }
             },
             "required": ["path"]
@@ -191,25 +187,29 @@ async fn execute_read(
     if !path.is_file() {
         // Directories are blocked here too: with an honest "use that tool to list directories".
         if path.is_dir() {
-            return Err(anyhow!("{raw} 是目录，不是文件 —— 列目录用 list_dir。"));
+            return Err(anyhow!(
+                "{raw} is a directory, not a file — use list_dir to list a directory."
+            ));
         }
-        return Err(anyhow!("找不到文件：{raw}（相对路径相对本轮工作目录）"));
+        return Err(anyhow!(
+            "File not found: {raw} (a relative path is relative to this turn's working directory)"
+        ));
     }
 
     let scan_path = path.clone();
     let (rendered, total, last_shown, byte_capped) =
         tokio::task::spawn_blocking(move || scan_lines(scan_path, offset, limit))
             .await
-            .map_err(|e| anyhow!("读取任务失败：{e}"))??;
+            .map_err(|e| anyhow!("Could not read the task: {e}"))??;
 
     let from = offset as u64;
     let mut out = String::new();
     if total == 0 {
-        return Ok("（空文件，0 行）".to_string());
+        return Ok("(empty file, 0 lines)".to_string());
     }
     if rendered.is_empty() {
         out.push_str(&format!(
-            "[第 {from} 行起没有内容：文件共 {total} 行。offset 超出范围了。]"
+            "[Nothing from line {from} on: the file has {total} lines. The offset is out of range.]"
         ));
     } else {
         out.push_str(&rendered.join("\n"));
@@ -231,7 +231,9 @@ async fn execute_read(
     out.hash(&mut hasher);
     let digest = hasher.finish();
     let key = format!("{}|{}|{offset}|{limit}", ctx.session_id, path.display());
-    let mut map = cache.lock().expect("read_file 缓存锁不该中毒");
+    let mut map = cache
+        .lock()
+        .expect("the read_file cache lock should not be poisoned");
     if map.get(&key) == Some(&digest) {
         return Ok(format!(
             "[File unchanged since last read: lines {from}–{last_shown} of {total} \
@@ -246,15 +248,14 @@ async fn execute_read(
 pub fn list_dir() -> Tool {
     Tool {
         name: "list_dir".to_string(),
-        description: "列一个目录的内容：目录在前（带 / 后缀）、文件在后（带字节大小），\
-                      最多 500 项。找文件、确认路径拼没拼对，先用它。"
+        description: "List a directory: directories first (with a trailing /), then files (with their size in bytes), 500 entries at most. Use it first to find a file or check a path."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "目录路径（默认当前目录）。支持 ~ 展开。"
+                    "description": "The directory path (default: the current directory). ~ is expanded."
                 }
             }
         }),
@@ -274,19 +275,19 @@ async fn execute_list(ctx: &crate::ToolCtx, args: &Value) -> Result<String> {
     let path = resolve_against_cwd(ctx, expand_tilde(raw));
     if !path.is_dir() {
         return Err(anyhow!(
-            "{raw} 不是目录（不存在，或者是个文件 —— 文件用 read_file 读）。"
+            "{raw} is not a directory (it does not exist, or it is a file — read a file with read_file)."
         ));
     }
 
     let mut reader = tokio::fs::read_dir(&path)
         .await
-        .map_err(|e| anyhow!("列不了 {raw}：{e}"))?;
+        .map_err(|e| anyhow!("Could not list {raw}: {e}"))?;
     let mut dirs: Vec<String> = Vec::new();
     let mut files: Vec<String> = Vec::new();
     while let Some(entry) = reader
         .next_entry()
         .await
-        .map_err(|e| anyhow!("列 {raw} 时出错：{e}"))?
+        .map_err(|e| anyhow!("Error while listing {raw}: {e}"))?
     {
         let name = entry.file_name().to_string_lossy().into_owned();
         // Don't follow symlinks to decide type (a bad link must not fail the listing); take the size when available.
@@ -308,7 +309,7 @@ async fn execute_list(ctx: &crate::ToolCtx, args: &Value) -> Result<String> {
     let mut lines = dirs;
     lines.extend(files);
     if lines.is_empty() {
-        return Ok(format!("{raw}（空目录）"));
+        return Ok(format!("{raw} (empty directory)"));
     }
     let total = lines.len();
     let mut note = String::new();

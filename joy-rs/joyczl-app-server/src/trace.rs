@@ -20,7 +20,10 @@ use chrono::Local;
 fn append_jsonl(path: &Path, line: &str) {
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!("(joy) 落盘目录建不了（{}）：{e}", parent.display());
+            eprintln!(
+                "(joy) the spill directory could not be created ({}): {e}",
+                parent.display()
+            );
             return;
         }
     }
@@ -31,10 +34,13 @@ fn append_jsonl(path: &Path, line: &str) {
     {
         Ok(mut file) => {
             if let Err(e) = file.write_all(format!("{line}\n").as_bytes()) {
-                eprintln!("(joy) 写账本失败（{}）：{e}", path.display());
+                eprintln!("(joy) writing the ledger failed ({}): {e}", path.display());
             }
         }
-        Err(e) => eprintln!("(joy) 打不开账本（{}）：{e}", path.display()),
+        Err(e) => eprintln!(
+            "(joy) the ledger could not be opened ({}): {e}",
+            path.display()
+        ),
     }
 }
 
@@ -59,7 +65,7 @@ mod trace_tests {
 
     #[test]
     fn lines_land_as_jsonl_and_survive_failures() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temporary directory");
         let home = dir.path();
 
         record_turn(home, &serde_json::json!({"turnId": "t1"}));
@@ -68,22 +74,23 @@ mod trace_tests {
 
         let date = Local::now().format("%Y-%m-%d").to_string();
         let trace = std::fs::read_to_string(home.join("traces").join(format!("{date}.jsonl")))
-            .expect("trace 文件");
+            .expect("the trace file");
         let lines: Vec<&str> = trace.lines().collect();
-        assert_eq!(lines.len(), 2, "两轮两行：{trace}");
+        assert_eq!(lines.len(), 2, "two turns make two lines: {trace}");
         for line in &lines {
-            let value: serde_json::Value = serde_json::from_str(line).expect("每行都是合法 JSON");
+            let value: serde_json::Value =
+                serde_json::from_str(line).expect("every line is valid JSON");
             assert!(value.get("turnId").is_some());
         }
 
-        let usage = std::fs::read_to_string(home.join("usage.jsonl")).expect("usage 文件");
+        let usage = std::fs::read_to_string(home.join("usage.jsonl")).expect("the usage file");
         assert_eq!(usage.lines().count(), 1, "{usage}");
     }
 
     #[test]
     fn a_bad_home_warns_instead_of_panicking() {
         // home points at a file: the directory cannot be created, but the caller proceeds as usual.
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temporary directory");
         let blocker = dir.path().join("blocker");
         std::fs::write(&blocker, "not a directory").unwrap();
         record_turn(&blocker, &serde_json::json!({"turnId": "t"}));

@@ -18,15 +18,18 @@
         <div class="brand">
           <span class="dot" aria-hidden="true"></span>
           <h1>Joy</h1>
+          <!-- 语言按钮放这里而不是页脚：页脚还有时间戳和刷新，中文放得下、英文放不下，
+               换行后哪一行都不好看。右上角是这类开关的常见位置。 -->
+          <button class="ghost lang" id="lang" type="button" data-i18n-title="切换界面语言">EN</button>
         </div>
 
         <!-- 新建会话是聊天应用的标配：一屏一目标，旧会话留在下面随时能切回去。 -->
-        <button class="new-chat" id="new-session" type="button" title="新建一个会话">
-          <span aria-hidden="true">＋</span> 新建会话
+        <button class="new-chat" id="new-session" type="button" data-i18n-title="新建一个会话">
+          <span aria-hidden="true">＋</span> <span data-i18n="新建会话">新建会话</span>
         </button>
 
         <div class="rail-block">
-          <p class="rail-label">会话</p>
+          <p class="rail-label" data-i18n="会话">会话</p>
           <ul class="session-list" id="sessions"></ul>
         </div>
 
@@ -34,32 +37,32 @@
              在那里置灰（只读），用户自己的（<home>/skills、mcp.json）才能加和删；
              定时任务写的是 <home>/schedules.json，技能带的 schedule 行只读。 -->
         <div class="rail-block cap-block">
-          <p class="rail-label">能力中心</p>
+          <p class="rail-label" data-i18n="能力中心">能力中心</p>
           <button
             class="cap-entry"
             id="cap-skills"
             type="button"
-            title="技能：Joy 会的做法（SKILL.md）"
+            data-i18n-title="技能：Joy 会的做法（SKILL.md）"
           >
-            <span class="cap-entry-name">技能</span>
+            <span class="cap-entry-name" data-i18n="技能">技能</span>
             <span class="cap-count" id="cap-skills-count">0</span>
           </button>
           <button
             class="cap-entry"
             id="cap-mcp"
             type="button"
-            title="MCP 连接器：接进来的外部工具"
+            data-i18n-title="MCP 连接器：接进来的外部工具"
           >
-            <span class="cap-entry-name">MCP 连接器</span>
+            <span class="cap-entry-name" data-i18n="MCP 连接器">MCP 连接器</span>
             <span class="cap-count" id="cap-mcp-count">0</span>
           </button>
           <button
             class="cap-entry"
             id="cap-schedules"
             type="button"
-            title="定时任务：到点在自己的会话里跑一轮"
+            data-i18n-title="定时任务：到点在自己的会话里跑一轮"
           >
-            <span class="cap-entry-name">定时任务</span>
+            <span class="cap-entry-name" data-i18n="定时任务">定时任务</span>
             <span class="cap-count" id="cap-schedules-count">0</span>
           </button>
         </div>
@@ -67,7 +70,7 @@
         <div class="sidebar-foot">
           <div class="foot-row">
             <span class="stamp" id="stamp"></span>
-            <button class="ghost" id="refresh" type="button">刷新</button>
+            <button class="ghost" id="refresh" type="button" data-i18n="刷新">刷新</button>
           </div>
         </div>
 
@@ -78,7 +81,7 @@
           role="separator"
           aria-orientation="vertical"
           tabindex="0"
-          aria-label="拖动调整侧栏宽度（双击复位，方向键微调）"
+          data-i18n-aria="拖动调整侧栏宽度（双击复位，方向键微调）"
         ></div>
       </aside>
 
@@ -87,21 +90,21 @@
       <main class="chat">
         <div class="bar">
           <p class="hint">
-            会话 · <code id="session" title="默认会话跟终端里的 joy 是同一条线">—</code>
+            <span data-i18n="会话">会话</span> · <code id="session" data-i18n-title="默认会话跟终端里的 joy 是同一条线">—</code>
           </p>
           <button
             class="ws-chip"
             id="cwd"
             type="button"
-            title="选一个文件夹作为工作目录——它同时也是唯一的可写范围"
+            data-i18n-title="选一个文件夹作为工作目录——它同时也是唯一的可写范围"
           >
             <span class="ws-folder" aria-hidden="true">▤</span>
-            <span id="cwd-label">选择工作目录</span>
+            <span id="cwd-label" data-i18n="选择工作目录">选择工作目录</span>
           </button>
-          <button class="ghost" id="progress" type="button">进度</button>
-          <button class="ghost" id="older" type="button" hidden>更早的 ↑</button>
+          <button class="ghost" id="progress" type="button" data-i18n="进度">进度</button>
+          <button class="ghost" id="older" type="button" hidden data-i18n="更早的 ↑">更早的 ↑</button>
         </div>
-        <div class="messages" id="messages" aria-live="polite" aria-label="对话"></div>
+        <div class="messages" id="messages" aria-live="polite" data-i18n-aria="对话"></div>
         <div class="statusline" id="status" hidden aria-live="polite"></div>
         <!-- 附件条是输入框的**兄弟**，不是 flex 子项：无论 CSS 有没有换行规则，
              它都不会跟 textarea 抢同一行的宽度。宽度写在这里，是为了连旧缓存里的
@@ -114,27 +117,27 @@
               class="ghost attach"
               id="attach"
               type="button"
-              title="附上文件（20MB 以内；模型会自己去读）"
+              data-i18n-title="附上文件（20MB 以内；模型会自己去读）"
             >
               ＋
             </button>
             <textarea
               id="input"
               rows="1"
-              placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
-              aria-label="消息"
+              data-i18n-placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"
+              data-i18n-aria="消息"
             ></textarea>
             <button
               class="ghost queue-toggle"
               id="queue-toggle"
               type="button"
-              title="这一轮跑完，再把这句话当成新的一轮发出去"
+              data-i18n-title="这一轮跑完，再把这句话当成新的一轮发出去"
               aria-pressed="false"
               hidden
             >
-              跑完再说
+              <span data-i18n="跑完再说">跑完再说</span>
             </button>
-            <button id="send" type="submit">发送</button>
+            <button id="send" type="submit" data-i18n="发送">发送</button>
           </form>
         </div>
       </main>
@@ -143,7 +146,7 @@
            审批卡片在聊天窗口里，不在这里。 -->
       <aside class="panels" id="drawer" hidden>
         <div class="drawer-head">
-          <div class="drawer-tabs" role="tablist" aria-label="面板">
+          <div class="drawer-tabs" role="tablist" data-i18n-aria="面板">
             <button
               class="drawer-tab active"
               id="tab-overview"
@@ -151,7 +154,7 @@
               role="tab"
               aria-selected="true"
             >
-              概览
+              <span data-i18n="概览">概览</span>
             </button>
             <button
               class="drawer-tab"
@@ -160,7 +163,7 @@
               role="tab"
               aria-selected="false"
             >
-              技能
+              <span data-i18n="技能">技能</span>
             </button>
             <button
               class="drawer-tab"
@@ -178,7 +181,7 @@
               role="tab"
               aria-selected="false"
             >
-              记忆
+              <span data-i18n="记忆">记忆</span>
             </button>
             <button
               class="drawer-tab"
@@ -187,10 +190,10 @@
               role="tab"
               aria-selected="false"
             >
-              定时
+              <span data-i18n="定时">定时</span>
             </button>
           </div>
-          <button class="ghost" id="drawer-close" type="button" aria-label="收起">×</button>
+          <button class="ghost" id="drawer-close" type="button" data-i18n-aria="收起">×</button>
         </div>
         <section class="panel" id="panel-overview" role="tabpanel">
           <div class="body" id="overview"></div>
@@ -204,7 +207,7 @@
         <!-- 记忆中心：三个只读视图，一次只看一段。账本是事实（一轮一行，点开看结构），
              记忆库是派生知识（左目录右正文，出处可跳回账本），上下文是代价（一条分层条）。 -->
         <section class="panel" id="panel-memory" role="tabpanel" hidden>
-          <div class="mem-segs" role="tablist" aria-label="记忆视图">
+          <div class="mem-segs" role="tablist" data-i18n-aria="记忆视图">
             <button
               class="mem-seg active"
               id="mem-seg-ledger"
@@ -212,7 +215,7 @@
               role="tab"
               aria-selected="true"
             >
-              账本
+              <span data-i18n="账本">账本</span>
             </button>
             <button
               class="mem-seg"
@@ -221,7 +224,7 @@
               role="tab"
               aria-selected="false"
             >
-              记忆库
+              <span data-i18n="记忆库">记忆库</span>
             </button>
             <button
               class="mem-seg"
@@ -230,7 +233,7 @@
               role="tab"
               aria-selected="false"
             >
-              上下文
+              <span data-i18n="上下文">上下文</span>
             </button>
           </div>
           <div class="body" id="mem-ledger"></div>

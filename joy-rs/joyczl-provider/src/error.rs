@@ -15,12 +15,12 @@ pub enum ProviderError {
     },
 
     /// The network layer failed: timeout, DNS, connection refused.
-    #[error("网络错误: {0}")]
+    #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 
     /// The provider says "this request exceeds the context window". Its own variant: it is
     /// the **only** error worth "compact and retry once" upstream — retrying others is futile.
-    #[error("上下文超出窗口（HTTP {status}）：{body}")]
+    #[error("context exceeded the window (HTTP {status}): {body}")]
     ContextOverflow { status: u16, body: String },
 
     /// 2xx but wrong content (e.g. OpenRouter rate limits return 200 + error body, no choices).
@@ -28,7 +28,7 @@ pub enum ProviderError {
     Api(String),
 
     /// The response format did not match expectations.
-    #[error("应答解析失败: {0}")]
+    #[error("could not parse the response: {0}")]
     Parse(String),
 }
 
@@ -102,6 +102,8 @@ pub fn looks_like_context_overflow(status: u16, body: &str) -> bool {
         "exceeds the maximum",
         "input length",
         "context window",
+        // Gateways behind Chinese products word it in Chinese; the English needles above do
+        // not cover them, and a missed match only costs a retry.
         "上下文长度",
         "超出上下文",
     ]

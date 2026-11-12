@@ -120,7 +120,7 @@ fn skill_jobs(home: &Path) -> (Vec<JobRow>, Vec<String>) {
             name: skill.name.clone(),
             cron,
             prompt: format!(
-                "按技能 '{}' 的做法执行一次：{}",
+                "Run skill '{}' once the way it says: {}",
                 skill.name, skill.description
             ),
             delivery: "outbox".to_string(),
@@ -210,6 +210,6 @@ mod tests {
             .next_run_note
             .as_deref()
             .expect("要有说明")
-            .contains("一年内"));
+            .contains("within a year"));
     }
 }

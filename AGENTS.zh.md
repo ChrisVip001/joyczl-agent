@@ -45,6 +45,7 @@ scripts/                schema 生成与 4 条端到端冒烟
 just check                    # 全部门禁：fmt + schema 漂移 + 工具文档漂移 + ts-check
                               # + py-check + clippy -D warnings + cargo test + 确定性 eval
 just check-tool-docs          # 06-tools §6.0 与 README 的工具表 vs. 代码里的工具名单
+just check-i18n               # 驾驶舱 t("…") 的文案 vs. i18n.ts 里的英文表
 just eval / just judge        # 确定性 eval（exit 0 = 可发布）/ judge 出分
 just write-app-server-schema  # 改协议后必跑；just check-app-server-schema 为 CI 漂移检查
 just smoke smoke-gateway smoke-dashboard smoke-sdk-python   # 端到端冒烟

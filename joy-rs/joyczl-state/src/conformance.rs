@@ -14,12 +14,14 @@ use crate::{EpisodicStore, SemanticStore};
 /// Acceptance for the six semantic-memory actions. Failure = a contract violation, named in the `Err`.
 pub async fn exercise_semantic(store: &impl SemanticStore) -> Result<()> {
     // Write → search hits.
+    // The fixture text is Chinese on purpose: it proves CJK survives the round trip through
+    // whatever backend is under test.
     let fact = store.add("alex", "喜欢早上的会议", "user", "user").await?;
     assert_eq!(fact.subject, "alex");
     let hits = store.search("alex", 4).await?;
     assert!(
         hits.iter().any(|f| f.content.contains("早上的会议")),
-        "刚写入的事实必须能检索到"
+        "a fact that was just written must be findable again"
     );
 
     // update: exists → true and content really changed; missing → false.
@@ -55,7 +57,7 @@ pub async fn exercise_episodic(store: &impl EpisodicStore) -> Result<()> {
     let hits = store.search("demo", 4).await?;
     assert!(
         hits.iter().any(|e| e.summary.contains("demo")),
-        "刚写入的情景必须能检索到"
+        "an episode that was just written must be findable again"
     );
 
     assert!(store.delete(id).await?);

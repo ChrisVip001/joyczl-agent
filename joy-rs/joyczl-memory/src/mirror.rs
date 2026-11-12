@@ -59,7 +59,7 @@ pub async fn mirror_facts(facts: &Facts, bundle: &Bundle) -> Result<MirrorReport
             if !untouched {
                 report.skipped += 1;
                 eprintln!(
-                    "(joy) 记忆页 {} 被手动改过，这次不覆盖（要覆盖就删掉它，下一轮会重新生成）",
+                    "(joy) memory page {} was edited by hand; not overwriting it this time (delete it and the next round regenerates it)",
                     bundle.page_path(&slug)?.display()
                 );
                 continue;
@@ -140,7 +140,7 @@ fn summary_of(rows: &[joyczl_state::FactRow]) -> String {
     let first = rows[0].content.trim();
     let mut summary: String = first.chars().take(60).collect();
     if rows.len() > 1 {
-        summary.push_str(&format!("…（共 {} 条）", rows.len()));
+        summary.push_str(&format!("…({} in total)", rows.len()));
     }
     summary
 }
@@ -150,7 +150,7 @@ fn render_body(subject: &str, rows: &[joyczl_state::FactRow]) -> String {
     for row in rows {
         out.push_str(&format!("- {}\n", row.content.trim()));
     }
-    out.push_str("\n## 出处\n\n");
+    out.push_str("\n## Sources\n\n");
     for row in rows {
         out.push_str(&format!(
             "- fact:{} · {} · {}\n",

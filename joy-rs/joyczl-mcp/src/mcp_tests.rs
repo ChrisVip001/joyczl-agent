@@ -54,7 +54,7 @@ fn config_refuses_two_transports_and_two_credentials() {
     };
     assert!(config::resolve(&both_transports, &no_env)
         .unwrap_err()
-        .contains("只能挑一种传输"));
+        .contains("pick one transport"));
 
     let both_creds = ServerSpec {
         name: "x".to_string(),
@@ -65,7 +65,7 @@ fn config_refuses_two_transports_and_two_credentials() {
     };
     assert!(config::resolve(&both_creds, &no_env)
         .unwrap_err()
-        .contains("只能挑一种"));
+        .contains("pick one"));
 
     let neither = ServerSpec {
         name: "x".to_string(),
@@ -342,7 +342,7 @@ async fn stdio_session_reports_a_server_that_goes_away() {
     let (client_read, client_write) = tokio::io::split(client_side);
     let mut session = StdioSession::new(client_read, client_write);
     let error = session.initialize().await.unwrap_err();
-    assert!(error.contains("写不出去"), "{error}");
+    assert!(error.contains("could not write"), "{error}");
 
     // Two: it left after taking the request — discovered at read time; a 0 read is EOF.
     let (client_side, server_side) = tokio::io::duplex(1024);
@@ -356,7 +356,10 @@ async fn stdio_session_reports_a_server_that_goes_away() {
     let (client_read, client_write) = tokio::io::split(client_side);
     let mut session = StdioSession::new(client_read, client_write);
     let error = session.initialize().await.unwrap_err();
-    assert!(error.contains("服务器把连接关了"), "{error}");
+    assert!(
+        error.contains("the server closed the connection"),
+        "{error}"
+    );
     drain.await.expect("读完那一行");
 }
 
@@ -507,16 +510,20 @@ async fn http_failure_reports_the_status_code() {
     assert!(error.len() < 200, "{error}");
 }
 
-/// A dead transport is **rebuilt from the spec** and the call replayed — the old behavior was
-/// "every call fails until you restart Joy", which hides a one-line recovery behind a restart.
+/// Transport failure does not prove that the remote tool did not commit its action.
 #[tokio::test]
-async fn a_dead_transport_is_rebuilt_and_the_call_retried() {
+async fn a_dead_transport_is_rebuilt_without_replaying_an_unknown_outcome() {
     let reply = |body: &str| Reply {
         status: 200,
         content_type: "application/json",
         body: body.to_string(),
     };
     let fake = fake_http(vec![
+        Reply {
+            status: 500,
+            content_type: "text/plain",
+            body: "connection lost after commit".into(),
+        },
         reply(r#"{"jsonrpc":"2.0","id":@id,"result":{"protocolVersion":"2025-06-18"}}"#),
         Reply {
             status: 202,
@@ -528,7 +535,7 @@ async fn a_dead_transport_is_rebuilt_and_the_call_retried() {
     .await;
 
     // Stands in for a transport that died: a closed port fails at the first request.
-    let dead = crate::transport::Transport::Http(HttpSession::new("http://127.0.0.1:1/mcp", None));
+    let dead = crate::transport::Transport::Http(HttpSession::new(&fake.url, None));
     let connection = crate::Connection::with_policy("x", dead, crate::BreakerPolicy::default())
         .with_spec(TransportSpec::Http {
             url: fake.url.clone(),
@@ -536,12 +543,18 @@ async fn a_dead_transport_is_rebuilt_and_the_call_retried() {
         });
 
     let text = connection.call("echo", json!({})).await;
-    assert_eq!(text, "活了", "重连之后这一调用该真的跑起来：{text}");
+    assert!(text.contains("outcome unknown"), "{text}");
     assert_eq!(
         fake.seen.lock().await.len(),
         3,
-        "重建只需要握手两条（initialize + initialized）+ 这一条调用"
+        "one tool call plus the reconnect handshake; no replay"
     );
+    let next = connection.call("echo", json!({})).await;
+    assert_eq!(
+        next, "活了",
+        "an explicit later call can use the rebuilt connection"
+    );
+    assert_eq!(fake.seen.lock().await.len(), 4);
 }
 
 /// Without a spec there is nothing to rebuild from: say that, do not pretend to retry.
@@ -615,6 +628,8 @@ async fn tool_ctx() -> joyczl_tools::ToolCtx {
         .expect("打开库");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     joyczl_tools::ToolCtx {
+        on_uncertain: None,
+        task_run_id: None,
         activate: None,
         embedder: None,
         cwd: None,
@@ -688,7 +703,14 @@ async fn a_real_subprocess_server_registers_working_tools() {
     );
     // A failed call is also **text**: the model can read it; the loop does not crash.
     let failed = registry.execute(ctx, "demo_boom", json!({})).await;
-    assert!(failed.contains("MCP 调用 demo_boom 失败"), "{failed}");
+    assert!(
+        failed.starts_with("Error: MCP tool boom failed:"),
+        "{failed}"
+    );
+    assert!(
+        !failed.contains("outcome unknown"),
+        "a remote tool error is a known outcome: {failed}"
+    );
     assert!(failed.contains("炸了"), "{failed}");
 }
 

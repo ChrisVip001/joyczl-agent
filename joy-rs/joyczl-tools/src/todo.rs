@@ -28,7 +28,8 @@ pub const MAX_ITEMS: usize = 20;
 /// Per-item content cap.
 pub const MAX_CONTENT_CHARS: usize = 4_000;
 /// Header when injected into the system prompt — fixed, recognizable even after compaction.
-pub const INJECTION_HEADER: &str = "## 待办清单（todo_write 维护 · 整表替换）";
+pub const INJECTION_HEADER: &str =
+    "## To-do list (kept by todo_write · the whole table is replaced)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TodoStatus {
@@ -75,7 +76,7 @@ pub struct TodoList {
 impl TodoList {
     /// Render into the lines shown to the model (injection and tool replies share one rendering).
     pub fn render(&self) -> String {
-        let mut out = format!("{INJECTION_HEADER} · 第 {} 版\n", self.revision);
+        let mut out = format!("{INJECTION_HEADER} · revision {}\n", self.revision);
         for item in &self.items {
             out.push_str(&format!("- {}: {}\n", item.status.as_str(), item.content));
         }
@@ -86,7 +87,7 @@ impl TodoList {
     pub fn summary(&self) -> String {
         let count = |status: TodoStatus| self.items.iter().filter(|i| i.status == status).count();
         format!(
-            "{} 项：{} 进行中、{} 未开始、{} 已完成、{} 已取消",
+            "{} items: {} in progress, {} pending, {} completed, {} cancelled",
             self.items.len(),
             count(TodoStatus::InProgress),
             count(TodoStatus::Pending),
@@ -112,19 +113,19 @@ impl TodoBoard {
     pub fn write(&self, session: &str, items: Vec<TodoItem>) -> Result<TodoList, String> {
         if items.len() > MAX_ITEMS {
             return Err(format!(
-                "待办最多 {MAX_ITEMS} 项，收到 {} 项 —— 清单是「正在做的」，不是「想做的」",
+                "The to-do list takes at most {MAX_ITEMS} items, got {} — the list is \"what is being done\", not \"what might be done\"",
                 items.len()
             ));
         }
         for (index, item) in items.iter().enumerate() {
             let at = index + 1;
             if item.content.trim().is_empty() {
-                return Err(format!("第 {at} 项的 content 是空的"));
+                return Err(format!("item {at} has empty content"));
             }
             let chars = item.content.chars().count();
             if chars > MAX_CONTENT_CHARS {
                 return Err(format!(
-                    "第 {at} 项的 content 有 {chars} 个字符，超过 {MAX_CONTENT_CHARS} —— 一句话说清要做什么"
+                    "item {at} has {chars} characters, over {MAX_CONTENT_CHARS} — say what to do in one sentence"
                 ));
             }
         }
@@ -134,11 +135,14 @@ impl TodoBoard {
             .count();
         if running > 1 {
             return Err(format!(
-                "同时只能有一项 in_progress，收到 {running} 项 —— 两个并行推进的任务等于没有推进中的任务"
+                "Only one item may be in_progress at a time, got {running} — two things in progress means nothing is in progress"
             ));
         }
 
-        let mut lists = self.lists.lock().expect("todo 锁不该中毒");
+        let mut lists = self
+            .lists
+            .lock()
+            .expect("the todo lock should not be poisoned");
         let revision = lists.get(session).map(|list| list.revision).unwrap_or(0) + 1;
         let list = TodoList { revision, items };
         lists.insert(session.to_string(), list.clone());
@@ -148,7 +152,7 @@ impl TodoBoard {
     pub fn read(&self, session: &str) -> Option<TodoList> {
         self.lists
             .lock()
-            .expect("todo 锁不该中毒")
+            .expect("the todo lock should not be poisoned")
             .get(session)
             .cloned()
     }
@@ -165,21 +169,19 @@ impl TodoBoard {
 pub fn todo_write(board: std::sync::Arc<TodoBoard>) -> Tool {
     Tool {
         name: "todo_write".to_string(),
-        description: "维护你自己那张待办清单（整表替换）。省略 todos = 读回当前清单。\
-                      清单会在每一轮重新注入上下文，所以长任务里它比「记住」可靠。\
-                      同时只能有一项 in_progress。"
+        description: "Maintain your own to-do list (whole-table replacement). Omit todos = read the current list back. The list is re-injected into the context every round, so on a long task it is more reliable than \"remembering\". Only one item may be in_progress."
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "todos": {
                     "type": "array",
-                    "description": "整张清单（最多 20 项）。省略它 = 只读回当前清单。",
+                    "description": "The whole list (20 items at most). Omit it to just read the current list back.",
                     "items": {
                         "type": "object",
                         "required": ["content", "status"],
                         "properties": {
-                            "content": { "type": "string", "description": "一句话说清要做什么" },
+                            "content": { "type": "string", "description": "what to do, in one sentence" },
                             "status": {
                                 "type": "string",
                                 "enum": ["pending", "in_progress", "completed", "cancelled"]
@@ -196,18 +198,18 @@ pub fn todo_write(board: std::sync::Arc<TodoBoard>) -> Tool {
                     // Read: say honestly when there's no list, rather than an empty array to guess at.
                     return Ok(match board.read(&ctx.session_id) {
                         Some(list) => list.render(),
-                        None => "还没有待办清单。要建一张就把 todos 传进来。".to_string(),
+                        None => "There is no to-do list yet. Pass todos to create one.".to_string(),
                     });
                 };
                 let Some(array) = raw.as_array() else {
-                    return Ok("Error: todos 要是一个数组（每项含 content 与 status）".to_string());
+                    return Ok("Error: todos must be an array (each item with content and status)".to_string());
                 };
 
                 let mut items = Vec::with_capacity(array.len());
                 for (index, raw) in array.iter().enumerate() {
                     let at = index + 1;
                     let Some(content) = raw.get("content").and_then(Value::as_str) else {
-                        return Ok(format!("Error: 第 {at} 项缺少 content"));
+                        return Ok(format!("Error: item {at} has no content"));
                     };
                     let status = raw
                         .get("status")
@@ -215,8 +217,7 @@ pub fn todo_write(board: std::sync::Arc<TodoBoard>) -> Tool {
                         .unwrap_or("pending");
                     let Some(status) = TodoStatus::parse(status) else {
                         return Ok(format!(
-                            "Error: 第 {at} 项的 status 不认识：'{status}'（只能是 pending / \
-                             in_progress / completed / cancelled）"
+                            "Error: unknown status for item {at}: '{status}' (only pending / in_progress / completed / cancelled)"
                         ));
                     };
                     items.push(TodoItem {
@@ -228,7 +229,7 @@ pub fn todo_write(board: std::sync::Arc<TodoBoard>) -> Tool {
                 match board.write(&ctx.session_id, items) {
                     // Return the authoritative result as-is: what the model sees next turn is
                     // this copy (revision included), so it needn't guess what it just wrote.
-                    Ok(list) => Ok(format!("{}（{}）", list.render(), list.summary())),
+                    Ok(list) => Ok(format!("{} ({})", list.render(), list.summary())),
                     Err(why) => Ok(format!("Error: {why}")),
                 }
             })

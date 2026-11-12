@@ -19,7 +19,7 @@ use crate::{resume, EventSink, Frame, Server};
 /// A server with the scripted fake provider swapped in (same recipe as turn_tests),
 /// plus its home — the age-limit tests need a second connection to back-date a row.
 async fn server_with_path(mock: Option<Arc<Mock>>) -> (Server, std::path::PathBuf) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temporary directory");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
@@ -87,7 +87,7 @@ fn crashed_working_memory() -> String {
             }],
         },
     ])
-    .expect("序列化")
+    .expect("serialize")
 }
 
 #[tokio::test]
@@ -354,11 +354,246 @@ fn an_unreadable_stamp_is_not_evidence_of_age() {
 /// 人话的粒度：从分钟到天，向下取整 —— 「2 天前」不能读成 1 天。
 #[test]
 fn ages_read_as_minutes_hours_and_days() {
-    assert_eq!(super::resume::humanize(0), "0 分钟");
-    assert_eq!(super::resume::humanize(59), "59 分钟");
-    assert_eq!(super::resume::humanize(60), "1 小时");
-    assert_eq!(super::resume::humanize(119), "1 小时");
-    assert_eq!(super::resume::humanize(1_439), "23 小时");
-    assert_eq!(super::resume::humanize(1_440), "1 天");
-    assert_eq!(super::resume::humanize(2_880), "2 天");
+    assert_eq!(super::resume::humanize(0), "0 minutes");
+    assert_eq!(super::resume::humanize(59), "59 minutes");
+    assert_eq!(super::resume::humanize(60), "1 hours");
+    assert_eq!(super::resume::humanize(119), "1 hours");
+    assert_eq!(super::resume::humanize(1_439), "23 hours");
+    assert_eq!(super::resume::humanize(1_440), "1 days");
+    assert_eq!(super::resume::humanize(2_880), "2 days");
+}
+
+#[tokio::test]
+async fn recovered_task_must_pass_acceptance_before_done() {
+    for (file_exists, budget, goal, expected) in [
+        (false, "{}", None, joyczl_state::TaskStatus::NeedsAttention),
+        (true, "{}", None, joyczl_state::TaskStatus::Done),
+        (
+            true,
+            r#"{"tokens":50}"#,
+            None,
+            joyczl_state::TaskStatus::NeedsAttention,
+        ),
+        (
+            true,
+            "{}",
+            Some("确认报告质量"),
+            joyczl_state::TaskStatus::NeedsAttention,
+        ),
+    ] {
+        let mock = Arc::new(Mock::new(vec![Mock::text("报告已经完成。")]));
+        let (server, home) = server_with_path(Some(mock)).await;
+        if file_exists {
+            std::fs::write(home.join("report.md"), "报告").expect("文件");
+        }
+        server
+            .tasks
+            .create(joyczl_state::NewTask {
+                id: "recovered-report",
+                session_id: Some("test"),
+                title: "写报告",
+                goal_condition: goal,
+                acceptance_json: r#"[{"kind":"fileExists","path":"report.md"}]"#,
+                budget_json: budget,
+                cwd: home.to_str(),
+                max_rounds: 1,
+                tier: None,
+            })
+            .await
+            .expect("任务");
+        server
+            .runs
+            .start(
+                "t-report",
+                "recovered-report",
+                Some("test"),
+                Some("t-report"),
+            )
+            .await
+            .expect("执行记录");
+        server
+            .checkpoints
+            .save_round(
+                "t-report",
+                "test",
+                "写报告",
+                "[]",
+                1,
+                r#"{"input_tokens":90,"output_tokens":0}"#,
+                Some("t-report"),
+                Some("report-round"),
+            )
+            .await
+            .expect("断点");
+        server
+            .runs
+            .account_round(
+                "t-report",
+                "report-round",
+                &joyczl_state::runs::RoundAccount {
+                    tokens_in: 100,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        resume::reconcile(&server, &EventSink::new(tx)).await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(frame) = rx.recv().await {
+                if matches!(
+                    frame,
+                    Frame::Notification(ServerNotification::TurnCompleted(_))
+                ) {
+                    return;
+                }
+            }
+            panic!("未完成");
+        })
+        .await
+        .expect("恢复超时");
+        let task = server
+            .tasks
+            .get("recovered-report")
+            .await
+            .expect("查询")
+            .expect("存在");
+        assert_eq!(task.status, expected);
+        assert_eq!(task.spent_tokens, 115);
+        assert!(task.checks_json.contains("report.md"));
+        assert_eq!(task.spent_tools, 0);
+    }
+}
+
+#[tokio::test]
+async fn pending_tool_intent_is_not_replayed() {
+    let mock = Arc::new(Mock::new(vec![Mock::text("must not run")]));
+    let server = server(Some(mock.clone())).await;
+    let mut messages: Vec<Message> = serde_json::from_str(&crashed_working_memory()).unwrap();
+    messages.pop();
+    server
+        .checkpoints
+        .save(
+            "unknown",
+            "test",
+            "work",
+            &serde_json::to_string(&messages).unwrap(),
+            0,
+            "{}",
+            None,
+        )
+        .await
+        .unwrap();
+    let (tx, _rx) = mpsc::unbounded_channel();
+    resume::reconcile(&server, &EventSink::new(tx)).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if server
+                .checkpoints
+                .get("unknown")
+                .await
+                .unwrap()
+                .unwrap()
+                .status
+                == "suspended"
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(mock.received.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn recovered_goal_uses_the_shared_driver_until_satisfied() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("First half complete."),
+        Mock::text(r#"{"ok":false,"impossible":false,"reason":"finish the remaining half"}"#),
+        Mock::text(r#"{"retrieve":false,"query":"","reason":"goal"}"#),
+        Mock::text("Both halves complete."),
+        Mock::text(r#"{"ok":true,"impossible":false,"reason":"verified"}"#),
+    ]));
+    let (server, _) = server_with_path(Some(mock.clone())).await;
+    server
+        .tasks
+        .create(joyczl_state::NewTask {
+            id: "resume-goal",
+            session_id: Some("test"),
+            title: "two halves",
+            goal_condition: Some("finish both halves"),
+            acceptance_json: "[]",
+            budget_json: "{}",
+            cwd: None,
+            max_rounds: 2,
+            tier: None,
+        })
+        .await
+        .unwrap();
+    server
+        .runs
+        .start("goal-run", "resume-goal", Some("test"), Some("goal-run"))
+        .await
+        .unwrap();
+    server
+        .checkpoints
+        .save_round(
+            "goal-run",
+            "test",
+            "start",
+            "[]",
+            1,
+            r#"{"input_tokens":0,"output_tokens":0}"#,
+            Some("goal-run"),
+            Some("goal-round-1"),
+        )
+        .await
+        .unwrap();
+    joyczl_agent::plan::record(
+        &server.steps,
+        "resume-goal",
+        &joyczl_agent::plan::Plan {
+            version: 2,
+            steps: vec!["Use the restored evidence ledger".into()],
+        },
+    )
+    .await
+    .unwrap();
+    let (sink, mut receiver) = EventSink::channel();
+    resume::reconcile(&server, &sink).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(frame) = receiver.recv().await {
+            if let Frame::Notification(ServerNotification::TurnCompleted(done)) = frame {
+                assert_eq!(done.meta.goal_status.as_deref(), Some("satisfied"));
+                assert_eq!(done.meta.goal_rounds, 2);
+                return;
+            }
+        }
+        panic!("recovered goal never completed");
+    })
+    .await
+    .unwrap();
+    let task = server.tasks.get("resume-goal").await.unwrap().unwrap();
+    assert_eq!(task.status, joyczl_state::TaskStatus::Done);
+    assert_eq!(task.rounds_used, 2);
+    assert_eq!(
+        server.runs.get("goal-run").await.unwrap().unwrap().rounds,
+        2
+    );
+    let requests = mock.received.lock().unwrap();
+    assert_eq!(requests.len(), 5);
+    assert!(
+        requests[3]
+            .messages
+            .iter()
+            .any(|m| m.text().contains("Use the restored evidence ledger")),
+        "goal continuation must retain the persisted plan"
+    );
+
+    assert!(requests.iter().any(|request| request
+        .messages
+        .iter()
+        .any(|m| m.text().contains("finish the remaining half"))));
 }

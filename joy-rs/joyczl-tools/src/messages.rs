@@ -14,14 +14,13 @@ use crate::{require_str, Tool, ToolCtx};
 pub fn send_message() -> Tool {
     Tool {
         name: "send_message".to_string(),
-        description: "给某人起草一条消息，放进本地 outbox 供用户审阅后自己发送。\
-                      用户让你「给谁发个消息/转告/提醒」时用。**从不真的发送。**"
+        description: "Draft a message for someone, into the local outbox for the user to review and send themselves. Use it when the user says \"send X a message / pass this on / remind them\". **It never actually sends.**"
             .to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "收件人名字或地址"},
-                "body": {"type": "string", "description": "消息正文"}
+                "to": {"type": "string", "description": "the recipient's name or address"},
+                "body": {"type": "string", "description": "the message body"}
             },
             "required": ["to", "body"]
         }),
@@ -44,7 +43,7 @@ pub fn send_message() -> Tool {
                 tokio::fs::write(&path, format!("To: {to}\n\n{body}\n")).await?;
 
                 Ok(format!(
-                    "给 {to} 的消息已放进 outbox（{}）。没有真的发送 —— 请到那里审阅后自己发。",
+                    "The message for {to} is in the outbox ({}). Nothing was sent — review it there and send it yourself.",
                     path.display()
                 ))
             })
