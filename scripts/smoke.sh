@@ -7,22 +7,9 @@
 #
 # Requires a prior cargo build (it uses target/debug/joy directly).
 
-set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$REPO/joy-rs/target/debug/joy"
-WORK="$(mktemp -d)"
-FAKE_PID=""
-cleanup() {
-  [[ -n "$FAKE_PID" ]] && kill "$FAKE_PID" 2>/dev/null || true
-  rm -rf "$WORK"
-}
-trap cleanup EXIT
-
-if [[ ! -x "$BIN" ]]; then
-  echo "✗ 找不到 $BIN，先跑：cd joy-rs && cargo build" >&2
-  exit 1
-fi
+need_bin
 
 cd "$WORK"
 
@@ -66,6 +53,7 @@ start_fake() {
   local port_file="$1"
   python3 "$REPO/scripts/fake_sse_server.py" >"$port_file" &
   FAKE_PID=$!
+track_pid "$FAKE_PID"
   for _ in $(seq 1 50); do
     [[ -s "$port_file" ]] && break
     sleep 0.1
@@ -131,6 +119,7 @@ grep -q '"alice"' "$HUB/users.json" || fail "users.json 里没有 alice"
 HUB_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
 JOY_HUB_ROOT="$HUB" JOY_PORT="$HUB_PORT" "$BIN" hub >/dev/null 2>&1 &
 HUB_PID=$!
+track_pid "$HUB_PID"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.5
   curl -s -o /dev/null "http://127.0.0.1:$HUB_PORT/api/data" && break

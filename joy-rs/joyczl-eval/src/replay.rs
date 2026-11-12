@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 
 use crate::scenario::{
@@ -124,64 +124,26 @@ impl ReplayCase {
 /// error**, not a silently-passing case. "A replay that asserts nothing" would be a green light
 /// with nothing behind it.
 pub fn load_all(paths: &[PathBuf]) -> Result<Vec<ReplayCase>> {
-    let mut cases = Vec::new();
-    for path in paths {
-        let files: Vec<PathBuf> = if path.is_dir() {
-            std::fs::read_dir(path)
-                .with_context(|| format!("读不了回放目录：{}", path.display()))?
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
-                .collect()
-        } else {
-            vec![path.clone()]
-        };
-        // Sorted: cases run in a stable order, so the printed table does not shuffle per machine.
-        let mut files = files;
-        files.sort();
-
-        for file in files {
-            let text = std::fs::read_to_string(&file)
-                .with_context(|| format!("读不了回放文件：{}", file.display()))?;
-            for (line_number, line) in text.lines().enumerate() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                let case: ReplayCase = serde_json::from_str(line).map_err(|e| {
-                    anyhow::anyhow!(
-                        "{} 第 {} 行不是合法回放用例：{e}",
-                        file.display(),
-                        line_number + 1
-                    )
-                })?;
-                let where_ = format!(
-                    "{} 第 {} 行（{}）",
-                    file.display(),
-                    line_number + 1,
-                    case.id
-                );
-                if case.schema_version != SCHEMA_VERSION {
-                    anyhow::bail!(
-                        "{where_}：schemaVersion={} 不认识（这份构建只读 {SCHEMA_VERSION}）。\
-                         老的录制文件不能猜着读 —— 换一份，或按 evals/replay/README.md 重录。",
-                        case.schema_version
-                    );
-                }
-                if case.recorded.turns.is_empty() {
-                    anyhow::bail!("{where_}：recorded.turns 是空的，没有任何对话可回放");
-                }
-                if case.expect.events.is_empty() {
-                    anyhow::bail!(
-                        "{where_}：expect.events 是空的 —— 回放用例必须声明它期望的事件序列，\
-                         否则它只是在重复一条确定性用例"
-                    );
-                }
-                cases.push(case);
-            }
+    crate::jsonl::read_jsonl(paths, "回放用例", |case: &ReplayCase, at| {
+        let where_ = format!("{at}（{}）", case.id);
+        if case.schema_version != SCHEMA_VERSION {
+            anyhow::bail!(
+                "{where_}：schemaVersion={} 不认识（这份构建只读 {SCHEMA_VERSION}）。\
+                 老的录制文件不能猜着读 —— 换一份，或按 evals/replay/README.md 重录。",
+                case.schema_version
+            );
         }
-    }
-    Ok(cases)
+        if case.recorded.turns.is_empty() {
+            anyhow::bail!("{where_}：recorded.turns 是空的，没有任何对话可回放");
+        }
+        if case.expect.events.is_empty() {
+            anyhow::bail!(
+                "{where_}：expect.events 是空的 —— 回放用例必须声明它期望的事件序列，\
+                 否则它只是在重复一条确定性用例"
+            );
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]

@@ -30,42 +30,10 @@ env_int(name, default) -> env(name).and_then(|v| v.parse().ok()).unwrap_or(defau
 
 ## 3.3 `Settings` 的全部旋钮
 
-`from_env()` 从 `Settings::default()` 出发逐字段覆盖 —— 那一份就是**完整清单**（当前 47 个字段）。
-下面按主题列出值得单独说明的那些（每个字段的环境变量名与默认值）：
-
-| 字段 | 环境变量 | 默认 |
-|---|---|---|
-| `provider` | `JOY_PROVIDER` | `anthropic` |
-| `api_key` / `base_url` / `model` / `small_model` | 无（**只**由 `<home>/models.json` 里当前那套填入，见 `models.rs`） | 无（用 provider 默认） |
-| `home` | `JOY_HOME` | `./.joy` |
-| `llm_timeout_secs` | `JOY_LLM_TIMEOUT` | `120` |
-| `max_iterations` | `JOY_MAX_ITERATIONS` | `32` |
-| `max_tokens` | `JOY_MAX_TOKENS` | `8192` |
-| `history_turns` | `JOY_HISTORY_TURNS` | `12` |
-| `consolidate_every` | `JOY_CONSOLIDATE_EVERY` | `6` |
-| `retrieval_top_k` | `JOY_RETRIEVAL_TOP_K` | `4` |
-| `graph_workflows` | `JOY_GRAPH_WORKFLOWS` | `false` |
-| `embeddings_enabled` / `embed_model` | `JOY_EMBEDDINGS` / `JOY_EMBED_MODEL` | `false` / 无 |
-| `exec_enabled` / `exec_allow` / `exec_timeout_secs` | `JOY_EXEC` / `JOY_EXEC_ALLOW` / `JOY_EXEC_TIMEOUT` | `false` / 空表 / `30` |
-
-### 记忆与上下文
-
-| 字段 | 环境变量 | 默认 |
-|---|---|---|
-| `context_window` | `JOY_CONTEXT_WINDOW` | 空 = 用当前模型的窗口 |
-| `compact_threshold` | `JOY_COMPACT_THRESHOLD` | `0.8`（预算 = 窗口 × 它 ÷ 校准系数） |
-| `context_warn_ratio` | `JOY_CONTEXT_WARN_RATIO` | `85`（百分比，到点面板上给一句提示） |
-| `ledger_inline_max` | `JOY_LEDGER_INLINE_MAX` | `32768`（超过就转存 `<home>/ledger/`，行里留指针） |
-| `soul_mode` | `JOY_SOUL_MODE` | `auto`（薄灵魂按 provider 自动选） |
-| `skill_index_tokens` | `JOY_SKILL_INDEX_TOKENS` | `200`（技能目录的预算） |
-| `skill_body_tokens` | `JOY_SKILL_BODY_TOKENS` | `1200`（本轮载入的正文预算） |
-| `tool_policy` | `JOY_TOOL_POLICY` | `eager`（`deferred` = 只常驻一部份 schema，其余靠 `find_tools`） |
-| `tool_result_total_chars` | `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000`（一轮工具结果的字符总量；超了从**最旧**的换桩） |
-| `tool_result_max_chars` | `JOY_TOOL_RESULT_MAX_CHARS` | `30000`（单条够长才有资格换桩） |
-| `tool_result_keep_recent` | `JOY_TOOL_RESULT_KEEP_RECENT` | `3`（最新几条永不换桩） |
-| `auto_continue_max` | `JOY_AUTO_CONTINUE_MAX` | `2`（一轮最多自己续几次；`0` = 用完就收尾） |
-| `turn_step_slice` | `JOY_TURN_STEP_SLICE` | `12`（一次续跑买回的步数） |
-| `resume_max_age_minutes` | `JOY_RESUME_MAX_AGE` | `60`（更旧的 `open` checkpoint 启动时标 `abandoned`） |
+`Settings::default()` 是**完整清单**，`from_env()` 从它出发逐字段覆盖。字段名、环境变量、
+默认值、合法区间**只写一份**：`docs/configuration.md`（`scripts/check_config_docs.py` 对账 ——
+代码读得到的每个 `JOY_*` 都必须在 `.env.example` 与两份配置文档里出现，漏一个就红）。
+这里只讲那几条**为什么这么分**的轴，以及几个容易踩的语义。
 
 这几行合起来定义的是「一轮到底花多少」：`compact_threshold` 决定**什么时候压**，
 `tool_result_*` 决定**塞不进的东西怎么办**，`max_iterations` 决定**最多问几次**，

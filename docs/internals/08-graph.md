@@ -169,9 +169,6 @@ FullFn     = Arc<dyn Fn(NodeCtx) -> Boxed<NodeWrites>>        // 就是不带图
 `DTSTART` 含今天且标题非空就收；空 → `"(nothing today)"`。它被 triage 与
 `joy gather` 共用——「今天有什么」只有**一个**解析器，两张图才不会打架。
 
-`triage_topology()` 用桩建图后 `describe()`，**从不运行**：拓扑即数据，给驾驶舱
-画图用。
-
 ## 8.6 `workflows/gather.rs`：晨报
 
 ### 两条铁律（模块注释，值得逐字读）

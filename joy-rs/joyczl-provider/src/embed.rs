@@ -12,7 +12,7 @@ use std::time::Duration;
 use reqwest::Client as HttpClient;
 use serde_json::json;
 
-use crate::{ProviderError, PROVIDERS};
+use crate::ProviderError;
 
 pub struct Embedder {
     http: HttpClient,
@@ -46,7 +46,7 @@ impl Embedder {
             .base_url
             .clone()
             .or_else(|| info.and_then(|i| i.base_url.map(str::to_string)))
-            .ok_or("这个 provider 没有默认端点：用 JOY_BASE_URL 指名 embedding 服务")?;
+            .ok_or("这个 provider 没有默认端点：在 <home>/models.json 里给这套模型配 base_url（或 /model add 时带上）")?;
         // Send even without a key (local services need none) — the same rule as chat.
         let key = settings
             .api_key
@@ -102,12 +102,4 @@ impl Embedder {
         }
         Ok(vector)
     }
-}
-
-/// Whether this provider has a default endpoint usable as an embedding service.
-pub fn default_endpoint(provider: &str) -> Option<&'static str> {
-    PROVIDERS
-        .iter()
-        .find(|info| info.id == provider)
-        .and_then(|info| info.base_url)
 }

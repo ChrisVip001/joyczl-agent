@@ -10,24 +10,13 @@
 #
 # Requires: a cargo build, a built frontend (just dashboard-build), python3.
 
-set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$REPO/joy-rs/target/debug/joy"
 ASSETS="$REPO/joy-ts/packages/dashboard/dist"
-WORK="$(mktemp -d)"
-FAKE_PID=""
-DASH_PID=""
-cleanup() {
-  [[ -n "$DASH_PID" ]] && kill "$DASH_PID" 2>/dev/null || true
-  [[ -n "$FAKE_PID" ]] && kill "$FAKE_PID" 2>/dev/null || true
-  rm -rf "$WORK"
-}
-trap cleanup EXIT
 
 fail() { echo "✗ $1" >&2; exit 1; }
 
-[[ -x "$BIN" ]] || fail "找不到 $BIN，先跑：cd joy-rs && cargo build"
+need_bin
 [[ -f "$ASSETS/index.html" ]] || fail "前端还没构建，先跑：just dashboard-build"
 
 # Fake SSE endpoint: completes the "SSE → full reply" chain without a real key.
@@ -35,6 +24,7 @@ fail() { echo "✗ $1" >&2; exit 1; }
 # first screen's turn, and one in a freshly created session).
 python3 "$REPO/scripts/fake_sse_server.py" 2 >"$WORK/fake_port" &
 FAKE_PID=$!
+track_pid "$FAKE_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/fake_port" ]] && break
   sleep 0.1
@@ -93,6 +83,7 @@ JOY_MCP_CONFIG="$WORK/pack/mcp.json" \
 JOY_PROVIDER=anthropic JOY_API_KEY=test JOY_BASE_URL="http://127.0.0.1:$MODEL_PORT" \
   "$BIN" dashboard >"$WORK/dash.log" 2>&1 &
 DASH_PID=$!
+track_pid "$DASH_PID"
 
 BASE=""
 for _ in $(seq 1 100); do

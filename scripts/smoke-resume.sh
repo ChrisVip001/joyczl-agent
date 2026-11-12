@@ -10,28 +10,17 @@
 #
 # Requires: a cargo build, python3 (fake SSE provider + state.db assertions).
 
-set -euo pipefail
-
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$REPO/joy-rs/target/debug/joy"
-WORK="$(mktemp -d)"
-FAKE_PID=""
-APP_PID=""
-cleanup() {
-  [[ -n "$APP_PID" ]] && kill "$APP_PID" 2>/dev/null || true
-  [[ -n "$FAKE_PID" ]] && kill "$FAKE_PID" 2>/dev/null || true
-  rm -rf "$WORK"
-}
-trap cleanup EXIT
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 fail() { echo "✗ $1" >&2; exit 1; }
 
-[[ -x "$BIN" ]] || fail "找不到 $BIN，先跑：cd joy-rs && cargo build"
+need_bin
 
 # Fake SSE endpoint: one streaming reply ("你好，世界") is all the resumed turn needs —
 # a resume skips the retrieval gate, so exactly one model call happens.
 python3 "$REPO/scripts/fake_sse_server.py" >"$WORK/fake_port" &
 FAKE_PID=$!
+track_pid "$FAKE_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/fake_port" ]] && break
   sleep 0.1
@@ -105,6 +94,7 @@ JOY_HOME="$WORK/.joy" JOY_PROVIDER=anthropic JOY_API_KEY=test \
   JOY_BASE_URL="http://127.0.0.1:$MODEL_PORT" \
   "$BIN" app-server <"$WORK/in" >"$WORK/out2.log" 2>&1 &
 APP_PID=$!
+track_pid "$APP_PID"
 exec 3>"$WORK/in" # hold stdin open: the reconcile task needs the process alive
 
 RESUMED=""
@@ -119,7 +109,6 @@ done
 [[ -n "$RESUMED" ]] || { cat "$WORK/out2.log"; fail "重启后没等到 turnCompleted —— 对账没续跑"; }
 exec 3>&-
 wait "$APP_PID" 2>/dev/null || true
-APP_PID=""
 
 grep -q '"type":"turnResumed"' "$WORK/out2.log" || fail "没有 turnResumed 通知"
 grep -q '"fromIterations":2' "$WORK/out2.log" || fail "续跑没报出已完成轮数"

@@ -801,8 +801,6 @@ fn interrupted_result(scene: Scene) -> LoopResult {
 }
 
 /// An empty observer, saving callers a closure when they need no events.
-pub fn noop_observer(_: LoopEvent) {}
-
 #[cfg(test)]
 #[path = "loop_tests.rs"]
 mod loop_tests;

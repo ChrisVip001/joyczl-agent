@@ -80,40 +80,6 @@ Routing is transparent about itself: `TurnMeta.routeReason` records
 `auto:reasoning → ds-r1` or `fallback: …` whenever a choice or a fallback
 actually happened; the dashboard footer prints it.
 
-## Model routing (`<home>/model-routes.json`)
-
-Instead of picking the model yourself, let the server pick it per turn —
-A tier abstraction ("You don't pick the model, the task does"):
-
-```json
-{
-  "mode": "auto",
-  "routes": { "reasoning": "ds-r1" }
-}
-```
-
-- `mode: "fixed"` (the default — a missing or broken file also means fixed)
-  keeps the active profile for every turn; routing never intervenes.
-- `mode: "auto"` picks a **tier** per turn, then maps tier → profile id:
-  token estimate over half the chat profile's context window → `reasoning`;
-  otherwise `chat`. Messages in the ambiguous band (≥2k tokens, under half
-  the window) additionally ask the cheap small-model once ("is this deep
-  reasoning?"); any failure or vague answer falls back to the L0 answer
-  (fail-open).
-- Missing tier entries fall through a default chain: `reasoning`/`fast` →
-  `chat` → the active profile. A route pointing at a deleted profile falls
-  back to the active profile and says so in `TurnMeta.routeReason`.
-- `JOY_MODEL_ROUTE=auto|fixed` forces the mode from the environment
-  (for CI / unattended hosts where the home file is out of reach).
-- Editing: REPL `/route`, `/route auto|fixed`, `/route set <tier> <id>`
-  (the file is re-read every turn — changes take effect immediately).
-- Routing is a **server-side policy**: the model has no tool to switch its
-  own model, and the human's active profile always wins.
-
-Routing is transparent about itself: `TurnMeta.routeReason` records
-`auto:reasoning → ds-r1` or `fallback: …` whenever a choice or a fallback
-actually happened; the dashboard footer prints it.
-
 ### A task can declare its tier
 
 `task/create` and `turn/start` both accept `tier` (`fast` / `chat` / `reasoning`):
@@ -234,6 +200,7 @@ points cannot disagree.
 | `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
 | `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
+| `JOY_LEDGER_INLINE_MAX` | 1024 – 1048576 |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | 0 – 50 |
 | `JOY_TURN_TOKEN_BUDGET` | 0 – 2000000 |
 | `JOY_AUTO_CONTINUE_MAX` | 0 – 5 |
@@ -255,11 +222,10 @@ nothing", which is the default.
 | Variable | Default | Purpose |
 |---|---|---|
 | `JOY_HOME` | `./.joy` | state directory: state.db, SOUL.md, skills/, traces/, outbox/, mcp.json, settings.json |
-| `JOY_PROVIDER` | `anthropic` | provider: anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama |
-| `JOY_PROVIDER` | `anthropic` | **only** the fallback provider when no profile is configured (local models start zero-config this way). Models and keys live in `<home>/models.json` |
+| `JOY_PROVIDER` | `anthropic` | provider: anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama. **Only** the fallback when no profile is configured (that is how local models start zero-config); models and keys live in `<home>/models.json` |
 | `JOY_LLM_TIMEOUT` | `120` | per-call model timeout in seconds |
-| `JOY_LLM_RETRIES` | `2` |
-| `JOY_GOAL_MAX_ROUNDS` | `5` | how many rounds a goal may continue for; on overrun the status is `round-limit` and the miss is reported honestly | retries on 429/5xx/network hiccups — exponential backoff (500ms, capped at 8s per wait, 30s total), **announced every time**, never a different provider; `0` disables |
+| `JOY_LLM_RETRIES` | `2` | retries on 429/5xx/network hiccups — exponential backoff (500ms, capped at 8s per wait, 30s total), **announced every time**, never a different provider; `0` disables |
+| `JOY_GOAL_MAX_ROUNDS` | `5` | how many rounds a goal may continue for; on overrun the status is `round-limit` and the miss is reported honestly |
 
 ## Behavior knobs
 
@@ -274,6 +240,7 @@ nothing", which is the default.
 | `JOY_COMPACT_THRESHOLD` | `0.8` | start compacting at this fraction of the window — tokens are the real gate, turns are the ceiling |
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | per-turn cap on the total size of tool results; over it the **oldest** results are replaced with stubs, newest kept whole (`0` disables) |
 | `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | a single result must exceed this to be stubbed (`0` disables) |
+| `JOY_LEDGER_INLINE_MAX` | `32768` | tool payloads above this go to `spill/…` instead of into the ledger — one turn should stay one readable row |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | how many of the newest results are never stubbed (trimming is oldest-first) |
 | `JOY_TURN_TOKEN_BUDGET` | `0` | per-**turn** token cap (input + output, as the provider reports it). At 80% the tools are taken away and the model wraps up — the same exit as the step cap, only this time the wallet ran out. `0` = off (default): the step cap already bounds rounds, and a cost gate nobody asked for cuts honest work short |
 | `JOY_RESUME_MAX_AGE` | `60` | minutes; an `open` turn checkpoint older than this is marked `abandoned` at startup instead of resumed (`0` = always resume) |

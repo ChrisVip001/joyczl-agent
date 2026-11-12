@@ -9,16 +9,7 @@
 #
 # Requires: a cargo build, uv, python3.
 
-set -euo pipefail
-
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d)"
-FAKE_PID=""
-cleanup() {
-  [[ -n "$FAKE_PID" ]] && kill "$FAKE_PID" 2>/dev/null || true
-  rm -rf "$WORK"
-}
-trap cleanup EXIT
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # Two ways to run:
 #
@@ -45,7 +36,6 @@ else
     exit 1
   fi
   RUN=(uv run --quiet --project "$REPO/sdk/python" python)
-  BIN="${JOY_BIN:-$REPO/joy-rs/target/debug/joy}"
   if [[ ! -x "$BIN" ]]; then
     echo "✗ 找不到 $BIN，先跑：cd joy-rs && cargo build" >&2
     exit 1
@@ -58,6 +48,7 @@ fi
 # It exits after serving one streaming reply.
 python3 "$REPO/scripts/fake_sse_server.py" >"$WORK/port" &
 FAKE_PID=$!
+track_pid "$FAKE_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/port" ]] && break
   sleep 0.1
@@ -101,12 +92,10 @@ SSE_PORT = os.environ["FAKE_SSE_PORT"]
 # Strip JOY_*: real keys may linger in the environment, and then the "no key" round proves nothing.
 BASE_ENV = {k: v for k, v in os.environ.items() if not k.startswith("JOY_")}
 
-
 def check(ok: bool, what: str) -> None:
     print(("  ✓ " if ok else "  ✗ ") + what)
     if not ok:
         sys.exit(1)
-
 
 async def without_a_key() -> None:
     """没配 key 的那条路：turn/start 该报 PROVIDER_ERROR，别的照常工作。"""
@@ -171,7 +160,6 @@ async def without_a_key() -> None:
     except RuntimeError:
         check(True, "关掉之后再发请求当场失败，不会挂住")
 
-
 async def streaming() -> None:
     """模型流 → textDelta → 完整应答。对端是假的，所以不要真 key。"""
     home = pathlib.Path(WORK) / "stream"
@@ -227,7 +215,6 @@ async def streaming() -> None:
     check("".join(deltas) == "你好，世界", f"增量拼得起来：{deltas}")
     check(replies == ["你好，世界"], f"turnCompleted 里是完整答复：{replies}")
 
-
 async def main() -> None:
     # When verifying the published wheel, first pin "the binary comes from the installed package".
     # Without pinning, if find_joy_binary lands on the repo's target (it will when run in-repo),
@@ -241,7 +228,6 @@ async def main() -> None:
     await without_a_key()
     print("[流式]")
     await streaming()
-
 
 asyncio.run(main())
 PY

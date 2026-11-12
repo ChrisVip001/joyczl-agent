@@ -158,11 +158,6 @@ impl State {
         self.0.get(key).and_then(Value::as_i64)
     }
 
-    /// Deserializes a key. A wrong type means a node wrote garbage — error out, don't guess.
-    pub fn get_as<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        serde_json::from_value(self.0.get(key)?.clone()).ok()
-    }
-
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
     }

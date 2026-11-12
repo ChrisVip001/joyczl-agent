@@ -177,6 +177,7 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | `JOY_COMPACT_THRESHOLD` | 0.05 – 0.95 |
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | 0 – 4000000 |
 | `JOY_TOOL_RESULT_MAX_CHARS` | 0 – 1000000 |
+| `JOY_LEDGER_INLINE_MAX` | 1024 – 1048576 |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | 0 – 50 |
 | `JOY_TURN_TOKEN_BUDGET` | 0 – 2000000 |
 | `JOY_AUTO_CONTINUE_MAX` | 0 – 5 |
@@ -197,11 +198,10 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `JOY_HOME` | `./.joy` | 状态目录：state.db、SOUL.md、skills/、traces/、outbox/、mcp.json、settings.json |
-| `JOY_PROVIDER` | `anthropic` | 模型厂商：anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama |
-| `JOY_PROVIDER` | `anthropic` | **只**是一套都没配时的兜底厂商（本地模型靠它零配置起步）。真正的模型与密钥在 `<home>/models.json` |
+| `JOY_PROVIDER` | `anthropic` | 模型厂商：anthropic / openai / deepseek / gemini / kimi / glm / minimax / xai / openrouter / opencode_zen / opencode_go / ollama。**只**是一套都没配时的兜底（本地模型靠它零配置起步）；真正的模型与密钥在 `<home>/models.json` |
 | `JOY_LLM_TIMEOUT` | `120` | 单次模型调用超时（秒） |
-| `JOY_LLM_RETRIES` | `2` |
-| `JOY_GOAL_MAX_ROUNDS` | `5` | 一个目标最多自动续几轮。超了就置 `round-limit` 并如实说明没完成 —— 不伪装完成、也不清掉目标 | 429/5xx/网络抖动时重试几次 —— 指数退避（500ms 起、单次上限 8s、总预算 30s），**每次必发通知**，绝不换厂商；`0` 关闭 |
+| `JOY_LLM_RETRIES` | `2` | 429/5xx/网络抖动时重试几次 —— 指数退避（500ms 起、单次上限 8s、总预算 30s），**每次必发通知**，绝不换厂商；`0` 关闭 |
+| `JOY_GOAL_MAX_ROUNDS` | `5` | 一个目标最多自动续几轮。超了就置 `round-limit` 并如实说明没完成 —— 不伪装完成、也不清掉目标 |
 
 ## 行为旋钮
 
@@ -214,6 +214,7 @@ curl -sS -X POST http://127.0.0.1:7777/api/run \
 | `JOY_COMPACT_THRESHOLD` | `0.8` | 用到窗口的这个比例就开始压缩 —— token 才是闸门，轮数是上限 |
 | `JOY_TOOL_RESULT_TOTAL_CHARS` | `200000` | 一轮里所有工具结果的字符总量上限；超了就从**最旧**的开始换成桩，最新的整条留着（`0` 关闭） |
 | `JOY_TOOL_RESULT_MAX_CHARS` | `30000` | 单条结果超过它才有资格被换桩（`0` 关闭） |
+| `JOY_LEDGER_INLINE_MAX` | `32768` | 超过这个大小的工具输出改存 `spill/…`，不进账本 —— 一轮应该还是一行能读的记录 |
 | `JOY_TOOL_RESULT_KEEP_RECENT` | `3` | 最新的几条结果永不换桩（清理从最旧的开始） |
 | `JOY_TURN_TOKEN_BUDGET` | `0` | **一轮**的 token 花费上限（输入+输出，按 provider 报的数）。到 80% 就把工具收起、让模型三句话收尾 —— 和步数上限走同一条路，只是这次是钱包到了。`0` = 关（默认）：步数已经管住轮数，没人要的花费闸门不该掐断正事 |
 | `JOY_AUTO_CONTINUE_MAX` | `2` | 一轮最多**自己续几次**。两个来源共用这个额度：Stop 钩子要求继续，或者内建完成闸发现待办里还有 `pending` / `in_progress`。续跑会带上刚才的步骤与工具结果（不是从头再来），并用掉一片新预算。`0` = 关（跑完就收尾）—— 步数用完不再等于「断掉」 |

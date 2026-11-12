@@ -388,7 +388,7 @@ pub static PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         // Local inference: no key, no network needed. An empty `key_env` declares exactly that.
         // Ollama exposes an OpenAI-compatible endpoint (`/v1`), so the same wire is reused —
-        // LM Studio / vLLM look the same; point `JOY_BASE_URL` at them.
+        // LM Studio / vLLM look the same; point a profile's base_url at them.
         id: "ollama",
         wire: Wire::OpenAi,
         key_env: "",

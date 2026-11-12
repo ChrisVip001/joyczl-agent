@@ -375,63 +375,12 @@ pub struct JudgeSpec {
 
 /// Reads judge cases (same JSONL shape as deterministic cases; directories and files both accepted).
 pub fn load_judge(paths: &[PathBuf]) -> anyhow::Result<Vec<JudgeScenario>> {
-    let mut scenarios = Vec::new();
-    for path in paths {
-        let files: Vec<PathBuf> = if path.is_dir() {
-            std::fs::read_dir(path)?
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
-                .collect()
-        } else {
-            vec![path.clone()]
-        };
-        for file in files {
-            let text = std::fs::read_to_string(&file)?;
-            for line in text.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                scenarios.push(serde_json::from_str(line)?);
-            }
-        }
-    }
-    Ok(scenarios)
+    crate::jsonl::read_jsonl(paths, "judge 用例", |_, _| Ok(()))
 }
 
 /// Reads all deterministic cases: each path is a JSONL file or directory (a directory consumes its *.jsonl).
 pub fn load_all(paths: &[PathBuf]) -> anyhow::Result<Vec<Scenario>> {
-    let mut scenarios = Vec::new();
-    for path in paths {
-        let files: Vec<PathBuf> = if path.is_dir() {
-            std::fs::read_dir(path)?
-                .filter_map(|entry| entry.ok())
-                .map(|entry| entry.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
-                .collect()
-        } else {
-            vec![path.clone()]
-        };
-        for file in files {
-            let text = std::fs::read_to_string(&file)?;
-            for (line_number, line) in text.lines().enumerate() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                let scenario: Scenario = serde_json::from_str(line).map_err(|e| {
-                    anyhow::anyhow!(
-                        "{} 第 {} 行不是合法用例：{e}",
-                        file.display(),
-                        line_number + 1
-                    )
-                })?;
-                scenarios.push(scenario);
-            }
-        }
-    }
-    Ok(scenarios)
+    crate::jsonl::read_jsonl(paths, "用例", |_, _| Ok(()))
 }
 
 #[cfg(test)]

@@ -4,6 +4,30 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### Internal tidying: one source for config, one preamble for scripts, less dead code
+
+- A configuration knob used to be written in six places by hand. Now **the code is the single
+  source**: `scripts/check_config_docs.py` (in `just check`) fails unless every `JOY_*` the code
+  can read appears in `.env.example` and both configuration docs. It immediately found 7 real
+  knobs that had never been listed in the sample (`JOY_PLAN`, `JOY_WRITE`, `JOY_LEDGER_INLINE_MAX`,
+  `JOY_HUB_ROOT`, …), one dead switch still documented after its removal (`JOY_EXPERIMENTAL`), and
+  two error messages telling users to set `JOY_BASE_URL` — which has not been read for a long time.
+- `.env.example`'s comments are back next to their variables (they had drifted into "comment
+  explains A, variable is B"), and `configuration.md` lost a section that was duplicated verbatim.
+- The seven smoke scripts share `scripts/lib.sh` (`fail` / `track_pid` / `need_bin`). The same ten
+  lines had been copied seven times, and the copies had already drifted: one cleaned up
+  `$FAKE_PID` while checking `$CB_PID`, another reset `trap` mid-run and dropped the cleanup.
+- Three JSONL loaders became `jsonl::read_jsonl`, which also unifies file ordering (the printed
+  table no longer shuffles between machines) and `file:line` errors (judge cases had none).
+- Deleted the 4 `pub fn` with zero references (out of 739): `triage_topology` (the dashboard
+  topology it fed was never wired; the doc sentence went with it), `default_endpoint`, `get_as`,
+  `noop_observer`.
+
+**Structural verdict, recorded so nobody asks again**: `turn.rs` (3200 lines) stays one file, and
+so does `ops/api.rs`. The criterion is in `docs/internals/09-app-server.md §9.7b`: the two pieces
+worth splitting are already "one struct in, one struct out", and the remaining four phases share
+six-plus mutable values — splitting them would only make every function carry those six.
+
 ### Running out of steps no longer means the task dies
 
 - When the **step cap cuts a turn off**, it passes a built-in completion gate: the todo list

@@ -371,6 +371,26 @@ JSON。这条规矩在 `lib.rs`、`builtin_tools`、`exec`、`oauth` 等所有�
 **绝不 panic**。理由：账本坏了不该连累对话，也不能悄悄闭嘴。
 （已知边界：`usage.jsonl` 没有轮转，见 `docs/limitations.md`。）
 
+## 9.7b 为什么 `turn.rs` 还是一个文件
+
+`turn.rs` 3200 行、`run_turn` 一个函数 850 行，看起来该拆。量过之后不拆，判据写在这里，免得
+下一轮再问一遍：
+
+| 候选职责 | 行数 | 拆出去之后要带走的共享状态 |
+|---|---|---|
+| `run_turn` 主流程（装载历史 → 跑 → 续跑 → 任务循环 → 收尾） | 850 | `full`（每段被替换）、`observation`（序号连续）、`continues` / `cap`、`checkpoint`、`settings`、`interrupt`、`sink` |
+| `full_turn`（一段循环） | 450 | 已经是一个独立函数，只吃 `TurnFrame` |
+| `finalize_turn`（收尾） | 400 | 同上，只吃 `FinishedTurn` |
+| `graph_route`（前置路由） | 200 | 只读 `resolved` 与 cwd |
+
+`full_turn` 与 `finalize_turn` 早已各自成函数，输入都是**一个结构体**——那正是「拆对了」的
+形状。剩下能拆的只有 `run_turn` 里那四段，而它们共享六七个可变值；拆成子模块后每个函数
+仍要传这六七个参数（或者再造一个把六七个字段搬来搬去的结构体），概念数反而增加。
+`ops/api.rs` 同理但不是同一个原因：它长是因为**端点**多，每个 handler 都不到 90 行。
+
+所以结论是：不动结构。想让它更好读，该做的是给那四段各加一句「这一段结束时的状态是什么」，
+不是搬文件。
+
 ## 9.8 测试钉住了什么
 
 `turn_tests.rs`（19 条）+ `dispatch_tests.rs` 覆盖：

@@ -185,7 +185,7 @@ fn local_provider_is_openai_wire_at_the_local_endpoint() {
 
 #[test]
 fn local_provider_still_honours_explicit_overrides() {
-    // LM Studio / vLLM are pointed at exactly via JOY_BASE_URL + JOY_MODEL.
+    // LM Studio / vLLM are pointed at exactly via a profile's base_url + model.
     let settings = joyczl_config::Settings {
         provider: "ollama".to_string(),
         base_url: Some("http://127.0.0.1:1234/v1".to_string()),

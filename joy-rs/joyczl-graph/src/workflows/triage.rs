@@ -27,7 +27,7 @@ use serde_json::json;
 
 use crate::nodes::fn_node;
 use crate::workflow_def::{builtin_routes, WorkflowDef};
-use crate::{writes, Boxed, Graph, NodeCtx, NodeFn, NodeWrites, State, Topology};
+use crate::{writes, Boxed, Graph, NodeCtx, NodeFn, NodeWrites, State};
 
 /// 拓扑的唯一定义，编译期内嵌（`definitions/triage.json`）。工作流是代码的一部分，
 /// 随二进制发布——改动走 review，不走运行时加载。
@@ -198,18 +198,4 @@ pub fn build_triage_graph(
     bindings.insert("gather".to_string(), fn_node(|_| NodeWrites::new()));
 
     WorkflowDef::parse(TRIAGE_DEF)?.build(&bindings, &builtin_routes())
-}
-
-/// Topology as data, for the dashboard — builds the graph with stubs, never runs it.
-pub fn triage_topology() -> Topology {
-    let noop_classify: ClassifyFn =
-        Arc::new(|_m| Box::pin(async { Ok(("full".to_string(), String::new())) }));
-    let noop_calendar: CalendarFn = Arc::new(String::new);
-    let noop_quick: QuickFn = Arc::new(|_s| Box::pin(async { Ok(String::new()) }));
-    let noop_full: FullFn = Arc::new(|_c| Box::pin(async { Ok(NodeWrites::new()) }));
-    match build_triage_graph(noop_classify, noop_calendar, noop_quick, noop_full) {
-        Ok(graph) => graph.describe(),
-        // Reaching here means the graph itself is wrong — and it is hard-coded in this file.
-        Err(error) => panic!("triage 图写错了：{error}"),
-    }
 }

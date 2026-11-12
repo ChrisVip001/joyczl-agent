@@ -12,27 +12,19 @@
 #
 # Requires: a cargo build, joy-ts deps installed (cd joy-ts && npm install), python3.
 
-set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$REPO/joy-rs/target/debug/joy"
 BRIDGE="$REPO/joy-ts/packages/gateway/src/bridge.ts"
-WORK="$(mktemp -d)"
-FAKE_PID=""
-cleanup() {
-  [[ -n "$FAKE_PID" ]] && kill "$FAKE_PID" 2>/dev/null || true
-  rm -rf "$WORK"
-}
-trap cleanup EXIT
 
 fail() { echo "✗ $1" >&2; exit 1; }
 
-[[ -x "$BIN" ]] || fail "找不到 $BIN，先跑：cd joy-rs && cargo build"
+need_bin
 
 # Fake SSE endpoint: completes the "SSE → full reply" chain without a real key.
 # The three chains below each ask once, so it must serve three streaming replies.
 python3 "$REPO/scripts/fake_sse_server.py" 3 >"$WORK/port" &
 FAKE_PID=$!
+track_pid "$FAKE_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/port" ]] && break
   sleep 0.1

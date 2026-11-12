@@ -10,21 +10,11 @@
 #
 # Requires: a cargo build, python3. No network, no real mail server.
 
-set -euo pipefail
-
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$REPO/joy-rs/target/debug/joy"
-WORK="$(mktemp -d)"
-SMTP_PID=""
-cleanup() {
-  [[ -n "$SMTP_PID" ]] && kill "$SMTP_PID" 2>/dev/null || true
-  rm -rf "$WORK"
-}
-trap cleanup EXIT
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 fail() { echo "✗ $1" >&2; exit 1; }
 
-[[ -x "$BIN" ]] || fail "找不到 $BIN，先跑：cd joy-rs && cargo build"
+need_bin
 
 mkdir -p "$WORK/.joy"
 
@@ -36,6 +26,7 @@ echo "  ✓ 没有配置时不启用任何连接器"
 # ---- 2. Allowlist is a hard boundary ------------------------------------------------
 python3 "$REPO/scripts/fake_smtp_server.py" "$WORK/data.txt" >"$WORK/port" &
 SMTP_PID=$!
+track_pid "$SMTP_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/port" ]] && break
   sleep 0.1
@@ -102,13 +93,13 @@ echo "  ✓ live：真的走到 SMTP，收件人 / 主题编码 / base64 正文�
 # ---- 5. Feishu: allowlist, draft, then one live message ---------------------------
 python3 "$REPO/scripts/fake_feishu_server.py" "$WORK/feishu.log" >"$WORK/feishu_port" &
 FEISHU_PID=$!
+track_pid "$FEISHU_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/feishu_port" ]] && break
   sleep 0.1
 done
 FEISHU_PORT="$(head -n1 "$WORK/feishu_port" 2>/dev/null || true)"
 [[ -n "$FEISHU_PORT" ]] || fail "假飞书端点没起来"
-trap 'kill "$SMTP_PID" "$FEISHU_PID" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
 python3 - "$WORK/.joy/connectors.json" "$FEISHU_PORT" <<'PY'
 import json, sys
@@ -194,6 +185,7 @@ PY
 
 python3 "$REPO/scripts/fake_imap_server.py" 101 102 >"$WORK/imap_port" &
 IMAP_PID=$!
+track_pid "$IMAP_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/imap_port" ]] && break
   sleep 0.1
@@ -217,6 +209,7 @@ JOY_IMAP_SMOKE_PASSWORD=s3cret JOY_HOME="$INBOUND_HOME" \
   JOY_PROVIDER=anthropic JOY_API_KEY=test \
   "$BIN" app-server <"$WORK/inbound_in" >"$WORK/inbound_out.log" 2>&1 &
 INBOUND_PID=$!
+track_pid "$INBOUND_PID"
 exec 4>"$WORK/inbound_in" # hold stdin open: the poller is a background task
 
 sleep 2
@@ -260,6 +253,7 @@ RENEW_HOME="$WORK/renew"
 mkdir -p "$RENEW_HOME/connector-auth"
 python3 "$REPO/scripts/fake_feishu_server.py" "$WORK/renew.log" >"$WORK/renew_port" &
 RENEW_PID=$!
+track_pid "$RENEW_PID"
 for _ in $(seq 1 50); do
   [[ -s "$WORK/renew_port" ]] && break
   sleep 0.1
@@ -287,6 +281,7 @@ PY_TOKEN
       JOY_FEISHU_SMOKE_SECRET=s3cret \
       "$BIN" app-server >"$WORK/renew_out.log" 2>&1 &
 RENEW_SERVER=$!
+track_pid "$RENEW_SERVER"
 
 RENEWED=""
 for _ in $(seq 1 100); do

@@ -13,6 +13,7 @@
 //! Reports land in `<home>/eval_report.json`, history appends to `<home>/eval_runs.jsonl`
 //! — the same "ledger on disk" rule as trace/usage.
 
+pub mod jsonl;
 pub mod judge;
 pub mod replay;
 pub mod report;

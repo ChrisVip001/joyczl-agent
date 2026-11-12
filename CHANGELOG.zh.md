@@ -4,6 +4,28 @@
 
 ## 未发布
 
+### 内部整理：配置单一来源、脚本收编、死代码清理
+
+- 配置项从「六处各写一遍」变成「代码是事实源」：新增 `scripts/check_config_docs.py`（已接进
+  `just check`），代码读得到的每个 `JOY_*` 都必须在 `.env.example` 与两份配置文档里出现，
+  漏一个就红。它当场查出 7 个从没记进样例的开关（`JOY_PLAN` / `JOY_WRITE` /
+  `JOY_LEDGER_INLINE_MAX` / `JOY_HUB_ROOT` / `JOY_API_KEY`… 中的真开关）、1 个早已删除却
+  还留在样例里的死开关（`JOY_EXPERIMENTAL`），以及两处教用户设 `JOY_BASE_URL` 的过时文案
+  （那个变量早就不读了）。
+- `.env.example` 的注释与变量重新对齐 —— 之前被错位成「注释讲 A、变量是 B」；`configuration.md`
+  里逐字重复的「Model routing」整节删除。
+- 七个 smoke 脚本的前奏收进 `scripts/lib.sh`（`fail` / `track_pid` / `need_bin`）：同一个十行
+  骨架抄了七份，其中一份清理 `$FAKE_PID` 时检查的是 `$CB_PID`，另一份中途重设 `trap` 把清理
+  整个丢掉 —— 副本漂移比重复更糟，它在你最需要的那一刻失效。
+- 三个 JSONL 读取器合成 `jsonl::read_jsonl`：顺手统一了文件排序（表格顺序不再随机器乱跳）
+  与「文件:行号」报错（judge 用例以前没有）。
+- 删掉 4 个零引用 `pub fn`（739 个里就这 4 个）：`triage_topology`（它服务的驾驶舱拓扑图从未
+  接线，文档里那一句一并删）、`default_endpoint`、`get_as`、`noop_observer`。
+
+**结构结论（留给下一轮，别再问一遍）**：`turn.rs` 3200 行不拆、`ops/api.rs` 不拆。判据写在
+`docs/internals/09-app-server.md §9.7b`：能拆的两块（`full_turn` / `finalize_turn`）早已是
+「一个结构体入口」的形状，剩下的四段共享六个以上可变值，拆完每个函数仍要背这六个参数。
+
 ### 步数用完不再等于「任务断掉」
 
 - **步数上限被截断**时过一次内建完成闸：待办清单里还有 `pending` / `in_progress`，
