@@ -1247,16 +1247,20 @@ async fn a_symlinked_attachment_outside_home_is_refused() {
 /// 的全部实现就在这一个分支上，所以它值得一条自己的测试。
 #[tokio::test]
 async fn the_session_working_directory_is_used_when_the_turn_names_none() {
+    // A real temp directory instead of a hardcoded `/tmp`: that path exists on Unix but not on a
+    // Windows runner, so the fail-closed `session_cwd` (existing dir only) returned None there.
+    let dir = tempfile::tempdir().expect("临时目录");
+    let cwd = dir.path().to_string_lossy().to_string();
     let server = server(Arc::new(Mock::new(vec![])), false).await;
     server
         .chat
-        .create_session("s1", None, Some("/tmp"))
+        .create_session("s1", None, Some(cwd.as_str()))
         .await
         .expect("建会话");
 
     assert_eq!(
         crate::turn::session_cwd(&server, "s1").await.as_deref(),
-        Some(std::path::Path::new("/tmp")),
+        Some(std::path::Path::new(cwd.as_str())),
         "会话记着的目录就是这一轮的可写范围根"
     );
     assert_eq!(
