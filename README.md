@@ -5,6 +5,7 @@ English | [简体中文](README.zh.md)
 [![CI](https://github.com/ChrisVip001/joyczl-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ChrisVip001/joyczl-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/ChrisVip001/joyczl-agent)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/ChrisVip001/joyczl-agent?style=social)](https://github.com/ChrisVip001/joyczl-agent/stargazers)
+[![Release](https://img.shields.io/github/v/release/ChrisVip001/joyczl-agent)](https://github.com/ChrisVip001/joyczl-agent/releases/latest)
 
 **A personal assistant that runs entirely on your own machine — with a memory you can actually inspect.**
 Rust owns the agent loop, memory and 29 tools; TypeScript is only the dashboard and the chat gateways; Python stays a thin SDK. Conversations, `state.db` and API keys never leave your laptop. The dashboard speaks both English and Chinese — switch it from the sidebar.
@@ -161,7 +162,7 @@ Tool failures return to the model as text — the loop never crashes on one.
 
 ## Roadmap
 
-**Next up (help wanted):** real-platform gateway integrations · Windows write boundary and the two failing Windows CI tests · more replay eval cases · provider coverage beyond the 12 built in · Homebrew / PyPI / npm packaging channels. See [open issues](https://github.com/ChrisVip001/joyczl-agent/issues) for the concrete list.
+**Next up (help wanted):** real-platform gateway integrations · Windows writable-boundary support · more replay eval cases · provider coverage beyond the 12 built in · Homebrew / PyPI / npm packaging channels. See [open issues](https://github.com/ChrisVip001/joyczl-agent/issues) for the concrete list.
 
 <details>
 <summary>Shipped: phases P0–P20 (click to expand)</summary>

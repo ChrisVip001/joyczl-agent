@@ -5,6 +5,7 @@
 [![CI](https://github.com/ChrisVip001/joyczl-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ChrisVip001/joyczl-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/ChrisVip001/joyczl-agent)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/ChrisVip001/joyczl-agent?style=social)](https://github.com/ChrisVip001/joyczl-agent/stargazers)
+[![Release](https://img.shields.io/github/v/release/ChrisVip001/joyczl-agent)](https://github.com/ChrisVip001/joyczl-agent/releases/latest)
 
 **一个完全跑在自己机器上的个人助手，而且它的记忆是能打开看的。**
 Rust 独占 agent 循环、记忆和 29 个工具；TypeScript 只负责驾驶舱和聊天网关；Python 留一个薄 SDK。对话、`state.db` 和密钥都不出本机。驾驶舱支持中英文切换，侧栏一键换语言。
@@ -154,7 +155,7 @@ JSONRPC
 
 ## 路线图
 
-**接下来（欢迎认领）：** 聊天网关接真实平台 · Windows 写入边界与 CI 上两个失败用例 · 更多 replay eval 用例 · 扩展第 13 家之后的 provider · Homebrew / PyPI / npm 发布链路。具体条目见 [open issues](https://github.com/ChrisVip001/joyczl-agent/issues)。
+**接下来（欢迎认领）：** 聊天网关接真实平台 · Windows 写入边界支持 · 更多 replay eval 用例 · 扩展第 13 家之后的 provider · Homebrew / PyPI / npm 发布链路。具体条目见 [open issues](https://github.com/ChrisVip001/joyczl-agent/issues)。
 
 <details>
 <summary>已完成：P0–P20（展开）</summary>
