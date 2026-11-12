@@ -6,6 +6,8 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # Lets a maintainer re-run a failed publish without moving the tag.
+  workflow_dispatch:
 
 permissions:
   contents: write # 创建 Release、上传产物
@@ -76,6 +78,9 @@ jobs:
     needs: [binaries, pypi-wheels]
     runs-on: ubuntu-24.04
     steps:
+      # gh release create needs a git repository; without checkout it fails with
+      # "fatal: not a git repository" (this is what broke the v0.17.0 run).
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -84,7 +89,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            dist/*
+          notes=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file "$notes" \
+              dist/*
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              dist/*
+          fi
