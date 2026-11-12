@@ -378,8 +378,13 @@ async fn a_remembered_write_directory_needs_no_answer() {
         .await;
     assert!(out.starts_with("已写入"), "{out}");
     assert!(path.exists(), "真写了");
+    // settings.json holds the path as a JSON string: on Windows the backslashes are escaped there
+    // (`C:\\Users\\…`), so the raw needle never matches. Compare the encoded form instead — on
+    // Unix the two are identical, so this stays platform-neutral.
+    let ws = workspace.to_string_lossy();
+    let encoded = serde_json::to_string(&ws).expect("路径可序列化");
     assert!(
-        settings_json(&settings.home).contains(workspace.to_string_lossy().as_ref()),
+        settings_json(&settings.home).contains(&encoded[1..encoded.len() - 1]),
         "目录进了 settings.json"
     );
 }
