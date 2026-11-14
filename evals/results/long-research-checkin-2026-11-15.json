@@ -1,0 +1,16 @@
+{
+  "checkedAt": "2026-11-14T19:09:46.362623+00:00",
+  "taskId": "task1794665575013",
+  "elapsedSeconds": 17811,
+  "requiredElapsedSeconds": 86400,
+  "eligibleAt": "2026-11-15T14:12:55.014254+00:00",
+  "status": "suspended",
+  "runs": 1,
+  "inputEvents": 0,
+  "sourceDraftAndFirstDaySnapshotUnchanged": true,
+  "reviewFileExists": false,
+  "finalFileExists": false,
+  "newPaidRequests": 0,
+  "crossDayQualityPassed": false,
+  "nextAction": "Complete review and explicitly signal the same task after the real 24-hour gate; preserve the original failed quality verdicts."
+}

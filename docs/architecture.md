@@ -293,3 +293,5 @@ Full/delegated stable prefixes and quick-reply system prompts reuse one conversa
 ### Task observation failures
 
 Task step and artifact observations are required execution evidence. A persistence failure still charges known round usage, then stops the task for attention before acceptance or repair model rounds. Partial records can be re-observed through existing step/path idempotency keys; this does not undo effects or automatically resume/complete the task. Optional timeline-event failures remain explicit in logs.
+
+A model failure after a checkpoint charges its recorded token usage through the same per-round cumulative watermark before terminal settlement. Repeated failure handling cannot charge those tokens twice. If charging fails, an active task becomes `needs_attention` and its checkpoint remains suspended for review. Existing human stop states are preserved; tokens missing from provider usage are not estimated as known spend.

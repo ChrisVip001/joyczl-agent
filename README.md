@@ -270,3 +270,5 @@ Full, delegated and quick replies now share memory-grounding and companionship i
 If required task step or artifact observations cannot be persisted, known usage is retained and acceptance/automatic continuation stop for review of work already performed. Existing files or external effects are not rolled back.
 
 [Staged research study](docs/long-research-study-2026-11-14.md): explicit first-day drafting, separate-context review and actual next-day continuation.
+
+Failed model rounds retain checkpointed token spend in task totals; an accounting failure keeps the checkpoint for review.

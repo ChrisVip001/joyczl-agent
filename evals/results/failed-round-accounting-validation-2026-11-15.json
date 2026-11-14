@@ -1,0 +1,41 @@
+{
+  "observedAt": "2026-11-14T19:16:40.969255+00:00",
+  "gitRevision": "fd5c78afe4bffad24b2f72354f192543acd44121",
+  "uncommittedChanges": true,
+  "scope": "Validation ran in the shared workspace, including concurrent permission work. Only this thread's accounting fix and research evidence are included in its commits. Desktop changes are excluded.",
+  "change": "Failure settlement charges persisted checkpoint tokens with existing per-round watermarks; accounting failure preserves a suspended review boundary. Human stop states remain protected.",
+  "regression": {
+    "name": "failed_model_round_charges_checkpoint_once_and_retains_accounting_faults",
+    "before": "Failed: task spent 0 versus 28 known checkpoint tokens after a successful file write followed by provider failure.",
+    "after": "Passed: exact task/run token totals, repeated settlement without duplicate charges, three provider requests per case, completed file preserved, storage fault retained for review and idempotent accounting after repair.",
+    "variants": 2
+  },
+  "fullGate": {
+    "command": "just check",
+    "exitCode": 0,
+    "rustPassed": 945,
+    "rustFailed": 0,
+    "appServerPassed": 233,
+    "frontendPassed": 113,
+    "deterministicPassed": 70,
+    "replayPassed": 5,
+    "clippyWarnings": 0
+  },
+  "sourceSha256": {
+    "joy-rs/joyczl-app-server/src/turn/failure.rs": "2954ffeeac1d24eb3428dc75c0bdbe032ea22ac6246fc50517fde1834409adf6",
+    "joy-rs/joyczl-app-server/src/task/tests.rs": "67d497355bb459b07db1476302f4ef30f3bb50ed64f088816f5742c2d46acd3a"
+  },
+  "logSha256": {
+    "/tmp/joy-failed-accounting-before.log": "11ada21d6e99966a73cf9e9e2b28f5569b7e08e6b437175849ff2ae883d8a563",
+    "/tmp/joy-failed-accounting-after-final.log": "2d7527c80fa338508ea815ab829aed2393f976badbfb26ef0ce96266759146c8",
+    "/tmp/joy-accounting-final-check-2026-11-15.log": "188f62e6deb6e038eba2d9652360c0f6024c97763efa6ca2992469e213aba701"
+  },
+  "beforeFailureExcerpt": "assertion left == right failed: left 0, right 28",
+  "historicalLiveEvidenceUnchanged": true,
+  "newPaidCalls": 0,
+  "limits": [
+    "Only reported checkpoint token usage is charged; missing provider usage remains unknown.",
+    "The original failed live database is retained without retroactive mutation.",
+    "Actual next-day research delivery, semantic correction and separate-context review remain pending until the original elapsed-time gate and explicit continuation."
+  ]
+}

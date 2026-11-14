@@ -47,3 +47,7 @@ Initial live calls used the existing 30-second request cap. Future research phas
 ## 2026-11-15 continuation
 
 At about 03:01 Asia/Shanghai, fewer than five hours had elapsed since the retained draft started. The actual 24-hour continuation gate remains in effect; no paid review or task signal was sent. Work continues on the observed failed-round accounting defect. Desktop and session-permission work belongs to another concurrent thread.
+
+The failed-round regression reproduced zero task tokens versus 28 known checkpoint tokens, then passed after the shared failure finalizer charged persisted usage. It also covers repeated finalization, injected accounting failure retaining review state, and idempotent charging after repair without rerunning the model or tool. Historical live failures remain unchanged; missing provider usage is still unknown. See the [current check-in](../evals/results/long-research-checkin-2026-11-15.json). Actual next-day delivery and model review remain pending.
+
+[Failed-round validation](../evals/results/failed-round-accounting-validation-2026-11-15.json): full gate passed with 945 Rust tests, 113 frontend, 70 deterministic and five replay cases, plus zero Clippy warnings. These checks do not establish final research quality.

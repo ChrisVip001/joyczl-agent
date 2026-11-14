@@ -51,6 +51,33 @@ pub(crate) async fn finish(
         close_run(server, run_id, RunStatus::Failed, message).await;
         return;
     }
+    // A provider error can arrive after successful calls already reached a durable boundary.
+    let charged = async {
+        if let Some(row) = server
+            .checkpoints
+            .get(turn_id)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            if row.run_id.as_deref() != run_id {
+                return Err("Failed checkpoint belongs to a different execution".to_string());
+            }
+            let usage = crate::task::contract::checkpoint_usage(&row.usage_json)?;
+            crate::task::contract::charge_checkpoint(server, &row, usage).await?;
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    let accounting_failed = charged.is_err();
+    let reason = match charged {
+        Ok(()) => message.to_string(),
+        Err(error) => {
+            let reason = format!("{message}; known checkpoint usage could not be charged: {error}");
+            eprintln!("(joy) {reason}");
+            reason
+        }
+    };
+    let message = reason.as_str();
     let preserved = match task.status {
         TaskStatus::Cancelled => Some((RunStatus::Cancelled, "abandoned")),
         TaskStatus::Done => Some((RunStatus::Completed, "done")),
@@ -73,21 +100,27 @@ pub(crate) async fn finish(
         crate::task::notify(sink, &task, task.last_stop_reason.as_deref());
         return;
     }
-    checkpoint(server, turn_id, "abandoned").await;
-    if let Err(error) = crate::completion_delivery::finish_task(
-        server,
-        task_id,
-        TaskStatus::Failed,
-        Some(message),
-        turn_id,
-        run_id,
-    )
-    .await
-    {
-        eprintln!(
-            "(joy) turn failure could not be committed: {}",
-            error.message
-        );
+    if accounting_failed {
+        if let Err(error) = server.checkpoints.review(turn_id, run_id, message).await {
+            eprintln!("(joy) failed accounting review could not be committed: {error}");
+        }
+    } else {
+        checkpoint(server, turn_id, "abandoned").await;
+        if let Err(error) = crate::completion_delivery::finish_task(
+            server,
+            task_id,
+            TaskStatus::Failed,
+            Some(message),
+            turn_id,
+            run_id,
+        )
+        .await
+        {
+            eprintln!(
+                "(joy) turn failure could not be committed: {}",
+                error.message
+            );
+        }
     }
     if let Ok(Some(task)) = server.tasks.get(task_id).await {
         crate::task::notify(sink, &task, Some(message));

@@ -1359,3 +1359,86 @@ async fn observation_write_failures_stop_before_continuation_and_keep_known_spen
         assert_eq!(task.status, joyczl_state::TaskStatus::NeedsAttention);
     }
 }
+
+#[tokio::test]
+async fn failed_model_round_charges_checkpoint_once_and_retains_accounting_faults() {
+    for fail_accounting in [false, true] {
+        let mock = Arc::new(Mock::with_outcomes(vec![
+            Ok(Mock::text(
+                r#"{"retrieve":false,"query":"","reason":"task"}"#,
+            )),
+            Ok(Mock::tool_use(
+                "write",
+                "write_file",
+                json!({"path":"report.md","content":"Completed before provider failure."}),
+            )),
+            Err(joyczl_provider::ProviderError::Api(
+                "Injected provider failure".into(),
+            )),
+        ]));
+        let (server, home) = boot(Some(mock.clone())).await;
+        let work = home.join("work");
+        std::fs::create_dir(&work).unwrap();
+        let created = create_task(&server, "failed-accounting", "Keep known spend", None).await;
+        if fail_accounting {
+            sqlx::query("CREATE TRIGGER fail_round_charge BEFORE INSERT ON run_round_accounts BEGIN SELECT RAISE(FAIL,'injected accounting failure'); END").execute(&server.pool).await.unwrap();
+        }
+        let (sink, _rx) = EventSink::channel();
+        let result = crate::turn::run_turn(
+            &server,
+            TurnStartParams {
+                session_id: Some("failed-accounting".into()),
+                message: "Write report.md, then verify it.".into(),
+                cwd: Some(work.display().to_string()),
+                ..Default::default()
+            },
+            RequestId::Number(1),
+            &sink,
+        )
+        .await;
+        assert!(result
+            .unwrap_err()
+            .message
+            .contains("Injected provider failure"));
+        let task = server.tasks.get(&created.task.id).await.unwrap().unwrap();
+        let turn_id: String = sqlx::query_scalar("SELECT turn_id FROM task_runs WHERE task_id=? ORDER BY started_at DESC,rowid DESC LIMIT 1").bind(&created.task.id).fetch_one(&server.pool).await.unwrap();
+        let turn = turn_id.as_str();
+        let row = server.checkpoints.get(turn).await.unwrap().unwrap();
+        let usage = crate::task::contract::checkpoint_usage(&row.usage_json).unwrap();
+        let known = usage.input_tokens + usage.output_tokens;
+        assert!(known > 0);
+        assert_eq!(
+            std::fs::read_to_string(work.join("report.md")).unwrap(),
+            "Completed before provider failure."
+        );
+        if fail_accounting {
+            assert_eq!(task.status, joyczl_state::TaskStatus::NeedsAttention);
+            assert_eq!(row.status, "suspended");
+            assert!(task.last_stop_reason.unwrap().contains("checkpoint usage"));
+            sqlx::query("DROP TRIGGER fail_round_charge")
+                .execute(&server.pool)
+                .await
+                .unwrap();
+        } else {
+            assert_eq!(task.status, joyczl_state::TaskStatus::Failed);
+            assert_eq!(task.spent_tokens, known);
+            assert_eq!(row.status, "abandoned");
+        }
+        for _ in 0..2 {
+            crate::turn::failure::finish(
+                &server,
+                &sink,
+                turn,
+                row.run_id.as_deref(),
+                Some(&created.task.id),
+                "Injected provider failure",
+            )
+            .await;
+        }
+        let task = server.tasks.get(&created.task.id).await.unwrap().unwrap();
+        assert_eq!(task.spent_tokens, known);
+        let run = server.runs.for_turn(turn).await.unwrap().unwrap();
+        assert_eq!(run.tokens_in + run.tokens_out, known);
+        assert_eq!(mock.received.lock().unwrap().len(), 3);
+    }
+}
