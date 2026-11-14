@@ -12,7 +12,7 @@ on a machine with credentials — tokens do not live in CI.
 - [ ] `just check` green on main (fmt / clippy / tests / schema drift / ts / py / eval)
 - [ ] `./scripts/smoke-sdk-python.sh` passes (the SDK really talks to a real app-server)
 - [ ] Version numbers bumped everywhere they live (see §1)
-- [ ] You are a maintainer with: PyPI account (twine token), npm account
+- [ ] You are a maintainer with: an npm account
       (`NPM_TOKEN` or `npm login`), and a `homebrew-tap` repo you can push to
 
 ## 1. Bump versions
@@ -43,7 +43,6 @@ joy-v0.8.0-aarch64-apple-darwin.tar.gz
 joy-v0.8.0-x86_64-apple-darwin.tar.gz
 joy-v0.8.0-x86_64-unknown-linux-gnu.tar.gz
 joy-v0.8.0-aarch64-unknown-linux-gnu.tar.gz
-joyczl_agent_bin-<ver>-<tags>.whl (per platform)
 ```
 
 ## 3. Homebrew

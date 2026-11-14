@@ -157,7 +157,7 @@ JSONRPC
 
 ## 路线图
 
-**接下来（欢迎认领）：** 聊天网关接真实平台 · Windows 写入边界支持 · 更多 replay eval 用例 · 扩展第 13 家之后的 provider · Homebrew / PyPI / npm 发布链路。具体条目见 [open issues](https://github.com/ChrisVip001/joyczl-agent/issues)。
+**接下来（欢迎认领）：** 聊天网关接真实平台 · Windows 写入边界支持 · 更多 replay eval 用例 · 扩展第 13 家之后的 provider · Homebrew / npm 发布链路。具体条目见 [open issues](https://github.com/ChrisVip001/joyczl-agent/issues)。
 
 <details>
 <summary>已完成：P0–P20（展开）</summary>
@@ -175,7 +175,7 @@ JSONRPC
 | P7 ✅ | 混合检索（`JOY_EMBEDDINGS`，RRF）、临时陈述过滤、技能更新（`joy skill update`） |
 | P8 ✅ | 启动期配置校验、工具参数 schema 校验、循环护栏、token 预算、沙箱且默认断网的执行、可见的重试、超长输出落盘、子代理、交互式批准、技能策略字段、记忆类别 |
 | P9 ✅ | 工具结果预算（按行落盘 + 实测 prefill 校准）、子代理报告扫描与 `result_schema`、MCP 熔断与命名去重、记忆写入去重、12 个生命周期钩子（`JOY_HOOKS`）、待办清单、后台作业、目标循环（`/goal`） |
-| P10 ✅ | 文件写入工具（`write_file`/`edit`）、图片输入、模型目录、HTTP 钩子、声明式工作流、per-session 写段锁、Windows 边界（仅 Unix）、分发物料（npm shim / brew / PyPI / release workflow） |
+| P10 ✅ | 文件写入工具（`write_file`/`edit`）、图片输入、模型目录、HTTP 钩子、声明式工作流、per-session 写段锁、Windows 边界（仅 Unix）、分发物料（npm shim / brew / release workflow） |
 | P11 ✅ | 账号与多端：hub 注册登录（PBKDF2、每设备 token、座位上限）、dashboard 远程模式与登录卡、跨端事件同步、CORS、PWA 骨架、Tauri 桌面壳 |
 | P12 ✅ | 长任务引擎（回合级 checkpoint）：工具边界落盘工作记忆、kill -9 后启动对账自动续跑（已完成的工具不重跑）、`task_*` 事件 ping、dashboard 续跑提示 |
 | P13 ✅ | 长任务实体（`agent_tasks`）：任务 → 目标循环执行器、一会话一活跃、创建/暂停/继续/取消、暂停保留断点（继续即续跑）、重启对账标挂起、dashboard 任务卡开关 |
@@ -193,7 +193,7 @@ JSONRPC
 
 | 用途 | 名字 |
 |---|---|
-| 仓库 / PyPI / crates.io | `joyczl-agent` |
+| 仓库 / crates.io | `joyczl-agent` |
 | Rust crate 前缀 | `joyczl-` |
 | CLI 二进制 | `joy` |
 | 助手人格 | Joy |

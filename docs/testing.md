@@ -13,7 +13,6 @@ passing 100% is the release gate** — one failure blocks the release.
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
 | Frontend | joy-ts (node --test + tsc) | 113 passed / 0 failed | |
-| Python SDK | sdk/python (pytest + mypy) | 14 passed / 0 failed; mypy clean on 8 files | |
 | End-to-end smokes | scripts/smoke*.sh | real app-server / gateways / dashboard / SDK | 4/4 pass |
 | Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 70/70 pass, gate exit 0 |
 | Replay evals | evals/replay/*.jsonl | recorded dialogue + **expected event sequence** (compaction / approval timeout / streamed output / MCP reconnect / step-budget continuation) | 5/5 pass, also in the gate |
@@ -49,7 +48,6 @@ Judge scores must be integers from 0 through 10; an invalid score fails judging 
 | cargo fmt --check | pass |
 | generated-artifact drift check | consistent with the Rust protocol definition |
 | joy-ts typecheck + node --test | typecheck pass; **99 passed / 0 failed** |
-| Python SDK mypy (strict) + pytest | mypy clean; **13 passed / 0 failed**; coverage 63% (floor 60) |
 | scripts/smoke.sh (app-server end to end) | pass |
 | scripts/smoke-gateway.sh (four gateway stubbed chains) | pass |
 | scripts/smoke-dashboard.sh (real dashboard HTTP/SSE) | pass |
@@ -66,7 +64,6 @@ Judge scores must be integers from 0 through 10; an invalid score fails judging 
 | Windows (build + tests, sandbox tests not applicable) | everything but the sandbox compiles and passes on Windows; the job name says the sandbox does not apply |
 | Protocol artifacts (drift check) | generated artifacts match the Rust definitions |
 | TypeScript (typecheck / test) | front-end types and tests |
-| Python SDK (mypy strict / pytest + coverage floor 60%) | strict typing plus the coverage floor |
 | Release gate (deterministic evals + smoke) | every deterministic eval plus a real-process smoke |
 
 Coverage is a **trend floor**, set from the measured baseline (Rust 65.9% → floor

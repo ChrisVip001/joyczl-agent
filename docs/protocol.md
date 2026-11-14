@@ -6,7 +6,7 @@ English | [简体中文](protocol.zh.md)
 one request per line; responses and notifications interleave (notifications
 before the response). Every type is defined in
 `joyczl-protocol/src/protocol/v2.rs` (130 types, JSON-RPC envelopes included) and generated into TypeScript
-(`schema/typescript/v2/`) and Python pydantic (`sdk/python/generated/`).
+(`schema/typescript/v2/`).
 **Changing the protocol requires `just write-app-server-schema`.**
 
 ## Methods (41)
@@ -135,9 +135,6 @@ unknown value is normalised to `fact`.
 
 * TypeScript: `joy-ts/packages/client` (`StdioTransport` + `JoyClient`;
   notifications dispatch on the `type` discriminant).
-* Python: `sdk/python/joyczl_agent` (`JoyClient.connect()` spawns the
-  subprocess, pydantic validates at runtime; discriminate notifications with
-  `n.type`, never isinstance).
 * The terminal REPL and dashboard drive the same method surface in-process
   and over HTTP respectively.
 
@@ -147,7 +144,7 @@ unknown value is normalised to `fact`.
 
 `AgentTaskView.executionSessionId` identifies its separate transcript; `sessionId` remains the originating conversation. `dispatchState` is pending / claimed / finished / interrupted, describing initial dispatch, not the task's final outcome. Paused and job-waiting tasks keep their normal task states. The original conversation can continue independently and receives bounded, owner-scoped task progress context. Working transcripts are not copied into chat. Output without acceptance is described as unverified in that progress snapshot.
 
-Each task accepts one initial dispatch; a duplicate start is rejected. Pending dispatches survive restart. Claimed work is owned by checkpoint recovery; a claim with no checkpoint stops for review rather than being submitted again. A queued pause requires human resume; cancel prevents execution. `POST /api/task` accepts `action: "start"` with the same parameters. TypeScript and Python clients expose `TASK_START`.
+Each task accepts one initial dispatch; a duplicate start is rejected. Pending dispatches survive restart. Claimed work is owned by checkpoint recovery; a claim with no checkpoint stops for review rather than being submitted again. A queued pause requires human resume; cancel prevents execution. `POST /api/task` accepts `action: "start"` with the same parameters. The TypeScript client exposes `TASK_START`.
 
 This is a local worker, not an always-online service or a distributed lease system. It runs while app-server is alive and a model is configured. It does not automatically ingest external callbacks or grant capabilities. Unrelated manual turns retain their existing concurrency rules; concurrent changes to the same external resource still require coordination.
 

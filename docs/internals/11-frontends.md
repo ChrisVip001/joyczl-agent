@@ -1,28 +1,24 @@
-# ⑪ 前端与 SDK：`joy-ts` 与 `sdk/python`
+# ⑪ 前端：`joy-ts`
 
 Joy 的逻辑全在 Rust。前端与 SDK 做的是同一件事：**用另一种语言说 JSON-RPC**。
 这一章讲它们各自怎么起进程、怎么分帧、以及各自不同的取舍。
 
-目录：`joy-ts/`（`packages/{client,dashboard,gateway}`）、`sdk/python/`、
-`sdk/python-bin/`。
+目录：`joy-ts/`（`packages/{client,dashboard,gateway}`）。
 
 ## 11.1 共同的形状：typing 来自生成物
 
-三方（Rust / TS / Python）之间只有一条类型通路：
+两侧（Rust / TS）之间只有一条类型通路：
 
 ```
 joy-rs/joyczl-protocol/src/protocol/v2.rs      ← 唯一来源（①）
   ├─ schema/typescript/v2/*.ts         ← joy-ts 的 client/protocol.ts 直接 import
-  └─ schema/json/v2.json               ← datamodel-codegen → SDK 的 generated/v2.py
+  └─ schema/json/v2.json               ← 给非 TS 调用方的机器可读副本
 ```
 
-于是每个包里都有一个**唯一指向生成物的文件**（TS 的 `protocol.ts`、Python 的
-`protocol.py`），其它文件一律从它引。这样「改协议」只需要动 Rust + 重新生成，
-而「忘了同步」会被 CI 的漂移检查挡住（⑫）。
-
-值得一提的**分岔**：TS 侧对通知**刻意不做运行时校验**（形状由 Rust 保证，省一层
-开销）；Python 侧则用 pydantic 校验一遍（因为校验规则也是同源生成的，白拿）。
-两种都对，但各自要写清理由——不然下一个人会以为其中一个是漏了。
+于是包里只有一个**指向生成物的文件**（TS 的 `protocol.ts`），其它文件一律从它引。
+「改协议」只需要动 Rust + 重新生成；「忘了同步」会被 CI 的漂移检查挡住（⑫）。
+非 TS 的调用方不必等一个官方 SDK —— 协议是 stdio 上的 JSON-RPC，几行代码就能说
+（见 `docs/operations.md` 的示例）。
 
 ## 11.2 `packages/client`：TS 客户端
 
@@ -187,47 +183,3 @@ t("已排队 —— 前面还有 {n} 条", { n: queued - 1 })
 IDENTIFY」，所以断的那几秒里说的话会丢；要补上得记住 `session_id` 与
 `resume_gateway_url`——那会是这条链上唯一需要持久状态的地方，所以先不做。
 代价是明确的：重启 Discord 网关会漏消息，重启 Telegram 网关不会。
-
-## 11.5 `sdk/python`：Python 客户端
-
-与 TS 客户端同构（`_pending` / 通知 handler / `_reject_all`），差异集中在传输与
-类型：
-
-**传输**（`transport.py`）：`asyncio.create_subprocess_exec` 起 `app-server`，
-三个 task 分别泵 stdout、stderr 与 `wait()`。两个细节：
-
-- `start()` 与构造函数分开，为的是**先把 handler 注册完再起泵**（消竞态）。
-- `close()` 只 `stdin.close()`，然后 `await asyncio.gather(*tasks)` ——
-  Python 的 asyncio 不像 Node 会把任务吊着，**必须显式等它退完**，否则最后几帧
-  会在进程退出时消失。
-
-`find_joy_binary()` 的顺序比 TS 多一跳：`$JOY_BIN` → 向上找
-`joy-rs/target/{debug,release}/joy` → **`joyczl_agent_bin.binary()`**（pip 包里
-自带的二进制）→ `shutil.which("joy")`。
-
-**类型与「四条防线测试」**（`tests/test_client.py`，用内存假传输，不起真进程）：
-
-1. 每个方法都有应答配对（`Methods` 与 `_RESPONSES` 对称）；
-2. 每个方法类型都能从包里取到；
-3. **12 个具名通知类故意不导出**（它们与联合类型里的内联副本不是同一个类，
-   `isinstance(n, TextDeltaNotification)` 会是 False）——这条测试防的是「有人
-   好心把它们导出去」；
-4. 形状对不上的通知只记日志不抛（一条坏通知不该打死客户端）。
-
-`test_every_method_has_a_response_pairing` 这类**自检型测试**值得保留：它不测行为，
-测的是「本端与协议没有漂移」。
-
-## 11.6 `sdk/python-bin`：为什么二进制单独成包
-
-二进制是**分平台**的，客户端是**纯 Python** 的。混在一个包里，`py3-none-any`
-轮子会被某个架构的 ELF 绑死；拆开之后：
-
-- `joyczl-agent` 永远纯 Python（`joyczl-agent-bin` 是可选的 extra）；
-- `joyczl-agent-bin` 用 hatch 的构建钩子（`hatch_build.py`）在打包时找二进制
-  （`$JOY_BIN` → 向上找 `joy-rs/target/{release,debug}/joy`），找到就把轮子标签
-  改成 `py3-none-{平台}` 并把二进制塞进去；
-- **找不到也不报错**：退回纯 Python 轮子并打警告（`just build-python-bin` 负责在
-  发布入口守「发出去的轮子必须有二进制」）。
-
-仓库里的 `bin/` 目录**永远是空的**（`.gitkeep` 之外都忽略），因为二进制不该进
-版本库——这是「一个二进制、一个状态目录」在打包链上的延续。

@@ -27,7 +27,7 @@ The app-server crate root holds shared server state and exports. `server_runtime
 ## Crate dependency graph
 
 ```
-                 joyczl-protocol  ←──── single source of truth (TS/JSON Schema/pydantic artifacts)
+                 joyczl-protocol  ←──── single source of truth (TS + JSON Schema artifacts)
                  joyczl-config    ←──── JOY_* env vars, read once at boot
                         │
                  joyczl-provider ────── 12 providers (incl. local Ollama), three wire formats + SSE

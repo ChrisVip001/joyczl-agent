@@ -574,7 +574,7 @@ page body.
 | `JOY_HUB_ROOT` | — | root directory for multi-user mode (or pass `joy hub --root`) |
 | `JOY_HUB_MAX_OPEN` | 32 | how many per-user app-servers hub keeps open at once (each is a child process). When full, the least-recently-used idle instance is evicted; if everything is in use it over-commits rather than failing requests |
 | `JOY_HUB_IDLE_SECS` | 900 | close a user's app-server after this many idle seconds. 0 = no idle eviction, only the cap applies |
-| `JOY_BIN` | — | explicit `joy` binary path for the Python SDK / TS clients |
+| `JOY_BIN` | — | explicit `joy` binary path for the TS clients and your own scripts |
 
 ## Multi-user on one machine (`joy hub`)
 

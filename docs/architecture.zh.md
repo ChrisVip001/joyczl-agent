@@ -24,7 +24,7 @@ app-server 的 crate 根保留共享状态和导出。`server_runtime.rs` 负责
 ## crate 依赖图
 
 ```
-                 joyczl-protocol  ←──── 唯一事实来源（TS/JSON Schema/pydantic 生成物）
+                 joyczl-protocol  ←──── 唯一事实来源（TS + JSON Schema 生成物）
                  joyczl-config    ←──── JOY_* 环境变量，启动读一次
                         │
                  joyczl-provider ────── 12 家厂商（含本地 Ollama），三种 wire format + SSE

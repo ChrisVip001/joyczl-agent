@@ -4,7 +4,7 @@ English | [RELEASING.md](RELEASING.md)
 
 各渠道，按依赖顺序。**CI 负责构建，人负责发布。** tag 自动触发的只有产物
 构建（`.github/workflows/release.yml`）：四个平台的二进制、
-以及承载它们的 GitHub Release。npm / PyPI 的上传在有凭据的机器上执行——
+以及承载它们的 GitHub Release。npm 的上传在有凭据的机器上执行——
 token 不进 CI。
 
 ## 0. 前置条件
@@ -12,7 +12,7 @@ token 不进 CI。
 - [ ] main 分支 `just check` 全绿（fmt / clippy / 测试 / 协议漂移 / ts / py / eval）
 - [ ] `./scripts/smoke-sdk-python.sh` 通过（SDK 真的对真 app-server 说过话）
 - [ ] 版本号在所有落点都已同步（见 §1）
-- [ ] 你是有凭据的维护者：PyPI 账号（twine token）、npm 账号（`NPM_TOKEN` 或
+- [ ] 你是有凭据的维护者：npm 账号（`NPM_TOKEN` 或
       `npm login`）、一个能推的 `homebrew-tap` 仓库
 
 ## 1. 升版本号
@@ -43,7 +43,6 @@ joy-v0.8.0-aarch64-apple-darwin.tar.gz
 joy-v0.8.0-x86_64-apple-darwin.tar.gz
 joy-v0.8.0-x86_64-unknown-linux-gnu.tar.gz
 joy-v0.8.0-aarch64-unknown-linux-gnu.tar.gz
-joyczl_agent_bin-<版本>-<平台标签>.whl（每个平台一份）
 ```
 
 ## 3. Homebrew

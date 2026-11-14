@@ -14,7 +14,7 @@ help:
 
 # ---- Protocol: single source of truth ----------------------------------------------------
 # Regenerate TypeScript and JSON Schema from the Rust types in joy-rs/joyczl-protocol.
-# Run this whenever the protocol changes, or the frontend and Python SDK silently drift.
+# Run this whenever the protocol changes, or the frontend silently drifts.
 write-app-server-schema *args:
     {{ python }} {{ justfile_directory() }}/scripts/write_schema.py {{args}}
 

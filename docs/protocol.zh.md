@@ -5,7 +5,7 @@
 `joy app-server` 在 stdin/stdout 上说**换行分隔的 JSON-RPC 2.0**：一行一个
 请求，应答与通知混序写出（通知先于应答）。所有类型定义在
 `joyczl-protocol/src/protocol/v2.rs`（130 个类型，含 JSON-RPC 信封），并生成 TypeScript
-（`schema/typescript/v2/`）与 Python pydantic（`sdk/python/generated/`）。
+（`schema/typescript/v2/`）。
 **改协议必须跑 `just write-app-server-schema`。**
 
 ## 方法一览（41 个）
@@ -130,9 +130,6 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
 
 * TypeScript：`joy-ts/packages/client`（`StdioTransport` + `JoyClient`，
   通知按判别式 `type` 分发）。
-* Python：`sdk/python/joyczl_agent`（`JoyClient.connect()` 拉起子进程，
-  pydantic 运行时校验；通知判别用 `n.type`，不要用 isinstance）。
-* 终端 REPL 与 dashboard 走进程内/HTTP 翻译的同一套方法面。
 
 ## 独立任务执行
 
@@ -140,7 +137,7 @@ turnStarted → gateDecided → retry* → textDelta* → toolStarted → toolCo
 
 `AgentTaskView.executionSessionId` 指向独立执行记录；`sessionId` 仍是原交流会话。`dispatchState` 为 pending / claimed / finished / interrupted，只描述首次派发，不代表任务最终结果。暂停与等待作业仍使用原任务状态。原聊天可独立继续，并携带有上限、限定本会话的任务进度；不复制工作对话。没有验收条件的产出在进度中标为尚未核验。
 
-每个任务只接受一次首次派发，重复开始会拒绝。待执行记录跨重启保留；已领取工作由 checkpoint 恢复负责，没有 checkpoint 的领取进入待核对，不重新提交。排队期间暂停后必须人工恢复，取消则不执行。`POST /api/task` 支持 `action: "start"` 与同样参数；TypeScript、Python 客户端提供 `TASK_START`。
+每个任务只接受一次首次派发，重复开始会拒绝。待执行记录跨重启保留；已领取工作由 checkpoint 恢复负责，没有 checkpoint 的领取进入待核对，不重新提交。排队期间暂停后必须人工恢复，取消则不执行。`POST /api/task` 支持 `action: "start"` 与同样参数；TypeScript 客户端提供 `TASK_START`。
 
 这是本地 worker，不是全天在线服务或分布式租约系统；app-server 运行且模型已配置时才工作。不自动接收外部回调，不授予额外能力。其他手动回合沿用原并发规则；多个操作修改同一外部资源仍需协调。
 

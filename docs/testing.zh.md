@@ -10,10 +10,9 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 | 层 | 位置 | 形态 | 数量（最近一次全量） |
 |---|---|---|---|
 | 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 937 通过 / 0 失败 |
-| 覆盖率 | `cargo llvm-cov` / `coverage` | **趋势门**，不是目标 | Rust 行 65.9%（门 60）/ Python 63%（门 60） |
+| 覆盖率 | `cargo llvm-cov` / `coverage` | **趋势门**，不是目标 | Rust 行 65.9%（门 60） |
 | 协议生成 | scripts/write_schema.py --check | 生成物漂移检查 | 0 漂移 |
-| 前端 | joy-ts（node --test + tsc） | 113 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |
-| Python SDK | sdk/python（pytest + mypy） | 14 通过 / 0 失败 | |
+| 前端 | joy-ts（node --test + tsc） | 113 通过 / 0 失败 | |
 | 端到端冒烟 | scripts/smoke*.sh | 真 app-server / 真网关 / 真驾驶舱 / 真 SDK | 4 套全通过 |
 | 确定性 eval | evals/deterministic/*.jsonl | scripted 模型驱动同一 run_turn | 70/70 通过，gate exit 0 |
 | 回放 eval | evals/replay/*.jsonl | 录制对话 + **期望事件序列**（压缩/审批超时/增量输出/MCP 断线/步数用尽自动续片） | 5/5 通过，同样进 gate |
@@ -49,7 +48,6 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 | cargo fmt --check | 通过 |
 | 生成物漂移检查 | 与 Rust 协议定义一致 |
 | joy-ts typecheck + node --test | 类型通过；**99 通过 / 0 失败** |
-| Python SDK mypy（strict）+ pytest | mypy 0 问题；**13 通过 / 0 失败**；覆盖率 63%（门 60） |
 | scripts/smoke.sh（app-server 端到端） | 通过 |
 | scripts/smoke-gateway.sh（四平台网关打桩链路） | 通过 |
 | scripts/smoke-dashboard.sh（真驾驶舱 HTTP/SSE） | 通过 |

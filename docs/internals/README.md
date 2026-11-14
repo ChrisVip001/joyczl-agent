@@ -39,7 +39,7 @@
 | ⑧ | [图引擎](08-graph.md) | 波次执行算法、写冲突检测、路由与 `on_error`、triage 前门、gather 晨报 |
 | ⑨ | [服务端](09-app-server.md) | `Server` 装配、`run_turn` 全流程（会话门/任务/计划/验收）、dispatch＋记忆中心的 45 个方法、确定性内核 `joyczl-agent`、stdio 并发模型、trace |
 | ⑩ | [命令行](10-cli.md) | 12 个子命令、REPL 的流式渲染、`joy schedule` 的 cron、`joy gather` 的真实绑定 |
-| ⑪ | [前端与 SDK](11-frontends.md) | TS 客户端/驾驶舱/四平台网关、Python SDK 与分平台二进制包 |
+| ⑪ | [前端](11-frontends.md) | TS 客户端/驾驶舱/四平台网关 |
 | ⑫ | [质量体系](12-quality.md) | eval 场景格式与断言、mock provider、judge、长任务基准、七条冒烟、CI 门 |
 
 ## 10 分钟全链路：`joy` 里敲一句话，发生了什么
