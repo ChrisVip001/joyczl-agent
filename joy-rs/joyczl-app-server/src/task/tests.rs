@@ -1245,3 +1245,117 @@ async fn a_broken_plan_is_ignored_not_fatal() {
         .expect("list the plan")
         .is_empty());
 }
+
+#[tokio::test]
+async fn observation_write_failures_stop_before_continuation_and_keep_known_spend() {
+    for (table, action, requires_step) in [
+        ("task_steps", "INSERT", false),
+        ("task_steps", "UPDATE", false),
+        ("task_artifacts", "INSERT", false),
+        ("task_steps", "INSERT", true),
+    ] {
+        let mock = Arc::new(Mock::new(vec![
+            Mock::text(r#"{"retrieve":false,"query":"","reason":"task"}"#),
+            Mock::tool_use(
+                "write-once",
+                "write_file",
+                json!({"path":"report.md","content":"Observed output."}),
+            ),
+            Mock::text("The report is ready."),
+        ]));
+        let (server, home) = boot(Some(mock.clone())).await;
+        let work = home.join("work");
+        std::fs::create_dir(&work).unwrap();
+        let acceptance = if requires_step {
+            json!([{"kind":"toolsOk","tool":"write_file","min":1}])
+        } else {
+            json!([])
+        };
+        let task = call(
+            &server,
+            "task/create",
+            json!({
+                "sessionId":"recording", "title":"Persist observed work", "cwd":work,
+                "maxRounds":3, "acceptance":acceptance,
+            }),
+        )
+        .await
+        .unwrap();
+        sqlx::query(&format!(
+            "CREATE TRIGGER fail_observation BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT, 'injected observation failure'); END"
+        )).execute(&server.pool).await.unwrap();
+        drive(
+            &server,
+            "recording",
+            "Write the report once.",
+            work.to_str(),
+        )
+        .await;
+        let view = call(&server, "task/get", json!({"taskId":task["task"]["id"]}))
+            .await
+            .unwrap();
+        assert_eq!(
+            view["task"]["status"], "needs_attention",
+            "{table} {action}"
+        );
+        assert!(view["task"]["lastStopReason"]
+            .as_str()
+            .unwrap()
+            .contains("observation"));
+        assert_eq!(view["task"]["spent"]["tokens"], 43);
+        assert_eq!(view["task"]["spent"]["tools"], 1);
+        assert_eq!(
+            mock.received.lock().unwrap().len(),
+            3,
+            "Persistence failure must not trigger repair model calls"
+        );
+        assert_eq!(
+            std::fs::read_to_string(work.join("report.md")).unwrap(),
+            "Observed output."
+        );
+        let completed: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM task_completions WHERE status = 'done'")
+                .fetch_one(&server.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            completed, 0,
+            "Unrecorded work must not advertise completion"
+        );
+        let (turn_id, round_id, messages): (String, String, String) = sqlx::query_as(
+            "SELECT turn_id, round_id, messages_json FROM turn_checkpoints WHERE session_id = 'recording'",
+        ).fetch_one(&server.pool).await.unwrap();
+        let messages: Vec<Message> = serde_json::from_str(&messages).unwrap();
+        let observation = joyczl_agent::observe::observe(
+            &messages,
+            &format!("{turn_id}:{round_id}"),
+            1,
+            Some(&work),
+        );
+        assert_eq!(observation.steps.len(), 1);
+        sqlx::query("DROP TRIGGER fail_observation")
+            .execute(&server.pool)
+            .await
+            .unwrap();
+        let run = server.runs.for_turn(&turn_id).await.unwrap().unwrap();
+        let recorder = joyczl_agent::observe::Recorder {
+            steps: &server.steps,
+            artifacts: &server.artifacts,
+            events: &server.events,
+            task_id: &run.task_id,
+            run_id: Some(&run.id),
+        };
+        for _ in 0..2 {
+            recorder.record(&observation).await.unwrap();
+        }
+        assert_eq!(server.steps.list_by_run(&run.id).await.unwrap().len(), 1);
+        assert_eq!(
+            server.artifacts.list(&run.task_id, 10).await.unwrap().len(),
+            1
+        );
+        assert_eq!(mock.received.lock().unwrap().len(), 3);
+        let task = server.tasks.get(&run.task_id).await.unwrap().unwrap();
+        assert_eq!(task.spent_tokens, 43);
+        assert_eq!(task.status, joyczl_state::TaskStatus::NeedsAttention);
+    }
+}

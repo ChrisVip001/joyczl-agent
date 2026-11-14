@@ -62,7 +62,7 @@ pub(crate) async fn account_round(
     };
 
     // 1. What was done: steps (with idempotency keys), files that exist, contradictions.
-    joyczl_agent::observe::Recorder {
+    let recorded = joyczl_agent::observe::Recorder {
         steps: &server.steps,
         artifacts: &server.artifacts,
         events: &server.events,
@@ -98,6 +98,12 @@ pub(crate) async fn account_round(
             task.id
         ));
     }
+
+    recorded.map_err(|error| {
+        format!(
+        "Task observation could not be recorded: {error}; review the completed work before retrying"
+    )
+    })?;
 
     // 3. The measurement itself.
     let checks = if ctx.acceptance.is_empty() {

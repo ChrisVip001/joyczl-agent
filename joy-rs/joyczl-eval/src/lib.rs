@@ -386,7 +386,7 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
 
     let mut output = TurnOutput::default();
     for turn in scenario.effective_turns() {
-        // P1 recovery benchmarks: drop this process and boot a new one on the same home. What
+        // P1 recovery benchmarks: drop this runtime and boot a new one on the same home. What
         // runs next is a genuinely fresh start — the ledger reconciliation really happened, so
         // "the task survived a restart" is measured, not assumed.
         if turn.restart {
@@ -416,10 +416,19 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
                 context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
                 vision: false,
             });
-            eprintln!("(joy) eval: simulating a process restart (same home), carrying on with the next round");
+            eprintln!("(joy) eval: simulating a runtime restart (same home), carrying on with the next round");
         }
         let session_id = turn.session_id.unwrap_or_else(|| "eval".to_string());
         let (sink, mut rx) = EventSink::channel();
+        let resume_id = if turn.resume_task {
+            Some(
+                task_id
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("resume_task requires a declared task"))?,
+            )
+        } else {
+            None
+        };
         // {{home}} in messages: lets the case point at its own files inside home.
         let message = expand_home(&turn.message, home);
         let params = TurnStartParams {
@@ -432,7 +441,22 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         };
         let task_server = server.clone();
         let task = tokio::spawn(async move {
-            run_turn(&task_server, params, RequestId::Number(0), &sink).await
+            if let Some(id) = resume_id {
+                handle(
+                    &task_server,
+                    JsonRpcRequest {
+                        jsonrpc: joyczl_protocol::JSONRPC_VERSION.into(),
+                        id: RequestId::Number(0),
+                        method: joyczl_protocol::methods::TASK_RESUME.into(),
+                        params: Some(serde_json::json!({"taskId":id,"reason":params.message})),
+                    },
+                    sink,
+                )
+                .await;
+                Ok(())
+            } else {
+                run_turn(&task_server, params, RequestId::Number(0), &sink).await
+            }
         });
 
         // Notification loop: interrupts and consolidation counts are collected here.
@@ -442,8 +466,12 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
             let Some(frame) = rx.recv().await else {
                 break;
             };
-            let Frame::Notification(notification) = frame else {
-                continue;
+            let notification = match frame {
+                Frame::Notification(notification) => notification,
+                Frame::Response(joyczl_protocol::JsonRpcMessage::Error(error)) => {
+                    anyhow::bail!("Eval control request failed: {}", error.error.message);
+                }
+                _ => continue,
             };
             match notification {
                 ServerNotification::TurnStarted(started) => {
@@ -778,7 +806,7 @@ async fn run_suite(
 ///
 ///   * task success rate: cases that reached the outcome their own case file declares (all of them
 ///     declare `done` — acceptance passed on facts);
-///   * resume rate: the subset tagged `recovery` (a turn is cut short, a fresh process boots on
+///   * resume rate: the subset tagged `recovery` (a turn is cut short, a fresh runtime opens on
 ///     the same home, a later turn finishes the task) that still reached that outcome.
 ///
 /// Mixing the two would hide the thing worth watching: a change that keeps the happy path
@@ -859,7 +887,7 @@ pub async fn run_long(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
         rate * 100.0
     );
     println!(
-        "resume after interruption: {}/{} ({:.0}%) — kill the process mid-run and see whether the next round still finishes",
+        "resume after interruption: {}/{} ({:.0}%) — reopen the runtime, explicitly resume and verify the task",
         recovered,
         recovery_total,
         recovery_rate * 100.0
@@ -1008,4 +1036,50 @@ pub async fn run_judge(paths: &[PathBuf], report_home: &Path) -> Result<i32> {
     }
     report::write(report_home, "judge", serde_json::json!({"cases": scores}))?;
     Ok(0)
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn interrupted_task_requires_explicit_human_resume_after_restart() -> Result<()> {
+        let cases = scenario::load_all(&[
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../evals/long/tasks.jsonl")
+        ])?;
+        let original = cases
+            .into_iter()
+            .find(|case| case.id == "recovery-interrupt-then-resume")
+            .expect("Recovery fixture must exist");
+        let mut no_task = original.clone();
+        no_task.task = None;
+        no_task.turns = Some(vec![original.turns.as_ref().unwrap()[1].clone()]);
+        let home = tempfile::tempdir()?;
+        let error = run_scenario(home.path(), &no_task).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("resume_task requires a declared task"));
+        for authorize in [false, true] {
+            let mut case = original.clone();
+            for turn in case
+                .turns
+                .as_mut()
+                .unwrap()
+                .iter_mut()
+                .filter(|turn| turn.restart)
+            {
+                turn.resume_task = authorize;
+            }
+            let home = tempfile::tempdir()?;
+            let output = run_scenario(home.path(), &case).await?;
+            assert_eq!(
+                output.task_status.as_deref(),
+                Some(if authorize { "done" } else { "suspended" })
+            );
+            if authorize {
+                assert!(score(&case.expect, &output).is_empty());
+            }
+        }
+        Ok(())
+    }
 }

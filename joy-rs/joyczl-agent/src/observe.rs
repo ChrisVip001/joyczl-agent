@@ -215,8 +215,7 @@ fn digest(output: &str) -> String {
     }
 }
 
-/// Writes one observation into the ledger. Every failure is a line on stderr: bookkeeping must
-/// never take a turn down with it.
+/// Persist required step/artifact evidence; optional event failures remain visible on stderr.
 pub struct Recorder<'a> {
     pub steps: &'a Steps,
     pub artifacts: &'a Artifacts,
@@ -226,9 +225,9 @@ pub struct Recorder<'a> {
 }
 
 impl Recorder<'_> {
-    pub async fn record(&self, observation: &Observation) {
+    pub async fn record(&self, observation: &Observation) -> Result<(), String> {
         for step in &observation.steps {
-            match self
+            let id = self
                 .steps
                 .begin(NewStep {
                     task_id: self.task_id,
@@ -240,26 +239,18 @@ impl Recorder<'_> {
                     idempotency_key: Some(&step.idempotency_key),
                 })
                 .await
-            {
-                Ok(id) => {
-                    let status = if step.ok { "ok" } else { "failed" };
-                    if let Err(e) = self.steps.close(id, status, Some(&step.digest), None).await {
-                        eprintln!(
-                            "(joy) the step closing was not recorded (the turn is unaffected): {e}"
-                        );
-                    }
-                }
-                Err(e) => eprintln!("(joy) the step was not written to the ledger: {e}"),
-            }
+                .map_err(|error| format!("Step observation could not be recorded: {error}"))?;
+            let status = if step.ok { "ok" } else { "failed" };
+            self.steps
+                .close(id, status, Some(&step.digest), None)
+                .await
+                .map_err(|error| format!("Step result could not be recorded: {error}"))?;
         }
         for (path, bytes) in observation.artifacts() {
-            if let Err(e) = self
-                .artifacts
+            self.artifacts
                 .add(self.task_id, self.run_id, &path, bytes as i64)
                 .await
-            {
-                eprintln!("(joy) the deliverable was not recorded: {e}");
-            }
+                .map_err(|error| format!("Artifact observation could not be recorded: {error}"))?;
         }
         for contradiction in observation.contradictions() {
             eprintln!(
@@ -279,5 +270,6 @@ impl Recorder<'_> {
                 eprintln!("(joy) the contradiction event was not recorded: {e}");
             }
         }
+        Ok(())
     }
 }

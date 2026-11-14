@@ -104,10 +104,10 @@ pub(crate) fn humanize(minutes: i64) -> String {
     }
 }
 
-/// Continue a **suspended** checkpoint on a human's say-so (`task/resume`).
+/// Continue a paused or stopped checkpoint on explicit human authorization (`task/resume`).
 ///
 /// This is the other half of reconcile: crash recovery resumes what the process left `open`
-/// (nobody asked), while a pause is the human's decision and waits for their "continue".
+/// (nobody asked), while a pause or stop waits for explicit human continuation.
 /// No suspended checkpoint for that turn → nothing to continue (the task then waits for
 /// its next message instead) — said out loud, not silently skipped.
 pub(crate) fn resume_authorized(server: &Server, sink: &EventSink, row: CheckpointRow) {

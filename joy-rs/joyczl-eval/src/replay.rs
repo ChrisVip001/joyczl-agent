@@ -94,6 +94,7 @@ impl ReplayCase {
                 interrupt_after_deltas: None,
                 cwd: turn.cwd,
                 restart: false,
+                resume_task: false,
                 approval: turn.approval,
             })
             .collect();

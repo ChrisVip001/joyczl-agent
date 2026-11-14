@@ -114,11 +114,12 @@ pub struct TurnScript {
     /// The workspace this turn picked (see `Scenario::cwd`).
     #[serde(default)]
     pub cwd: Option<String>,
-    /// Start this turn on a **fresh server process** pointed at the same home (P1 recovery
-    /// benchmarks): the previous process is dropped, a new one boots and reconciles the ledger,
-    /// then the turn runs. This is what makes "restart, then continue" honest rather than assumed.
+    /// Reopen a fresh runtime on the same home; actual process death is tested by smoke-recovery.
     #[serde(default)]
     pub restart: bool,
+    /// Explicit human task/resume action; message is the control reason, not a new chat turn.
+    #[serde(default)]
+    pub resume_task: bool,
     /// How to answer approval questions during this turn. Unset = nobody answers, which with
     /// `approval` on is a refusal after the timeout (the default the tool layer promises).
     #[serde(default)]
@@ -215,6 +216,7 @@ impl Scenario {
             interrupt_after_deltas: self.interrupt_after_deltas,
             cwd: self.cwd.clone(),
             restart: false,
+            resume_task: false,
             approval: None,
         }]
     }
@@ -231,11 +233,15 @@ impl Scenario {
             responses.push(Mock::text(plan));
         }
         for turn in self.effective_turns() {
-            let gate = match &turn.gate {
-                Some(gate) => serde_json::to_string(gate).expect("the gate serialises"),
-                None => "(the scenario gave no gate script — the gate will fail open)".to_string(),
-            };
-            responses.push(Mock::text(&gate));
+            if !turn.resume_task {
+                let gate = match &turn.gate {
+                    Some(gate) => serde_json::to_string(gate).expect("the gate serialises"),
+                    None => {
+                        "(the scenario gave no gate script — the gate will fail open)".to_string()
+                    }
+                };
+                responses.push(Mock::text(&gate));
+            }
             for (index, response) in turn.responses.iter().enumerate() {
                 match response {
                     // An inline gate script: the round boundary is a real model call, and

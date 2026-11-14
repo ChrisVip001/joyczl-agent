@@ -29,7 +29,8 @@ impl HumanPauses {
         let changed = sqlx::query("UPDATE agent_tasks SET status='running',current_turn_id=?,suspend_reason=NULL,updated_at=datetime('now') WHERE id=? AND status IN ('suspended','needs_attention')")
             .bind(turn_id).bind(task_id).execute(&mut *tx).await?.rows_affected();
         anyhow::ensure!(changed == 1, "Task changed before human continuation");
-        let changed = sqlx::query("UPDATE turn_checkpoints SET status='open',messages_json=?,updated_at=datetime('now') WHERE turn_id=? AND status IN ('open','suspended','waiting_jobs','waiting_input','done') AND run_id=(SELECT id FROM task_runs WHERE task_id=? ORDER BY started_at DESC,rowid DESC LIMIT 1)")
+        // Explicit human continuation can reopen a stopped latest checkpoint; cancellation stays fenced.
+        let changed = sqlx::query("UPDATE turn_checkpoints SET status='open',messages_json=?,updated_at=datetime('now') WHERE turn_id=? AND status IN ('open','suspended','waiting_jobs','waiting_input','done','abandoned') AND run_id=(SELECT id FROM task_runs WHERE task_id=? ORDER BY started_at DESC,rowid DESC LIMIT 1)")
             .bind(messages_json).bind(turn_id).bind(task_id).execute(&mut *tx).await?.rows_affected();
         anyhow::ensure!(changed == 1, "Checkpoint changed before human continuation");
         sqlx::query("DELETE FROM task_pause_fences WHERE task_id=?")

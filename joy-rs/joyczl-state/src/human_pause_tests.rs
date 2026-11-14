@@ -74,68 +74,92 @@ async fn a_failed_pause_transition_does_not_leave_a_hidden_fence() {
 
 #[tokio::test]
 async fn continuation_failure_keeps_the_pause_and_original_boundary() {
-    let home = tempfile::tempdir().unwrap();
-    let pool = crate::open(&home.path().join("state.db")).await.unwrap();
-    let tasks = Tasks::new(pool.clone());
-    tasks
-        .create(NewTask {
-            id: "task",
-            session_id: Some("chat"),
-            title: "work",
-            goal_condition: None,
-            acceptance_json: "[]",
-            budget_json: "{}",
-            cwd: None,
-            max_rounds: 1,
-            tier: None,
-        })
-        .await
-        .unwrap();
-    crate::Runs::new(pool.clone())
-        .start("run", "task", Some("chat"), Some("turn"))
-        .await
-        .unwrap();
-    let checkpoints = Checkpoints::new(pool.clone());
-    checkpoints
-        .save("turn", "chat", "work", "[]", 0, "{}", Some("run"))
-        .await
-        .unwrap();
-    checkpoints.finish("turn", "suspended").await.unwrap();
-    tasks.suspend("task", Some("Human pause")).await.unwrap();
-    let pauses = HumanPauses::new(pool.clone());
-    sqlx::query("CREATE TRIGGER fail_continuation BEFORE UPDATE OF messages_json ON turn_checkpoints BEGIN SELECT RAISE(FAIL,'injected continuation failure'); END").execute(&pool).await.unwrap();
-    assert!(pauses
-        .resume_checkpoint("task", "turn", "[1]")
-        .await
-        .is_err());
-    assert!(pauses.is_paused("task").await.unwrap());
-    assert_eq!(
-        tasks.get("task").await.unwrap().unwrap().status,
-        TaskStatus::Suspended
-    );
-    assert_eq!(
-        checkpoints
-            .get("turn")
+    for checkpoint_status in ["suspended", "abandoned"] {
+        let home = tempfile::tempdir().unwrap();
+        let pool = crate::open(&home.path().join("state.db")).await.unwrap();
+        let tasks = Tasks::new(pool.clone());
+        tasks
+            .create(NewTask {
+                id: "task",
+                session_id: Some("chat"),
+                title: "work",
+                goal_condition: None,
+                acceptance_json: "[]",
+                budget_json: "{}",
+                cwd: None,
+                max_rounds: 1,
+                tier: None,
+            })
             .await
-            .unwrap()
-            .unwrap()
-            .messages_json,
-        "[]"
-    );
-    sqlx::query("DROP TRIGGER fail_continuation")
-        .execute(&pool)
-        .await
-        .unwrap();
-    pauses
-        .resume_checkpoint("task", "turn", "[1]")
-        .await
-        .unwrap();
-    assert!(!pauses.is_paused("task").await.unwrap());
-    assert_eq!(
-        tasks.get("task").await.unwrap().unwrap().status,
-        TaskStatus::Running
-    );
-    let checkpoint = checkpoints.get("turn").await.unwrap().unwrap();
-    assert_eq!(checkpoint.status, "open");
-    assert_eq!(checkpoint.messages_json, "[1]");
+            .unwrap();
+        crate::Runs::new(pool.clone())
+            .start("run", "task", Some("chat"), Some("turn"))
+            .await
+            .unwrap();
+        let checkpoints = Checkpoints::new(pool.clone());
+        checkpoints
+            .save("turn", "chat", "work", "[]", 0, "{}", Some("run"))
+            .await
+            .unwrap();
+        checkpoints.finish("turn", checkpoint_status).await.unwrap();
+        tasks.suspend("task", Some("Human pause")).await.unwrap();
+        let pauses = HumanPauses::new(pool.clone());
+        sqlx::query("CREATE TRIGGER fail_continuation BEFORE UPDATE OF messages_json ON turn_checkpoints BEGIN SELECT RAISE(FAIL,'injected continuation failure'); END").execute(&pool).await.unwrap();
+        assert!(pauses
+            .resume_checkpoint("task", "turn", "[1]")
+            .await
+            .is_err());
+        assert!(pauses.is_paused("task").await.unwrap());
+        assert_eq!(
+            tasks.get("task").await.unwrap().unwrap().status,
+            TaskStatus::Suspended
+        );
+        assert_eq!(
+            checkpoints
+                .get("turn")
+                .await
+                .unwrap()
+                .unwrap()
+                .messages_json,
+            "[]"
+        );
+        sqlx::query("DROP TRIGGER fail_continuation")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pauses
+            .resume_checkpoint("task", "turn", "[1]")
+            .await
+            .unwrap();
+        assert!(!pauses.is_paused("task").await.unwrap());
+        assert_eq!(
+            tasks.get("task").await.unwrap().unwrap().status,
+            TaskStatus::Running
+        );
+        let checkpoint = checkpoints.get("turn").await.unwrap().unwrap();
+        assert_eq!(checkpoint.status, "open");
+        assert_eq!(checkpoint.messages_json, "[1]");
+        checkpoints.finish("turn", "abandoned").await.unwrap();
+        tasks
+            .finish_run(
+                "task",
+                TaskStatus::Cancelled,
+                Some("Cancelled by the user"),
+                Some("run"),
+            )
+            .await
+            .unwrap();
+        assert!(pauses
+            .resume_checkpoint("task", "turn", "[2]")
+            .await
+            .is_err());
+        assert_eq!(
+            tasks.get("task").await.unwrap().unwrap().status,
+            TaskStatus::Cancelled
+        );
+        assert_eq!(
+            checkpoints.get("turn").await.unwrap().unwrap().status,
+            "abandoned"
+        );
+    }
 }
