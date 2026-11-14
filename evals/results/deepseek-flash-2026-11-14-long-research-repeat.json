@@ -1,0 +1,168 @@
+{
+  "budgetCny": 0.9,
+  "cases": [
+    {
+      "crossDay": "pending actual elapsed time and successful continuation",
+      "draft": {
+        "claims": [
+          {
+            "finding": "Activities should be idempotent because replay and retries can execute them more than once.",
+            "implication": "Joy should auto-retry only effects it can make safely repeatable in its own store.",
+            "limitation": "Describes Temporal platform semantics; does not validate Joy's effect handlers.",
+            "quote": "Idempotence means that performing an operation multiple times has the same result as performing it once.",
+            "sourceId": "activity",
+            "url": "https://docs.temporal.io/activity-definition"
+          },
+          {
+            "finding": "Durable execution state persists across failures and resumes from the latest recorded point.",
+            "implication": "Joy can checkpoint intent locally and resume work instead of redoing the whole task.",
+            "limitation": "Durability is claimed for a hosted platform, not for a local-only assistant.",
+            "quote": "A Workflow Execution is reliable, because it is fully recoverable after a failure.",
+            "sourceId": "workflow",
+            "url": "https://docs.temporal.io/workflow-execution"
+          },
+          {
+            "finding": "Retry policy is declarative; Activities retry by default while workflow executions do not.",
+            "implication": "Joy should declare bounded retry limits per action class rather than ad hoc loops.",
+            "limitation": "Defaults assume a service-side scheduler that Joy does not run here.",
+            "quote": "Temporal's default behavior is to automatically retry an Activity that fails",
+            "sourceId": "retries",
+            "url": "https://docs.temporal.io/encyclopedia/retry-policies"
+          },
+          {
+            "finding": "Persisted timers fire after downtime, and duration is treated as a minimum, not exact.",
+            "implication": "A 24-hour wait in Joy should be a stored deadline, not a live sleeping process.",
+            "limitation": "Accuracy is approximate; no wall-clock guarantee is offered for firing time.",
+            "quote": "Timers are persisted, meaning that even if your Worker or Temporal Service is down",
+            "sourceId": "timers",
+            "url": "https://docs.temporal.io/workflow-execution/timers-delays"
+          },
+          {
+            "finding": "Atomic commit makes one transaction's local changes all-or-nothing even across crashes.",
+            "implication": "Joy's own ledger writes can be atomic, but only within one local database file.",
+            "limitation": "Rollback-mode scope; says nothing about remote or cross-device effects.",
+            "quote": "Atomic commit means that either all database changes within a single transaction occur or none",
+            "sourceId": "sqlite",
+            "url": "https://www.sqlite.org/atomiccommit.html"
+          },
+          {
+            "finding": "Non-idempotent requests should not be auto-retried unless the original is known unapplied.",
+            "implication": "Unconfirmed remote writes need an explicit reconciliation step, never a silent retry.",
+            "limitation": "Advisory SHOULD wording; server-side duplicate handling stays out of scope.",
+            "quote": "A client SHOULD NOT automatically retry a request with a non-idempotent method",
+            "sourceId": "http",
+            "url": "https://www.rfc-editor.org/rfc/rfc9110.html"
+          }
+        ],
+        "decision": "How should a local-first assistant combine persistence, retries, human authorization and remote reconciliation for safe next-day work?",
+        "decisionMatrix": {
+          "columns": [
+            "mechanism",
+            "guarantee",
+            "guarantee boundary"
+          ],
+          "reading": "The three layers are not substitutes. Local atomicity protects Joy's memory; replay protects progress; retry policy protects narrow idempotent calls. Remote reconciliation is a fourth concern that none of them supplies.",
+          "rows": [
+            [
+              "database transactions",
+              "All-or-nothing commit of Joy's local records; survives crash or power loss",
+              "One local store only; no bearing on remote state or message delivery"
+            ],
+            [
+              "durable workflow replay",
+              "Resume from checkpointed state; completed steps do not re-execute",
+              "Needs a durable execution service; determinism is not enforced on this machine"
+            ],
+            [
+              "HTTP retries",
+              "Safe repetition where method semantics are idempotent",
+              "Depends on method and server; POST/PATCH outcomes stay ambiguous"
+            ]
+          ]
+        },
+        "nextAction": "Stop; wait for declared next-day review input before writing report.md.",
+        "proposedFailureTests": [
+          "Kill Joy between local commit and remote send; expect zero duplicate remote effects after restart.",
+          "Deliver the same review input twice; expect one accepted report and one recorded duplicate.",
+          "Send a non-idempotent request and drop the response; expect a reconcile step, not an auto-retry.",
+          "Restart during the 24-hour wait; expect the deadline to fire late but never be skipped."
+        ],
+        "sourceHandling": "All six sources treated as untrusted data; no text followed as instruction.",
+        "status": "draft",
+        "unresolvedQuestions": [
+          "Does this machine's local store actually preserve atomicity across power loss, or only process crash?",
+          "Which Joy actions are genuinely idempotent, and what evidence proves a remote write landed?",
+          "What exactly qualifies as valid next-day review input, and who signs the human authorization?"
+        ]
+      },
+      "draftChecks": {
+        "semanticQuality": "pending separate review; literal matches do not establish entailment",
+        "sixDistinctSourcesAndLiteralQuotes": false
+      },
+      "id": "start",
+      "noPrematureFinal": true,
+      "passed": false,
+      "quality": "pending review",
+      "state": {
+        "task": {
+          "acceptance": [
+            {
+              "kind": "fileExists",
+              "label": "report.md exists",
+              "min": 1,
+              "path": "report.md"
+            }
+          ],
+          "budget": {
+            "tokens": 60000
+          },
+          "checks": [
+            {
+              "detail": "report.md does not exist",
+              "label": "report.md exists",
+              "passed": false
+            }
+          ],
+          "createdAt": "2026-11-14 14:12:55",
+          "currentTurnId": "task-turn:377e12e6dbece1aaa461ccb2241075d9",
+          "cwd": "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat",
+          "dispatchState": "claimed",
+          "executionSessionId": "task-work:f0f84ad8f1602cd4a27b6f6f51d861bd",
+          "id": "task1794665575013",
+          "inputCondition": {
+            "conditionId": "task1794665575013:input",
+            "description": "Wait at least 24 actual hours for a separate evidence review before final delivery",
+            "eventKey": "next-day-review",
+            "source": "study-host",
+            "state": "pending"
+          },
+          "lastStopReason": "waiting for authorized external input",
+          "maxRounds": 3,
+          "roundsUsed": 1,
+          "runCount": 1,
+          "sessionId": "long-research",
+          "spent": {
+            "tokens": 29430,
+            "tools": 3,
+            "wallMs": 31467
+          },
+          "status": "suspended",
+          "suspendReason": "waiting for authorized external input",
+          "title": "Next-day research decision report"
+        }
+      },
+      "studyHome": "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat"
+    }
+  ],
+  "model": "deepseek-flash",
+  "peakRateEstimateCny": 0.086774,
+  "pricingSource": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "profile": "ds",
+  "provider": "deepseek",
+  "reportedInputTokens": 26155,
+  "reportedOutputTokens": 4308,
+  "requests": 5,
+  "requestsWithoutUsage": 0,
+  "reservedUpperCny": 0.770308,
+  "suite": "research-long"
+}

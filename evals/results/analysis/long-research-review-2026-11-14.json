@@ -1,0 +1,84 @@
+{
+  "reviewer": "coding assistant source audit; not independent human or blind model review",
+  "reviewedAt": "2026-11-14T14:18:40.733094+00:00",
+  "draftSha256": "6ec9b02f21f70e79b4542ff90ebcc5a989939399f1934b89f39f7956a3e49dab",
+  "sourceManifestSha256": "aa5bbd0a74ac8a9341c75cac9b1cbd908ff8b58c9dbbcf7001b79e04b59434bc",
+  "automatedReview": "failed network response decoding; raw generation report retained",
+  "independentReviewCompleted": false,
+  "verdict": "revise",
+  "literalChecks": [
+    {
+      "sourceId": "activity",
+      "literalMatch": true,
+      "words": 16
+    },
+    {
+      "sourceId": "workflow",
+      "literalMatch": true,
+      "words": 13
+    },
+    {
+      "sourceId": "retries",
+      "literalMatch": true,
+      "words": 11
+    },
+    {
+      "sourceId": "timers",
+      "literalMatch": false,
+      "words": 14
+    },
+    {
+      "sourceId": "sqlite",
+      "literalMatch": true,
+      "words": 15
+    },
+    {
+      "sourceId": "http",
+      "literalMatch": true,
+      "words": 12
+    }
+  ],
+  "findings": [
+    {
+      "sourceId": "activity",
+      "severity": "major",
+      "finding": "The draft attributes possible re-execution to replay as well as retries. The source explicitly distinguishes completed activities, which do not re-execute in workflow replay, from unreported outcomes that may retry. Local-store repeatability alone cannot deduplicate a remote effect."
+    },
+    {
+      "sourceId": "workflow",
+      "severity": "minor",
+      "finding": "The hosted-only limitation is unsupported by the captured source. Separate Temporal service requirements from whether the service is hosted or self-managed. The proposed Joy behavior is an inference, not validation of Joy."
+    },
+    {
+      "sourceId": "retries",
+      "severity": "minor",
+      "finding": "Activity defaults and workflow-execution defaults are distinguished. Add transient/permanent/unknown-effect classification; do not treat bounded retries as proof of safe effects."
+    },
+    {
+      "sourceId": "timers",
+      "severity": "major",
+      "finding": "The quoted text changes the source wording and fails literal matching. Use a short exact quote. Persisted timers resume when workers and service become available; this study uses manual input after a host time check, not an automatically firing production timer."
+    },
+    {
+      "sourceId": "sqlite",
+      "severity": "major",
+      "finding": "One-file-only is not established as the general transaction boundary by the captured excerpt. State the transaction and journal-mode assumptions; neither local atomicity nor these tests establish atomic remote effects or power-loss durability on this machine."
+    },
+    {
+      "sourceId": "http",
+      "severity": "major",
+      "finding": "The RFC permits more than the known-unapplied exception: a client may know the actual request semantics are idempotent. Describe Joy choosing a stricter reconciliation policy as a product decision. Idempotence concerns intended effects, not necessarily identical responses or incidental logging."
+    }
+  ],
+  "crossCutting": [
+    "Four of six pages are from one vendor; vendor concentration limits breadth.",
+    "The human authorization contract is a proposed design, not sourced proof.",
+    "Failure tests must specify uncertain outcomes and remote deduplication/readback rather than assume zero duplicate effects.",
+    "No source proves the current Joy implementation; use observed runtime evidence separately."
+  ],
+  "nextDayRequirements": [
+    "Correct every major issue and preserve this original draft.",
+    "Generate the planned separate-context review or record its remaining absence explicitly.",
+    "Do not mark comprehensive quality passed from citation presence and file existence alone."
+  ]
+}

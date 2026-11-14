@@ -1,0 +1,21 @@
+{
+  "budgetCny": 0.35,
+  "cases": [
+    {
+      "error": "turn failed: Model call failed: network error: error decoding response body",
+      "id": "review",
+      "passed": false
+    }
+  ],
+  "model": "deepseek-flash",
+  "peakRateEstimateCny": 0.013504,
+  "pricingSource": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "profile": "ds",
+  "provider": "deepseek",
+  "reportedInputTokens": 4996,
+  "reportedOutputTokens": 439,
+  "requests": 2,
+  "requestsWithoutUsage": 1,
+  "reservedUpperCny": 0.31326,
+  "suite": "research-long"
+}

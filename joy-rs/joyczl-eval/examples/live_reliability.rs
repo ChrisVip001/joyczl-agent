@@ -19,6 +19,9 @@ mod memory_case;
 #[path = "live_reliability/research_case.rs"]
 mod research_case;
 
+#[path = "live_reliability/long_research.rs"]
+mod long_research;
+
 #[derive(Default)]
 struct Account {
     calls: usize,
@@ -135,7 +138,6 @@ async fn server(
     settings.max_iterations = max_iterations;
     settings.max_tokens = 2048;
     settings.llm_retries = 0;
-    settings.llm_timeout_secs = 30;
     let pool = joyczl_state::open(&home.join("state.db")).await?;
     let mut server = Server::boot(pool, settings).await;
     server.install_provider(resolved.clone());
@@ -257,7 +259,8 @@ async fn main() -> Result<()> {
             "memory",
             "research",
             "research-guarded",
-            "support"
+            "support",
+            "research-long"
         ]
         .contains(&suite.as_str()),
         "Unknown live eval suite"
@@ -271,6 +274,20 @@ async fn main() -> Result<()> {
         "budget must be in (0, 10] CNY"
     );
     let out = PathBuf::from(value("--out").ok_or_else(|| anyhow::anyhow!("--out required"))?);
+    ensure!(
+        !out.exists(),
+        "Refusing to overwrite an existing live report"
+    );
+    let persistent = if suite == "research-long" {
+        let home = PathBuf::from(
+            value("--work-home").ok_or_else(|| anyhow::anyhow!("--work-home required"))?,
+        );
+        let phase = value("--phase").ok_or_else(|| anyhow::anyhow!("--phase required"))?;
+        long_research::preflight(&home, &phase, chrono::Utc::now().timestamp())?;
+        Some((home, phase))
+    } else {
+        None
+    };
     let models = joyczl_config::models::load_models(&source);
     let profile = joyczl_config::models::active_profile(&models)
         .ok_or_else(|| anyhow::anyhow!("active profile missing"))?;
@@ -281,7 +298,7 @@ async fn main() -> Result<()> {
     let mut settings = joyczl_config::Settings {
         home: source.clone(),
         llm_retries: 0,
-        llm_timeout_secs: 30,
+        llm_timeout_secs: if suite == "research-long" { 60 } else { 30 },
         ..Default::default()
     };
     joyczl_config::models::apply_profile(
@@ -328,6 +345,13 @@ async fn main() -> Result<()> {
         "No support fixtures loaded"
     );
     let mut cases = Vec::new();
+    if let Some((home, phase)) = &persistent {
+        let result = long_research::run(home, phase, &settings, &resolved).await;
+        cases.push(match result {
+            Ok(result) => result,
+            Err(error) => json!({"id":phase,"passed":false,"error":error.to_string()}),
+        });
+    }
     let names = match suite.as_str() {
         "expanded" => vec![
             "chinese-continuity",
@@ -337,6 +361,7 @@ async fn main() -> Result<()> {
         "memory" => vec!["transient-memory"],
         "support" => support.iter().map(|case| case.id.as_str()).collect(),
         "research" | "research-guarded" => vec!["source-report", "source-unavailable"],
+        "research-long" => vec![],
         _ => vec!["continuity", "artifact", "uncertain-effect"],
     };
     let selected = value("--case");

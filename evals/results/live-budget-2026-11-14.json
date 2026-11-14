@@ -1,6 +1,6 @@
 {
   "capCny": 10,
-  "invocations": 12,
+  "invocations": 15,
   "reports": [
     "evals/results/deepseek-flash-2026-11-13-initial.json",
     "evals/results/deepseek-flash-2026-11-13-confirmed.json",
@@ -13,12 +13,16 @@
     "evals/results/deepseek-flash-2026-11-14-support.json",
     "evals/results/deepseek-flash-2026-11-14-support-followup.json",
     "evals/results/deepseek-flash-2026-11-14-support-grounded.json",
-    "evals/results/deepseek-flash-2026-11-14-grounded-continuity.json"
+    "evals/results/deepseek-flash-2026-11-14-grounded-continuity.json",
+    "evals/results/deepseek-flash-2026-11-14-long-research-start.json",
+    "evals/results/deepseek-flash-2026-11-14-long-research-repeat.json",
+    "evals/results/deepseek-flash-2026-11-14-long-research-review.json"
   ],
-  "requests": 90,
-  "reportedInputTokens": 112803,
-  "reportedOutputTokens": 20172,
-  "peakRateEstimateCny": 0.386982,
-  "reservedUpperCny": 7.573676,
-  "scope": "Reported-use peak-price estimate and conservative reservations, not invoice reconciliation."
+  "requests": 101,
+  "reportedInputTokens": 151696,
+  "reportedOutputTokens": 25721,
+  "peakRateEstimateCny": 0.50916,
+  "reservedUpperCny": 9.14938,
+  "scope": "Reported-use peak-price estimate and conservative reservations, not invoice reconciliation. Missing-usage calls retain their full reservation; estimates exclude their unreported usage.",
+  "requestsWithoutUsage": 2
 }

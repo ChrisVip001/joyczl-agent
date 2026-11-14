@@ -1,0 +1,183 @@
+{
+  "observedAt": "2026-11-14T14:23:21.164613+00:00",
+  "gitRevision": "fd936881ffe601f0a081e66333ca6476025a244b",
+  "uncommittedChanges": true,
+  "comprehensiveQualityPassed": false,
+  "firstAttempt": "Network response decoding failure; no draft/final; failed task. Known checkpoint usage absent from task aggregate.",
+  "repeat": "Draft written/read back; one run suspended; five of six literal quotes match; first-day acceptance fails.",
+  "separateContextReview": "Network response decoding failure; no review file; not completed.",
+  "codingAssistantAudit": "Revise; retained separately, not blind or independent human review.",
+  "actualCrossDay": "Pending elapsed time, missing review and successful explicit human continuation.",
+  "eligibleAt": "2026-11-15T14:12:55.014254+00:00",
+  "eligibleAtAsiaShanghai": "2026-11-15T22:12:55+08:00",
+  "studyHome": "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat",
+  "originalFailedHome": "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14",
+  "runs": [
+    {
+      "id": "task-turn:377e12e6dbece1aaa461ccb2241075d9",
+      "task_id": "task1794665575013",
+      "status": "waiting",
+      "rounds": 1,
+      "tokens_in": 25754,
+      "tokens_out": 3676,
+      "tools_ok": 3,
+      "tools_failed": 0
+    }
+  ],
+  "operationReceipts": [
+    {
+      "id": "275c6c1eec8fe3b5fb38f71b95dcba4d66eb972fa3954b3684f5d86bd2c59b11",
+      "task_id": "task1794665575013",
+      "run_id": "task-turn:377e12e6dbece1aaa461ccb2241075d9",
+      "tool": "read_file",
+      "status": "succeeded",
+      "input_digest": "3b239c5bfd290ce79114022f1311531722b9a65f735cfe2a0cee757f620beffa",
+      "output_digest": "842ad1773be691c8974d6dcc822ec7f2e59a0b0cb5706484c469815d7fbc94a9",
+      "path": "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/sources.json"
+    },
+    {
+      "id": "413aaaaf20830be356533ee00699e42b41079f07eef74d16e8a37ad23504f0d9",
+      "task_id": "task1794665575013",
+      "run_id": "task-turn:377e12e6dbece1aaa461ccb2241075d9",
+      "tool": "write_file",
+      "status": "succeeded",
+      "input_digest": "e3ad675547dd333e8c055018040141764a2b9c1176460bedf6d5a4595b7d2bde",
+      "output_digest": "d492c7e041f1581b104181392b18826d0334b07d5e051bde0f0ae4f73f6afa42",
+      "path": "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/draft.json"
+    },
+    {
+      "id": "bfda890dbb1f3e9499dae741b022d43ef5c37d9074ffe2d3e00db2553e5266b5",
+      "task_id": "task1794665575013",
+      "run_id": "task-turn:377e12e6dbece1aaa461ccb2241075d9",
+      "tool": "read_file",
+      "status": "succeeded",
+      "input_digest": "90089fe05e0c02c59f7dee39739de99f953985c14e91ca759e89d3b312585311",
+      "output_digest": "deb1c1d7c373e9b74179a383db7f49bc982c2457183a764e6d17edc57ff0220b",
+      "path": "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/draft.json"
+    }
+  ],
+  "noFinalReport": true,
+  "sourceReceipts": [
+    {
+      "id": "activity",
+      "url": "https://docs.temporal.io/activity-definition",
+      "capturedAt": "2026-11-14T14:04:40.246529+00:00",
+      "rawSha256": "db1232023c95a31f61ed970b18c23a39585e2a1cf3234b3580f0305b27d4bab6",
+      "excerptSha256": "5de85cde7688c2cf0e03e154588b1c9db5028d3330c6407e9911110acc8e495f",
+      "selection": "Curated bounded excerpt; not autonomous source discovery"
+    },
+    {
+      "id": "workflow",
+      "url": "https://docs.temporal.io/workflow-execution",
+      "capturedAt": "2026-11-14T14:04:40.252746+00:00",
+      "rawSha256": "e707ba5242b7aaf056682295b6c84ca117d50d5298dac240fc5334fb1bcce6ec",
+      "excerptSha256": "54bdfe1ffa120eaec8472f73cc146c74222c5dfeb192c59dfeffc909f1cb5f30",
+      "selection": "Curated bounded excerpt; not autonomous source discovery"
+    },
+    {
+      "id": "retries",
+      "url": "https://docs.temporal.io/encyclopedia/retry-policies",
+      "capturedAt": "2026-11-14T14:04:40.261681+00:00",
+      "rawSha256": "104c98009001d102c93185de38166a0906babc983cef1cc4ad0d2159db118cef",
+      "excerptSha256": "584cf35b9407063ad6d77af0fe3b73d52e1577e4d4b6c4f14c65d701547a7d61",
+      "selection": "Curated bounded excerpt; not autonomous source discovery"
+    },
+    {
+      "id": "timers",
+      "url": "https://docs.temporal.io/workflow-execution/timers-delays",
+      "capturedAt": "2026-11-14T14:04:40.268023+00:00",
+      "rawSha256": "0800405b32d5003221647c563a3cddc577d77c00f8bfe1409ed7bf958794c781",
+      "excerptSha256": "bd5f3e9ad63d816b7564e275ee7a763a451558cae56fceb8e473f075e1443758",
+      "selection": "Curated bounded excerpt; not autonomous source discovery"
+    },
+    {
+      "id": "sqlite",
+      "url": "https://www.sqlite.org/atomiccommit.html",
+      "capturedAt": "2026-11-14T14:04:41.894312+00:00",
+      "rawSha256": "5a5be7b660217c9408c8a81eaf2faa2d08832ed3790f895a0a713916ad856ea1",
+      "excerptSha256": "b4b6ad4c6210d3b71c40990f907945b092d79c899bbd5ca52cf148a1a912c994",
+      "selection": "Curated bounded excerpt; not autonomous source discovery"
+    },
+    {
+      "id": "http",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
+      "capturedAt": "2026-11-14T14:04:43.371059+00:00",
+      "rawSha256": "d431760660ea44e130f6e919dab216df2d0b3a490567a98089267523368fe1e5",
+      "excerptSha256": "90f46898b9f83d6fc8c02e0244ab1805d626d021c4944d58bb15d5a62db674c1",
+      "selection": "Curated bounded excerpt; not autonomous source discovery"
+    }
+  ],
+  "artifactSha256": {
+    "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/sources.json": "aa5bbd0a74ac8a9341c75cac9b1cbd908ff8b58c9dbbcf7001b79e04b59434bc",
+    "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/draft.json": "6ec9b02f21f70e79b4542ff90ebcc5a989939399f1934b89f39f7956a3e49dab",
+    "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/study.json": "e0f5c0a2b49cdcc6e0312ee1444d0cd4efad9a67a782516c90953348413bcfaf",
+    "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/host-review.json": "391f8dbdcdfa083f00257c6a55d0e895d299ec8a4e185af3f540fc115a2ac0e6",
+    "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14-repeat/day-one-state.db": "8f5b9301515b009425a478afe7a4d656002f067f88c1b3819fc3c8bbad6f8c58",
+    "/Users/chirslarn/AI-Agent/joy-namespace/long-research-2026-11-14/day-one-state.db": "7ede4f61ca364f642ca01b82ac4d987eeced740bbd97b44fc0bd9c3fa7c583e7"
+  },
+  "sourceSha256": {
+    "joy-rs/joyczl-eval/examples/live_reliability.rs": "061bbd4e3ac60190695a1cd6248b7f18dd50d57796280b5bfdcb2293e6ebda45",
+    "joy-rs/joyczl-eval/examples/live_reliability/cases.rs": "df738a228e96438e5d9da43ebe24daad0431e5afd6a4e0c84d6d0e04ee444cf3",
+    "joy-rs/joyczl-eval/examples/live_reliability/long_research.rs": "ed6420c851af27c30bd858fab1d083a6306724180ddf4a8bf0225dc2bdeb5427"
+  },
+  "rawEvidenceSha256": {
+    "evals/results/deepseek-flash-2026-11-14-long-research-start.json": "ede622047c78f6375782808e0944b1c430e0ac97351045af82384a760f009494",
+    "evals/results/deepseek-flash-2026-11-14-long-research-repeat.json": "d98c9a6e52387ee912ab7db11fe2700ab37521c99a183e06ffe0a0cc44d8bb0e",
+    "evals/results/deepseek-flash-2026-11-14-long-research-review.json": "e2f997d03ec3b671379358d4594d054f074b5989fc2bd7640eceaa5578494bc2",
+    "evals/results/long-research-preregistration-2026-11-14.json": "dde4625a58e952bc6abce2db7c289291ee2c407ab2817e76f9303a8d130aabdb",
+    "evals/results/long-research-early-resume-2026-11-14.json": "4a00fbfd2f37d1934c32c910315de115bf1ad774c2a6c67a763c4ee03af67ce7",
+    "evals/results/analysis/long-research-review-2026-11-14.json": "391f8dbdcdfa083f00257c6a55d0e895d299ec8a4e185af3f540fc115a2ac0e6",
+    "evals/results/analysis/long-research-accounting-gap-2026-11-14.json": "0f1c306184f456c71635a45f75a19ae04e69f05b46dcf38a02466c60b96ad6ab"
+  },
+  "validation": {
+    "fullGateExitCode": 0,
+    "rustPassed": 939,
+    "rustFailed": 0,
+    "frontendPassed": 113,
+    "deterministicPassed": 70,
+    "replayPassed": 5,
+    "exampleTestsPassed": 11,
+    "clippyWarnings": 0,
+    "logsSha256": {
+      "/tmp/joy-long-study-final-check.log": "5d41c0c64572d5b216732105b3e78bd4f08960c214ea5c25c99c04957de02d6d",
+      "/tmp/joy-long-study-final-example-tests.log": "a26a65b9b57d73adf24375db63726a06241c5d6249bccb12596f1888b1db3369",
+      "/tmp/joy-long-study-final-example-clippy.log": "04ebbdf6e130bde306342312b303024d21b2b9301dc80ca34df9d83270afe735"
+    }
+  },
+  "budget": {
+    "capCny": 10,
+    "invocations": 15,
+    "reports": [
+      "evals/results/deepseek-flash-2026-11-13-initial.json",
+      "evals/results/deepseek-flash-2026-11-13-confirmed.json",
+      "evals/results/deepseek-flash-2026-11-13-expanded.json",
+      "evals/results/deepseek-flash-2026-11-13-wait-confirmed.json",
+      "evals/results/deepseek-flash-2026-11-14-memory.json",
+      "evals/results/deepseek-flash-2026-11-14-research.json",
+      "evals/results/deepseek-flash-2026-11-14-research-unavailable.json",
+      "evals/results/deepseek-flash-2026-11-14-research-guarded.json",
+      "evals/results/deepseek-flash-2026-11-14-support.json",
+      "evals/results/deepseek-flash-2026-11-14-support-followup.json",
+      "evals/results/deepseek-flash-2026-11-14-support-grounded.json",
+      "evals/results/deepseek-flash-2026-11-14-grounded-continuity.json",
+      "evals/results/deepseek-flash-2026-11-14-long-research-start.json",
+      "evals/results/deepseek-flash-2026-11-14-long-research-repeat.json",
+      "evals/results/deepseek-flash-2026-11-14-long-research-review.json"
+    ],
+    "requests": 101,
+    "reportedInputTokens": 151696,
+    "reportedOutputTokens": 25721,
+    "peakRateEstimateCny": 0.50916,
+    "reservedUpperCny": 9.14938,
+    "scope": "Reported-use peak-price estimate and conservative reservations, not invoice reconciliation. Missing-usage calls retain their full reservation; estimates exclude their unreported usage.",
+    "requestsWithoutUsage": 2
+  },
+  "scope": "Curated six-source bounded staged research, not autonomous discovery or external transactions. No actual-day success, semantic pass or completed independent review claimed.",
+  "timeoutProvenance": "All retained live calls used the 30-second request setting. Final opt-in research-long code allows 60 seconds for future requests; no live success for that change is claimed.",
+  "nextSteps": [
+    "Complete separate-context review within remaining allowance; retain both failed invocations.",
+    "After eligible time and explicit human continuation, resume the same task and inspect signals, run IDs and operations.",
+    "Correct major semantic/citation issues and perform final quality review.",
+    "Fix and regress the observed failed-round task accounting gap before declaring failure accounting complete."
+  ]
+}

@@ -1,7 +1,7 @@
 //! Synthetic lifecycle samples. No personal history or external transactions.
 use super::*;
 
-async fn task_status(host: &Server, task: &str, expected: &str) -> Result<Value> {
+pub(super) async fn task_status(host: &Server, task: &str, expected: &str) -> Result<Value> {
     tokio::time::timeout(std::time::Duration::from_secs(90), async {
         loop {
             let result = rpc(host, "task/get", json!({"taskId":task})).await?;
@@ -13,7 +13,7 @@ async fn task_status(host: &Server, task: &str, expected: &str) -> Result<Value>
                 return Ok(result);
             }
             ensure!(
-                !matches!(status, "cancelled" | "needs_attention" | "done"),
+                !matches!(status, "cancelled" | "failed" | "needs_attention" | "done"),
                 "Task reached {status} while waiting for {expected}"
             );
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;

@@ -1,0 +1,8 @@
+{
+  "checkedAt": "2026-11-14T14:16:19.787481+00:00",
+  "exitCode": 1,
+  "stderr": "Error: Actual 24-hour wait has not elapsed; no model request was sent\n",
+  "providerProfile": "nonexistent; preflight rejected before resolving credentials",
+  "outputCreated": false,
+  "passed": true
+}

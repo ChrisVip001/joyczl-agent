@@ -1,0 +1,17 @@
+{
+  "observedAt": "2026-11-14T14:18:40.739830+00:00",
+  "fixture": "First real-model study attempt; isolated state",
+  "taskStatus": "failed",
+  "taskSpentTokens": 0,
+  "taskStopReason": "Model call failed: network error: error decoding response body",
+  "checkpointStatus": "abandoned",
+  "checkpointKnownUsage": {
+    "input_tokens": 7341,
+    "output_tokens": 468,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  },
+  "budgetProtection": "Independent evaluator limiter retains reservations for every request, including missing-usage failures.",
+  "verdict": "Known checkpoint usage is absent from task aggregate after the failed model round; unresolved runtime accounting defect.",
+  "scope": "Observation only; original state and failed model report preserved."
+}

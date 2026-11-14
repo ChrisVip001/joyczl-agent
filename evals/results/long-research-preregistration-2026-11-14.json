@@ -1,0 +1,33 @@
+{
+  "registeredAt": "2026-11-14T14:06:33.847221+00:00",
+  "study": "Joy next-day research decision report",
+  "profile": "ds/deepseek-flash",
+  "sourceCount": 6,
+  "sourcePublishers": 3,
+  "sourceSelection": "Curated official excerpts; no autonomous discovery claim",
+  "sourceManifestSha256": "aa5bbd0a74ac8a9341c75cac9b1cbd908ff8b58c9dbbcf7001b79e04b59434bc",
+  "criteria": {
+    "dayOne": [
+      "Six distinct source-backed claims, each with a literal quotation of at most 16 words",
+      "Separate findings, Joy-specific inferences and limitations",
+      "Draft persisted and task suspended on an explicit input condition",
+      "No final report before next-day input"
+    ],
+    "review": [
+      "Separate session reviews all six claims against captured excerpts",
+      "Retain criticism verbatim; no automated semantic pass based on a nonempty review",
+      "Same model is not an independent human or different-model reviewer"
+    ],
+    "dayTwo": [
+      "At least 86400 real seconds since start; fresh process and same store",
+      "Explicit human-triggered signal; duplicate signal acknowledged without a second continuation",
+      "Same task and run retained; inspect operation receipts for duplicate final writes",
+      "Final report cites all six sources and addresses justified review issues",
+      "Semantic review of guarantee boundaries, counterarguments, decision matrix and testable criteria required; file existence is insufficient"
+    ]
+  },
+  "scope": "Bounded multi-source staged research with real elapsed-time persistence. Not multi-hour autonomous discovery, external account transactions, production exactly-once proof or a general reliability estimate.",
+  "initialPhaseCapCny": 1.05,
+  "overallPriorReservationCny": 7.573676,
+  "overallCapCny": 10
+}
