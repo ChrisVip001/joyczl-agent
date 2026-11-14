@@ -1,0 +1,82 @@
+{
+  "date": "2026-11-14",
+  "gitRevision": "fa429485341acb9c35f8fcfd4ca1df32d57b3f9f",
+  "uncommittedChanges": true,
+  "paidModelCallsThisChange": 0,
+  "validation": {
+    "command": "just check",
+    "exitCode": 0,
+    "rustPassed": 939,
+    "rustFailed": 0,
+    "frontendPassed": 113,
+    "deterministicPassed": 70,
+    "replayPassed": 5,
+    "clippyWarnings": 0,
+    "appServerPassed": 227,
+    "evalPassed": 7,
+    "statePassed": 89
+  },
+  "observationFaults": {
+    "variants": [
+      "step insertion",
+      "step closing",
+      "artifact insertion",
+      "step insertion with repair budget"
+    ],
+    "result": "All stop in needs_attention before acceptance or continuation; known usage remains 43 tokens and one tool, three provider requests. Replaying the real checkpoint twice after removing the fault creates one step and one artifact without rerunning the model or marking done."
+  },
+  "humanContinuation": {
+    "result": "Explicit human resume continues the latest known-outcome stopped checkpoint; no authorization leaves it suspended; cancelled tasks remain rejected. Existing unknown-effect reconciliation guard is unchanged."
+  },
+  "longBenchmark": {
+    "initial": {
+      "passed": 8,
+      "total": 11,
+      "recovered": 0,
+      "recoveryCases": 3
+    },
+    "final": {
+      "passed": 11,
+      "total": 11,
+      "recovered": 3,
+      "recoveryCases": 3
+    },
+    "change": "Trusted fixtures now explicitly call task/resume after in-process runtime recreation. The runtime also permits explicit human continuation of a stopped checkpoint. Original artifact acceptance assertions remain unchanged. This is not a measured real-model capability improvement."
+  },
+  "processRecovery": {
+    "cases": 5,
+    "passed": 5,
+    "method": "Real SIGKILL with a local scripted provider; effects and accounting checked by the smoke script."
+  },
+  "scope": "Local scripted providers and fault injection only. No claim of open-ended task reliability or remote exactly-once effects. Longer real research and independent quality review remain pending.",
+  "sourceSha256": {
+    "joy-rs/joyczl-agent/src/observe.rs": "3395fc84eff4092a0264b166b51527a1349a4ed7d44218c647bdf905739e17a4",
+    "joy-rs/joyczl-app-server/src/turn/accounting.rs": "a349d8ce90f694b1e9c63244e027bf6693f548cdb9478e59705a84a731a6ec31",
+    "joy-rs/joyczl-app-server/src/task/tests.rs": "ab4b04b848f6bd4496569c7b56e3a5bd005552894c1e5f5bb5027dd57b75ff1a",
+    "joy-rs/joyczl-app-server/src/resume.rs": "c9ccb88196589efe96a69cef29ea0ebee81a752912bbfed865a5df26839dc412",
+    "joy-rs/joyczl-state/src/human_pauses.rs": "8d807319031a52e96bc227b9a3d34f4ec7fc3d40b5448354247033f931a744bf",
+    "joy-rs/joyczl-state/src/human_pause_tests.rs": "501211e2a6df38709addee1b61e5f6a3a8136bfb1f345c5d3538dd2a924d2171",
+    "joy-rs/joyczl-eval/src/lib.rs": "6531de69d11eaf065a404f3b7796429c007ca65ea31625f250ac26a5ac6f508b",
+    "joy-rs/joyczl-eval/src/scenario.rs": "269e2bf227770916efd77c9cd7e69162f1e7aecd2c314bd750b71976801ce7ae",
+    "joy-rs/joyczl-eval/src/replay.rs": "e9eaf0e05a58416912af839aadca8f2db514e18e633f5fce4e15f2b8bcc14471",
+    "evals/long/tasks.jsonl": "30028b8fbe8c5a5514c3464457aa8bf86643d0dbf727a0c3d6b6ac86a5e3308c"
+  },
+  "rawReportSha256": {
+    "evals/results/long-task-2026-11-14-initial.json": "cacd567f398e668395b4b3deb29b18e33664d893bb2417eea16e7a4faec8cfad",
+    "evals/results/long-task-2026-11-14-final.json": "37152147b4d20a0679a36f7175e4c90bf4e5665834aa39a986d1497d43da4f10",
+    "evals/results/process-recovery-2026-11-14-task-final.json": "561ae76d64e91349f1e605cd746d90322dd83f55d8b42cdcffb1a31c772dab45"
+  },
+  "initialBenchmarkSourceSha256": {
+    "evals/long/tasks.jsonl": "ee16c9ea39069a0d4f1f6b9e15c4fde42712faf91bf2d3bf31da31e272c7da48",
+    "joy-rs/joyczl-eval/src/lib.rs": "8d82a8e20a9a9ede1241038cb57ccbf79a7ee7a37c2797fb467a9ac0e0e6f6d9",
+    "joy-rs/joyczl-eval/src/scenario.rs": "b07890712f648b3009196d80f53e00616d65fd0c96dcaabfcbda59d0dd9ba72c"
+  },
+  "logSha256": {
+    "/tmp/joy-task-final-check.log": "547ba7f8dae389e5932e51f65fa6d86bdac9e63cc6543d9d8af6402e5a593d5d",
+    "/tmp/joy-observation-before.log": "3b35515a458c659b94394900628c9c5245eec0947bae8b1a823beca27ab21b30",
+    "/tmp/joy-observation-repair.log": "bb6513b92339443fdb4a572e69a2429f661190efd76904a4a14f8b3fed881cf3",
+    "/tmp/joy-long-resume-before.log": "6e9ebd23e454354d9349c635f80d3ffd0261545281a6b5e762dc3220727d9fda",
+    "/tmp/joy-long-resume-final-tests.log": "73dc764e0b3cceea387dd2e09e4c138c41a22d176b3099ac4103f9d49f1c857e",
+    "/tmp/joy-task-final-process.log": "4ce1838811822dd4c4c63d4cb1f0013ac1bae7b22b26f325440c768419ab0728"
+  }
+}

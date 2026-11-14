@@ -140,8 +140,9 @@ pub(super) async fn graph_route(
                     .await
                     .map_err(|error| error.message)?;
                 let soul = format!(
-                    "{}{}{}",
+                    "{}\n{}\n{}{}",
                     soul,
+                    super::prompt::CONVERSATION_RULES,
                     crate::task::dispatch::projection(&server, &session_id).await,
                     operation_context.prompt,
                 );

@@ -1,6 +1,6 @@
 {
   "capCny": 10,
-  "invocations": 10,
+  "invocations": 12,
   "reports": [
     "evals/results/deepseek-flash-2026-11-13-initial.json",
     "evals/results/deepseek-flash-2026-11-13-confirmed.json",
@@ -11,12 +11,14 @@
     "evals/results/deepseek-flash-2026-11-14-research-unavailable.json",
     "evals/results/deepseek-flash-2026-11-14-research-guarded.json",
     "evals/results/deepseek-flash-2026-11-14-support.json",
-    "evals/results/deepseek-flash-2026-11-14-support-followup.json"
+    "evals/results/deepseek-flash-2026-11-14-support-followup.json",
+    "evals/results/deepseek-flash-2026-11-14-support-grounded.json",
+    "evals/results/deepseek-flash-2026-11-14-grounded-continuity.json"
   ],
-  "requests": 80,
-  "reportedInputTokens": 107645,
-  "reportedOutputTokens": 18486,
-  "peakRateEstimateCny": 0.363178,
-  "reservedUpperCny": 6.833904,
+  "requests": 90,
+  "reportedInputTokens": 112803,
+  "reportedOutputTokens": 20172,
+  "peakRateEstimateCny": 0.386982,
+  "reservedUpperCny": 7.573676,
   "scope": "Reported-use peak-price estimate and conservative reservations, not invoice reconciliation."
 }

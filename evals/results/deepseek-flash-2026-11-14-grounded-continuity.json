@@ -1,0 +1,26 @@
+{
+  "budgetCny": 0.5,
+  "cases": [
+    {
+      "id": "chinese-continuity",
+      "latencyMs": 7374,
+      "passed": true,
+      "scope": "literal continuity and no tool execution; emotional quality is not scored",
+      "turn": {
+        "reply": "你的猫叫**墨墨**。\n\n你在担心的是**明天的项目汇报**——你说自己现在有点紧张。",
+        "tools": []
+      }
+    }
+  ],
+  "model": "deepseek-flash",
+  "peakRateEstimateCny": 0.012084,
+  "pricingSource": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "profile": "ds",
+  "provider": "deepseek",
+  "reportedInputTokens": 3378,
+  "reportedOutputTokens": 666,
+  "requests": 4,
+  "requestsWithoutUsage": 0,
+  "reservedUpperCny": 0.31514000000000003,
+  "suite": "expanded"
+}

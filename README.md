@@ -8,6 +8,7 @@ English | [简体中文](README.zh.md)
 [![Release](https://img.shields.io/github/v/release/ChrisVip001/joyczl-agent)](https://github.com/ChrisVip001/joyczl-agent/releases/latest)
 
 **A personal assistant that runs entirely on your own machine — with a memory you can actually inspect.**
+The focus is planning, executing, recovering, verifying and delivering complex personal tasks; everyday conversation is supporting interaction.
 Rust owns the agent loop, memory and 29 tools; TypeScript is only the dashboard and the chat gateways. Conversations, `state.db` and API keys never leave your laptop. The dashboard speaks both English and Chinese — switch it from the sidebar.
 
 > Most agents keep memory in a black box. Joy writes **one append-only ledger row per turn**. Open any row and you see that turn's full entry stream: the retrieval decision, which tools ran, which model answered, and what it cost. The memory library links back to source turns via `ledger:…` chips, and the FTS5 index can be rebuilt from the ledger. Nothing is hidden, nothing is silently lost.
@@ -263,3 +264,7 @@ Structured artifact checks now verify typed JSON values and retain file-version 
 Ordinary chats now have [human operation review](docs/protocol.md#ordinary-chat-operation-review), with read-only continuation while earlier outcomes remain unknown.
 
 When a full agent turn's tool table is empty, its capability note asks for plain text and disclosure of verification limits. This is guidance, not an output guarantee; see the [live support evidence and limits](docs/live-reliability.md).
+
+Full, delegated and quick replies now share memory-grounding and companionship instructions: distinguish current references from recalled history and avoid continuous-availability or guaranteed-recall promises. User `SOUL.md` stays intact; compliance still needs [live evaluation](docs/live-reliability.md).
+
+If required task step or artifact observations cannot be persisted, known usage is retained and acceptance/automatic continuation stop for review of work already performed. Existing files or external effects are not rolled back.

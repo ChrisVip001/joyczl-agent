@@ -9,7 +9,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Layer | Location | Shape | Latest full run |
 |---|---|---|---|
-| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 937 passed / 0 failed |
+| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 939 passed / 0 failed |
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
 | Frontend | joy-ts (node --test + tsc) | 113 passed / 0 failed | |
@@ -33,7 +33,7 @@ Judge scores must be integers from 0 through 10; an invalid score fails judging 
 | joyczl-mcp | 37 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
 | joyczl-memory | 70 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
 | joyczl-agent | 20 | the deterministic core: the three acceptance checks (exists / substring / successful-call count), tool claims versus filesystem facts (contradictions included), plan storage and its failure fallback, path containment (outside the workspace or no workspace at all = refuse) |
-| joyczl-app-server | 226 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths; and the task engine: tasks with no session, a false done needing a human, acceptance passing only on a real file, over-budget stopping before the spend, one run per attempt, restart reconciliation without replay, unique step keys across rounds, and interrupt ending the task loop immediately; plus the session gate: a second turn in the same session is refused with `SESSION_BUSY` before any side effect, `steer` lands at a round boundary, `follow-up` survives a restart, and an idle call says there is nothing to wait for |
+| joyczl-app-server | 227 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths; and the task engine: tasks with no session, a false done needing a human, acceptance passing only on a real file, over-budget stopping before the spend, one run per attempt, restart reconciliation without replay, unique step keys across rounds, and interrupt ending the task loop immediately; plus the session gate: a second turn in the same session is refused with `SESSION_BUSY` before any side effect, `steer` lands at a round boundary, `follow-up` survives a restart, and an idle call says there is nothing to wait for |
 | joyczl-config | 35 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear (**no model or key fields left**); multi-profile storage, secret backends (memory/file — never the real keychain), switching and removal |
 | joyczl-cli | 15 | cron semantics, once-per-minute firing, job loading from both sources, and one firing that lands in the outbox |
 | joyczl-protocol | 7 | RPC envelope serialization (the export test runs on demand) |
@@ -121,8 +121,8 @@ because mixing them hides exactly what is worth watching:
 * **task success**: cases that reached the outcome their own file declares (all declare
   `done`, i.e. acceptance passed on facts);
 * **interrupt recovery**: the subset tagged `recovery` where a round is really interrupted,
-  the server process is really restarted on the same home (reconciliation ran), and a later
-  turn still finishes the task.
+  the runtime is reopened in-process on the same home, and an explicit human continuation
+  still finishes the task. Actual process death is covered separately by `smoke-recovery`.
 
 It **records and never blocks** (exit 0 even on failures): the value is the trend, and making
 it a gate would only breed cases written to make the number look good. The report lands in
@@ -162,3 +162,7 @@ Focused regression tests also cover repeated recovery, missing model configurati
 Retained local result: [2026-11-14 process recovery](../evals/results/process-recovery-2026-11-14.json), four cases passed. Both uncertainty stops retained 15 known tokens; uninterrupted and known-result recovery each retained 30 tokens with one run and one committed effect. CI runs this suite in its Linux release gate.
 
 Memory recovery regressions exercise interruption before completion, retained claims after startup recovery failure, source-set isolation from new chats, atomic backoff failure, and a failure after facts/episode commit but before source completion. The same source batch cannot inflate confirmations or duplicate its episode; a human-deleted episode is not resurrected. Worker tests also verify execution ownership and cancellation/join of a stalled model future. The process crash smoke includes a memory-admission SIGKILL case; its result distinguishes resumable source rows from completed extraction.
+
+### Recovery fixture controls
+
+`restart` reopens the runtime in-process; it does not kill an OS process. `resume_task: true` is a trusted fixture action calling the human-only `task/resume` API, with `message` as its control reason rather than a new chat turn. Continuation consumes the checkpoint without a fresh retrieval-gate script. Without this action the task stays paused; original artifact checks are unchanged. These fields are evaluator-only, not application protocol or model tools. The initial 8/11, recovery 0/3 report is retained; benchmark exit 0 never substitutes for inspecting case outcomes.

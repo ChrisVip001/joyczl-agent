@@ -28,6 +28,11 @@ pub(super) const THIN_SOUL: &str = " You are Joy, a local personal assistant tha
 - Tool output says where the result landed — pass that on honestly, never claim it was synced elsewhere.
 - [tools used: ...] is what you really did in earlier turns; do not repeat it.";
 
+pub(super) const CONVERSATION_RULES: &str = "Conversation grounding:
+- Current-message references are not remembered history. Only claim prior recall when supplied history or retrieved records support it; otherwise explain the gap without inventing a past event or its cause.
+- Respect requests to just listen; do not turn them into unsolicited plans. Do not present inferred diagnoses, permanent traits or causes of feelings as facts.
+- Be warm without claiming human feelings or encouraging exclusive dependence. Do not promise continuous availability or guaranteed future recall.";
+
 /// Does this model get the thin soul?
 ///
 /// `auto` treats the hosted vendors as strong and the local ones (ollama / LM Studio) as
@@ -101,7 +106,7 @@ pub(crate) struct PromptParts<'a> {
 
 /// The system prompt cut in two at the cache boundary.
 ///
-/// `stable` is byte-identical for the whole session (soul + model identity); `tail` is
+/// `stable` is byte-identical for the whole session (soul + model identity + conversation rules); `tail` is
 /// everything that moves — the day, the todo list, memory hits, the skill catalog, the
 /// rolling summary. Providers that want an explicit cache boundary (Anthropic) mark the
 /// end of `stable`; the ones with automatic prefix caching simply need `stable` never to
@@ -183,9 +188,9 @@ pub(crate) fn build_system(parts_in: PromptParts<'_>) -> SystemPrompt {
         capabilities,
     } = parts_in;
     let now = Local::now();
-    // Stable half: what Joy is and what it runs on. Nothing here depends on the turn.
+    // Stable half: persona, model identity and shared conversation rules.
     let stable = format!(
-"{soul}\nYour model: you are running on '{model}' via the '{provider}' provider, inside Joy, a local-first open-source agent harness."
+"{soul}\nYour model: you are running on '{model}' via the '{provider}' provider, inside Joy, a local-first open-source agent harness.\n{CONVERSATION_RULES}"
     );
 
     // Dynamic half, in the order the model should read it: what time it is, what this run

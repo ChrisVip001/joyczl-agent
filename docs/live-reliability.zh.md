@@ -94,3 +94,15 @@ cargo run -p joyczl-eval --example live_reliability --manifest-path joy-rs/Cargo
 [首次原始回复](../evals/results/deepseek-flash-2026-11-14-support.json)、[定向复测](../evals/results/deepseek-flash-2026-11-14-support-followup.json)、[带来源摘要的证据复核](../evals/results/analysis/support-review-2026-11-14.json)、[累计费用](../evals/results/live-budget-2026-11-14.json)。
 
 [本轮验证摘要](../evals/results/support-validation-2026-11-14.json)：评测器 8 项、完整门禁复跑均通过。首轮微信 worker 挂起记录保留，单独 12 项通过；没有修改网关代码。
+
+## 2026-11-14 共用约束后的复测
+
+完整执行、委派与快答现在共用一份简短对话约束，不改写用户 SOUL.md，不增加模型调用。快答回归仍是两次请求，保留自定义人格及相关会话历史；8 项评测器测试也覆盖完整执行路径的约束注入。提示约束不是确定性的事实过滤器。
+
+三项新陪伴样本满足既有格式指标。证据复核观察到：无历史样本明确表示没有记录、不知道原因，不再声称记得；但倾听样本仍擅自补充晚上/线下汇报情境，关系样本虽明确否认可持续在线，随后仍有“随时能说两句”的矛盾措辞。这些质量缺口原样保留。已有双轮中文连续性用例通过，说明提供的猫名和汇报上下文仍可用于回忆；它只测字面连续性，不代表多轮陪伴质量。每例一个样本不能得出普遍改善结论，也不能替代独立人工评审；原始失败及原始记录中的待评状态都不改写。
+
+三例复测用了 6 请求，估算 ¥0.011720、预留 ¥0.424632；连续性用了 4 请求，估算 ¥0.012084、预留 ¥0.315140。累计 **12 次调用、90 请求，输入 112,803 / 输出 20,172 tokens，高峰价估算 ¥0.386982，保守预留 ¥7.573676**，低于授权 ¥10。记录请求都有 usage，价格于 2026-11-14 再次核对官方来源；估算不是账单。
+
+[陪伴复测](../evals/results/deepseek-flash-2026-11-14-support-grounded.json)、[有据连续性](../evals/results/deepseek-flash-2026-11-14-grounded-continuity.json)、[带来源摘要的编码助手复核](../evals/results/analysis/support-review-2026-11-14.json)、[累计费用](../evals/results/live-budget-2026-11-14.json)。
+
+[本轮验证摘要](../evals/results/grounding-validation-2026-11-14.json)：当前完整门禁、专项快答回归及 8 项评测器测试全部通过；保留修复前失败记录及源文件摘要。

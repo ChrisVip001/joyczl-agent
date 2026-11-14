@@ -1,0 +1,35 @@
+{
+  "capturedOn": "2026-11-14",
+  "gitRevision": "fa429485341acb9c35f8fcfd4ca1df32d57b3f9f",
+  "uncommittedChanges": true,
+  "scope": "Shared grounding instructions for full/delegated and quick replies. Custom SOUL.md preserved and no additional per-turn provider call. Instructions are not a deterministic fact or promise verifier.",
+  "checks": {
+    "justCheckExitCode": 0,
+    "rustTestsPassed": 937,
+    "rustTestsFailed": 0,
+    "ignoredIncludingDocTests": 2,
+    "typeScriptTestsPassed": 113,
+    "deterministicPassed": 70,
+    "replayPassed": 5,
+    "workspaceClippyExitCode": 0,
+    "quickContextRegressionPassed": 1,
+    "exampleTestsPassed": 8
+  },
+  "liveCases": {
+    "supportStructuralPassed": 3,
+    "supportQuality": "Coding-assistant review retains unsupported scene details and contradictory availability wording. No independent quality score.",
+    "twoTurnLiteralContinuityPassed": 1
+  },
+  "sourceSha256": {
+    "joy-rs/joyczl-app-server/src/turn/prompt.rs": "5a0d8819cf57e8c5dae9511d644cdfa54aa12028dbf50de70621919c857f33f9",
+    "joy-rs/joyczl-app-server/src/turn/triage.rs": "9da4fac8ec540a9b3740d4008dc2b8db8ff3fc369768a4fdd527d725d64400ae",
+    "joy-rs/joyczl-app-server/src/turn/tests.rs": "260380bdc27780ff491818b6448aba3b935826a7b3ddddd03dde45bdec14e8ef",
+    "joy-rs/joyczl-eval/examples/live_reliability/cases.rs": "ad255d1c0f2d2448bb07dc7b593474ba189a9ee19241928bcf99677bc83b63e6",
+    "evals/judge/quality.jsonl": "21a1fdee4081a4ea7dde6966cd75e709d55b61f52d97d13487885a58dd668d72",
+    "evals/results/deepseek-flash-2026-11-14-support-grounded.json": "6c892f199da12ace85906842f0d7554ede4f0b74eedbf246781917709743a5b1",
+    "evals/results/deepseek-flash-2026-11-14-grounded-continuity.json": "f91c8f6fc2e012a078eecca5dcff1f108f406e1b56f0a31bbd23f05ebab34bb4",
+    "evals/results/analysis/support-review-2026-11-14.json": "eb61a50923f9610634b11df2f2d99c965a00d245f6cbf24d0bf58194a6693157"
+  },
+  "checkLogSha256": "5edc238a568bff7bdbd5e9ec7f4698ae0bb194f4e4780db6dea835a990520a05",
+  "regressionBeforeLogSha256": "30a26148bfcf9c9896182e27dbfe1b9c15675fa69ddc99abcd831c534547635a"
+}

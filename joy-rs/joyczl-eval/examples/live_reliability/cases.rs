@@ -193,6 +193,10 @@ mod tests {
                 .system_text()
                 .unwrap_or_default()
                 .contains("No tools are available")));
+            assert!(mock.received.lock().unwrap().iter().any(|request| request
+                .system_text()
+                .unwrap_or_default()
+                .contains("Current-message references are not remembered history.")));
             assert!(mock
                 .received
                 .lock()

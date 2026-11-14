@@ -156,3 +156,32 @@ have usage; neither estimate nor reservation is an invoice.
 [cumulative budget](../evals/results/live-budget-2026-11-14.json).
 
 [Current validation](../evals/results/support-validation-2026-11-14.json): eight example tests and the full gate rerun passed. The first hung WeChat worker is recorded; its 12 tests passed separately. No gateway source changed.
+
+## 2026-11-14 shared grounding follow-up
+
+Full/delegated and quick replies now reuse one short conversation rule set without rewriting
+user SOUL.md or adding provider calls. Quick-context regression still uses two requests and
+preserves the custom persona and relevant session history. The eight example tests also
+verify full-path instruction delivery; instructions are not a deterministic truth filter.
+
+Three new support samples after the change met the existing structural checks. Evidence
+review observed an explicit lack-of-records answer instead of claimed prior recall. However,
+the listening reply added unsupported evening/in-person details, and the relationship reply
+mixed a clear availability disclaimer with later anytime-access wording. These are retained
+quality gaps. The existing two-turn Chinese continuity case passed: supplied cat/presentation
+history remained usable without tools. It measures literal continuity, not multi-turn support.
+One sample per fixture cannot establish a general improvement or replace independent human
+review; the original failures and pending raw quality flags remain unchanged.
+
+The three-case call used six requests (estimate CNY 0.011720, reservation CNY 0.424632);
+continuity used four (estimate CNY 0.012084, reservation CNY 0.315140). Across **12 invocations:
+90 requests, 112,803 input / 20,172 output tokens, peak-rate estimate CNY 0.386982,
+reservations CNY 7.573676**, within the authorized CNY 10. All recorded requests have usage.
+Rates were rechecked against the official source on 2026-11-14. Estimates are not invoices.
+
+[Support follow-up](../evals/results/deepseek-flash-2026-11-14-support-grounded.json),
+[grounded continuity](../evals/results/deepseek-flash-2026-11-14-grounded-continuity.json),
+[source-hashed coding-assistant review](../evals/results/analysis/support-review-2026-11-14.json),
+[cumulative budget](../evals/results/live-budget-2026-11-14.json).
+
+[Current validation](../evals/results/grounding-validation-2026-11-14.json): the current full gate, quick-context regression and eight example tests passed; the failing pre-fix regression and source hashes are recorded.

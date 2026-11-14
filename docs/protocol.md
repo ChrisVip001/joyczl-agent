@@ -270,3 +270,7 @@ rejected. The old turn stays stopped. After review, send a new instruction using
 workspace; this route does not recover old permissions or workspace state. Human observations
 do not count as observed tool successes. Separate conversations and uncooperative external
 processes still have no global external-effect deduplication guarantee.
+
+### Explicit continuation after a stop
+
+`turn/interrupt` stops execution and does not automatically resume its checkpoint. A human may explicitly call `task/resume` for a known-outcome stopped checkpoint belonging to the latest task execution; authorization, activation and reopening commit atomically. Cancelled tasks, stale execution identities and unreconciled unknown tool outcomes remain blocked.

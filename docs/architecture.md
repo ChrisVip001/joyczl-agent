@@ -285,3 +285,11 @@ Tool-free quick replies retain the session's recent exchanges and at most six un
 ### Generated memory projections
 
 The background worker compares the rendered source fields of durable facts and historical episodes, rather than fact counts. Corrections and episode-only changes refresh generated views on the next worker check. Mirror-owned metadata is excluded from the comparison, and failed writes do not advance the cache. Existing memory projects without a configured model; only extraction needs one. Human-edited bundle pages retain their existing protection. The comparison reads the source rows; large-store performance has not been benchmarked.
+
+### Shared conversation grounding
+
+Full/delegated stable prefixes and quick-reply system prompts reuse one conversation rule set: recall needs supplied history or retrieved records; a current-message reference is not recalled history. Listen-only requests, emotional uncertainty and relationship boundaries are explicit, including no continuous-availability, exclusive-companionship or guaranteed-recall promises. User SOUL.md is not rewritten and no provider call is added. These are instructions, not a fact verifier or an output guarantee.
+
+### Task observation failures
+
+Task step and artifact observations are required execution evidence. A persistence failure still charges known round usage, then stops the task for attention before acceptance or repair model rounds. Partial records can be re-observed through existing step/path idempotency keys; this does not undo effects or automatically resume/complete the task. Optional timeline-event failures remain explicit in logs.

@@ -35,9 +35,9 @@ See [implementation tracking](harness-upgrade.md) and [protocol contracts](proto
 
 | Check | Result and interpretation |
 |---|---|
-| Latest full `just check` | Exit 0, 937 Rust tests passed, zero failures, zero Clippy warnings; includes the final memory lifecycle changes. |
+| Latest full `just check` | Exit 0, 939 Rust tests passed, zero failures, zero Clippy warnings; includes observation persistence and explicit stopped-task continuation fixes. |
 | Latest deterministic/replay evaluations | 70/70 and 5/5 observed passing; scripted behavior is not general live-model reliability. |
-| Key crates | State 89, memory 70 and app-server 226 passed within the final workspace run, including memory lifecycle and provenance. |
+| Key crates | State 89, memory 70, app-server 227 and evaluator 7 passed within the final workspace run. |
 | Clients | Zero schema drift, 113 frontend tests passed in final validation. |
 | Real process death | Five local-fixture cases observed passing: baseline, pre-dispatch, effect committed without reply, durable tool result, and admitted memory extraction. No tool replay observed. Unknown stops retained 15 known task tokens; baseline/result recovery retained 30. The memory case recovered the same two pending source rows, not a completed extraction. |
 | Four end-to-end suites | App-server, gateway and dashboard all reran successfully after the final memory changes, using local fixtures. |
@@ -50,9 +50,9 @@ The complete rerun finished with sufficient disk space. Retained evidence: [fina
 
 The authorized existing profile was **ds / DeepSeek / deepseek-flash**. This is a requested alias, not proof of a pinned internal backend revision.
 
-The empty-tool update passed the complete `just check` rerun: 937 Rust, 113 frontend, 70 deterministic and five replay tests, plus workspace Clippy; eight example tests passed separately. See the [current validation record](../evals/results/support-validation-2026-11-14.json). The first WeChat worker did not exit; its 12 tests passed independently and the full retry passed after stopping that worker. No gateway source changed. The four end-to-end and five recovery cases above belong to the earlier projection baseline and were not repeated for this change.
+The latest shared-grounding update passed the complete `just check` gate: 937 Rust, 113 frontend, 70 deterministic and five replay tests, plus workspace Clippy; eight example tests passed separately. See the [current validation record](../evals/results/grounding-validation-2026-11-14.json). An earlier run's WeChat worker did not exit; its 12 tests passed independently and the full retry passed after stopping that worker. No gateway source changed. The four end-to-end and five recovery cases above belong to the earlier projection baseline and were not repeated for this change.
 
-Ten invocations made 80 logical model requests: 107,645 reported input tokens and 18,486 output tokens. The historical peak-price estimate is **CNY 0.363178**; cumulative conservative reservations were **CNY 6.833904**, within the authorized **CNY 10**. Reservations are not actual spend, and the estimate is not invoice reconciliation.
+Twelve invocations made 90 logical model requests: 112,803 reported input tokens and 20,172 output tokens. The historical peak-price estimate is **CNY 0.386982**; cumulative conservative reservations were **CNY 7.573676**, within the authorized **CNY 10**. Reservations are not actual spend, and the estimate is not invoice reconciliation.
 
 Small synthetic samples covered continuity, Chinese continuity, file delivery, uncertainty stops, expired memory, and waiting/input/chat/delivery. Retained failures include an incorrect status assertion, an insufficient step limit, and a draft counted as duplicate final delivery. The last issue was resolved by an offline review of retained receipts, not an additional successful model run.
 
@@ -61,7 +61,7 @@ One new live structural extraction sample passed nickname-only durable retention
 
 Three new research invocations are retained. The first positive run passed. An unavailable-source run using generic file writes failed: task acceptance kept `needs_attention`, but the model still created a partial final file. A constrained publication adapter then passed both cases: independent reads, exact citations and typed facts gate the final write; a missing source leaves no final artifact. The original failure remains. This MCP domain adapter lives in the evaluator, not the production generic file-tool contract; missing-source explanation quality was not scored. See the [research report](public-source-research-2026-11-14.md) and [guarded raw cases](../evals/results/deepseek-flash-2026-11-14-research-guarded.json).
 
-New Chinese support replies have a [source-hashed evidence review](../evals/results/analysis/support-review-2026-11-14.json). The DSML failure is retained; empty-tool capability notes and the format metric were corrected. A structurally valid follow-up still makes a problematic memory claim, so support quality improvement is not established.
+New Chinese support replies have a [source-hashed evidence review](../evals/results/analysis/support-review-2026-11-14.json). The DSML failure is retained; empty-tool capability notes and the format metric were corrected. The earlier structurally valid follow-up still makes a problematic memory claim. New samples with shared grounding acknowledge missing history and retain literal continuity, but unsupported scene details and availability wording remain; overall support quality is not established.
 
 ## Remaining work
 
@@ -71,7 +71,7 @@ New Chinese support replies have a [source-hashed evidence review](../evals/resu
 | P1 | Domain evidence and remote read-back | Define and validate one concrete transaction's authentication, source, acceptance, read-back and reconciliation contract. |
 | P1 | Service idempotency/event adapters | Integrate supported idempotency keys and authenticated events/receipts for concrete services; no universal exactly-once claim. |
 | P1 | Real long-running delivery workflows | Measure research/citation quality, long waits, shutdowns, cross-day recovery, authorization changes and notification failures. Current coverage is mainly synthetic/offline. |
-| P1 | Relationship/support quality | Three live single-turn replies and one follow-up exposed format, availability and memory-claim issues. Independent scoring, multi-turn samples and human blind review remain outstanding. |
+| P2 | Basic everyday conversation | Retain natural communication, grounded recall and honest commitments as supporting capabilities; complex-task execution, recovery and delivery take priority. |
 | P1 | Memory quality/history governance | Validate classification, address paraphrase resurrection, historical unbounded emotions, pre-migration deletions/claims, and episode/backup redaction. Confidence is not calibrated. |
 | P2 | Resource scopes | Add concrete path/resource conflict handling; separate homes, human edits and remote concurrency need their own contracts. |
 | P2 | Models and external harnesses | Broaden live compatibility/probing and API capabilities; no same-tool/same-budget comparison with Codex, Claude Code, pi or another external harness has been performed. |
@@ -79,10 +79,16 @@ New Chinese support replies have a [source-hashed evidence review](../evals/resu
 
 Against the original phases: **A implementation and final regression are closed, with release review still pending; B has synthetic delivery and a completed fixed-source live research pilot, but lacks long research and external transaction validation; C has adaptation/memory foundations but lacks quality validation and external-backend comparison.**
 
-Final validation, the fixed-source research pilot and archival are complete. A [review/recovery guide](harness-release-review.md) is available; the user has committed module splitting, while the current follow-up fixes remain uncommitted. Chinese support quality, long research and concrete transaction read-back remain outstanding. External harness comparison should use a stable common task/tool contract. Rust, SQLite, local-first state and the single protocol were retained. Distributed scheduling, large multi-agent systems and wholesale pluginization were intentionally deferred in the original report.
+Final validation, the fixed-source research pilot and archival are complete. A [review/recovery guide](harness-release-review.md) is available; the user has committed module splitting, while the current follow-up fixes remain uncommitted. Next prioritize multi-step task execution, interrupted/resumed delivery, longer research and concrete transaction read-back. Everyday conversation remains a supporting capability. External harness comparison should use a stable common task/tool contract. Rust, SQLite, local-first state and the single protocol were retained. Distributed scheduling, large multi-agent systems and wholesale pluginization were intentionally deferred in the original report.
 
 ## Tool and attribution limits
 
 This report uses implementation records, retained evaluation files and observed tool results. Other working-tree changes are not automatically attributed to this work.
 
 A CodeGraph query did not execute because automatic approval review hit an account usage limit; the tool explicitly stated this was not a safety determination. The tool subsequently became unavailable. This is separate from the DeepSeek evaluation cost allowance.
+
+## Long-task reliability follow-up
+
+Complex task delivery is the product priority; everyday emotional conversation is a supporting capability. Required step or artifact persistence failures now preserve known spend and stop before acceptance or another model round. Evidence can be recorded idempotently after storage repair without repeating effects. Explicit human continuation of a stopped checkpoint now works; cancellation, stale-run and unknown-effect guards remain in place.
+
+The final full gate passed: 939 Rust, 113 frontend, 70 deterministic and five replay tests, with zero Clippy warnings. The local scripted long-task benchmark changed from 8/11 (recovery 0/3) to 11/11 (recovery 3/3), after adding explicit human resume to fixtures and fixing stopped-checkpoint eligibility. Original acceptance assertions and the initial failure record are preserved; this is not a real-model capability improvement measurement. Five real SIGKILL scenarios also passed, separately from the benchmark’s in-process runtime recreation. No paid model calls were added. See the [validation and source hashes](../evals/results/task-reliability-validation-2026-11-14.json). Longer real research, cross-day transactions and independent quality review remain pending.

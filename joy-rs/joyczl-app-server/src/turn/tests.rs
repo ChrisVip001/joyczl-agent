@@ -2011,6 +2011,13 @@ async fn quick_chat_keeps_recent_context_and_personality() {
         .as_deref()
         .unwrap()
         .contains("patient and warm"));
+    let system = quick.system.as_deref().unwrap();
+    assert!(system.contains("Current-message references are not remembered history."));
+    assert!(system.contains("Do not promise continuous availability or guaranteed future recall."));
+    assert_eq!(
+        std::fs::read_to_string(server.settings().home.join("SOUL.md")).unwrap(),
+        "Be patient and warm."
+    );
     assert_eq!(quick.messages[0].text(), "My cat is Momo.");
     assert_eq!(quick.messages[1].text(), "How is Momo?");
     assert!(!quick
