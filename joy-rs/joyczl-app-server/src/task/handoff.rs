@@ -41,7 +41,7 @@ pub(crate) async fn load(
         .await
         .map_err(failed)?
         .ok_or_else(|| failed("task is missing"))?;
-    crate::task_contract::validate(&task).map_err(failed)?;
+    crate::task::contract::validate(&task).map_err(failed)?;
     let acceptance: Value = serde_json::from_str(&task.acceptance_json).map_err(failed)?;
     let budget: Value = serde_json::from_str(&task.budget_json).map_err(failed)?;
     let previous_checks: Value = serde_json::from_str(&task.checks_json).map_err(failed)?;
@@ -77,7 +77,7 @@ pub(crate) async fn load(
         Ok(json!({"receiptId":receipt.id,"runId":receipt.run_id,"roundId":receipt.round_id,
             "measuredAt":receipt.measured_at,"previousReceiptId":receipt.previous_id,"files":files}))
     }).transpose()?;
-    let input = crate::task_inputs::prompt(server, &task.id, &run.id)
+    let input = crate::task::inputs::prompt(server, &task.id, &run.id)
         .await
         .map_err(failed)?;
     let handoff = json!({

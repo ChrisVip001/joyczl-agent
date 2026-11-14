@@ -36,15 +36,17 @@ async fn fixture() -> (tempfile::TempDir, tempfile::TempDir, Server) {
     server
         .checkpoints
         .save_with_operations(
-            "unknown-old",
-            "chat",
-            "Perform the authorized action",
-            &serde_json::to_string(&messages).unwrap(),
-            1,
-            "{}",
-            None,
-            Some("old-round"),
-            Some(1),
+            joyczl_state::checkpoints::CheckpointWrite {
+                turn_id: "unknown-old",
+                session_id: "chat",
+                user_message: "Perform the authorized action",
+                messages_json: &serde_json::to_string(&messages).unwrap(),
+                iterations: 1,
+                usage_json: "{}",
+                run_id: None,
+                round_id: Some("old-round"),
+                round_no: Some(1),
+            },
             &[joyczl_state::operations::OperationSnapshot {
                 tool_use_id: "external-call".into(),
                 tool: "external_write".into(),
@@ -172,7 +174,7 @@ async fn chat_reconciliation_is_scoped_atomic_idempotent_and_never_restarts() {
     assert_eq!(cp.status, "suspended");
     assert!(cp.messages_json.contains("Human reconciliation:"));
     assert!(server.active_turns(Some("chat")).is_empty());
-    let context = crate::turn_operations::context(&server, "chat")
+    let context = crate::turn::operations::context(&server, "chat")
         .await
         .unwrap();
     assert!(!context.unresolved);
@@ -222,7 +224,7 @@ async fn legacy_chat_intents_are_recovered_without_restarting_or_broadening_scop
         .await
         .unwrap();
     assert!(
-        crate::turn_operations::context(&server, "chat")
+        crate::turn::operations::context(&server, "chat")
             .await
             .unwrap()
             .unresolved
@@ -254,7 +256,7 @@ async fn unclaimed_open_chat_uncertainty_is_not_a_startup_bypass() {
         .await
         .unwrap();
     assert!(
-        crate::turn_operations::context(&server, "chat")
+        crate::turn::operations::context(&server, "chat")
             .await
             .unwrap()
             .unresolved

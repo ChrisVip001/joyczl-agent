@@ -82,5 +82,5 @@ pub(crate) fn arm(server: Server, sink: EventSink, wait: JobWait) {
 }
 
 #[cfg(test)]
-#[path = "task_waits_tests.rs"]
-mod tests;
+#[path = "waits_tests.rs"]
+mod waits_tests;

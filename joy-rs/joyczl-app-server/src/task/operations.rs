@@ -33,7 +33,7 @@ async fn inspect_inner(
         .await
         .map_err(invalid)?
         .ok_or_else(|| invalid("Task is unavailable"))?;
-    let checkpoint = crate::task_recovery::checkpoint(server, &task).await?;
+    let checkpoint = crate::task::recovery::checkpoint(server, &task).await?;
     if let Some(cp) = checkpoint.as_ref().filter(|cp| cp.status == "suspended") {
         if matches!(
             task.status,
@@ -42,7 +42,7 @@ async fn inspect_inner(
         {
             let messages: Vec<Message> =
                 serde_json::from_str(&cp.messages_json).map_err(invalid)?;
-            let pending = crate::task_recovery::pending_tools(&messages)?;
+            let pending = crate::task::recovery::pending_tools(&messages)?;
             if !pending.is_empty() {
                 let operations: Vec<_> = pending
                     .into_iter()
@@ -120,7 +120,7 @@ pub(crate) fn reconciled_messages(
         if joyczl_state::ledger::digest_of(cp.messages_json.as_bytes()) != digest {
             return Err(invalid("Checkpoint changed; inspect it again"));
         }
-        let pending = crate::task_recovery::pending_tools(&messages)?;
+        let pending = crate::task::recovery::pending_tools(&messages)?;
         let (tool, input) = pending
             .get(operation.tool_use_id.as_str())
             .ok_or_else(|| invalid("Checkpoint has no unresolved call for this operation"))?;

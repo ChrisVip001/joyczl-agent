@@ -63,15 +63,17 @@ async fn fixture() -> (tempfile::TempDir, Server, Arc<Mock>) {
     server
         .checkpoints
         .save_with_operations(
-            "turn",
-            "work",
-            "Authorized transaction",
-            &serde_json::to_string(&messages).unwrap(),
-            0,
-            "{}",
-            Some("run"),
-            Some("round"),
-            Some(1),
+            joyczl_state::checkpoints::CheckpointWrite {
+                turn_id: "turn",
+                session_id: "work",
+                user_message: "Authorized transaction",
+                messages_json: &serde_json::to_string(&messages).unwrap(),
+                iterations: 0,
+                usage_json: "{}",
+                run_id: Some("run"),
+                round_id: Some("round"),
+                round_no: Some(1),
+            },
             &[joyczl_state::operations::OperationSnapshot {
                 tool_use_id: "external-call".into(),
                 tool: "external_write".into(),
@@ -98,7 +100,7 @@ async fn fixture() -> (tempfile::TempDir, Server, Arc<Mock>) {
 async fn a_human_receipt_resolves_only_its_operation_and_requires_explicit_continue() {
     let (home, server, model) = fixture().await;
     std::fs::write(home.path().join("external-receipt"), "tx-42: one effect").unwrap();
-    let original = crate::task_operations::inspect(&server, "task")
+    let original = crate::task::operations::inspect(&server, "task")
         .await
         .unwrap();
     assert_eq!(original.operations.len(), 1);
@@ -113,21 +115,21 @@ async fn a_human_receipt_resolves_only_its_operation_and_requires_explicit_conti
     let (sink, _receiver) = EventSink::channel();
     let mut stale = params.clone();
     stale.checkpoint_digest = "stale".into();
-    assert!(crate::task_operations::reconcile(&server, &sink, stale)
+    assert!(crate::task::operations::reconcile(&server, &sink, stale)
         .await
         .is_err());
     let _actor = server.begin_turn("turn", "work").unwrap();
     assert!(
-        crate::task_operations::reconcile(&server, &sink, params.clone())
+        crate::task::operations::reconcile(&server, &sink, params.clone())
             .await
             .is_err()
     );
     server.finish_turn("turn");
-    let settled = crate::task_operations::reconcile(&server, &sink, params.clone())
+    let settled = crate::task::operations::reconcile(&server, &sink, params.clone())
         .await
         .unwrap();
     assert_eq!(settled.operations[0].status, "reconciled_success");
-    crate::task_operations::reconcile(&server, &sink, params)
+    crate::task::operations::reconcile(&server, &sink, params)
         .await
         .unwrap();
     assert!(model.received.lock().unwrap().is_empty());
@@ -136,7 +138,7 @@ async fn a_human_receipt_resolves_only_its_operation_and_requires_explicit_conti
         joyczl_state::TaskStatus::NeedsAttention
     );
     let cp = server.checkpoints.get("turn").await.unwrap().unwrap();
-    crate::task_recovery::require_known(&cp).unwrap();
+    crate::task::recovery::require_known(&cp).unwrap();
     assert!(cp.messages_json.contains("Human reconciliation:"));
     crate::task::resume(
         &server,
@@ -184,7 +186,7 @@ async fn stopped_legacy_checkpoints_recover_only_labelled_operation_metadata() {
         .await
         .unwrap();
     let before = server.checkpoints.get("turn").await.unwrap().unwrap();
-    let view = crate::task_operations::inspect(&server, "task")
+    let view = crate::task::operations::inspect(&server, "task")
         .await
         .unwrap();
     assert_eq!(view.operations.len(), 1);
@@ -195,7 +197,7 @@ async fn stopped_legacy_checkpoints_recover_only_labelled_operation_metadata() {
     assert_eq!(after.status, "suspended");
     assert!(model.received.lock().unwrap().is_empty());
     let (sink, _receiver) = EventSink::channel();
-    crate::task_operations::reconcile(
+    crate::task::operations::reconcile(
         &server,
         &sink,
         joyczl_protocol::TaskReconcileParams {

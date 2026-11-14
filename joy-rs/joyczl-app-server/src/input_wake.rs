@@ -83,7 +83,7 @@ async fn resume_input(
     {
         Ok(messages) => messages,
         Err(error) => {
-            crate::task_contract::stop_recovery(
+            crate::task::contract::stop_recovery(
                 server,
                 sink,
                 &row,
@@ -93,8 +93,8 @@ async fn resume_input(
             return false;
         }
     };
-    if let Err(error) = crate::task_recovery::require_known_messages(&messages) {
-        crate::task_contract::stop_recovery(server, sink, &row, &error.message).await;
+    if let Err(error) = crate::task::recovery::require_known_messages(&messages) {
+        crate::task::contract::stop_recovery(server, sink, &row, &error.message).await;
         return false;
     }
     if condition.condition_id != wait.condition_id
@@ -103,10 +103,10 @@ async fn resume_input(
     {
         return false;
     }
-    let note = match crate::task_inputs::input_message(condition) {
+    let note = match crate::task::inputs::input_message(condition) {
         Ok(note) => note,
         Err(error) => {
-            crate::task_contract::stop_recovery(
+            crate::task::contract::stop_recovery(
                 server,
                 sink,
                 &row,

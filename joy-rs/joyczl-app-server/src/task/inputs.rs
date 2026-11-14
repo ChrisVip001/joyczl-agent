@@ -151,7 +151,7 @@ pub(crate) async fn prepare_manual_resume(
     row: &mut joyczl_state::CheckpointRow,
 ) -> anyhow::Result<()> {
     let mut messages: Vec<joyczl_provider::Message> = serde_json::from_str(&row.messages_json)?;
-    crate::task_recovery::require_known_messages(&messages)
+    crate::task::recovery::require_known_messages(&messages)
         .map_err(|error| anyhow::anyhow!(error.message))?;
     let input = if let Some(run_id) = &row.run_id {
         let run = server

@@ -295,17 +295,17 @@ async fn a_received_input_survives_restart_and_resumes_the_original_draft() {
     let usage = r#"{"input_tokens":10,"output_tokens":5}"#;
     old_server
         .checkpoints
-        .save_numbered_round(
-            "restart-turn",
-            "restart-work",
-            "Prepare the report",
-            &messages,
-            1,
-            usage,
-            Some("restart-run"),
-            Some("restart-round"),
-            Some(1),
-        )
+        .save_numbered_round(joyczl_state::checkpoints::CheckpointWrite {
+            turn_id: "restart-turn",
+            session_id: "restart-work",
+            user_message: "Prepare the report",
+            messages_json: &messages,
+            iterations: 1,
+            usage_json: usage,
+            run_id: Some("restart-run"),
+            round_id: Some("restart-round"),
+            round_no: Some(1),
+        })
         .await
         .unwrap();
     old_server

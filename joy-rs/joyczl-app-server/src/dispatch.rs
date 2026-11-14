@@ -65,11 +65,11 @@ async fn dispatch(
         // ---- Memory ----------------------------------------------------------
         methods::TURN_OPERATIONS => {
             let params: joyczl_protocol::TurnOperationsParams = parse(params, method)?;
-            respond(crate::turn_operations::inspect(server, &params).await?)
+            respond(crate::turn::operations::inspect(server, &params).await?)
         }
         methods::TURN_RECONCILE => {
             let params: joyczl_protocol::TurnReconcileParams = parse(params, method)?;
-            respond(crate::turn_operations::reconcile(server, params).await?)
+            respond(crate::turn::operations::reconcile(server, params).await?)
         }
         methods::MEMORY_SEARCH => {
             let p: MemorySearchParams = parse(params, method)?;
@@ -574,19 +574,19 @@ async fn dispatch(
         // ---- Long tasks: every branch is human-only (the model has no task tool) ----
         methods::TASK_OPERATIONS => {
             let p: TaskGetParams = parse(params, method)?;
-            respond(crate::task_operations::inspect(server, &p.task_id).await?)
+            respond(crate::task::operations::inspect(server, &p.task_id).await?)
         }
         methods::TASK_RECONCILE => {
             let p: joyczl_protocol::TaskReconcileParams = parse(params, method)?;
-            respond(crate::task_operations::reconcile(server, sink, p).await?)
+            respond(crate::task::operations::reconcile(server, sink, p).await?)
         }
         methods::TASK_WAIT => {
             let p: joyczl_protocol::TaskWaitParams = parse(params, method)?;
-            respond(crate::task_inputs::declare(server, sink, p).await?)
+            respond(crate::task::inputs::declare(server, sink, p).await?)
         }
         methods::TASK_SIGNAL => {
             let p: joyczl_protocol::TaskSignalParams = parse(params, method)?;
-            respond(crate::task_inputs::signal(server, p).await?)
+            respond(crate::task::inputs::signal(server, p).await?)
         }
         methods::TASK_START => {
             let p: joyczl_protocol::TaskStartParams = parse(params, method)?;

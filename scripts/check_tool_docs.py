@@ -14,7 +14,7 @@ The same number is scattered across three places and all three have to hold:
   3. **`README.md` / `README.zh.md`** — the table aimed at users.
 
 The difference between a gated tool (`run_command` and friends) and an always-on one can only
-be read out of `app-server/src/lib.rs`: they appear in `tools.register(joyczl_tools::…::fn(…))`,
+be read out of `app-server/src/server/*.rs`: they appear in `tools.register(joyczl_tools::…::fn(…))`,
 and `todo_write` is registered the same way yet is always on. So `ALWAYS_EXTRA` lists it
 separately and says why — writing that one fact down beats parsing the `if` conditions.
 
@@ -31,7 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS_TESTS = ROOT / "joy-rs" / "joyczl-tools" / "src" / "tools_tests.rs"
-APP_SERVER = ROOT / "joy-rs" / "joyczl-app-server" / "src" / "lib.rs"
+APP_SERVER = ROOT / "joy-rs" / "joyczl-app-server" / "src"
 DOC = ROOT / "docs" / "internals" / "06-tools.md"
 READMES = (ROOT / "README.md", ROOT / "README.zh.md")
 
@@ -39,7 +39,7 @@ TEST_NAME = "default_registry_has_the_expected_tools"
 
 # What `app-server` registers unconditionally but `build_default()` does not hold.
 # `todo_write` is always on: it touches neither permissions nor storage (see the
-# "present by default" line in lib.rs).
+# "present by default" line in server_runtime.rs).
 ALWAYS_EXTRA = {"todo_write"}
 
 # Below this count the extraction has stopped working (the code was rewritten); that has to be
@@ -97,7 +97,12 @@ def build_default_names() -> list[str]:
 
 def app_server_names() -> set[str]:
     """What `app-server` registers itself: `todo_write` is always on, the rest are gated."""
-    return set(GATED_RE.findall(APP_SERVER.read_text(encoding="utf-8")))
+    # Every module under server/ — registrations live wherever the server is assembled, and a
+    # hard-coded pair of file names meant this check broke the day those files moved.
+    text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((APP_SERVER / "server").glob("*.rs"))
+    )
+    return set(GATED_RE.findall(text))
 
 
 def readme_table(text: str, name: str) -> str:
@@ -128,7 +133,7 @@ def main() -> int:
     if len(always) < MIN_ALWAYS or len(gated) < MIN_GATED:
         fail(
             f"the extraction looks wrong: {len(always)} always on, {len(gated)} gated"
-            " — check how lib.rs registers them; do not let this check spin idle"
+            " — check how app-server registers them; do not let this check spin idle"
         )
 
     doc = DOC.read_text(encoding="utf-8")

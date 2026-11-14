@@ -1,5 +1,14 @@
 //! Shared task driver for fresh turns and recovered checkpoints.
-use super::*;
+use super::history::{judge_transcript, notify_goal};
+use super::plan::revise_plan;
+use super::{
+    account_round, budget_overrun, checkpoint_outlet, fail_turn, full_turn, observe_round,
+    FullTurn, RoundCtx, TaskDecision, TurnFrame,
+};
+use crate::Server;
+use joyczl_protocol::ErrorObject;
+use joyczl_provider::Resolved;
+use joyczl_state::TaskRow;
 
 pub(crate) struct DriveTask<'a> {
     pub server: &'a Server,
@@ -41,13 +50,9 @@ pub(crate) async fn drive_task(
         session_id,
         turn_id,
         sink,
-        interrupt,
         turn_cwd,
-        route_reason: turn_route,
-        checkpoint: _,
-        steering,
         ..
-    } = frame;
+    } = frame.clone();
     let (session_id, turn_id) = (session_id.to_string(), turn_id.to_string());
     let task_id = task.as_ref().map(|task| task.id.clone());
     let goal_condition = task.as_ref().and_then(|task| task.goal_condition.clone());
@@ -279,44 +284,7 @@ pub(crate) async fn drive_task(
             round_no += 1;
             round_started = std::time::Instant::now();
             wall_offset_ms = 0;
-            // P1: a failed round is the one moment a plan may change. Capped (initial + one
-            // revision): a plan rewritten after every failure is thrash, not progress.
-            let plan_now = plan.clone();
-            if let (Some(id), Some(current)) = (task_id.as_deref(), plan_now) {
-                if server.settings().plan_enabled
-                    && current.version < joyczl_agent::plan::MAX_VERSIONS
-                {
-                    let labels: Vec<String> = acceptance.iter().map(|item| item.label()).collect();
-                    let title = task
-                        .as_ref()
-                        .map(|row| row.title.as_str())
-                        .unwrap_or("this task");
-                    let goal = task.as_ref().and_then(|row| row.goal_condition.as_deref());
-                    match joyczl_agent::plan::make(
-                        resolved,
-                        title,
-                        goal,
-                        &labels,
-                        Some(&reason),
-                        current.version + 1,
-                    )
-                    .await
-                    {
-                        Ok(revised) => {
-                            match joyczl_agent::plan::record(&server.steps, id, &revised).await {
-                                Ok(()) => {
-                                    eprintln!("(joy) task {id} moved to plan v{}", revised.version);
-                                    plan = Some(revised);
-                                }
-                                Err(why) => eprintln!("(joy) revised plan not committed; keeping the previous version: {why}"),
-                            }
-                        }
-                        Err(why) => eprintln!(
-                            "(joy) re-planning failed (continuing with the old plan): {why}"
-                        ),
-                    }
-                }
-            }
+            plan = revise_plan(server, resolved, task.as_ref(), &acceptance, plan, &reason).await;
             // Feed the measurement back — not the judge's opinion, and not "try harder".
             let mut correction = format!(
 "Acceptance did not pass: {reason}\nKeep working until it is true (the file really written, the change really in place); do not merely claim it is done."
@@ -331,13 +299,6 @@ pub(crate) async fn drive_task(
                 &correction,
                 Vec::new(),
                 TurnFrame {
-                    session_id: &session_id,
-                    turn_id: &turn_id,
-                    sink,
-                    interrupt: interrupt.clone(),
-                    turn_cwd: turn_cwd.clone(),
-                    route_reason: turn_route.clone(),
-                    steering: steering.clone(),
                     resume: None,
                     checkpoint: Some(checkpoint_outlet(
                         &server.checkpoints,
@@ -348,6 +309,7 @@ pub(crate) async fn drive_task(
                         run_id.as_deref(),
                         round_no,
                     )),
+                    ..frame.clone()
                 },
                 None,
             )
@@ -486,13 +448,6 @@ pub(crate) async fn drive_task(
             &continuation,
             Vec::new(),
             TurnFrame {
-                session_id: &session_id,
-                turn_id: &turn_id,
-                sink,
-                interrupt: interrupt.clone(),
-                turn_cwd: turn_cwd.clone(),
-                route_reason: turn_route.clone(),
-                steering: steering.clone(),
                 resume: None,
                 checkpoint: Some(checkpoint_outlet(
                     &server.checkpoints,
@@ -503,6 +458,7 @@ pub(crate) async fn drive_task(
                     run_id.as_deref(),
                     round_no,
                 )),
+                ..frame.clone()
             },
             None,
         )

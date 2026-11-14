@@ -38,12 +38,12 @@ pub async fn reconcile(server: &Server, sink: &EventSink) {
     let now = chrono::Utc::now().naive_utc();
     for row in rows {
         if row.run_id.is_some() && row.round_id.is_some() {
-            let charged = match crate::task_contract::checkpoint_usage(&row.usage_json) {
-                Ok(usage) => crate::task_contract::charge_checkpoint(server, &row, usage).await,
+            let charged = match crate::task::contract::checkpoint_usage(&row.usage_json) {
+                Ok(usage) => crate::task::contract::charge_checkpoint(server, &row, usage).await,
                 Err(error) => Err(error),
             };
             if let Err(error) = charged {
-                crate::task_contract::stop_recovery(
+                crate::task::contract::stop_recovery(
                     server,
                     sink,
                     &row,
@@ -134,7 +134,7 @@ pub(crate) async fn resume_waiting(
         Ok(messages) => messages,
         Err(_) => return false,
     };
-    if crate::task_recovery::require_known_messages(&messages).is_err() {
+    if crate::task::recovery::require_known_messages(&messages).is_err() {
         let reason = "Waiting checkpoint has an unknown tool intent; reconcile before resuming";
         let _ = server.tasks.needs_attention(&wait.task_id, reason).await;
         let _ = server.checkpoints.finish(&wait.turn_id, "suspended").await;
@@ -180,8 +180,8 @@ pub(crate) async fn resume_turn(
         let _ = server.checkpoints.finish(&row.turn_id, "abandoned").await;
         return false;
     };
-    if crate::task_recovery::require_known_messages(&messages).is_err() {
-        crate::task_contract::stop_recovery(
+    if crate::task::recovery::require_known_messages(&messages).is_err() {
+        crate::task::contract::stop_recovery(
             server,
             sink,
             &row,
@@ -190,10 +190,10 @@ pub(crate) async fn resume_turn(
         .await;
         return false;
     }
-    let mut usage: Usage = match crate::task_contract::checkpoint_usage(&row.usage_json) {
+    let mut usage: Usage = match crate::task::contract::checkpoint_usage(&row.usage_json) {
         Ok(usage) => usage,
         Err(error) => {
-            crate::task_contract::stop_recovery(server, sink, &row, &error).await;
+            crate::task::contract::stop_recovery(server, sink, &row, &error).await;
             return false;
         }
     };
@@ -202,9 +202,9 @@ pub(crate) async fn resume_turn(
         None => {
             if row.round_id.is_some() {
                 if let Err(error) =
-                    crate::task_contract::charge_checkpoint(server, &row, usage).await
+                    crate::task::contract::charge_checkpoint(server, &row, usage).await
                 {
-                    crate::task_contract::stop_recovery(
+                    crate::task::contract::stop_recovery(
                         server,
                         sink,
                         &row,
@@ -373,9 +373,9 @@ pub(crate) async fn resume_turn(
         }
     }
     if let Some(task) = &task {
-        let admission = match crate::task_contract::charge_checkpoint(server, &row, usage).await {
+        let admission = match crate::task::contract::charge_checkpoint(server, &row, usage).await {
             Ok(()) => match server.tasks.get(&task.id).await {
-                Ok(Some(current)) => crate::task_contract::admit(server, sink, &current)
+                Ok(Some(current)) => crate::task::contract::admit(server, sink, &current)
                     .await
                     .map(|_| ())
                     .map_err(|error| error.message),
@@ -384,7 +384,7 @@ pub(crate) async fn resume_turn(
             Err(error) => Err(format!("Checkpoint usage could not be charged: {error}")),
         };
         if let Err(reason) = admission {
-            crate::task_contract::stop_recovery(server, sink, &row, &reason).await;
+            crate::task::contract::stop_recovery(server, sink, &row, &reason).await;
             return false;
         }
     }
@@ -458,7 +458,7 @@ pub(crate) async fn resume_turn(
                 account.wall_ms
             }
             Err(e) => {
-                crate::task_contract::stop_recovery(
+                crate::task::contract::stop_recovery(
                     server,
                     sink,
                     &row,
@@ -474,7 +474,7 @@ pub(crate) async fn resume_turn(
         Some(task) => match joyczl_agent::plan::restore(&server.steps, &task.id).await {
             Ok(plan) => plan,
             Err(error) => {
-                crate::task_contract::stop_recovery(
+                crate::task::contract::stop_recovery(
                     server,
                     sink,
                     &row,

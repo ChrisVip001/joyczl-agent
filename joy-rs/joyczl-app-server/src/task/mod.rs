@@ -73,7 +73,7 @@ pub(crate) async fn view(server: &Server, row: &TaskRow) -> AgentTaskView {
             .get(&row.id)
             .await
         {
-            Ok(condition) => condition.map(crate::task_inputs::view),
+            Ok(condition) => condition.map(crate::task::inputs::view),
             Err(error) => {
                 eprintln!("(joy) task input view unavailable: {error}");
                 None
@@ -267,7 +267,7 @@ pub(crate) async fn start(
         .await
         .map_err(|e| invalid(format!("Task was not queued: {e}")))?;
     notify(sink, &row, Some("queued for independent execution"));
-    crate::task_dispatch::kick(server.clone(), sink.clone());
+    crate::task::dispatch::kick(server.clone(), sink.clone());
     Ok(TaskEnvelope {
         task: view(server, &row).await,
     })
@@ -430,7 +430,7 @@ pub(crate) async fn resume(
         ) {
             break;
         }
-        let checkpoint = crate::task_recovery::checkpoint(server, &row).await?;
+        let checkpoint = crate::task::recovery::checkpoint(server, &row).await?;
         let turn_id = checkpoint
             .as_ref()
             .map(|cp| cp.turn_id.as_str())
@@ -476,7 +476,7 @@ async fn resume_ready(
     {
         if let Ok(Some(wait)) = waits.get(&row.id).await {
             if wait.state == "waiting" {
-                crate::task_waits::arm(server.clone(), sink.clone(), wait);
+                crate::task::waits::arm(server.clone(), sink.clone(), wait);
                 return Ok(TaskEnvelope {
                     task: view(server, &row).await,
                 });
@@ -521,15 +521,15 @@ async fn resume_ready(
     if unstarted {
         let row = reload(server, &row.id).await?;
         notify(sink, &row, Some("queued task resumed by the user"));
-        crate::task_dispatch::kick(server.clone(), sink.clone());
+        crate::task::dispatch::kick(server.clone(), sink.clone());
         return Ok(TaskEnvelope {
             task: view(server, &row).await,
         });
     }
-    let mut checkpoint = crate::task_recovery::checkpoint(server, &row).await?;
+    let mut checkpoint = crate::task::recovery::checkpoint(server, &row).await?;
     if let Some(checkpoint) = &mut checkpoint {
-        crate::task_recovery::require_known(checkpoint)?;
-        crate::task_inputs::prepare_manual_resume(server, checkpoint)
+        crate::task::recovery::require_known(checkpoint)?;
+        crate::task::inputs::prepare_manual_resume(server, checkpoint)
             .await
             .map_err(|error| invalid(format!("Cannot prepare continuation: {error}")))?;
         pauses
@@ -553,7 +553,7 @@ async fn resume_ready(
     }
     let row = reload(server, &row.id).await?;
     notify(sink, &row, Some("resumed by the user"));
-    crate::task_dispatch::kick(server.clone(), sink.clone());
+    crate::task::dispatch::kick(server.clone(), sink.clone());
     if let Some(checkpoint) = checkpoint {
         crate::resume::resume_authorized(server, sink, checkpoint);
     }
@@ -630,3 +630,24 @@ pub(crate) async fn cancel(
         task: view(server, &row).await,
     })
 }
+
+// One module per responsibility; declared here instead of across the crate root.
+pub(crate) mod contract;
+pub(crate) mod dispatch;
+pub(crate) mod handoff;
+pub(crate) mod inputs;
+pub(crate) mod operations;
+pub(crate) mod recovery;
+pub(crate) mod waits;
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod dispatch_tests;
+
+#[cfg(test)]
+mod operations_tests;
+
+#[cfg(test)]
+mod recovery_tests;

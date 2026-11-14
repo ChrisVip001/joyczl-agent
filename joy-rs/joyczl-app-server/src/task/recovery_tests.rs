@@ -367,7 +367,7 @@ async fn recovery_errors_do_not_resurrect_a_cancelled_task() {
     server.checkpoints.finish("run", "abandoned").await.unwrap();
     let row = server.checkpoints.get("run").await.unwrap().unwrap();
     let (sink, _receiver) = EventSink::channel();
-    crate::task_contract::stop_recovery(&server, &sink, &row, "Corrupt checkpoint usage").await;
+    crate::task::contract::stop_recovery(&server, &sink, &row, "Corrupt checkpoint usage").await;
     assert_eq!(
         server.tasks.get("task").await.unwrap().unwrap().status,
         joyczl_state::TaskStatus::Cancelled
@@ -502,8 +502,8 @@ fn call_ids_are_paired_chronologically_across_completed_rounds() {
         },
         call(2),
     ];
-    let pending = crate::task_recovery::pending_tools(&messages).unwrap();
+    let pending = crate::task::recovery::pending_tools(&messages).unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending["call"].1["value"], 2);
-    assert!(crate::task_recovery::pending_tools(&[call(1), call(2)]).is_err());
+    assert!(crate::task::recovery::pending_tools(&[call(1), call(2)]).is_err());
 }

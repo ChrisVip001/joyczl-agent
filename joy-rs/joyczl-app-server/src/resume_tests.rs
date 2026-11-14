@@ -693,17 +693,17 @@ async fn recovery_uses_the_checkpoint_round_cap_instead_of_a_stale_task_counter(
         .unwrap();
     server
         .checkpoints
-        .save_numbered_round(
-            "round-turn",
-            "test",
-            "continue work",
-            "[]",
-            0,
-            "{}",
-            Some("round-run"),
-            Some("second-round"),
-            Some(2),
-        )
+        .save_numbered_round(joyczl_state::checkpoints::CheckpointWrite {
+            turn_id: "round-turn",
+            session_id: "test",
+            user_message: "continue work",
+            messages_json: "[]",
+            iterations: 0,
+            usage_json: "{}",
+            run_id: Some("round-run"),
+            round_id: Some("second-round"),
+            round_no: Some(2),
+        })
         .await
         .unwrap();
     server.tasks.record_round("round-cap", 1).await.unwrap();

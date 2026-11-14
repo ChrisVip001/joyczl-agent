@@ -1,6 +1,6 @@
 //! Ordinary-chat uncertainty has a human exit path without replaying the old turn.
 use crate::{
-    task_operations::{invalid, operation_view, reconciled_messages},
+    task::operations::{invalid, operation_view, reconciled_messages},
     Server,
 };
 use joyczl_protocol::{
@@ -49,7 +49,7 @@ async fn inspect_inner(
         if server.active_turns(Some(&params.session_id)).is_empty() {
             let messages: Vec<Message> =
                 serde_json::from_str(&cp.messages_json).map_err(invalid)?;
-            let pending = crate::task_recovery::pending_tools(&messages)?;
+            let pending = crate::task::recovery::pending_tools(&messages)?;
             if cp.status == "open" {
                 if pending.is_empty() {
                     continue;
@@ -203,7 +203,7 @@ pub(crate) async fn context(server: &Server, session: &str) -> Result<ChatContex
         match serde_json::from_str::<Vec<Message>>(&cp.messages_json)
             .map_err(invalid)
             .and_then(|messages| {
-                crate::task_recovery::pending_tools(&messages).map(|pending| pending.len())
+                crate::task::recovery::pending_tools(&messages).map(|pending| pending.len())
             }) {
             Ok(0) => (),
             Ok(count) => {

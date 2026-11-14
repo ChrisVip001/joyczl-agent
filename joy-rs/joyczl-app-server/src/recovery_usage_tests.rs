@@ -61,15 +61,17 @@ async fn fixture(unknown: bool) -> (tempfile::TempDir, Server, joyczl_state::Che
     server
         .checkpoints
         .save_with_operations(
-            "turn",
-            "chat",
-            "Authorized work",
-            &serde_json::to_string(&messages).unwrap(),
-            1,
-            r#"{"input_tokens":10,"output_tokens":5}"#,
-            Some("run"),
-            Some("round"),
-            Some(1),
+            joyczl_state::checkpoints::CheckpointWrite {
+                turn_id: "turn",
+                session_id: "chat",
+                user_message: "Authorized work",
+                messages_json: &serde_json::to_string(&messages).unwrap(),
+                iterations: 1,
+                usage_json: r#"{"input_tokens":10,"output_tokens":5}"#,
+                run_id: Some("run"),
+                round_id: Some("round"),
+                round_no: Some(1),
+            },
             &[joyczl_state::operations::OperationSnapshot {
                 tool_use_id: "call".into(),
                 tool: "external_write".into(),
