@@ -25,6 +25,6 @@ const stamped = html.replace('src="./main.js"', `src="./main.js?v=${build}"`);
 if (stamped === html) {
   // Fail the build, not the page: an unstamped script tag silently reintroduces the
   // stale-pair bug, and a page that renders wrong is harder to trace than a red build.
-  throw new Error('index.html 里找不到 src="./main.js" —— 脚本标签改了？版本戳没打上');
+  throw new Error('no src="./main.js" in index.html — did the script tag change? the version stamp was not applied');
 }
 await writeFile(htmlPath, stamped);

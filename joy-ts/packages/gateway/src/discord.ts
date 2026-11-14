@@ -169,10 +169,10 @@ export class DiscordAdapter {
         // **Wait a while even on a clean disconnect**. Discord takes connections down on purpose
         // (by design, not a fault) and expects you not to reconnect immediately — with a bad
         // token it closes with 4004 every time, and an instant reconnect is a self-harming hot loop.
-        await this.#pause("连接断了");
+        await this.#pause("the connection dropped");
       } catch (error) {
         if (this.#stopped) return;
-        await this.#pause("连不上", error);
+        await this.#pause("cannot connect", error);
       }
     }
   }
@@ -265,7 +265,7 @@ export class DiscordAdapter {
       };
 
       socket.onclose = () => finish();
-      socket.onerror = () => finish(new Error("Discord 的连接断了"));
+      socket.onerror = () => finish(new Error("the Discord connection dropped"));
     });
   }
 
@@ -273,7 +273,7 @@ export class DiscordAdapter {
     if (frame.t === "READY") {
       const self = selfOf(frame.d);
       this.#selfId = self?.id ?? null;
-      this.#onLog(`以 ${self?.username ?? "?"} 的身份连上了`);
+      this.#onLog(`connected as ${self?.username ?? "?"}`);
       return;
     }
     if (frame.t !== "MESSAGE_CREATE") return;
@@ -282,7 +282,7 @@ export class DiscordAdapter {
     // takes the process down by default, and this process serves everyone's sessions.
     void this.#handle(frame.d as DiscordMessage).catch((error: unknown) => {
       this.#onLog(
-        `这条消息没处理完：${error instanceof Error ? error.message : String(error)}`,
+        `this message was not handled: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
   }
@@ -302,13 +302,13 @@ export class DiscordAdapter {
     if (!this.#allowed(author)) {
       // Ignore silently, and don't reply "no permission" — that tells a stranger the bot is
       // alive and invites more probing. A trace in the logs is enough (same rule as Telegram).
-      this.#onLog(`忽略了不在白名单里的人：${author.id}（频道 ${channelId}）`);
+      this.#onLog(`ignored someone outside the allowlist: ${author.id} (channel ${channelId})`);
       return;
     }
 
     const text = this.#stripMention(message.content);
     if (text === "") {
-      await this.#say(channelId, "这条我读不了 —— 目前只认文字，语音和图片还没接。");
+      await this.#say(channelId, "I cannot read this one — text only for now; voice and images are not wired up yet.");
       return;
     }
 
@@ -378,7 +378,7 @@ export class DiscordAdapter {
       if (response.status !== 429) {
         if (!response.ok) {
           throw new Error(
-            `Discord 发消息失败：${response.status} ${await response.text()}`,
+            `Discord refused the message: ${response.status} ${await response.text()}`,
           );
         }
         return;
@@ -386,7 +386,7 @@ export class DiscordAdapter {
 
       // 429: Discord writes "how long to wait" in the response. Easy to hit when a long reply
       // splits into 7-8 chunks; wait as told and send again — the dropped chunks are invisible.
-      if (attempt >= 2) throw new Error("Discord 一直在限流，这条没能发出去");
+      if (attempt >= 2) throw new Error("Discord keeps rate limiting; this one was not sent");
       await sleep(await retryAfterMs(response));
     }
   }
@@ -408,7 +408,7 @@ export class DiscordAdapter {
         ? ""
         : `：${error instanceof Error ? error.message : String(error)}`;
     this.#onLog(
-      `${reason}（第 ${this.#failures} 次），${Math.round(waitMs / 1000)} 秒后重连${detail}`,
+      `${reason} (failure ${this.#failures}); reconnecting in ${Math.round(waitMs / 1000)} s${detail}`,
     );
 
     const until = Date.now() + waitMs;

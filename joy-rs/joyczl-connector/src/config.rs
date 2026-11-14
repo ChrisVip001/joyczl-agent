@@ -35,16 +35,17 @@ pub struct ConnectorConfig {
     pub feishu: Option<FeishuConfig>,
 }
 
-/// 飞书（Lark）自建应用。消息以**应用身份**发出（tenant_access_token），
-/// 这也是机器人能做的事；以用户身份行事需要 OAuth 授权码 + 控制台登记回调，
-/// 见 docs/limitations：没有可验证的 app 之前不写不可验证的流程。
+/// A self-built Feishu (Lark) app. Messages go out as **the app**
+/// (tenant_access_token) — that is the part a bot can do; acting as a user needs the OAuth
+/// code flow plus a callback registered in the console. See docs/limitations: no
+/// unverifiable flow is written before there is an app to verify it against.
 ///
 /// ```json
 /// {
 ///   "feishu": {
 ///     "app_id": "cli_a…",
 ///     "app_secret": "keychain:connector:feishu",
-///     "allow_recipients": ["oc_聊天id", "ou_用户id"],
+///     "allow_recipients": ["oc_chat_id", "ou_user_id"],
 ///     "live": false
 ///   }
 /// }

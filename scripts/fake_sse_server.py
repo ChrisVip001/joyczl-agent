@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""假的 SSE 端点，只给 smoke.sh 用。
+"""A fake SSE endpoint, only for smoke.sh.
 
-起一个 HTTP 服务，按请求体分流：
+It runs an HTTP server and branches on the request body:
 
-  * 带 `"stream": true` 的调用（loop 那次）→ 回一段 Anthropic 风格的 SSE：
-    两个 text_delta（"你好" / "，世界"）+ message_delta + message_stop；
-  * 其它调用（检索门那次）                → 500，让门「失败开放」走过去。
+  * a call carrying `"stream": true` (the loop one) → an Anthropic-style SSE stream:
+    two text_deltas ("hello" / ", world") + message_delta + message_stop;
+  * any other call (the retrieval gate) → 500, so the gate takes its fail-open path.
 
-绑定 127.0.0.1:0，把端口打印到 stdout 一行；服务完 argv[1] 轮流式应答就自己
-退出（默认 1 轮，早点退场省得留个后台进程要 kill）。冒烟测试里每多一条链要
-问一句，就把这个数加上去 —— 这几条链共用同一个假端点。
-这样不需要任何真 key，也能把「SSE → textDelta」这条链跑通。
+It binds 127.0.0.1:0 and prints the port as one line on stdout; after serving argv[1] streaming
+replies it exits (1 by default — leaving early beats leaving a background process to kill).
+Every extra chain the smoke test asks about adds one to that number: those chains share this
+one fake endpoint. This is how the SSE → textDelta chain runs through with no real key.
 """
 
 import socket
@@ -23,10 +23,10 @@ SSE_BODY = (
     'data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}\n\n'
     "event: content_block_delta\n"
     'data: {"type":"content_block_delta","index":0,'
-    '"delta":{"type":"text_delta","text":"你好"}}\n\n'
+    '"delta":{"type":"text_delta","text":"hello"}}\n\n'
     "event: content_block_delta\n"
     'data: {"type":"content_block_delta","index":0,'
-    '"delta":{"type":"text_delta","text":"，世界"}}\n\n'
+    '"delta":{"type":"text_delta","text":", world"}}\n\n'
     "event: message_delta\n"
     'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":5}}\n\n'
@@ -36,7 +36,7 @@ SSE_BODY = (
 
 
 def read_request(conn):
-    """读到请求体为止（Content-Length 说了算，不靠连接关闭）。"""
+    """Read up to the request body (Content-Length decides, not the connection closing)."""
     data = b""
     while b"\r\n\r\n" not in data:
         chunk = conn.recv(4096)
@@ -78,7 +78,7 @@ def main(turns):
         served_stream = False
         try:
             body = read_request(conn)
-            # 检索门那次请求没有 `"stream"` 键 → 500；loop 那次有 → 回 SSE。
+            # The gate's request has no `"stream"` key → 500; the loop's does → answer with SSE.
             if b'"stream"' in body:
                 send(conn, "200 OK", "text/event-stream", SSE_BODY)
                 served_stream = True

@@ -19,7 +19,7 @@ async fn run_twice(
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep();
 
     let mock = Arc::new(Mock::new(vec![
@@ -29,14 +29,14 @@ async fn run_twice(
             "call-1",
             "todo_write",
             json!({"todos": [
-                {"content": "写测试", "status": "in_progress"},
-                {"content": "改文档", "status": "pending"}
+                {"content": "write tests", "status": "in_progress"},
+                {"content": "update the docs", "status": "pending"}
             ]}),
         ),
-        Mock::text("清单记下了。"),
+        Mock::text("the list is noted."),
         // Second turn: retrieval gate → wind down
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "todo"}"#),
-        Mock::text("接着干。"),
+        Mock::text("carrying on."),
     ]));
 
     let server = Server::boot(
@@ -76,7 +76,7 @@ async fn run_twice(
             &sink,
         )
         .await
-        .expect("这一轮该跑完");
+        .expect("this turn should finish");
 
         while let Ok(frame) = rx.try_recv() {
             match frame {
@@ -109,25 +109,26 @@ async fn run_twice(
 /// The board is **visible on the very next turn** after being written, and it is injected (not via history).
 #[tokio::test]
 async fn a_todo_list_is_injected_into_the_next_turn() {
-    let (_mock, tool_output, system, reply) = run_twice("列一下要做的事", "接着来").await;
+    let (_mock, tool_output, system, reply) =
+        run_twice("list what needs doing", "keep going").await;
 
     assert!(
-        tool_output.contains("in_progress: 写测试"),
-        "工具应答里该有权威清单：{tool_output}"
+        tool_output.contains("in_progress: write tests"),
+        "the tool reply has to carry the authoritative list: {tool_output}"
     );
     assert!(
         system.contains(joyczl_tools::todo::INJECTION_HEADER),
-        "第二轮的 system prompt 里该有清单那一段：{system}"
+        "the second round's system prompt has to carry that list section: {system}"
     );
-    assert!(system.contains("in_progress: 写测试"), "{system}");
-    assert!(system.contains("pending: 改文档"), "{system}");
+    assert!(system.contains("in_progress: write tests"), "{system}");
+    assert!(system.contains("pending: update the docs"), "{system}");
 
-    // 这一轮是模型自己说完的（步数没用完），清单里还开着两项也**不**劫持结尾：
-    // 「列个计划」说完计划就算做完了，自动接着做等于替人决定去执行。要续跑得是**被截断**那种。
-    assert!(!reply.is_empty(), "第二轮该收到 TurnCompleted 的回复文本");
+    // The model finished this turn on its own (it did not run out of steps), and two open items
+    // do **not** hijack the ending: "make a plan" is done once the plan is stated, and carrying
+    // on would be deciding to execute on the human's behalf. Only a **truncated** turn resumes.
     assert!(
-        !reply.contains("自动续跑"),
-        "自然结束的一轮不该被续跑接管：{reply}"
+        !reply.contains("automatic continuation"),
+        "a turn that ended naturally must not be taken over by a continuation: {reply}"
     );
 }
 
@@ -138,11 +139,11 @@ async fn a_session_without_a_list_gets_no_section() {
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep();
     let mock = Arc::new(Mock::new(vec![
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "plain"}"#),
-        Mock::text("好。"),
+        Mock::text("fine."),
     ]));
     let server = Server::boot(
         pool,
@@ -167,7 +168,7 @@ async fn a_session_without_a_list_gets_no_section() {
         TurnStartParams {
             attachments: None,
             session_id: Some("clean".to_string()),
-            message: "随便说点什么".to_string(),
+            message: "say something, anything".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -176,12 +177,12 @@ async fn a_session_without_a_list_gets_no_section() {
         &EventSink::new(tx),
     )
     .await
-    .expect("跑完");
+    .expect("it finishes");
 
     let requests = mock.received.lock().unwrap();
     let system = requests[0].system.clone().unwrap_or_default();
     assert!(
         !system.contains(joyczl_tools::todo::INJECTION_HEADER),
-        "没清单就不该有那一段：{system}"
+        "no list means no such section: {system}"
     );
 }

@@ -76,10 +76,10 @@ mod tests {
     use super::*;
 
     async fn db() -> (Approvals, tempfile::TempDir) {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let pool = crate::open(&dir.path().join("state.db"))
             .await
-            .expect("打开库");
+            .expect("open the store");
         (Approvals::new(pool), dir)
     }
 
@@ -87,7 +87,7 @@ mod tests {
     #[tokio::test]
     async fn the_log_records_all_four_outcomes() {
         let (log, _dir) = db().await;
-        assert!(log.recent(10).await.expect("空表").is_empty());
+        assert!(log.recent(10).await.expect("empty table").is_empty());
 
         for (i, outcome) in ["approved", "denied", "timeout", "voided"]
             .iter()
@@ -98,15 +98,15 @@ mod tests {
                 &format!("ap-{i}"),
                 "run_command",
                 "rm -rf /tmp/x",
-                "放行表没盖住",
+                "the allowlist was not recorded",
                 outcome,
             )
             .await
-            .expect("记一行");
+            .expect("record one row");
         }
-        let rows = log.recent(10).await.expect("读回");
+        let rows = log.recent(10).await.expect("read back");
         assert_eq!(rows.len(), 4);
-        assert_eq!(rows[0].outcome, "voided", "新的在前");
+        assert_eq!(rows[0].outcome, "voided", "newest first");
         assert_eq!(rows[3].outcome, "approved");
         assert!(rows[0].args_preview.contains("rm -rf"));
     }

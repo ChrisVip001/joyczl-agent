@@ -1,6 +1,6 @@
 //! The capability center: skills and MCP connectors, as the files they are on this machine.
 //!
-//! The dashboard's sidebar entry (「能力中心」) lists both and lets a human manage the
+//! The dashboard's sidebar entry (Capabilities) lists both and lets a human manage the
 //! ones they own. Two rules shape everything here:
 //!
 //! 1. **Built-in means greyed out.** A skill from `JOY_SKILL_DIRS` or a server from
@@ -82,10 +82,10 @@ pub struct Outcome {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct SkillInstallBody {
-    /// SKILL.md 原文（粘贴）。
+    /// The SKILL.md source, pasted as-is.
     #[serde(default)]
     pub text: String,
-    /// 或者一个网址（GitHub blob / Gist 页面会自动转成 raw 内容）。
+    /// Or a URL (GitHub blob / Gist pages are rewritten to their raw form).
     #[serde(default)]
     pub url: String,
 }

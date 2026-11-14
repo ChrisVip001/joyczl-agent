@@ -55,7 +55,7 @@ pub async fn mirror_facts(facts: &Facts, bundle: &Bundle) -> Result<MirrorReport
                 .as_deref()
                 .map(|digest| digest == existing.digest)
                 // No recorded digest but a file exists: it was not ours to begin with.
-                .unwrap_or(true);
+                .unwrap_or(false);
             if !untouched {
                 report.skipped += 1;
                 eprintln!(
@@ -90,12 +90,53 @@ pub async fn mirror_facts(facts: &Facts, bundle: &Bundle) -> Result<MirrorReport
     Ok(report)
 }
 
+/// Build the prompt catalog from eligible pages at read time, never from a stale index.
+pub async fn recall_catalog(facts: &Facts, bundle: &Bundle) -> Result<String> {
+    let mut out = String::from("# Memory catalog\n\n");
+    for page in bundle.pages()? {
+        if page_is_current(facts, &page).await? {
+            out.push_str(&format!(
+                "- [{}]({}.md) · {} — {}\n",
+                page.title, page.slug, page.kind, page.summary
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// Pages with database sources are snapshots. Suppress the entire page when any
+/// source is absent, time-bounded, or corrected; never leak an obsolete sibling claim.
+pub async fn page_is_current(facts: &Facts, page: &Page) -> Result<bool> {
+    let mut ids = Vec::new();
+    for source in &page.sources {
+        if let Some(value) = source.strip_prefix("fact:") {
+            let Ok(id) = value.parse::<i64>() else {
+                return Ok(false);
+            };
+            if !facts.is_durable(id).await? {
+                return Ok(false);
+            }
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        return Ok(true);
+    }
+    let rows = facts.for_subject(&page.title).await?;
+    let selected: Vec<_> = rows
+        .into_iter()
+        .filter(|row| ids.contains(&row.id))
+        .collect();
+    Ok(selected.len() == ids.len()
+        && page.body.trim() == render_body(&page.title, &selected).trim())
+}
+
 fn slug_of(subject: &str) -> String {
     let mut slug: String = subject
         .to_lowercase()
         .chars()
         .map(|c| {
-            // Unicode letters survive: `张伟` becomes `张伟.md` (the page a human would name
+            // Unicode letters survive: `张伟` becomes `张伟.md` (the page name a human would pick
             // themselves), and the hash fallback is only for themes with no letters at all.
             if c.is_alphanumeric() || c == '-' || c == '_' {
                 c

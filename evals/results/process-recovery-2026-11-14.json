@@ -1,0 +1,63 @@
+{
+  "provider": "local-scripted-fixture",
+  "results": [
+    {
+      "case": "normal",
+      "status": "done",
+      "toolRequests": 1,
+      "effects": 1,
+      "rounds": 1,
+      "tokens": 30,
+      "checks": [
+        {
+          "detail": "fault_commit succeeded 1 times (needs 1)",
+          "label": "fault_commit succeeds at least 1 times",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "case": "before_request",
+      "status": "needs_attention",
+      "toolRequests": 0,
+      "effects": 0,
+      "rounds": 1,
+      "tokens": 15,
+      "checks": []
+    },
+    {
+      "case": "after_effect",
+      "status": "needs_attention",
+      "toolRequests": 1,
+      "effects": 1,
+      "rounds": 1,
+      "tokens": 15,
+      "checks": []
+    },
+    {
+      "case": "after_checkpoint",
+      "status": "done",
+      "toolRequests": 1,
+      "effects": 1,
+      "rounds": 1,
+      "tokens": 30,
+      "checks": [
+        {
+          "detail": "fault_commit succeeded 1 times (needs 1)",
+          "label": "fault_commit succeeds at least 1 times",
+          "passed": true
+        }
+      ]
+    }
+  ],
+  "capturedOn": "2026-11-14",
+  "command": "python3 scripts/smoke-recovery.py --report <output.json>",
+  "scope": "Local scripted provider and synthetic external effects; not real-service reliability.",
+  "assertions": [
+    "Same exact run across recovery",
+    "No automatic replay of uncertain effects",
+    "Known usage retained on uncertainty stop",
+    "Second restart does not double-charge known usage",
+    "Durable-result recovery matches uninterrupted round/token totals"
+  ]
+}

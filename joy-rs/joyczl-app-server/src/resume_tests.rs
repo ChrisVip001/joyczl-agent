@@ -23,7 +23,7 @@ async fn server_with_path(mock: Option<Arc<Mock>>) -> (Server, std::path::PathBu
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let settings = Settings {
         home: home.clone(),
         ..Settings::default()
@@ -51,13 +51,13 @@ async fn server(mock: Option<Arc<Mock>>) -> Server {
 async fn back_date(home: &std::path::Path, turn_id: &str, modifier: &str) {
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     sqlx::query("UPDATE turn_checkpoints SET updated_at = datetime('now', ?) WHERE turn_id = ?")
         .bind(modifier)
         .bind(turn_id)
         .execute(&pool)
         .await
-        .expect("改时间戳");
+        .expect("change the timestamp");
 }
 
 /// The working memory a killed process would have left behind: user asked, assistant
@@ -67,7 +67,7 @@ fn crashed_working_memory() -> String {
         Message {
             role: Role::User,
             content: vec![ContentBlock::Text {
-                text: "帮我盯三天服务器".to_string(),
+                text: "watch the server for me for three days".to_string(),
             }],
         },
         Message {
@@ -75,7 +75,7 @@ fn crashed_working_memory() -> String {
             content: vec![ContentBlock::ToolUse {
                 id: "tu_1".to_string(),
                 name: "save_note".to_string(),
-                input: json!({"subject": "服务器", "content": "要盯三天"}),
+                input: json!({"subject": "the server", "content": "watch it for three days"}),
                 extra: None,
             }],
         },
@@ -83,7 +83,7 @@ fn crashed_working_memory() -> String {
             role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "tu_1".to_string(),
-                content: "已记录".to_string(),
+                content: "noted".to_string(),
             }],
         },
     ])
@@ -92,7 +92,9 @@ fn crashed_working_memory() -> String {
 
 #[tokio::test]
 async fn an_open_checkpoint_resumes_and_gets_full_accounting() {
-    let mock = Arc::new(Mock::new(vec![Mock::text("接着上次的进度，已经盯完了。")]));
+    let mock = Arc::new(Mock::new(vec![Mock::text(
+        "carrying on from where it stopped, the watching is done.",
+    )]));
     let server = server(Some(mock.clone())).await;
 
     // The crash leftover, exactly as the checkpoint outlet leaves it.
@@ -101,14 +103,14 @@ async fn an_open_checkpoint_resumes_and_gets_full_accounting() {
         .save(
             "t-crash",
             "test",
-            "帮我盯三天服务器",
+            "watch the server for me for three days",
             &crashed_working_memory(),
             2,
             r#"{"input_tokens":100,"output_tokens":20}"#,
             None,
         )
         .await
-        .expect("写 checkpoint");
+        .expect("write the checkpoint");
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     resume::reconcile(&server, &EventSink::new(tx)).await;
@@ -128,13 +130,13 @@ async fn an_open_checkpoint_resumes_and_gets_full_accounting() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(completed, "续跑没走完");
+    assert!(completed, "the resume did not run through");
 
     // Announced honestly: the same turn started again, then resumed with its iteration count.
     assert!(matches!(
         notifications.first(),
         Some(ServerNotification::TurnStarted(started))
-            if started.turn_id == "t-crash" && started.user_message == "帮我盯三天服务器"
+            if started.turn_id == "t-crash" && started.user_message == "watch the server for me for three days"
     ));
     assert!(notifications.iter().any(|n| matches!(
         n,
@@ -145,28 +147,36 @@ async fn an_open_checkpoint_resumes_and_gets_full_accounting() {
     // No finished tool re-ran: the script had exactly one response, so exactly one model call.
     // Copy out before any await — the guard cannot cross it.
     let (calls, message_count) = {
-        let received = mock.received.lock().expect("锁");
+        let received = mock.received.lock().expect("lock");
         (received.len(), received.first().map(|r| r.messages.len()))
     };
     assert_eq!(calls, 1);
-    assert_eq!(message_count, Some(3), "请求带的就是 checkpoint 的工作记忆");
+    assert_eq!(
+        message_count,
+        Some(3),
+        "the request carries the checkpoint's working memory"
+    );
 
     // Full accounting: the reply persisted under the original turn, the checkpoint closed.
     let history = server
         .chat
         .session_history("test")
         .await
-        .expect("读对话日志");
-    assert_eq!(history.len(), 1, "续跑的回合照常落对话日志");
-    assert!(history[0].1.contains("已经盯完了"));
+        .expect("read the conversation log");
+    assert_eq!(
+        history.len(),
+        1,
+        "a resumed turn lands in the chat log as usual"
+    );
+    assert!(history[0].1.contains("the watching is done"));
     assert!(
         server
             .checkpoints
             .open_rows()
             .await
-            .expect("读台账")
+            .expect("read the register")
             .is_empty(),
-        "续跑完成即关闭"
+        "a resume closes as soon as it is done"
     );
 }
 
@@ -175,38 +185,43 @@ async fn without_a_model_the_checkpoint_stays_open_for_later() {
     let server = server(None).await;
     server
         .checkpoints
-        .save("t-wait", "test", "长任务", "[]", 1, "{}", None)
+        .save("t-wait", "test", "a long task", "[]", 1, "{}", None)
         .await
-        .expect("写 checkpoint");
+        .expect("write the checkpoint");
 
     let (tx, _rx) = mpsc::unbounded_channel();
     resume::reconcile(&server, &EventSink::new(tx)).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     assert_eq!(
-        server.checkpoints.open_rows().await.expect("读台账").len(),
+        server
+            .checkpoints
+            .open_rows()
+            .await
+            .expect("read the register")
+            .len(),
         1,
-        "模型没配好：先留着，配好再续"
+        "the model is not configured: keep it for now and resume once it is"
     );
 }
 
 #[tokio::test]
 async fn unreadable_working_memory_is_abandoned_not_resumed() {
-    let mock = Arc::new(Mock::new(vec![Mock::text("随便")]));
+    let mock = Arc::new(Mock::new(vec![Mock::text("whatever")]));
     let server = server(Some(mock)).await;
     server
         .checkpoints
         .save(
             "t-broken",
             "test",
-            "长任务",
+            "a long task",
             "not json at all",
             1,
             "{}",
             None,
         )
         .await
-        .expect("写 checkpoint");
+        .expect("write the checkpoint");
 
     let (tx, _rx) = mpsc::unbounded_channel();
     resume::reconcile(&server, &EventSink::new(tx)).await;
@@ -226,7 +241,7 @@ async fn unreadable_working_memory_is_abandoned_not_resumed() {
         .checkpoints
         .open_rows()
         .await
-        .expect("读台账")
+        .expect("read the register")
         .is_empty());
 }
 
@@ -238,9 +253,17 @@ async fn a_turn_error_marks_its_checkpoint_abandoned() {
     let server = server(Some(mock)).await;
     server
         .checkpoints
-        .save("t-doomed", "test", "必败的任务", "[]", 1, "{}", None)
+        .save(
+            "t-doomed",
+            "test",
+            "a task that is bound to fail",
+            "[]",
+            1,
+            "{}",
+            None,
+        )
         .await
-        .expect("写 checkpoint");
+        .expect("write the checkpoint");
 
     let (tx, _rx) = mpsc::unbounded_channel();
     resume::reconcile(&server, &EventSink::new(tx)).await;
@@ -260,15 +283,18 @@ async fn a_turn_error_marks_its_checkpoint_abandoned() {
         .checkpoints
         .open_rows()
         .await
-        .expect("读台账")
+        .expect("read the register")
         .is_empty());
 }
 
-/// 两天前留下的回合**不**自动续跑：标 abandoned，而不是每次启动都替人再答一遍。
+/// A turn left over two days ago is **not** resumed: it is marked abandoned, rather than
+/// answering again for the user on every start.
 ///
-/// 这条规则来自一次真实的误答：用户 11-10 问「给我一份今天科技新闻的简报」，11-12 启动时
-/// 被续跑，「今天」变成了另一个今天，还花了四万多输入 token 去抓新闻。checkpoint 是崩溃
-/// 恢复，窗口是秒到分钟；跨天之后它已经不是「同一个回合接着跑」了。
+/// That rule comes from a real wrong answer: the user asked on 11-10 for "a briefing on
+/// today's tech news", and on 11-12 the start-up resumed it — "today" had become a different
+/// today, and it burned forty-odd thousand input tokens fetching news. A checkpoint is crash
+/// recovery, and the window is seconds to minutes; across days it is no longer "the same turn
+/// carrying on".
 #[tokio::test]
 async fn a_checkpoint_past_the_age_limit_is_abandoned_not_resumed() {
     let (server, home) = server_with_path(None).await;
@@ -277,14 +303,14 @@ async fn a_checkpoint_past_the_age_limit_is_abandoned_not_resumed() {
         .save(
             "t-stale",
             "test",
-            "给我一份今天科技新闻的简报",
+            "give me a briefing on today's tech news",
             "[]",
             1,
             "{}",
             None,
         )
         .await
-        .expect("写 checkpoint");
+        .expect("write the checkpoint");
     back_date(&home, "t-stale", "-2 days").await;
 
     let (tx, _rx) = mpsc::unbounded_channel();
@@ -295,16 +321,25 @@ async fn a_checkpoint_past_the_age_limit_is_abandoned_not_resumed() {
         .checkpoints
         .get("t-stale")
         .await
-        .expect("读")
-        .expect("在");
-    assert_eq!(row.status, "abandoned", "超龄的回合不该被自动续跑");
+        .expect("read")
+        .expect("present");
+    assert_eq!(
+        row.status, "abandoned",
+        "an over-age turn must not be resumed automatically"
+    );
     assert!(
-        server.checkpoints.open_rows().await.expect("读").is_empty(),
-        "标完 abandoned 之后就没有可续的了 —— 下次启动不该再打印同一行"
+        server
+            .checkpoints
+            .open_rows()
+            .await
+            .expect("read")
+            .is_empty(),
+        "once marked abandoned there is nothing left to resume — the next boot must not print that line again"
     );
 }
 
-/// 上限设成 0 = 关掉这条规则：回归到「一律续上」，超龄行仍然 `open` 等下一轮。
+/// A limit of 0 switches the rule off: back to "always resume", and an over-age row stays
+/// `open` for the next round.
 #[tokio::test]
 async fn a_zero_limit_keeps_the_old_resume_everything_behaviour() {
     let (server, home) = server_with_path(None).await;
@@ -315,9 +350,17 @@ async fn a_zero_limit_keeps_the_old_resume_everything_behaviour() {
     });
     server
         .checkpoints
-        .save("t-old", "test", "两天前的事", "[]", 1, "{}", None)
+        .save(
+            "t-old",
+            "test",
+            "something from two days ago",
+            "[]",
+            1,
+            "{}",
+            None,
+        )
         .await
-        .expect("写 checkpoint");
+        .expect("write the checkpoint");
     back_date(&home, "t-old", "-2 days").await;
 
     let (tx, _rx) = mpsc::unbounded_channel();
@@ -328,30 +371,36 @@ async fn a_zero_limit_keeps_the_old_resume_everything_behaviour() {
         .checkpoints
         .get("t-old")
         .await
-        .expect("读")
-        .expect("在");
-    assert_eq!(row.status, "open", "0 是「不设上限」，不是「一律不续」");
+        .expect("read")
+        .expect("present");
+    assert_eq!(row.status, "open", "0 means no limit, not never resume");
 }
 
-/// 时间戳读不出来时按「不知道」处理：照旧续跑，并把话说在 stderr 上。
-/// 拒绝续跑会让人白问一遍；续跑最多是把旧行为重放一次。
+/// An unreadable timestamp is treated as "unknown": resume as before, and say so on stderr.
+/// Refusing to resume makes the user ask again for nothing; resuming at worst replays the old
+/// behaviour once.
 #[test]
 fn an_unreadable_stamp_is_not_evidence_of_age() {
     let now = chrono::NaiveDateTime::parse_from_str("2026-11-12 06:00:00", "%Y-%m-%d %H:%M:%S")
-        .expect("解析");
-    assert_eq!(super::resume::age_minutes("不是时间", now), None);
+        .expect("parse");
+    assert_eq!(
+        super::resume::age_minutes("not a time", now),
+        None,
+        "an unreadable timestamp is unknown"
+    );
     assert_eq!(
         super::resume::age_minutes("2026-11-12 05:30:00", now),
         Some(30)
     );
-    // 时钟往回跳（未来时间戳）得到负数，也不该被判成超龄。
+    // A clock jumping backwards (a future timestamp) gives a negative age, which must not count
+    // as over-age either.
     assert_eq!(
         super::resume::age_minutes("2026-11-12 07:00:00", now),
         Some(-60)
     );
 }
 
-/// 人话的粒度：从分钟到天，向下取整 —— 「2 天前」不能读成 1 天。
+/// Human granularity, minutes to days, rounded down — "2 days ago" must not read as one day.
 #[test]
 fn ages_read_as_minutes_hours_and_days() {
     assert_eq!(super::resume::humanize(0), "0 minutes");
@@ -377,21 +426,21 @@ async fn recovered_task_must_pass_acceptance_before_done() {
         (
             true,
             "{}",
-            Some("确认报告质量"),
+            Some("confirm the report's quality"),
             joyczl_state::TaskStatus::NeedsAttention,
         ),
     ] {
-        let mock = Arc::new(Mock::new(vec![Mock::text("报告已经完成。")]));
-        let (server, home) = server_with_path(Some(mock)).await;
+        let mock = Arc::new(Mock::new(vec![Mock::text("the report is finished.")]));
+        let (server, home) = server_with_path(Some(mock.clone())).await;
         if file_exists {
-            std::fs::write(home.join("report.md"), "报告").expect("文件");
+            std::fs::write(home.join("report.md"), "the report").expect("the file");
         }
         server
             .tasks
             .create(joyczl_state::NewTask {
                 id: "recovered-report",
                 session_id: Some("test"),
-                title: "写报告",
+                title: "write the report",
                 goal_condition: goal,
                 acceptance_json: r#"[{"kind":"fileExists","path":"report.md"}]"#,
                 budget_json: budget,
@@ -400,7 +449,7 @@ async fn recovered_task_must_pass_acceptance_before_done() {
                 tier: None,
             })
             .await
-            .expect("任务");
+            .expect("the task");
         server
             .runs
             .start(
@@ -410,13 +459,13 @@ async fn recovered_task_must_pass_acceptance_before_done() {
                 Some("t-report"),
             )
             .await
-            .expect("执行记录");
+            .expect("the run record");
         server
             .checkpoints
             .save_round(
                 "t-report",
                 "test",
-                "写报告",
+                "write the report",
                 "[]",
                 1,
                 r#"{"input_tokens":90,"output_tokens":0}"#,
@@ -424,7 +473,7 @@ async fn recovered_task_must_pass_acceptance_before_done() {
                 Some("report-round"),
             )
             .await
-            .expect("断点");
+            .expect("the checkpoint");
         server
             .runs
             .account_round(
@@ -441,26 +490,34 @@ async fn recovered_task_must_pass_acceptance_before_done() {
         resume::reconcile(&server, &EventSink::new(tx)).await;
         tokio::time::timeout(Duration::from_secs(5), async {
             while let Some(frame) = rx.recv().await {
-                if matches!(
-                    frame,
-                    Frame::Notification(ServerNotification::TurnCompleted(_))
-                ) {
+                if matches!(&frame, Frame::Notification(ServerNotification::TaskUpdated(update))
+                    if budget != "{}" && update.status == "needs_attention")
+                    || matches!(
+                        frame,
+                        Frame::Notification(ServerNotification::TurnCompleted(_))
+                    )
+                {
                     return;
                 }
             }
-            panic!("未完成");
+            panic!("not finished");
         })
         .await
-        .expect("恢复超时");
+        .expect("the recovery times out");
         let task = server
             .tasks
             .get("recovered-report")
             .await
-            .expect("查询")
-            .expect("存在");
+            .expect("query")
+            .expect("it exists");
         assert_eq!(task.status, expected);
-        assert_eq!(task.spent_tokens, 115);
-        assert!(task.checks_json.contains("report.md"));
+        if budget == "{}" {
+            assert_eq!(task.spent_tokens, 115);
+            assert!(task.checks_json.contains("report.md"));
+        } else {
+            assert_eq!(task.spent_tokens, 100);
+            assert!(mock.received.lock().unwrap().is_empty());
+        }
         assert_eq!(task.spent_tools, 0);
     }
 }
@@ -584,6 +641,15 @@ async fn recovered_goal_uses_the_shared_driver_until_satisfied() {
     );
     let requests = mock.received.lock().unwrap();
     assert_eq!(requests.len(), 5);
+    assert!(requests[0]
+        .system_text()
+        .unwrap()
+        .contains("finish both halves"));
+    assert!(requests[3]
+        .system_text()
+        .unwrap()
+        .contains("finish both halves"));
+
     assert!(
         requests[3]
             .messages
@@ -596,4 +662,74 @@ async fn recovered_goal_uses_the_shared_driver_until_satisfied() {
         .messages
         .iter()
         .any(|m| m.text().contains("finish the remaining half"))));
+}
+
+#[tokio::test]
+async fn recovery_uses_the_checkpoint_round_cap_instead_of_a_stale_task_counter() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text("Second round result."),
+        Mock::text(r#"{"ok":false,"impossible":false,"reason":"still incomplete"}"#),
+    ]));
+    let (server, _) = server_with_path(Some(mock.clone())).await;
+    server
+        .tasks
+        .create(joyczl_state::NewTask {
+            id: "round-cap",
+            session_id: Some("test"),
+            title: "work",
+            goal_condition: Some("finish work"),
+            acceptance_json: "[]",
+            budget_json: "{}",
+            cwd: None,
+            max_rounds: 2,
+            tier: None,
+        })
+        .await
+        .unwrap();
+    server
+        .runs
+        .start("round-run", "round-cap", Some("test"), Some("round-turn"))
+        .await
+        .unwrap();
+    server
+        .checkpoints
+        .save_numbered_round(
+            "round-turn",
+            "test",
+            "continue work",
+            "[]",
+            0,
+            "{}",
+            Some("round-run"),
+            Some("second-round"),
+            Some(2),
+        )
+        .await
+        .unwrap();
+    server.tasks.record_round("round-cap", 1).await.unwrap();
+    let (sink, mut receiver) = EventSink::channel();
+    resume::reconcile(&server, &sink).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(frame) = receiver.recv().await {
+            if let Frame::Notification(ServerNotification::TurnCompleted(done)) = frame {
+                assert_eq!(done.meta.goal_rounds, 2);
+                assert_eq!(done.meta.goal_status.as_deref(), Some("round-limit"));
+                return;
+            }
+        }
+        panic!("recovery never completed");
+    })
+    .await
+    .unwrap();
+    assert_eq!(mock.received.lock().unwrap().len(), 2);
+    assert_eq!(
+        server
+            .tasks
+            .get("round-cap")
+            .await
+            .unwrap()
+            .unwrap()
+            .rounds_used,
+        2
+    );
 }

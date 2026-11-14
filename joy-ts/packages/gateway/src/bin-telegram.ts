@@ -4,9 +4,9 @@ import { TelegramAdapter } from "./telegram.ts";
 const token = process.env["TELEGRAM_BOT_TOKEN"]?.trim();
 if (token === undefined || token === "") {
   console.error(
-    "没给 TELEGRAM_BOT_TOKEN。\n" +
-      "找 @BotFather 建一个 bot 拿到 token，然后：\n" +
-      "  TELEGRAM_BOT_TOKEN=123:abc TELEGRAM_ALLOW=@你的用户名 npm run start:telegram",
+    "TELEGRAM_BOT_TOKEN was not given.\n" +
+      "Ask @BotFather for a bot and its token, then:\n" +
+      "  TELEGRAM_BOT_TOKEN=123:abc TELEGRAM_ALLOW=@your-username npm run start:telegram",
   );
   process.exit(1);
 }
@@ -20,8 +20,8 @@ if (allow.length === 0) {
   // Usable without an allowlist, but that means "open this bot to everyone" — and it spends
   // your model quota. Such a default must announce itself, not wait for an incident.
   console.error(
-    "注意：没设 TELEGRAM_ALLOW，这个 bot 谁都能用，消耗的是你的模型额度。\n" +
-      "      只给自己用的话，填你的数字 id 或 @用户名。",
+    "Note: TELEGRAM_ALLOW is unset, so anyone can use this bot and spend your model quota.\n" +
+      "      To keep it to yourself, put your numeric id or @username here.",
   );
 }
 
@@ -40,5 +40,5 @@ const shutdown = (): void => {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-console.error("Joy 网关上来了，去 Telegram 里说句话试试。");
+console.error("The Joy gateway is up; say something in Telegram.");
 await adapter.run();

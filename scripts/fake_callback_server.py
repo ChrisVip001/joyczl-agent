@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""假的回调接收方，只给 smoke-business.sh 的异步 hook 用。
+"""A fake callback receiver, only for smoke-business.sh's asynchronous hook.
 
-绑定 127.0.0.1:0，把端口打印到 stdout 一行；每收到一个 POST，就把请求体追加到
-输出文件（一行一条 JSON），回 200 `{"ok":true}`；收满 <接收次数> 次后自己退出。
+Binds 127.0.0.1:0 and prints the port as one line on stdout; every POST appends its body to
+the output file (one JSON object per line) and gets 200 `{"ok":true}`; after <count>
+requests it exits on its own.
 
-    fake_callback_server.py <输出文件> <接收次数>
+    fake_callback_server.py <output file> <how many requests>
 
-它不解释内容 —— 「回调有没有真的送到」是冒烟要回答的问题，内容由读文件的一方断言。
+It interprets nothing — "did the callback really arrive" is the question the smoke test
+answers, and whoever reads the file does the asserting.
 """
 
 import socket
@@ -14,7 +16,7 @@ import sys
 
 
 def read_request(conn):
-    """读到请求体为止（Content-Length 说了算，不靠连接关闭）。"""
+    """Read up to the request body (Content-Length decides, not the connection closing)."""
     data = b""
     while b"\r\n\r\n" not in data:
         chunk = conn.recv(4096)

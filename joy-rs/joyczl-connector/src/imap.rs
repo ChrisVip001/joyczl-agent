@@ -314,7 +314,7 @@ async fn tls_upgrade(stream: TcpStream, host: &str) -> Result<TlsStream<TcpStrea
 // ---- MIME, minimally ----------------------------------------------------------------
 
 /// Raw message bytes → the fields the inbox stores. Never fails: a broken message is
-/// still a message (subject = "(无主题)", body = whatever could be read).
+/// still a message (subject = "(no subject)", body = whatever could be read).
 pub fn parse(raw: &[u8], uid: i64) -> Incoming {
     let (head, body) = split_head(raw);
     let headers = parse_headers(head);

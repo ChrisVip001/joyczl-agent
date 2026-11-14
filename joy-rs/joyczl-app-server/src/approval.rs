@@ -22,7 +22,7 @@ use crate::{narrow, EventSink};
 pub(crate) struct Waiting {
     /// The answer comes back here.
     pub(crate) tx: oneshot::Sender<bool>,
-    /// What "记住这条" would record, as named by the asking tool (the command, or the directory).
+    /// What "remember this one" would record, as named by the asking tool (the command, or the directory).
     ///
     /// Kept **here**, not inferred from the preview text at answer time: parsing a human-facing
     /// string to decide what gets a standing permission is how the wrong thing gets remembered.

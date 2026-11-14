@@ -152,8 +152,8 @@ fn export(home: &Path, args: &[String]) -> Result<()> {
 }
 
 async fn install(home: &Path, source: &str) -> Result<()> {
-    // 抓取、校验、落盘都在 joyczl_memory::skills 里（驾驶舱的能力中心走同一条路）——
-    // 三个入口各写一遍 fetch 规则，迟早对不上。
+    // Fetching, validating and writing all live in joyczl_memory::skills (the cockpit's capability
+    // center takes the same road) — three copies of the fetch rules would drift apart eventually.
     let outcome = if source.starts_with("http://") || source.starts_with("https://") {
         println!("Fetching {source}");
         skills::install_from_url(home, source).await

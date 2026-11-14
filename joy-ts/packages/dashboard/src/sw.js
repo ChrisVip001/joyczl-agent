@@ -1,10 +1,14 @@
-// Joy 的 service worker：页面与样式网络优先，其余静态资源缓存优先，/api 永远直连。
+// Joy's service worker: network first for pages and styles, cache first for the rest of the
+// static assets, and /api always straight through.
 //
-// 三条纪律：
-// 1. /api/* 一帧也不缓存——对话、记忆、审批都是活的；服务端已发 no-store，这里同样直通。
-// 2. index.html / style.css 网络优先：缓存优先会造成「改好了但浏览器还在显示旧版」，
-//    布局修复尤其明显。网络拿不到才回落缓存，离线照样能开。
-// 3. 其余静态资源缓存优先、后台更新；版本号一变，旧缓存整体作废。
+// Three rules:
+// 1. /api/* is never cached, not one frame — conversations, memory and approvals are live; the
+//    server already sends no-store, and this goes straight through too.
+// 2. index.html / style.css are network first: cache first produces «fixed it, but the browser
+//    still shows the old one», most visibly on a layout fix. Only when the network fails does it
+//    fall back to the cache, so offline still opens.
+// 3. Every other static asset is cache first with a background update; bump the version and the
+//    whole old cache is void.
 // Bump on every shipped frontend change: a stale cache means a stale layout.
 // Bump on every shipped change: a stale cache keeping the old main.js alive is the one bug
 // the version string exists to prevent (it has happened once).
@@ -30,7 +34,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.pathname.startsWith("/api/")) return;
 
-  // 导航请求与样式必须先看网络：一次刷新就要拿到新布局，不能等后台更新悄悄换上。
+  // Navigation requests and styles have to hit the network first: one refresh has to bring the new
+// layout, not wait for a background update to swap it in quietly.
   const pageLike = url.pathname.endsWith("/") || /\.(?:html|css)$/.test(url.pathname);
   event.respondWith(
     caches.open(VERSION).then(async (cache) => {

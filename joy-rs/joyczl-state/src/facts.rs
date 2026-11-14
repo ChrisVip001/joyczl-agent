@@ -89,37 +89,41 @@ impl Facts {
         source: &str,
         kind: &str,
     ) -> Result<(FactRow, bool)> {
-        let inserted = sqlx::query_as::<_, FactRow>(
-            "INSERT INTO facts (subject, content, source, kind, last_confirmed_at, confirm_count)
-             VALUES (?, ?, ?, ?, datetime('now'), 1)
-             ON CONFLICT DO NOTHING
-             RETURNING id, subject, content, source, kind, created_at",
-        )
-        .bind(subject)
-        .bind(content)
-        .bind(source)
-        .bind(normalise_kind(kind))
-        .fetch_optional(&self.pool)
-        .await?;
+        edits::add(self, subject, content, source, kind)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Memory suppressed by a prior human edit; explicitly remember it to restore it"
+                )
+            })
+    }
 
-        if let Some(row) = inserted {
-            return Ok((row, true));
-        }
-        // Collided with an existing row: read it back and hand it over (the caller wants the fact).
-        let existing = sqlx::query_as::<_, FactRow>(
-            "SELECT id, subject, content, source, kind, created_at
-             FROM facts
-             WHERE subject = ? AND lower(trim(content)) = lower(trim(?))
-             ORDER BY id LIMIT 1",
-        )
-        .bind(subject)
-        .bind(content)
-        .fetch_one(&self.pool)
-        .await?;
-        // Being written again is a weak confirmation — the model re-derived the same
-        // statement, or the human repeated it. Counted as such, never as a new fact.
-        self.confirm(existing.id).await?;
-        Ok((existing, false))
+    /// Background extraction cannot undo a human deletion or correction.
+    pub async fn add_consolidated(
+        &self,
+        subject: &str,
+        content: &str,
+        kind: &str,
+    ) -> Result<Option<(FactRow, bool)>> {
+        edits::add(self, subject, content, "consolidation", kind).await
+    }
+
+    /// Persist extraction context atomically with the fact. Replaying the same context
+    /// does not count as another observation; references are derivation inputs, not proof.
+    pub async fn add_consolidated_from(
+        &self,
+        subject: &str,
+        content: &str,
+        kind: &str,
+        source_refs: &[String],
+    ) -> Result<Option<(FactRow, bool)>> {
+        edits::add_from(self, subject, content, "consolidation", kind, source_refs).await
+    }
+
+    /// All derivation contexts for a fact, in insertion order. Deleted facts have none.
+    pub async fn observations(&self, id: i64) -> Result<Vec<(String, String, String)>> {
+        Ok(sqlx::query_as("SELECT context_digest,source_refs_json,observed_at FROM memory_observations WHERE fact_id=? ORDER BY rowid")
+            .bind(id).fetch_all(&self.pool).await?)
     }
 
     /// Mark a fact as still true: bump its count and stamp the moment.
@@ -166,7 +170,7 @@ impl Facts {
     pub async fn for_subject(&self, subject: &str) -> Result<Vec<FactRow>> {
         let rows = sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
-             FROM facts WHERE subject = ? ORDER BY id",
+             FROM durable_facts WHERE subject = ? ORDER BY id",
         )
         .bind(subject)
         .fetch_all(&self.pool)
@@ -186,7 +190,7 @@ impl Facts {
     /// Ordered by subject so a re-run produces the same file order (small git diffs).
     pub async fn subjects(&self) -> Result<Vec<(String, i64)>> {
         let rows = sqlx::query_as::<_, (String, i64)>(
-            "SELECT subject, COUNT(*) FROM facts GROUP BY subject ORDER BY subject",
+            "SELECT subject, COUNT(*) FROM durable_facts GROUP BY subject ORDER BY subject",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -198,7 +202,7 @@ impl Facts {
     pub async fn stale(&self, days: u32, limit: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
-             FROM facts
+             FROM active_facts
              WHERE last_confirmed_at IS NULL
                 OR last_confirmed_at < datetime('now', ?)
              ORDER BY COALESCE(last_confirmed_at, created_at) LIMIT ?",
@@ -227,7 +231,7 @@ impl Facts {
     pub async fn all_with_embedding(&self) -> Result<Vec<(FactRow, Vec<f32>)>> {
         let rows: Vec<FactWithEmbedding> = sqlx::query_as(
             "SELECT id, subject, content, source, kind, created_at, embedding
-             FROM facts WHERE embedding IS NOT NULL ORDER BY id",
+             FROM active_facts WHERE embedding IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -256,7 +260,7 @@ impl Facts {
     pub async fn missing_embedding(&self, limit: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
-             FROM facts WHERE embedding IS NULL ORDER BY id LIMIT ?",
+             FROM active_facts WHERE embedding IS NULL ORDER BY id LIMIT ?",
         )
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -275,7 +279,7 @@ impl Facts {
             let hits = sqlx::query_as::<_, FactRow>(
                 "SELECT f.id, f.subject, f.content, f.source, f.kind, f.created_at
                  FROM facts_fts
-                 JOIN facts f ON f.id = facts_fts.rowid
+                 JOIN active_facts f ON f.id = facts_fts.rowid
                  WHERE facts_fts MATCH ?
                  ORDER BY bm25(facts_fts)
                  LIMIT ?",
@@ -294,7 +298,7 @@ impl Facts {
         };
         sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
-             FROM facts
+             FROM active_facts
              WHERE subject LIKE ? OR content LIKE ?
              ORDER BY id DESC
              LIMIT ?",
@@ -310,7 +314,7 @@ impl Facts {
     pub async fn recent(&self, limit: u32, offset: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
-             FROM facts ORDER BY id DESC LIMIT ? OFFSET ?",
+             FROM active_facts ORDER BY id DESC LIMIT ? OFFSET ?",
         )
         .bind(limit as i64)
         .bind(offset as i64)
@@ -319,12 +323,19 @@ impl Facts {
         .map_err(Into::into)
     }
 
+    /// Bounded personal context for tool-free chat; consolidated inferences and bounded
+    /// claims need the full retrieval path rather than becoming standing preferences.
+    pub async fn personal_preferences(&self) -> Result<Vec<FactRow>> {
+        Ok(sqlx::query_as("SELECT id,subject,content,source,kind,created_at FROM durable_facts WHERE source='user' AND kind IN ('user','feedback') ORDER BY last_confirmed_at DESC,id DESC LIMIT 6")
+            .fetch_all(&self.pool).await?)
+    }
+
     /// All facts grouped by subject (for the MEMORY.md mirror) — when a human reads,
     /// facts on the same subject belong together to look like a memory.
     pub async fn all_by_subject(&self, limit: u32) -> Result<Vec<FactRow>> {
         sqlx::query_as::<_, FactRow>(
             "SELECT id, subject, content, source, kind, created_at
-             FROM facts ORDER BY subject, id LIMIT ?",
+             FROM durable_facts ORDER BY subject, id LIMIT ?",
         )
         .bind(limit as i64)
         .fetch_all(&self.pool)
@@ -334,30 +345,69 @@ impl Facts {
 
     /// Forget all facts under a subject. A trigger keeps the FTS index in sync.
     pub async fn forget_subject(&self, subject: &str) -> Result<u64> {
-        let done = sqlx::query("DELETE FROM facts WHERE subject = ?")
-            .bind(subject)
-            .execute(&self.pool)
-            .await?;
-        Ok(done.rows_affected())
+        edits::forget_subject(self, subject).await
     }
 
     /// Change a fact's content (manage_memory). Returns whether it really changed:
     /// a missing id is false, so the caller can tell the model honestly.
     pub async fn update(&self, id: i64, content: &str) -> Result<bool> {
-        let done = sqlx::query("UPDATE facts SET content = ? WHERE id = ?")
-            .bind(content)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(done.rows_affected() > 0)
+        edits::update(self, id, content).await
     }
 
     /// Delete one fact by id. A trigger keeps the FTS index in sync.
     pub async fn delete(&self, id: i64) -> Result<bool> {
-        let done = sqlx::query("DELETE FROM facts WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(done.rows_affected() > 0)
+        edits::delete(self, id).await
+    }
+}
+
+#[path = "fact_edits.rs"]
+mod edits;
+
+#[path = "memory_validity.rs"]
+mod validity;
+
+#[path = "transient_memory.rs"]
+mod transient;
+pub use transient::TransientObservation;
+
+impl Facts {
+    /// Persist a source-bound observation and expiry in the same transaction.
+    pub async fn add_transient_from(
+        &self,
+        subject: &str,
+        content: &str,
+        kind: &str,
+        source_refs: &[String],
+        observation: &TransientObservation,
+    ) -> Result<Option<(FactRow, bool)>> {
+        edits::add_observed(
+            self,
+            subject,
+            content,
+            "consolidation",
+            kind,
+            edits::Observation {
+                refs: source_refs,
+                transient: Some(observation),
+            },
+        )
+        .await
+    }
+
+    pub async fn observations_detailed(
+        &self,
+        id: i64,
+    ) -> Result<Vec<(String, String, String, Option<String>)>> {
+        Ok(sqlx::query_as("SELECT o.context_digest,o.source_refs_json,o.observed_at,a.assessment_json FROM memory_observations o LEFT JOIN memory_transient_assessments a ON a.fact_id=o.fact_id AND a.context_digest=o.context_digest WHERE o.fact_id=? ORDER BY o.rowid")
+            .bind(id).fetch_all(&self.pool).await?)
+    }
+
+    pub async fn validity_origin(&self, id: i64) -> Result<Option<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT origin FROM memory_validity WHERE fact_id=?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?,
+        )
     }
 }

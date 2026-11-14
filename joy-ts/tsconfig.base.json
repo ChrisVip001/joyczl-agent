@@ -4,8 +4,8 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
 
-    // 源码里写 `./x.ts`：Node 直接跑 TS 时不会替你补扩展名，
-    // 而这里刻意不做构建步骤 —— 跑的 .ts 就是提交的 .ts。
+    // Sources write `./x.ts`: running TS directly in Node does not fill in the extension for you,
+    // and there is deliberately no build step here — the .ts that runs is the .ts committed.
     "allowImportingTsExtensions": true,
 
     "strict": true,

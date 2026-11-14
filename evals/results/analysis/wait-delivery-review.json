@@ -1,0 +1,22 @@
+{
+  "kind": "offline-evidence-review",
+  "sourceReport": "deepseek-flash-2026-11-13-wait-confirmed.json",
+  "sourceSha256": "077cf8070cb7b4135be519ad7d81828e41b1c97fef36ff28de0b2cd1b3304fa5",
+  "originalAutomatedVerdict": false,
+  "reviewedRuntimeOutcome": "passed",
+  "reason": "The original evaluator counted a distinct draft file as a duplicate final delivery. The corrected path selector has an offline regression test. No additional model invocation was made for this review.",
+  "checks": {
+    "singleRun": true,
+    "noFinalFileBeforeInput": true,
+    "chatHasNoToolExecution": true,
+    "duplicateEventAcknowledged": true,
+    "taskDone": true,
+    "typedValueMatches": true,
+    "oneFinalWrite": true,
+    "finalWriteSucceeded": true
+  },
+  "totalWriteOperations": 2,
+  "draftWriteOperations": 1,
+  "finalWriteOperations": 1,
+  "limitation": "The original file did not retain the first signal acknowledgement separately; the duplicate acknowledgement and consumed input are retained. Local file effects do not establish remote exactly-once semantics."
+}

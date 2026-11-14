@@ -161,8 +161,10 @@ mod tests {
     use crate::db::open;
 
     async fn store() -> Inbox {
-        let dir = tempfile::tempdir().expect("临时目录");
-        let pool = open(&dir.path().join("state.db")).await.expect("打开库");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let pool = open(&dir.path().join("state.db"))
+            .await
+            .expect("open the store");
         let _ = dir.keep();
         Inbox::new(pool)
     }
@@ -177,12 +179,12 @@ mod tests {
                 42,
                 Some("<m1@x>"),
                 "a@corp.com",
-                "周报",
+                "weekly report",
                 "2026-11-05T08:00:00Z",
-                "正文",
+                "body text",
             )
             .await
-            .expect("写入");
+            .expect("write");
         let second = inbox
             .record(
                 "email",
@@ -190,15 +192,15 @@ mod tests {
                 42,
                 Some("<m1@x>"),
                 "a@corp.com",
-                "周报",
+                "weekly report",
                 "2026-11-05T08:00:00Z",
-                "正文",
+                "body text",
             )
             .await
-            .expect("再写");
-        assert!(first, "第一次是新邮件");
-        assert!(!second, "同一个 UID 不该再算新的");
-        assert_eq!(inbox.recent("email", 10).await.expect("读").len(), 1);
+            .expect("write again");
+        assert!(first, "the first time is new mail");
+        assert!(!second, "the same UID must not count as new again");
+        assert_eq!(inbox.recent("email", 10).await.expect("read").len(), 1);
     }
 
     #[tokio::test]
@@ -217,34 +219,34 @@ mod tests {
                     "b",
                 )
                 .await
-                .expect("写入");
+                .expect("write");
         }
-        assert_eq!(inbox.unseen_count("email").await.expect("数"), 3);
+        assert_eq!(inbox.unseen_count("email").await.expect("count"), 3);
 
-        assert_eq!(inbox.cursor("email", "INBOX").await.expect("游标"), None);
+        assert_eq!(inbox.cursor("email", "INBOX").await.expect("cursor"), None);
         inbox
             .set_cursor("email", "INBOX", 12)
             .await
-            .expect("写游标");
+            .expect("write the cursor");
         inbox
             .set_cursor("email", "INBOX", 9)
             .await
-            .expect("倒退不生效");
+            .expect("going backwards must not take effect");
         assert_eq!(
-            inbox.cursor("email", "INBOX").await.expect("游标"),
+            inbox.cursor("email", "INBOX").await.expect("cursor"),
             Some(12)
         );
 
-        let waiting = inbox.unseen("email", 10).await.expect("读");
+        let waiting = inbox.unseen("email", 10).await.expect("read");
         let ids: Vec<i64> = waiting.iter().map(|item| item.id).collect();
-        inbox.mark_handled(&ids).await.expect("标记");
+        inbox.mark_handled(&ids).await.expect("mark");
 
-        assert_eq!(inbox.unseen_count("email").await.expect("数"), 0);
-        let recent = inbox.recent("email", 10).await.expect("读");
+        assert_eq!(inbox.unseen_count("email").await.expect("count"), 0);
+        let recent = inbox.recent("email", 10).await.expect("read");
         assert!(recent.iter().all(|item| item.seen));
         // The cursor is about uids, not about being seen.
         assert_eq!(
-            inbox.cursor("email", "INBOX").await.expect("游标"),
+            inbox.cursor("email", "INBOX").await.expect("cursor"),
             Some(12)
         );
     }
@@ -264,9 +266,9 @@ mod tests {
                 "b",
             )
             .await
-            .expect("写入");
-        assert!(inbox.recent("feishu", 10).await.expect("读").is_empty());
-        assert_eq!(inbox.unseen_count("feishu").await.expect("数"), 0);
+            .expect("write");
+        assert!(inbox.recent("feishu", 10).await.expect("read").is_empty());
+        assert_eq!(inbox.unseen_count("feishu").await.expect("count"), 0);
     }
 
     #[tokio::test]
@@ -281,12 +283,16 @@ mod tests {
                 "a@corp.com",
                 "s",
                 "2026-11-05T08:00:00Z",
-                &"长".repeat(400),
+                &"x".repeat(400),
             )
             .await
-            .expect("写入");
-        let item = &inbox.recent("email", 1).await.expect("读")[0];
-        assert_eq!(item.snippet.chars().count(), 240, "摘要按字符截断");
-        assert_eq!(item.body.chars().count(), 400, "正文留全");
+            .expect("write");
+        let item = &inbox.recent("email", 1).await.expect("read")[0];
+        assert_eq!(
+            item.snippet.chars().count(),
+            240,
+            "the snippet is cut by characters"
+        );
+        assert_eq!(item.body.chars().count(), 400, "the body is kept whole");
     }
 }

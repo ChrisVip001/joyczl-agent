@@ -9,14 +9,15 @@ use crate::{handlers, Tool, ToolCtx, ToolRegistry};
 /// Opens a temp state.db and returns a ready-to-use ctx. home is also a temp dir —
 /// the calendar.ics / outbox tests need real file writes.
 async fn ctx() -> ToolCtx {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be deleted here
     ToolCtx {
         on_uncertain: None,
+        resource_lease: None,
         task_run_id: None,
         activate: None,
         embedder: None,
@@ -48,6 +49,8 @@ async fn default_registry_has_the_expected_tools() {
             "fetch_url",
             "find_tools",
             "forget_note",
+            "glob",
+            "grep",
             "list_dir",
             "list_events",
             "list_memory",
@@ -74,17 +77,26 @@ async fn save_note_then_search_memory_round_trips() {
         .execute(
             ctx.clone(),
             "save_note",
-            json!({"subject": "alex", "content": "喜欢早上的会议"}),
+            json!({"subject": "alex", "content": "likes morning meetings"}),
         )
         .await;
     // The output must say where things landed — the model relays it and must not overclaim.
-    assert!(out.contains("state.db"), "输出没说落点：{out}");
-    assert!(out.contains("alex"), "输出没复述内容：{out}");
+    assert!(
+        out.contains("state.db"),
+        "the output never says where it landed: {out}"
+    );
+    assert!(
+        out.contains("alex"),
+        "the output does not repeat the content: {out}"
+    );
 
     let out = registry
-        .execute(ctx.clone(), "search_memory", json!({"query": "早上"}))
+        .execute(ctx.clone(), "search_memory", json!({"query": "morning"}))
         .await;
-    assert!(out.contains("喜欢早上的会议"), "搜不回来：{out}");
+    assert!(
+        out.contains("likes morning meetings"),
+        "it cannot be searched back: {out}"
+    );
 }
 
 #[tokio::test]
@@ -95,7 +107,10 @@ async fn forget_note_reports_when_nothing_matched() {
     let out = registry
         .execute(ctx.clone(), "forget_note", json!({"subject": "ghost"}))
         .await;
-    assert!(out.contains("no memory about"), "0 条删除也该说清楚：{out}");
+    assert!(
+        out.contains("no memory about"),
+        "deleting 0 should still be said out loud: {out}"
+    );
 
     registry
         .execute(
@@ -107,7 +122,10 @@ async fn forget_note_reports_when_nothing_matched() {
     let out = registry
         .execute(ctx.clone(), "forget_note", json!({"subject": "a"}))
         .await;
-    assert!(out.contains("Forgot 1"), "应当报删了几条：{out}");
+    assert!(
+        out.contains("Forgot 1"),
+        "it should report how many it deleted: {out}"
+    );
 }
 
 #[tokio::test]
@@ -117,10 +135,10 @@ async fn current_time_gives_a_usable_answer() {
         .execute(ctx().await, "current_time", json!({}))
         .await;
     // Weekday and UTC offset are both there — parsing "tomorrow morning" needs them.
-    assert!(out.contains("UTC"), "没有时区：{out}");
+    assert!(out.contains("UTC"), "no timezone: {out}");
     assert!(
         out.contains("weekday") || out.chars().any(|c| c.is_ascii_alphabetic()),
-        "没有weekday：{out}"
+        "there is no weekday: {out}"
     );
 }
 
@@ -130,8 +148,11 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
     let ctx = ctx().await;
 
     let out = registry.execute(ctx.clone(), "nope", json!({})).await;
-    assert!(out.starts_with("Error:"), "未知工具：{out}");
-    assert!(out.contains("save_note"), "应当列出可用的工具：{out}");
+    assert!(out.starts_with("Error:"), "an unknown tool: {out}");
+    assert!(
+        out.contains("save_note"),
+        "it should list the tools that do exist: {out}"
+    );
 
     // Missing argument
     let out = registry
@@ -139,7 +160,7 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         .await;
     assert!(
         out.starts_with("Error:") && out.contains("content"),
-        "缺参数：{out}"
+        "a missing argument: {out}"
     );
 
     // Wrong type: now caught first by the argument schema (earlier and more specific
@@ -153,7 +174,7 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         .await;
     assert!(
         out.starts_with("Error:") && out.contains("subject") && out.contains("schema"),
-        "类型错：{out}"
+        "the wrong type: {out}"
     );
 
     // Empty string
@@ -166,7 +187,7 @@ async fn unknown_tool_and_bad_args_become_text_not_errors() {
         .await;
     assert!(
         out.starts_with("Error:") && out.contains("must not be empty"),
-        "空串：{out}"
+        "an empty string: {out}"
     );
 }
 
@@ -176,7 +197,10 @@ async fn list_memory_handles_an_empty_store() {
     let out = registry
         .execute(ctx().await, "list_memory", json!({}))
         .await;
-    assert!(out.contains("empty"), "空记忆要有引导性文案：{out}");
+    assert!(
+        out.contains("empty"),
+        "an empty memory needs a guiding sentence: {out}"
+    );
 }
 
 #[tokio::test]
@@ -217,31 +241,47 @@ async fn create_event_lands_in_db_and_ics_and_is_idempotent() {
         .execute(
             ctx.clone(),
             "create_event",
-            json!({"title": "与阿明开会", "start": "2026-07-14T09:00:00"}),
+            json!({"title": "meet Alex", "start": "2026-07-14T09:00:00"}),
         )
         .await;
     assert!(out.contains("created"), "{out}");
-    assert!(out.contains("local calendar"), "输出要说明落点：{out}");
+    assert!(
+        out.contains("local calendar"),
+        "the output has to say where it landed: {out}"
+    );
     // No end given defaults to +1 hour.
-    assert!(out.contains("2026-07-14T10:00"), "默认结束时间：{out}");
+    assert!(
+        out.contains("2026-07-14T10:00"),
+        "the default end time: {out}"
+    );
 
-    let ics = std::fs::read_to_string(ctx.home.join("calendar.ics")).expect("ics 文件");
-    assert!(ics.contains("SUMMARY:与阿明开会"));
+    let ics = std::fs::read_to_string(ctx.home.join("calendar.ics")).expect("the ics file");
+    assert!(ics.contains("SUMMARY:meet Alex"));
     assert!(ics.contains("DTSTART:20260714T090000"), "{ics}");
-    assert!(ics.ends_with("END:VCALENDAR\n"), "VCALENDAR 要闭合：{ics}");
+    assert!(
+        ics.ends_with("END:VCALENDAR\n"),
+        "VCALENDAR has to close: {ics}"
+    );
 
     // Run it again: a timestamp with seconds also normalizes to minute precision → idempotent hit.
     let out = registry
         .execute(
             ctx.clone(),
             "create_event",
-            json!({"title": "与阿明开会", "start": "2026-07-14T09:00"}),
+            json!({"title": "meet Alex", "start": "2026-07-14T09:00"}),
         )
         .await;
-    assert!(out.contains("already exists"), "第二次应当报幂等：{out}");
+    assert!(
+        out.contains("already exists"),
+        "the second call should report the idempotent hit: {out}"
+    );
 
     // And only one row in the database.
-    let rows = ctx.calendar.list(None, None, 100).await.expect("查库");
+    let rows = ctx
+        .calendar
+        .list(None, None, 100)
+        .await
+        .expect("query the store");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].end, "2026-07-14T10:00");
 }
@@ -257,13 +297,16 @@ async fn list_events_reports_what_it_checked_when_empty() {
         .execute(ctx.clone(), "list_events", json!({}))
         .await;
     assert!(out.contains("No events found"), "{out}");
-    assert!(out.contains("local calendar"), "要说明查了哪个日历：{out}");
+    assert!(
+        out.contains("local calendar"),
+        "it has to say which calendar was read: {out}"
+    );
 
     registry
         .execute(
             ctx.clone(),
             "create_event",
-            json!({"title": "牙医", "start": "2026-07-14T09:00", "attendees": "阿明"}),
+            json!({"title": "dentist", "start": "2026-07-14T09:00", "attendees": "Alex"}),
         )
         .await;
     let out = registry
@@ -273,8 +316,14 @@ async fn list_events_reports_what_it_checked_when_empty() {
             json!({"start": "2026-07-14", "end": "2026-07-14"}),
         )
         .await;
-    assert!(out.contains("牙医"), "区间内的事件要列出来：{out}");
-    assert!(out.contains(", with 阿明"), "参与者要带上：{out}");
+    assert!(
+        out.contains("dentist"),
+        "events inside the window have to be listed: {out}"
+    );
+    assert!(
+        out.contains(", with Alex"),
+        "the attendees have to come along: {out}"
+    );
 
     // Out-of-range entries don't appear.
     let out = registry
@@ -284,7 +333,10 @@ async fn list_events_reports_what_it_checked_when_empty() {
             json!({"start": "2026-08-01", "end": "2026-08-31"}),
         )
         .await;
-    assert!(out.contains("No events found"), "区间外不该出现：{out}");
+    assert!(
+        out.contains("No events found"),
+        "nothing outside the window should show up: {out}"
+    );
 }
 
 /// send_message only writes an outbox draft, never sends — the output must say so in full.
@@ -297,20 +349,23 @@ async fn send_message_writes_a_draft_and_never_sends() {
         .execute(
             ctx.clone(),
             "send_message",
-            json!({"to": "阿明 <aming@example.com>", "body": "周四见"}),
+            json!({"to": "Alex <alex@example.com>", "body": "see you Thursday"}),
         )
         .await;
-    assert!(out.contains("Nothing was sent"), "必须明说没发：{out}");
+    assert!(
+        out.contains("Nothing was sent"),
+        "it has to say outright that nothing was sent: {out}"
+    );
 
     let dir = ctx.home.join("outbox");
     let mut entries: Vec<_> = std::fs::read_dir(&dir)
-        .expect("outbox 目录")
-        .map(|e| e.expect("目录项"))
+        .expect("the outbox directory")
+        .map(|e| e.expect("a directory entry"))
         .collect();
     assert_eq!(entries.len(), 1);
-    let content = std::fs::read_to_string(entries.remove(0).path()).expect("草稿");
+    let content = std::fs::read_to_string(entries.remove(0).path()).expect("the draft");
     assert!(
-        content.starts_with("To: 阿明 <aming@example.com>\n\n周四见\n"),
+        content.starts_with("To: Alex <alex@example.com>\n\nsee you Thursday\n"),
         "{content}"
     );
 }
@@ -325,24 +380,28 @@ async fn manage_memory_updates_and_deletes_by_id() {
         .execute(
             ctx.clone(),
             "save_note",
-            json!({"subject": "alex", "content": "喜欢咖啡"}),
+            json!({"subject": "alex", "content": "likes coffee"}),
         )
         .await;
-    let fact = &ctx.facts.search("咖啡", 1).await.expect("查库")[0];
+    let fact = &ctx
+        .facts
+        .search("coffee", 1)
+        .await
+        .expect("query the store")[0];
 
     let out = registry
         .execute(
             ctx.clone(),
             "manage_memory",
-            json!({"action": "update_fact", "id": fact.id, "content": "喜欢茶"}),
+            json!({"action": "update_fact", "id": fact.id, "content": "likes tea"}),
         )
         .await;
     assert!(out.contains("now reads"), "{out}");
     assert!(
-        ctx.facts.search("茶", 4).await.expect("查库")[0]
+        ctx.facts.search("tea", 4).await.expect("query the store")[0]
             .content
-            .contains("茶"),
-        "正文要真的改掉"
+            .contains("tea"),
+        "the body really has to change"
     );
 
     let out = registry
@@ -360,7 +419,10 @@ async fn manage_memory_updates_and_deletes_by_id() {
             json!({"action": "delete_fact", "id": fact.id}),
         )
         .await;
-    assert!(out.contains("with id"), "删第二次要如实说：{out}");
+    assert!(
+        out.contains("with id"),
+        "deleting twice has to be said honestly: {out}"
+    );
 
     // An unknown action is text too, not an error — now caught first by the schema's enum
     // (the handler's fallback branch only runs if schema compilation failed).
@@ -423,7 +485,10 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
             json!({"name": "../evil", "description": "x", "body": "y"}),
         )
         .await;
-    assert!(out.contains("slug"), "路径穿越要被拦下：{out}");
+    assert!(
+        out.contains("slug"),
+        "a path escape has to be stopped: {out}"
+    );
     assert!(
         !ctx.home.join("evil").exists()
             && !ctx
@@ -431,7 +496,7 @@ async fn create_skill_writes_a_valid_skill_md_and_refuses_collisions() {
                 .parent()
                 .map(|p| p.join("evil"))
                 .is_some_and(|p| p.exists()),
-        "不该写出目录树之外的东西"
+        "nothing outside the directory tree may be written"
     );
 }
 
@@ -452,12 +517,19 @@ async fn a_wrong_typed_argument_is_caught_before_the_handler_runs() {
         )
         .await;
 
-    assert!(out.starts_with("Error:"), "要保持 Error: 前缀：{out}");
-    assert!(out.contains("schema"), "{out}");
-    assert!(out.contains("subject"), "要说清是哪个字段：{out}");
     assert!(
-        ctx.facts.recent(10, 0).await.expect("查库").is_empty(),
-        "校验没过就不该落库"
+        out.starts_with("Error:"),
+        "the Error: prefix has to stay: {out}"
+    );
+    assert!(out.contains("schema"), "{out}");
+    assert!(out.contains("subject"), "it has to name the field: {out}");
+    assert!(
+        ctx.facts
+            .recent(10, 0)
+            .await
+            .expect("query the store")
+            .is_empty(),
+        "a failed validation must not reach the store"
     );
 }
 
@@ -470,7 +542,10 @@ async fn a_missing_required_argument_is_caught_by_the_schema() {
         .execute(ctx.clone(), "save_note", json!({"subject": "alex"}))
         .await;
     assert!(out.starts_with("Error:"), "{out}");
-    assert!(out.contains("content"), "缺的那个字段要出现在报错里：{out}");
+    assert!(
+        out.contains("content"),
+        "the missing field has to appear in the error: {out}"
+    );
 }
 
 /// A remote (MCP) server may report a broken schema. Such tools **skip validation and run** —
@@ -480,17 +555,20 @@ async fn a_tool_with_a_broken_schema_still_runs() {
     let mut registry = ToolRegistry::new();
     registry.register(Tool {
         name: "broken_schema".to_string(),
-        description: "schema 是垃圾的工具".to_string(),
-        input_schema: json!("这不是一个 schema"),
+        description: "a tool whose schema is junk".to_string(),
+        input_schema: json!("this is not a schema"),
         handler: Arc::new(|_ctx: ToolCtx, _args: serde_json::Value| {
-            Box::pin(async { Ok("真的跑了".to_string()) })
+            Box::pin(async { Ok("it really ran".to_string()) })
         }),
     });
 
     let out = registry
         .execute(ctx().await, "broken_schema", json!({"whatever": true}))
         .await;
-    assert_eq!(out, "真的跑了", "坏 schema 不该拦住执行：{out}");
+    assert_eq!(
+        out, "it really ran",
+        "a broken schema must not block execution: {out}"
+    );
 }
 
 /// Valid arguments still reach the handler (validation must not hit normal calls).
@@ -502,7 +580,7 @@ async fn valid_arguments_pass_the_schema() {
         .execute(
             ctx.clone(),
             "save_note",
-            json!({"subject": "alex", "content": "喜欢早会"}),
+            json!({"subject": "alex", "content": "likes morning meetings"}),
         )
         .await;
     assert!(out.contains("Remembered"), "{out}");
@@ -522,7 +600,7 @@ async fn a_duplicate_tool_name_does_not_replace_the_first() {
         let answer = answer.to_string();
         super::Tool {
             name: name.to_string(),
-            description: "测试用".to_string(),
+            description: "for the test".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
             handler: Arc::new(move |_ctx: super::ToolCtx, _args: Value| {
                 let answer = answer.clone();
@@ -535,8 +613,8 @@ async fn a_duplicate_tool_name_does_not_replace_the_first() {
     }
 
     let mut registry = super::ToolRegistry::new();
-    registry.register(fixed("dup", "第一个"));
-    registry.register(fixed("dup", "第二个"));
+    registry.register(fixed("dup", "the first one"));
+    registry.register(fixed("dup", "the second one"));
 
     assert_eq!(
         registry
@@ -545,12 +623,15 @@ async fn a_duplicate_tool_name_does_not_replace_the_first() {
             .filter(|name| **name == "dup")
             .count(),
         1,
-        "只该有一个"
+        "there should be exactly one"
     );
     let out = registry
         .execute(ctx().await, "dup", serde_json::json!({}))
         .await;
-    assert_eq!(out, "第一个", "先到的保留，后到的被拒");
+    assert_eq!(
+        out, "the first one",
+        "the first one is kept and the second refused"
+    );
 }
 
 /// Tool-level hooks hang on the **single choke point**: PreToolUse can stop a call, PostToolUse can rewrite the result.
@@ -559,34 +640,40 @@ async fn a_duplicate_tool_name_does_not_replace_the_first() {
 async fn tool_hooks_block_before_and_rewrite_after() {
     use std::sync::Arc;
 
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(
         dir.path().join("hooks.json"),
         r#"{ "hooks": {
              "PreToolUse": [ { "matcher": "blocked_tool", "command": "sh",
-               "args": ["-c", "cat >/dev/null; echo 这个工具现在不许用 >&2; exit 2"] } ],
+               "args": ["-c", "cat >/dev/null; echo this tool is not allowed right now >&2; exit 2"] } ],
              "PostToolUse": [ { "matcher": "rewritten_tool", "command": "sh",
-               "args": ["-c", "cat >/dev/null; printf %s '{\"updatedOutput\":\"被钩子改写过了\"}'"] } ]
+               "args": ["-c", "cat >/dev/null; printf %s '{\"updatedOutput\":\"the hook rewrote this\"}'"] } ]
            } }"#,
     )
-    .expect("写 hooks.json");
-    let hooks = Arc::new(super::hooks::Hooks::load(dir.path(), None).expect("装载"));
+    .expect("write hooks.json");
+    let hooks = Arc::new(super::hooks::Hooks::load(dir.path(), None).expect("load"));
 
     let mut registry = super::ToolRegistry::new();
-    registry.register(tool("blocked_tool", "原样返回"));
-    registry.register(tool("rewritten_tool", "原样返回"));
+    registry.register(tool("blocked_tool", "returned unchanged"));
+    registry.register(tool("rewritten_tool", "returned unchanged"));
     registry.set_hooks(Some(hooks));
 
     let blocked = registry
         .execute(ctx().await, "blocked_tool", serde_json::json!({}))
         .await;
     assert!(blocked.starts_with("Error:"), "{blocked}");
-    assert!(blocked.contains("这个工具现在不许用"), "{blocked}");
+    assert!(
+        blocked.contains("this tool is not allowed right now"),
+        "{blocked}"
+    );
 
     let rewritten = registry
         .execute(ctx().await, "rewritten_tool", serde_json::json!({}))
         .await;
-    assert_eq!(rewritten, "被钩子改写过了");
+    assert_eq!(
+        rewritten, "the hook rewrote this",
+        "the hook rewrites the output"
+    );
 }
 
 /// A tool that returns fixed text (for hook tests).
@@ -599,7 +686,7 @@ fn tool(name: &str, answer: &str) -> super::Tool {
     let answer = answer.to_string();
     super::Tool {
         name: name.to_string(),
-        description: "测试用".to_string(),
+        description: "for the test".to_string(),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         handler: Arc::new(move |_ctx: super::ToolCtx, _args: Value| {
             let answer = answer.clone();
@@ -611,21 +698,28 @@ fn tool(name: &str, answer: &str) -> super::Tool {
     }
 }
 
-/// 记忆页：模型按目录读页，读到正文与出处；没有的页给一句话而不是空。
+/// Memory pages: the model reads a page from the catalog and gets the body plus its source; a
+/// page that does not exist gets one sentence rather than nothing.
 #[tokio::test]
 async fn reading_a_memory_page_carries_its_sources() {
     let ctx = ctx().await;
     let bundle = joyczl_memory::bundle::Bundle::new(&ctx.home);
-    let mut page = joyczl_memory::bundle::Page::new(
-        "alex",
-        "person",
-        "Alex",
-        "alex",
-        "喜欢早会",
-        "Alice 喜欢早上七点的会。",
-    );
-    page.sources = vec!["fact:1".to_string(), "ledger:s1/t3".to_string()];
-    bundle.write(&page).expect("写页");
+    let (fact, _) = ctx
+        .facts
+        .add(
+            "Alex",
+            "Alice likes the seven o'clock meeting.",
+            "user",
+            "user",
+        )
+        .await
+        .unwrap();
+    joyczl_memory::mirror::mirror_facts(&ctx.facts, &bundle)
+        .await
+        .unwrap();
+    let mut page = bundle.read("alex").unwrap().unwrap();
+    page.sources.push("ledger:s1/t3".into());
+    bundle.write(&page).expect("write the page");
 
     let registry = handlers::build_default();
     let out = registry
@@ -636,9 +730,22 @@ async fn reading_a_memory_page_carries_its_sources() {
         )
         .await;
     assert!(out.contains("Alex"), "{out}");
-    assert!(out.contains("早上七点的会"), "{out}");
-    assert!(out.contains("fact:1"), "出处要带出来：{out}");
+    assert!(out.contains("the seven o'clock meeting"), "{out}");
+    assert!(
+        out.contains("fact:1"),
+        "the source has to come along: {out}"
+    );
 
+    ctx.facts.delete(fact.id).await.unwrap();
+    let stale = registry
+        .execute(
+            ctx.clone(),
+            "read_memory_page",
+            serde_json::json!({"page":"alex"}),
+        )
+        .await;
+    assert!(stale.contains("excluded from recall"), "{stale}");
+    assert!(!stale.contains("seven o'clock"), "{stale}");
     let missing = registry
         .execute(
             ctx,
@@ -649,10 +756,12 @@ async fn reading_a_memory_page_carries_its_sources() {
     assert!(missing.contains("has no page \"nobody\""), "{missing}");
 }
 
-/// `JOY_TOOL_POLICY=deferred`：工具表先窄，`find_tools` 打开后下一轮才宽。
+/// `JOY_TOOL_POLICY=deferred`: the tool list starts narrow and only widens on the next round,
+/// after `find_tools` opens it.
 ///
-/// 两条边界一起钉住：受开关与审批约束的工具**永远不会**被藏起来（发现步骤不能跑到
-/// 授权前面），而隐藏只影响「模型看到什么」，不影响它能调什么。
+/// Two boundaries pinned at once: a tool bound by a switch or an approval is **never** hidden
+/// (discovery must not run ahead of authorisation), and hiding only changes what the model
+/// sees, not what it can call.
 #[test]
 fn deferred_hides_the_shelf_until_find_tools_opens_it() {
     let mut view = handlers::build_default().session_view();
@@ -667,7 +776,7 @@ fn deferred_hides_the_shelf_until_find_tools_opens_it() {
 
     assert!(
         !names(&view).contains(&"list_memory".to_string()),
-        "deferred 下没激活的工具不该进请求"
+        "a tool not activated under deferred must not enter the request"
     );
     for always in [
         "current_time",
@@ -678,7 +787,7 @@ fn deferred_hides_the_shelf_until_find_tools_opens_it() {
     ] {
         assert!(
             names(&view).contains(&always.to_string()),
-            "{always} 是常驻工具，不该被藏"
+            "{always} is an always-on tool and must not be hidden"
         );
     }
 
@@ -686,19 +795,21 @@ fn deferred_hides_the_shelf_until_find_tools_opens_it() {
     assert_eq!(
         opened,
         vec!["list_memory".to_string()],
-        "查询该只落在目标的描述上"
+        "the query has to land on the target's description only"
     );
     assert!(
         names(&view).contains(&"list_memory".to_string()),
-        "打开之后下一轮该出现在工具表里"
+        "once opened, it should appear in the tool table next round"
     );
 }
 
-/// 一句话建任务：声明落在 `<home>`，模型不必让用户去挑工作目录。
+/// A task from one sentence: the declaration lands in `<home>`, so the model does not have to
+/// send the user off to pick a working directory.
 ///
-/// 这条来自一次真实的卡住：用户说「帮我做一个定时任务」，模型去写 `schedules.json`，
-/// 而那是工作区之外的文件 —— `write_file` 拒绝得对，界面却只好问「请选择目录」。
-/// 定时任务是 Joy 自己的状态，不是项目内容，该由工具直接写。
+/// That came from a real dead end: the user said "make me a scheduled task" and the model went
+/// to write `schedules.json`, which lives outside the workspace — `write_file` refused, quite
+/// rightly, and the UI was left asking "pick a directory". A scheduled task is Joy's own
+/// state, not project content, so the tool should write it directly.
 #[tokio::test]
 async fn schedule_job_writes_the_declaration_into_home() {
     let registry = handlers::build_default();
@@ -708,18 +819,21 @@ async fn schedule_job_writes_the_declaration_into_home() {
         .execute(
             ctx.clone(),
             "schedule_job",
-            json!({"name": "morning-news", "cron": "0 8 * * 1-5", "prompt": "给我一份科技简报"}),
+            json!({"name": "morning-news", "cron": "0 8 * * 1-5", "prompt": "give me a tech briefing"}),
         )
         .await;
     assert!(out.contains("saved"), "{out}");
-    assert!(out.contains("Next run"), "要告诉人什么时候跑：{out}");
+    assert!(
+        out.contains("Next run"),
+        "a human has to be told when it runs: {out}"
+    );
     assert!(
         out.contains("joy schedule"),
-        "谁在触发必须说清楚，否则它看起来像已经排好了：{out}"
+        "who triggers it has to be clear, or it looks as if it is already scheduled: {out}"
     );
     assert!(
         ctx.home.join("schedules.json").exists(),
-        "声明该落在 home 里，不是工作目录"
+        "the declaration lands in home, not the working directory"
     );
 
     let listed = registry
@@ -741,7 +855,8 @@ async fn schedule_job_writes_the_declaration_into_home() {
     assert!(after.contains("No scheduled jobs yet"), "{after}");
 }
 
-/// 坏输入变成一句可执行的话（`Error:` 文本回给模型），且不留下半个文件。
+/// Bad input turns into one actionable sentence (an `Error:` text back to the model) and
+/// leaves no half-written file behind.
 #[tokio::test]
 async fn a_bad_cron_comes_back_as_a_sentence() {
     let registry = handlers::build_default();
@@ -758,18 +873,20 @@ async fn a_bad_cron_comes_back_as_a_sentence() {
     assert!(error.contains("five fields"), "{error}");
     assert!(
         !ctx.home.join("schedules.json").exists(),
-        "被拒绝时不该留下文件"
+        "nothing may be left behind when it is refused"
     );
 }
 
-// ---- 声明与实现不许漂 ---------------------------------------------------------------
+// ---- Declaration and implementation must not drift ----------------------------------
 
-/// 每个工具的 `input_schema` 都得是一份**能读的**契约：有描述、type=object、
-/// required 里的每个名字都能在 properties 里找到、每个属性和顶层 type 都是合法的 JSON
-/// 类型名。模型看到的正是这份 schema，写错一个字，代价是一次「参数不合法」的空转。
+/// Every tool's `input_schema` has to be a **readable** contract: a description, type=object,
+/// each name in required present in properties, and each property and the top-level type a
+/// legal JSON type name. The model sees exactly this schema, and one wrong word costs a round
+/// trip that ends in "invalid arguments".
 ///
-/// 为什么不在这里把 handler 也跑一遍：这些工具会连网、起子进程、写磁盘；「空参数会
-/// 返回 Error 文本」由各工具自己的测试覆盖，混进这个遍历只会让一条断言变成一场副作用。
+/// Why the handlers are not run here too: these tools go online, start subprocesses and write
+/// to disk; "empty arguments come back as an Error text" is covered by each tool's own tests,
+/// and folding it into this sweep would turn one assertion into a pile of side effects.
 #[test]
 fn every_builtin_tool_declares_a_schema_it_can_honour() {
     const JSON_TYPES: &[&str] = &[
@@ -777,64 +894,68 @@ fn every_builtin_tool_declares_a_schema_it_can_honour() {
     ];
     let registry = handlers::build_default();
     let names = registry.names();
-    assert!(!names.is_empty(), "工具表不该是empty");
+    assert!(!names.is_empty(), "the tool list must not be empty");
 
     let mut seen = std::collections::BTreeSet::new();
     for name in &names {
         assert!(
             seen.insert(name.to_string()),
-            "工具名重复了：{name} —— register 会静默覆盖"
+            "the tool name is duplicated: {name} — register would overwrite silently"
         );
-        let tool = registry.get(name).expect("names() 里的工具要能取到");
+        let tool = registry
+            .get(name)
+            .expect("every tool in names() has to be retrievable");
         assert!(
             tool.description.trim().len() > 4,
-            "{name} 的描述为空或太短 —— 模型就是靠这句话决定要不要用"
+            "{name}'s description is empty or too short — that sentence is how the model decides whether to use it"
         );
         let schema = &tool.input_schema;
         assert_eq!(
             schema["type"], "object",
-            "{name} 的 schema 顶层必须是 type=object"
+            "{name}'s schema has to be type=object at the top"
         );
         let properties = schema["properties"]
             .as_object()
-            .unwrap_or_else(|| panic!("{name} 没有 properties"));
+            .unwrap_or_else(|| panic!("{name} has no properties"));
         if let Some(required) = schema["required"].as_array() {
             for field in required {
-                let field = field.as_str().expect("required 里要写字符串");
+                let field = field.as_str().expect("required must hold strings");
                 assert!(
                     properties.contains_key(field),
-                    "{name} 的 required 里有 {field}，但 properties 里没有 —— 模型永远填不对"
+                    "{name} lists {field} in required but not in properties — the model can never fill it in right"
                 );
             }
         }
-        let declared = schema["type"].as_str().expect("type 是字符串");
+        let declared = schema["type"].as_str().expect("type is a string");
         assert!(
             JSON_TYPES.contains(&declared),
-            "{name} 的 type 是 {declared}"
+            "{name}'s type is {declared}"
         );
 
         for (field, spec) in properties {
             let Some(kind) = spec["type"].as_str() else {
-                // `anyOf` 之类是合法的 JSON Schema；只要不是「什么都没有」就行。
+                // Something like `anyOf` is legal JSON Schema; it just must not be "nothing at all".
                 assert!(
                     !spec.is_null(),
-                    "{name}.{field} 没有任何类型信息，模型没法填"
+                    "{name}.{field} carries no type information, so the model cannot fill it in"
                 );
                 continue;
             };
             assert!(
                 JSON_TYPES.contains(&kind),
-                "{name}.{field} 的类型是 {kind}，不是 JSON 类型名"
+                "{name}.{field} is typed {kind}, which is not a JSON type name"
             );
         }
     }
 }
 
-/// `readonly()` 只去掉独占型工具，其余原样留下（批量委派靠它把写/执行收起来）。
+/// `readonly()` drops only the exclusive tools and leaves the rest alone (batch delegation uses
+/// it to put writes and exec away).
 #[tokio::test]
 async fn readonly_drops_the_exclusive_tools_and_nothing_else() {
     let mut registry = handlers::build_default();
-    // 用一个假的独占工具代表 run_command / write_file：真正的那些由 app-server 注册。
+    // A fake exclusive tool stands in for run_command / write_file: the real ones are registered by
+    // the app-server.
     let mut exclusive = crate::handlers::find_tools();
     exclusive.name = "pretend_write".to_string();
     registry.register_exclusive(exclusive);
@@ -842,22 +963,22 @@ async fn readonly_drops_the_exclusive_tools_and_nothing_else() {
     let read_only = registry.readonly();
     assert!(
         read_only.get("pretend_write").is_none(),
-        "独占型工具必须被收走"
+        "an exclusive tool has to be taken away"
     );
     assert!(
         !read_only.is_exclusive("pretend_write"),
-        "收走之后不能再被当成屏障"
+        "once taken away it must not count as a barrier"
     );
     assert!(
         read_only.get("read_file").is_some() && read_only.get("list_dir").is_some(),
-        "只读工具一个都不能少"
+        "not one read-only tool may go missing"
     );
     assert!(
         registry.get("pretend_write").is_some(),
-        "原表不能被改：readonly() 是拷贝"
+        "the original table must not change: readonly() copies"
     );
     assert!(
         read_only.names().len() + 1 == registry.names().len(),
-        "差的恰好是那一个独占工具"
+        "the one missing is exactly the exclusive tool"
     );
 }

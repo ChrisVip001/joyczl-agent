@@ -164,7 +164,7 @@ export class WeChatAdapter {
       // rejection — Node takes the process down by default, and it serves everyone's sessions.
       void this.#serve(request, response).catch((error: unknown) => {
         this.#onLog(
-          `这个请求没处理完：${error instanceof Error ? error.message : String(error)}`,
+          `this request was not handled: ${error instanceof Error ? error.message : String(error)}`,
         );
         if (!response.headersSent) response.writeHead(500);
         response.end();
@@ -176,13 +176,14 @@ export class WeChatAdapter {
       server.on("close", () => resolve());
       server.listen(this.#port, () => {
         this.#onLog(
-          `在 ${this.#port} 端口等微信推 ${this.#path} —— ` +
-            `微信那边要的是公网可达的 80 或 443，本地跑得先配内网穿透。`,
+          `waiting for WeChat to push ${this.#path} on port ${this.#port} — ` +
+            `WeChat wants a publicly reachable 80 or 443, so a local run needs a tunnel first.`,
         );
         if (this.#appSecret === undefined) {
           this.#onLog(
-            "没配 AppSecret：客服消息推不了。于是只有「4 秒内答得完」的消息能回，" +
-              "慢一点的那些微信就把用户那句掐了。",
+            "no AppSecret: customer-service messages cannot be pushed. So only messages that can be " +
+            "answered within 4 seconds get a reply, " +
+              "and WeChat cuts off the user's line on the slower ones.",
           );
         }
       });
@@ -222,7 +223,8 @@ export class WeChatAdapter {
       const timestamp = query.get("timestamp") ?? "";
       const nonce = query.get("nonce") ?? "";
       if (signatureOf(this.#token, timestamp, nonce) !== signature) {
-        this.#onLog("URL 验证没通过：签名对不上。多半是 Token 填得跟微信那边不一样。");
+        this.#onLog("URL verification failed: the signature does not match. The Token is probably "
+          + "different from the one on the WeChat side.");
         response.writeHead(403);
         response.end();
         return;
@@ -272,7 +274,7 @@ export class WeChatAdapter {
         signatureOf(this.#token, timestamp, nonce) !==
         (query.get("signature") ?? "")
       ) {
-        this.#onLog("收到一条明文消息，但签名对不上，丢掉。");
+        this.#onLog("a plaintext message arrived with a signature that does not match; dropped.");
         return undefined;
       }
       return body;
@@ -285,12 +287,12 @@ export class WeChatAdapter {
       signatureOf(this.#token, timestamp, nonce, encrypt) !==
       (query.get("msg_signature") ?? "")
     ) {
-      this.#onLog("收到一条加密消息，但 msg_signature 对不上，丢掉。");
+      this.#onLog("an encrypted message arrived with a msg_signature that does not match; dropped.");
       return undefined;
     }
     if (key === undefined) {
       this.#onLog(
-        "微信那边选的是加密模式，但没给 WECHAT_AES_KEY，这些消息解不开。",
+        "the WeChat side is in encrypted mode but WECHAT_AES_KEY is missing, so these cannot be opened.",
       );
       return undefined;
     }
@@ -302,7 +304,7 @@ export class WeChatAdapter {
       });
     } catch (error) {
       this.#onLog(
-        `解不开这条密文：${error instanceof Error ? error.message : String(error)}`,
+        `cannot open this ciphertext: ${error instanceof Error ? error.message : String(error)}`,
       );
       return undefined;
     }
@@ -321,7 +323,7 @@ export class WeChatAdapter {
       if (this.#seen.has(msgId)) {
         // WeChat's retry. The first attempt was accepted; just make it stop resending — another
         // reply is a second duplicate, and arriving almost together they read as ghosts.
-        this.#onLog(`微信又把 ${msgId} 推了一遍（5 秒没等到答复），跳过。`);
+        this.#onLog(`WeChat pushed ${msgId} again (no answer within 5 s); skipped.`);
         this.#end(response, "success");
         return;
       }
@@ -330,7 +332,7 @@ export class WeChatAdapter {
 
     if (this.#allow.size > 0 && !this.#allow.has(openid)) {
       // Ignore silently, and don't reply "no permission" — that tells a stranger the account is alive.
-      this.#onLog(`忽略了不在白名单里的人：${openid}`);
+      this.#onLog(`ignored someone outside the allowlist: ${openid}`);
       this.#end(response, "success");
       return;
     }
@@ -338,7 +340,7 @@ export class WeChatAdapter {
     const text = tag(xml, "MsgType") === "text" ? tag(xml, "Content") : "";
     const pending: Promise<string> =
       text.trim() === ""
-        ? Promise.resolve("这条我读不了 —— 目前只认文字，语音和图片还没接。")
+        ? Promise.resolve("I cannot read this one — text only for now; voice and images are not wired up yet.")
         : this.#respond(`wechat:${openid}`, text).catch((error: unknown) =>
             explain(error),
           );
@@ -371,7 +373,7 @@ export class WeChatAdapter {
         // One failed send, stop: the rest would fail identically, and three identical errors are
         // far harder to read than one useful one. The usual cause is an unverified account.
         this.#onLog(
-          `客服消息没发出去：${error instanceof Error ? error.message : String(error)}`,
+          `the customer-service message did not go out: ${error instanceof Error ? error.message : String(error)}`,
         );
         return;
       }
@@ -443,7 +445,7 @@ export class WeChatAdapter {
     const secret = this.#appSecret;
     if (secret === undefined) {
       throw new Error(
-        "没配 AppSecret —— 客服消息发不出去。（另外它只有认证过的公众号能调。）",
+        "no AppSecret — customer-service messages cannot be sent. (And only a verified account can call it.)",
       );
     }
     if (this.#accessToken !== undefined && Date.now() < this.#accessTokenUntil) {
@@ -470,7 +472,7 @@ export class WeChatAdapter {
       errmsg?: string;
     };
     if (typeof body.access_token !== "string") {
-      throw new Error(`取 access_token 没成：${body.errcode} ${body.errmsg}`);
+      throw new Error(`fetching access_token failed: ${body.errcode} ${body.errmsg}`);
     }
 
     this.#accessToken = body.access_token;
@@ -513,7 +515,7 @@ export class WeChatAdapter {
         this.#accessTokenUntil = 0;
         continue;
       }
-      throw new Error(`客服消息被拒：${body.errcode} ${body.errmsg}`);
+      throw new Error(`the customer-service message was refused: ${body.errcode} ${body.errmsg}`);
     }
   }
 }

@@ -3,7 +3,7 @@ name = "joyczl-ops"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "驾驶舱的 HTTP 面：axum + SSE，把浏览器接到 app-server 上。"
+description = "The cockpit's HTTP face: axum + SSE, wiring a browser to the app-server."
 
 [lib]
 name = "joyczl_ops"
@@ -25,11 +25,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
-# token 生成用：已在依赖树里（sqlx/tokio 传递引入），不是新 crate。
+# For token generation: already in the tree (pulled in transitively by sqlx/tokio), not a new
+# crate.
 getrandom = "0.3"
-# 密码哈希（PBKDF2-HMAC-SHA256）与 webhook 的 HMAC-SHA256：ring 已在依赖树里（reqwest → rustls）。
+# Password hashing (PBKDF2-HMAC-SHA256) and the webhook's HMAC-SHA256: ring is already in the
+# tree (reqwest → rustls).
 ring = "0.17"
-# webhook 的异步回调：POST 一条结果。reqwest 早就在树里（网关 / MCP / 飞书），不是新编译物。
+# The webhook's asynchronous callback: POST one result. reqwest has been in the tree (gateway /
+# MCP / Feishu), so nothing new to compile.
 reqwest = { workspace = true }
 
 [dev-dependencies]

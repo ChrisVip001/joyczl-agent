@@ -46,6 +46,8 @@ pub struct ModelProfile {
     /// the same decision — one vendor can ship both kinds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub vision: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub capabilities: Option<joyczl_protocol::ModelCapabilities>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -141,6 +143,7 @@ pub fn apply_profile(
     settings.api_key = resolve_key(profile, home, store);
     // Per-model, not per-vendor: absent here means "fall back to the catalog row".
     settings.vision = profile.vision;
+    settings.model_capabilities = profile.capabilities.clone();
 }
 
 /// Fetch the real key per `key_source`. `env:` reads the env var directly (**never copied
@@ -253,21 +256,25 @@ impl SecretStore {
     }
 }
 
-/// 秘密的唯一收口：LLM key、连接器 token、MCP token 迟早都从这条缝过。
+/// The one place secrets pass through: LLM keys, connector tokens and MCP tokens all come
+/// through this seam, sooner or later.
 ///
-/// 现在的实现是 [`SecretStore`]（钥匙串 / 0600 文件 / 内存）。留着这个 trait 是为了
-/// 「第二个后端」——服务器形态的 KMS 信封出现时只加实现，`apply_profile` 这些调用方
-/// 一行不改。连接器与 MCP 的 token 文件还没搬进来：它们的轮换/锁语义（0600 + 临时
-/// 文件改名 + 跨进程锁）值得单独一轮，搬的时机是产品真出服务器版。
+/// Today's implementation is [`SecretStore`] (keychain / 0600 file / memory). The trait stays
+/// for the **second backend**: when a server-shaped KMS envelope appears, only an
+/// implementation is added and callers like `apply_profile` do not change a line. The
+/// connector and MCP token files have not moved in yet — their rotation and locking rules
+/// (0600 plus temp-file rename plus a cross-process lock) deserve a round of their own; the
+/// time to move them is when the product actually ships a server edition.
 pub trait SecretVault {
-    /// 存一条秘密，返回**实际落点**（`keychain` / `file` / `memory`）—— UI 与日志必须
-    /// 说真话：绝不暗示在钥匙串其实是明文文件。
+    /// Store a secret and return where it **actually landed** (`keychain` / `file` /
+    /// `memory`) — the UI and the logs have to tell the truth: never imply "keychain" when
+    /// it is really a plaintext file.
     fn put(&mut self, home: &Path, account: &str, secret: &str) -> Result<&'static str, String>;
 
-    /// 取回。`None` = 没存过（比如这个档案/服务根本不需要 key）。
+    /// Read it back. `None` = never stored (a profile or service that needs no key at all).
     fn get(&mut self, home: &Path, account: &str) -> Option<String>;
 
-    /// 删掉（钥匙串条目与文件兜底一起清）。
+    /// Delete it (the keychain entry and the file fallback are both cleared).
     fn remove(&mut self, home: &Path, account: &str);
 }
 
@@ -380,7 +387,7 @@ fn run_limited(command: &mut std::process::Command, stdin_secret: Option<&str>) 
 /// Wait cap for keychain commands.
 const KEYCHAIN_TIMEOUT_SECS: u64 = 5;
 
-/// 平台钥匙串的统一入口。macOS: `security add-generic-password -U -s joyczl -a <account>
+/// The single entry point to the platform keychain. macOS: `security add-generic-password -U -s joyczl -a <account>
 /// -w <key>`；Linux: `secret-tool store` reads from stdin (**never argv** — argv is visible
 /// to all)；Windows: Credential Manager（keyring crate，CredWrite/CredRead）。
 fn os_keychain_put(account: &str, secret: &str) -> bool {
@@ -422,7 +429,8 @@ fn os_keychain_put(account: &str, secret: &str) -> bool {
             return true;
         }
     }
-    // 钥匙串失败（或不可用）：回落 0600 文件，put 的返回值会如实说落点。
+    // The keychain failed (or is unavailable): fall back to a 0600 file — `put`'s return
+    // value says where it really landed.
     false
 }
 
@@ -487,20 +495,23 @@ fn os_keychain_remove(account: &str) {
 
 // ---- Windows Credential Manager（keyring crate）----------------------------------------------
 
-/// 只在 Windows 编译。macOS 与 Linux 的命令行路径已上过线，不换实现；Windows 之前只有
-/// 「存得进、读不回」的命令行尴尬（见 limitations），keyring 走 CredWrite/CredRead，两边都通。
+/// Compiled on Windows only. The command-line paths on macOS and Linux have shipped, so they
+/// are not being replaced; Windows previously had the command-line embarrassment of
+/// "writes fine, cannot read back" (see limitations), and `keyring` goes through
+/// CredWrite/CredRead, which works both ways.
 #[cfg(target_os = "windows")]
 mod win {
     use keyring::Entry;
 
-    /// keyring 的调用是阻塞系统调用，包一层 5 秒超时（与 `security`/`secret-tool` 同一条
-    /// 纪律）：凭据操作冻住 app-server 不可接受。超时 = 失败，回落文件。
+    /// A keyring call blocks the OS thread, so it is wrapped in a 5-second timeout — the same
+    /// discipline as `security`/`secret-tool`: a credentials call freezing the app-server is
+    /// not acceptable. Timeout = failure, and it falls back to the file.
     fn limited<T>(
         account: &str,
         op: impl FnOnce(&Entry) -> Result<T, keyring::Error> + Send + 'static,
     ) -> Option<T>
     where
-        // 结果要穿过通道回到调用线程。
+        // The result has to cross the channel back to the calling thread.
         T: Send + 'static,
     {
         let entry = Entry::new(super::SERVICE, account).ok()?;
@@ -514,7 +525,8 @@ mod win {
     }
 
     pub fn put(account: &str, secret: &str) -> bool {
-        // 闭包必须 'static（要搬进线程），借用的 secret 先落为自有值。
+        // The closure must be 'static (it moves into a thread), so the borrowed secret is
+        // first turned into an owned value.
         let secret = secret.to_string();
         limited(account, move |entry| entry.set_password(&secret)).is_some()
     }
@@ -543,17 +555,22 @@ mod models_tests {
             base_url: None,
             key_source: None,
             vision: None,
+            capabilities: None,
         }
     }
 
-    /// Vault trait 是唯一接缝：通过 `&mut dyn SecretVault` 也能完成一整轮存取删 ——
-    /// 将来服务器 KMS 后端就从这个口接进来，调用方（apply_profile 一类）零改动。
+    /// The Vault trait is the only seam: a full store/read/delete round works through
+    /// `&mut dyn SecretVault` too — a future server KMS backend plugs in here, and callers
+    /// (apply_profile and friends) change nothing.
     #[test]
     fn the_vault_trait_is_the_only_seam() {
         let home = Path::new("/tmp/joyczl-vault-trait-test");
         let mut vault: Box<dyn SecretVault> = Box::new(SecretStore::memory());
         assert_eq!(vault.get(home, "llm:ds"), None);
-        assert_eq!(vault.put(home, "llm:ds", "sk-test").expect("存"), "memory");
+        assert_eq!(
+            vault.put(home, "llm:ds", "sk-test").expect("store"),
+            "memory"
+        );
         assert_eq!(vault.get(home, "llm:ds").as_deref(), Some("sk-test"));
         vault.remove(home, "llm:ds");
         assert_eq!(vault.get(home, "llm:ds"), None);
@@ -562,20 +579,20 @@ mod models_tests {
     /// Memory backend: **never touches the system keychain or disk** — CI must never see auth prompts.
     #[test]
     fn the_memory_backend_never_touches_the_disk() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let mut store = SecretStore::memory();
         assert_eq!(store.put(dir.path(), "ds", "sk-1").unwrap(), "memory");
         assert_eq!(store.get(dir.path(), "ds").as_deref(), Some("sk-1"));
         assert!(
             !secrets_path(dir.path()).exists(),
-            "内存后端不该写 secrets.json"
+            "the memory backend must not write secrets.json"
         );
     }
 
     /// File fallback: stores and reads back, with (Unix) permissions tightened to 0600.
     #[test]
     fn the_file_backend_stores_and_reads_back() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let mut store = SecretStore::file_only();
         assert_eq!(store.put(dir.path(), "ds", "sk-2").unwrap(), "file");
         assert_eq!(store.get(dir.path(), "ds").as_deref(), Some("sk-2"));
@@ -588,10 +605,14 @@ mod models_tests {
             let mut store = SecretStore::file_only();
             store.put(dir.path(), "ds", "sk-3").unwrap();
             let mode = std::fs::metadata(secrets_path(dir.path()))
-                .expect("文件在")
+                .expect("the file is there")
                 .permissions()
                 .mode();
-            assert_eq!(mode & 0o777, 0o600, "明文兜底该是 0600，实际 {mode:o}");
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "the plaintext fallback should be 0600, actually {mode:o}"
+            );
         }
     }
 
@@ -613,7 +634,11 @@ mod models_tests {
                 ..profile("ds", "deepseek")
             },
         );
-        assert_eq!(models.profiles.len(), 1, "同 id 该覆盖而不是新增");
+        assert_eq!(
+            models.profiles.len(),
+            1,
+            "the same id should overwrite, not add a second entry"
+        );
         assert_eq!(
             models.profiles[0].model.as_deref(),
             Some("deepseek-reasoner")
@@ -621,7 +646,7 @@ mod models_tests {
         assert_eq!(
             models.profiles[0].key_source.as_deref(),
             Some("keychain"),
-            "没给 key 就不该把原来的凭据指针清掉"
+            "not passing a key must not clear the existing credential pointer"
         );
     }
 
@@ -643,25 +668,25 @@ mod models_tests {
         assert!(remove(&mut models, "oa"));
         assert!(
             models.active.is_none(),
-            "删掉当前那套后不该留一个指不中的 active"
+            "deleting the active profile must not leave an `active` that points at nothing"
         );
         assert!(active_profile(&models).is_none());
-        assert!(!remove(&mut models, "不存在"));
+        assert!(!remove(&mut models, "not-there"));
     }
 
     /// Applying into Settings: provider/model/base_url in place, key from the credential backend.
     #[test]
     fn applying_the_active_profile_fills_settings_including_the_key() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let mut store = SecretStore::memory();
-        store.put(dir.path(), "ds", "sk-应用").unwrap();
+        store.put(dir.path(), "ds", "sk-from-store").unwrap();
 
         let mut models = ModelsFile::default();
         upsert(
             &mut models,
             ModelProfile {
-                model: Some("deepseek-chat".to_string()),
-                small_model: Some("deepseek-chat".to_string()),
+                model: Some("deepseek-flash".to_string()),
+                small_model: Some("deepseek-flash".to_string()),
                 base_url: Some("https://api.deepseek.com/v1".to_string()),
                 key_source: Some("keychain".to_string()),
                 ..profile("ds", "deepseek")
@@ -672,20 +697,20 @@ mod models_tests {
         let mut settings = crate::Settings::default();
         apply_active(&models, dir.path(), &mut store, &mut settings);
         assert_eq!(settings.provider, "deepseek");
-        assert_eq!(settings.model.as_deref(), Some("deepseek-chat"));
+        assert_eq!(settings.model.as_deref(), Some("deepseek-flash"));
         assert_eq!(
             settings.base_url.as_deref(),
             Some("https://api.deepseek.com/v1")
         );
-        assert_eq!(settings.api_key.as_deref(), Some("sk-应用"));
+        assert_eq!(settings.api_key.as_deref(), Some("sk-from-store"));
     }
 
     /// An `env:` source reads the environment directly, **never copied into any file**.
     #[test]
     fn an_env_key_source_is_read_from_the_environment() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let var = "JOY_TEST_MODELS_KEY";
-        std::env::set_var(var, "sk-环境");
+        std::env::set_var(var, "sk-from-env");
         let mut models = ModelsFile::default();
         upsert(
             &mut models,
@@ -702,10 +727,10 @@ mod models_tests {
             &mut SecretStore::memory(),
             &mut settings,
         );
-        assert_eq!(settings.api_key.as_deref(), Some("sk-环境"));
+        assert_eq!(settings.api_key.as_deref(), Some("sk-from-env"));
         assert!(
             !secrets_path(dir.path()).exists(),
-            "env 源不该把 key 抄进文件"
+            "the env source must not copy the key into a file"
         );
         std::env::remove_var(var);
     }
@@ -713,7 +738,7 @@ mod models_tests {
     /// No active profile leaves Settings alone — no config in the file ≠ clearing the config.
     #[test]
     fn no_active_profile_leaves_settings_alone() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let mut settings = crate::Settings {
             provider: "ollama".to_string(),
             ..crate::Settings::default()
@@ -727,14 +752,15 @@ mod models_tests {
         assert_eq!(settings.provider, "ollama");
     }
 
-    /// `vision` 跟着配置走：不写 = 跟随厂商默认，写了 = 这套模型说了算。
-    /// 同一家既有看图模型也有纯文本模型，这是唯一说得准的地方。
+    /// `vision` follows the config: unset = whatever the vendor defaults to, set = this
+    /// profile decides. One vendor ships both vision and text-only models, so this is the
+    /// only place that can say which is which.
     #[test]
     fn applying_a_profile_carries_its_vision_declaration() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let mut store = SecretStore::memory();
         let mut settings = crate::Settings::default();
-        assert_eq!(settings.vision, None, "默认跟随厂商");
+        assert_eq!(settings.vision, None, "follows the vendor by default");
 
         let mut models = ModelsFile::default();
         upsert(
@@ -746,7 +772,11 @@ mod models_tests {
         );
         models.active = Some("ds".to_string());
         apply_active(&models, dir.path(), &mut store, &mut settings);
-        assert_eq!(settings.vision, Some(true), "声明要进运行时设置");
+        assert_eq!(
+            settings.vision,
+            Some(true),
+            "the declaration must reach the runtime settings"
+        );
 
         upsert(
             &mut models,
@@ -756,13 +786,17 @@ mod models_tests {
             },
         );
         apply_active(&models, dir.path(), &mut store, &mut settings);
-        assert_eq!(settings.vision, Some(false), "换成纯文本模型要收回能力");
+        assert_eq!(
+            settings.vision,
+            Some(false),
+            "switching to a text-only model must take the capability back"
+        );
     }
 
     /// Read/write round trip: the file holds only config and credential **pointers**, never keys.
     #[test]
     fn the_file_round_trips_and_never_contains_the_key() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let mut models = ModelsFile::default();
         upsert(
             &mut models,
@@ -772,10 +806,13 @@ mod models_tests {
             },
         );
         models.active = Some("ds".to_string());
-        save_models(dir.path(), &models).expect("写");
+        save_models(dir.path(), &models).expect("write");
 
-        let raw = std::fs::read_to_string(models_path(dir.path())).expect("读");
-        assert!(!raw.contains("sk-"), "models.json 里不该出现密钥：{raw}");
+        let raw = std::fs::read_to_string(models_path(dir.path())).expect("read");
+        assert!(
+            !raw.contains("sk-"),
+            "no key may appear in models.json: {raw}"
+        );
 
         let back = load_models(dir.path());
         assert_eq!(back.active.as_deref(), Some("ds"));

@@ -37,6 +37,22 @@ pub async fn reconcile(server: &Server, sink: &EventSink) {
     let max_age = server.settings().resume_max_age_minutes;
     let now = chrono::Utc::now().naive_utc();
     for row in rows {
+        if row.run_id.is_some() && row.round_id.is_some() {
+            let charged = match crate::task_contract::checkpoint_usage(&row.usage_json) {
+                Ok(usage) => crate::task_contract::charge_checkpoint(server, &row, usage).await,
+                Err(error) => Err(error),
+            };
+            if let Err(error) = charged {
+                crate::task_contract::stop_recovery(
+                    server,
+                    sink,
+                    &row,
+                    &format!("Checkpoint usage could not be charged: {error}"),
+                )
+                .await;
+                continue;
+            }
+        }
         if let Some(age) = age_minutes(&row.updated_at, now) {
             if max_age > 0 && age > i64::from(max_age) {
                 eprintln!(
@@ -77,7 +93,7 @@ pub(crate) fn age_minutes(updated_at: &str, now: chrono::NaiveDateTime) -> Optio
     Some((now - at).num_minutes())
 }
 
-/// 90 → `1 小时`, 3000 → `2 天`. Rounded down on purpose: "2 天前" must not read as 1.
+/// 90 → `1 hour`, 3000 → `2 days`. Rounded down on purpose: "2 days ago" must not read as 1.
 pub(crate) fn humanize(minutes: i64) -> String {
     if minutes >= 1_440 {
         format!("{} days", minutes / 1_440)
@@ -94,29 +110,10 @@ pub(crate) fn humanize(minutes: i64) -> String {
 /// (nobody asked), while a pause is the human's decision and waits for their "continue".
 /// No suspended checkpoint for that turn → nothing to continue (the task then waits for
 /// its next message instead) — said out loud, not silently skipped.
-pub(crate) async fn resume_suspended(server: &Server, sink: &EventSink, turn_id: &str) {
-    let row = match server.checkpoints.get(turn_id).await {
-        Ok(Some(row)) if row.status == "suspended" => row,
-        Ok(_) => {
-            eprintln!(
-                "(joy) turn {turn_id} has no resumable pause point; waiting for the next message"
-            );
-            return;
-        }
-        Err(e) => {
-            eprintln!("(joy) could not read the paused checkpoint ({turn_id}): {e}");
-            return;
-        }
-    };
-    // Back to `open` **before** the loop runs: every further boundary checkpoints normally,
-    // and if this process dies mid-resume the next boot continues it like any other crash.
-    if let Err(e) = server.checkpoints.reopen(turn_id).await {
-        eprintln!("(joy) could not set the checkpoint back to open before resuming: {e}");
-        return;
-    }
+pub(crate) fn resume_authorized(server: &Server, sink: &EventSink, row: CheckpointRow) {
     let server = server.clone();
     let sink = sink.clone();
-    let turn_id = turn_id.to_string();
+    let turn_id = row.turn_id.clone();
     tokio::spawn(async move {
         eprintln!("(joy) task resuming from where it paused: turn {turn_id}");
         resume_turn(&server, &sink, row, None).await;
@@ -137,12 +134,7 @@ pub(crate) async fn resume_waiting(
         Ok(messages) => messages,
         Err(_) => return false,
     };
-    if messages.last().is_some_and(|message| {
-        message
-            .content
-            .iter()
-            .any(|block| matches!(block, joyczl_provider::ContentBlock::ToolUse { .. }))
-    }) {
+    if crate::task_recovery::require_known_messages(&messages).is_err() {
         let reason = "Waiting checkpoint has an unknown tool intent; reconcile before resuming";
         let _ = server.tasks.needs_attention(&wait.task_id, reason).await;
         let _ = server.checkpoints.finish(&wait.turn_id, "suspended").await;
@@ -170,26 +162,16 @@ pub(crate) async fn resume_waiting(
         Ok(json) => json,
         Err(_) => return false,
     };
-    resume_turn(server, sink, row, Some(wait)).await
+    resume_turn(server, sink, row, Some(crate::wake::Wake::Jobs(wait))).await
 }
 
 /// Continue one checkpointed turn and give it the same accounting as a fresh one.
-async fn resume_turn(
+pub(crate) async fn resume_turn(
     server: &Server,
     sink: &EventSink,
     row: CheckpointRow,
-    waiting: Option<joyczl_state::waits::JobWait>,
+    waiting: Option<crate::wake::Wake>,
 ) -> bool {
-    let resolved: Resolved = match server.resolved() {
-        Some(resolved) => resolved,
-        None => {
-            eprintln!(
-                "(joy) keeping checkpoint {} for now: no model is configured; it resumes at the next start once there is one",
-                row.turn_id
-            );
-            return false;
-        }
-    };
     let Ok(messages) = serde_json::from_str::<Vec<Message>>(&row.messages_json) else {
         eprintln!(
             "(joy) the working memory of checkpoint {} could not be read (schema drift?), marked abandoned",
@@ -198,26 +180,47 @@ async fn resume_turn(
         let _ = server.checkpoints.finish(&row.turn_id, "abandoned").await;
         return false;
     };
-    if messages.last().is_some_and(|m| {
-        m.content
-            .iter()
-            .any(|b| matches!(b, joyczl_provider::ContentBlock::ToolUse { .. }))
-    }) {
-        let reason = "Tool outcome unknown after interruption; reconcile before retrying";
-        if let Some(id) = row.run_id.as_deref() {
-            if let Ok(Some(run)) = server.runs.get(id).await {
-                let _ = server.tasks.needs_attention(&run.task_id, reason).await;
-                let _ = server
-                    .runs
-                    .close(id, joyczl_state::RunStatus::Waiting, Some(reason))
-                    .await;
-            }
-        }
-        let _ = server.checkpoints.finish(&row.turn_id, "suspended").await;
-        eprintln!("(joy) {}: {reason}", row.turn_id);
+    if crate::task_recovery::require_known_messages(&messages).is_err() {
+        crate::task_contract::stop_recovery(
+            server,
+            sink,
+            &row,
+            "Tool outcome unknown after interruption; reconcile before retrying",
+        )
+        .await;
         return false;
     }
-    let mut usage: Usage = serde_json::from_str(&row.usage_json).unwrap_or_default();
+    let mut usage: Usage = match crate::task_contract::checkpoint_usage(&row.usage_json) {
+        Ok(usage) => usage,
+        Err(error) => {
+            crate::task_contract::stop_recovery(server, sink, &row, &error).await;
+            return false;
+        }
+    };
+    let resolved: Resolved = match server.resolved() {
+        Some(resolved) => resolved,
+        None => {
+            if row.round_id.is_some() {
+                if let Err(error) =
+                    crate::task_contract::charge_checkpoint(server, &row, usage).await
+                {
+                    crate::task_contract::stop_recovery(
+                        server,
+                        sink,
+                        &row,
+                        &format!("Checkpoint usage could not be charged: {error}"),
+                    )
+                    .await;
+                    return false;
+                }
+            }
+            eprintln!(
+                "(joy) keeping checkpoint {} for now: no model is configured; it resumes at the next start once there is one",
+                row.turn_id
+            );
+            return false;
+        }
+    };
     let session_id = row.session_id.clone();
     let turn_id = row.turn_id.clone();
 
@@ -260,13 +263,24 @@ async fn resume_turn(
         },
         None => None,
     };
-    sink.notification(ServerNotification::TurnResumed(TurnResumedNotification {
-        turn_id: turn_id.clone(),
-        session_id: session_id.clone(),
-        from_iterations: row.iterations,
-        reason: "reconcile: crash recovery".to_string(),
-    }));
-
+    let background_lock = match &task {
+        Some(task) => match joyczl_state::dispatch::TaskDispatch::new(server.pool.clone())
+            .get(&task.id)
+            .await
+        {
+            Ok(Some(_)) => Some(server.session_write_lock("background-task-worker")),
+            Ok(None) => None,
+            Err(error) => {
+                eprintln!("(joy) cannot read recovered task dispatch: {error}");
+                return false;
+            }
+        },
+        None => None,
+    };
+    let _background_guard = match &background_lock {
+        Some(lock) => Some(lock.lock().await),
+        None => None,
+    };
     // Same table as a fresh turn: turn/interrupt can stop a resumed one too. The session gate
     // applies here as well — two checkpoints of one session must not resume side by side.
     // Losing the race leaves this checkpoint `open`; the next boot picks it up again.
@@ -292,29 +306,117 @@ async fn resume_turn(
         Some(lock) => Some(lock.lock().await),
         None => None,
     };
-    if let Some(wait) = &waiting {
-        match joyczl_state::waits::JobWaits::new(server.pool.clone())
-            .claim(wait, &row.messages_json)
+    if let Some(task) = &task {
+        match joyczl_state::human_pauses::HumanPauses::new(server.pool.clone())
+            .is_paused(&task.id)
             .await
         {
-            Ok(true) => eprintln!(
-                "(joy) task {} background jobs finished; resuming authorized work",
-                wait.task_id
-            ),
-            Ok(false) => return false,
-            Err(e) => {
-                eprintln!("(joy) cannot claim durable job wait: {e}");
+            Ok(false) => (),
+            Ok(true) => {
+                let _ = server.checkpoints.finish(&turn_id, "suspended").await;
+                eprintln!(
+                    "(joy) task {} remains paused by the user; automatic recovery was refused",
+                    task.id
+                );
+                crate::task::notify(
+                    sink,
+                    task,
+                    Some("Paused by the user; explicit continuation is required"),
+                );
+                return false;
+            }
+            Err(error) => {
+                eprintln!("(joy) human pause could not be verified; recovery stopped: {error}");
+                return false;
+            }
+        }
+        match server.runs.list_by_task(&task.id, 1).await {
+            Ok(runs) if runs.first().map(|run| run.id.as_str()) == row.run_id.as_deref() => (),
+            Ok(_) => {
+                if let Err(error) = server.checkpoints.finish(&turn_id, "abandoned").await {
+                    eprintln!("(joy) stale checkpoint could not be closed: {error}");
+                }
+                if let Some(id) = &row.run_id {
+                    if let Err(error) = server.runs.supersede(id).await {
+                        eprintln!("(joy) stale run could not be suspended: {error}");
+                    }
+                }
+                eprintln!(
+                    "(joy) checkpoint {turn_id} belongs to an older execution; it will not resume"
+                );
+                return false;
+            }
+            Err(error) => {
+                eprintln!(
+                    "(joy) latest execution could not be verified; recovery stopped: {error}"
+                );
+                return false;
+            }
+        }
+        match server.tasks.get(&task.id).await {
+            Ok(Some(current)) if current.status.is_open() => {}
+            _ => {
+                eprintln!("(joy) recovered task is no longer open; execution stopped");
+                return false;
+            }
+        }
+        let expected = waiting
+            .as_ref()
+            .map(crate::wake::Wake::checkpoint_status)
+            .unwrap_or("open");
+        match server.checkpoints.get(&turn_id).await {
+            Ok(Some(current)) if current.status == expected => {}
+            _ => {
+                eprintln!("(joy) recovered checkpoint admission changed; execution stopped");
                 return false;
             }
         }
     }
     if let Some(task) = &task {
-        if server.tasks.set_running(&task.id, &turn_id).await.is_ok() {
-            if let Ok(Some(row)) = server.tasks.get(&task.id).await {
-                crate::task::notify(sink, &row, Some("turn resumed"));
+        let admission = match crate::task_contract::charge_checkpoint(server, &row, usage).await {
+            Ok(()) => match server.tasks.get(&task.id).await {
+                Ok(Some(current)) => crate::task_contract::admit(server, sink, &current)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.message),
+                _ => Err("Recovered task is unavailable".into()),
+            },
+            Err(error) => Err(format!("Checkpoint usage could not be charged: {error}")),
+        };
+        if let Err(reason) = admission {
+            crate::task_contract::stop_recovery(server, sink, &row, &reason).await;
+            return false;
+        }
+    }
+    if let Some(wait) = &waiting {
+        match wait.claim(server, &row.messages_json).await {
+            Ok(true) => eprintln!(
+                "(joy) task {} input dependencies settled; resuming authorized work",
+                wait.task_id()
+            ),
+            Ok(false) => return false,
+            Err(error) => {
+                eprintln!("(joy) durable wait could not be claimed: {error}");
+                return false;
             }
         }
     }
+    if let Some(task) = &task {
+        if let Err(error) = server.tasks.set_running(&task.id, &turn_id).await {
+            eprintln!("(joy) recovered task activation failed; execution stopped: {error}");
+            let _ = server.checkpoints.finish(&turn_id, "suspended").await;
+            return false;
+        }
+        if let Ok(Some(row)) = server.tasks.get(&task.id).await {
+            crate::task::notify(sink, &row, Some("turn resumed"));
+        }
+    }
+    sink.notification(ServerNotification::TurnResumed(TurnResumedNotification {
+        turn_id: turn_id.clone(),
+        session_id: session_id.clone(),
+        from_iterations: row.iterations,
+        reason: "reconcile: crash recovery".to_string(),
+    }));
 
     drop(control_guard);
 
@@ -337,6 +439,11 @@ async fn resume_turn(
         }
     }
 
+    let round_no = row.round_no.unwrap_or_else(|| {
+        task.as_ref()
+            .map(|task| task.rounds_used.max(1))
+            .unwrap_or(1)
+    });
     let round_id = row
         .round_id
         .clone()
@@ -351,7 +458,13 @@ async fn resume_turn(
                 account.wall_ms
             }
             Err(e) => {
-                eprintln!("(joy) cannot read recovered round accounting: {e}");
+                crate::task_contract::stop_recovery(
+                    server,
+                    sink,
+                    &row,
+                    &format!("Cannot read recovered round accounting: {e}"),
+                )
+                .await;
                 return false;
             }
         },
@@ -361,7 +474,13 @@ async fn resume_turn(
         Some(task) => match joyczl_agent::plan::restore(&server.steps, &task.id).await {
             Ok(plan) => plan,
             Err(error) => {
-                eprintln!("(joy) cannot restore task plan; recovery stopped: {error}");
+                crate::task_contract::stop_recovery(
+                    server,
+                    sink,
+                    &row,
+                    &format!("Cannot restore task plan: {error}"),
+                )
+                .await;
                 return false;
             }
         },
@@ -396,6 +515,7 @@ async fn resume_turn(
             &session_id,
             &row.user_message,
             run_id.as_deref(),
+            round_no,
         )),
         // A resumed turn is steerable too: whatever the human adds while the crash recovery
         // runs lands in the same transcript.
@@ -434,14 +554,12 @@ async fn resume_turn(
                             &session_id,
                             &row.user_message,
                             run_id.as_deref(),
+                            round_no,
                         )),
                         steering: Some(steering.clone()),
                     },
                     plan,
-                    round_no: task
-                        .as_ref()
-                        .map(|task| task.rounds_used.max(1))
-                        .unwrap_or(1),
+                    round_no,
                     max_rounds: task
                         .as_ref()
                         .map(|task| task.max_rounds.max(1))

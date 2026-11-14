@@ -1,6 +1,6 @@
-# 发布 Joy 的二进制产物：四个平台的 `joy` + Python 轮子，挂到 GitHub Release 上。
-# 由 tag（v*）触发。npm publish / PyPI upload 仍由人在有凭据的机器执行
-# （见 packaging/RELEASING.md —— 凭据不该躺在 CI 里）。
+# Publish Joy's binary artefacts: `joy` for four platforms plus the Python wheels, attached to a
+# GitHub Release. Triggered by a tag (v*). npm publish / PyPI upload are still done by a human on
+# a machine with credentials (see packaging/RELEASING.md — credentials do not belong in CI).
 name: release
 
 on:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # 创建 Release、上传产物
+  contents: write # create the Release, upload the artefacts
 
 jobs:
   binaries:
@@ -18,9 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS 13 镜像已于 2025-12-04 退役，继续用它会让 job 永远排队（v0.8.0
-          # 挂满 24h 被取消、v0.16.0 排队 31h 未启动，release job 因此从未执行）。
-          # 官方给 x86_64 的替代标签是 macos-15-intel（可用到 2027 年秋）。
+          # The macOS 13 image was retired on 2025-12-04; keeping it leaves the job queued
+          # forever (v0.8.0 sat 24 h and was cancelled, v0.16.0 queued 31 h and never started,
+          # so the release job never ran). The official x86_64 replacement is macos-15-intel
+          # (available until autumn 2027).
           - { os: macos-15, target: aarch64-apple-darwin }
           - { os: macos-15-intel, target: x86_64-apple-darwin }
           - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
@@ -31,7 +32,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      # Linux 构建依赖（sqlite3 源码编译不需要系统库；bwrap 只在运行时需要）。
+      # Linux build dependencies (the sqlite3 bundled build needs no system library; bwrap is
+      # only needed at run time).
       - name: Build joy (${{ matrix.target }})
         working-directory: joy-rs
         run: cargo build --release --target ${{ matrix.target }} -p joyczl-cli
@@ -49,8 +51,8 @@ jobs:
           path: dist/joy-v*.tar.gz
 
   pypi-wheels:
-    # 每平台的原生 bin 轮子（joyczl-agent-bin）。runner 本身就是目标平台，无需交叉编译。
-    # 上传（twine）由人执行 —— 凭据不进 CI。
+    # The native bin wheel per platform (joyczl-agent-bin). The runner is the target platform, so
+    # no cross-compilation. Uploading (twine) is done by a human — credentials do not enter CI.
     strategy:
       fail-fast: false
       matrix:

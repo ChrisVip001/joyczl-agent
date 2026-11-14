@@ -3,7 +3,8 @@
 //! Before these two existed, the model had one way to read a file: flip `JOY_EXEC=1`, then
 //! `run_command cat` — binding "peek at a file" to the "run a command" gate. Reads have no
 //! side effects (consensus: read-only is zero-friction; approval is for writes and execution),
-//! so these two tools are **registered by default and skip the gate**.
+//! so these two tools are **registered by default and skip the gate**. Searching a tree
+//! (`glob` / `grep`) lives in `search.rs`: same no-gate rule, different job.
 //!
 //! Two designs:
 //!
@@ -89,7 +90,11 @@ fn scan_lines(path: PathBuf, offset: u32, limit: u32) -> Result<(Vec<String>, u6
             Ok(line) => line,
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                 return Err(anyhow!(
-                    "{:?} is not UTF-8 text (probably binary); read_file only reads text — for raw bytes use run_command (needs JOY_EXEC=1).",
+                    concat!(
+                        "{:?} is not UTF-8 text (probably binary); read_file only reads text. ",
+                        "If it is an image, ask the user to attach it to the message — an image ",
+                        "path cannot be opened here. For raw bytes, run_command needs JOY_EXEC=1."
+                    ),
                     path
                 ));
             }
@@ -171,7 +176,7 @@ async fn execute_read(
 
     // ---- Spill addresses are **relative to home**, and the model is told so by `spill.rs`.
     //
-    // "全量在 spill/20261112/exec-….txt" is only a useful address if copying it works; resolving
+    // "the full output is in spill/20261112/exec-….txt" is only a useful address if copying it works; resolving
     // it against the turn's cwd fails whenever that cwd is somewhere else (usually). So: if the
     // cwd-relative read misses and the text starts with `spill/`, try `<home>/<that>`.
     //

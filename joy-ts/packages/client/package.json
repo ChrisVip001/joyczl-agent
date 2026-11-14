@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "app-server 的 TypeScript 客户端：起进程、收发帧、把通知分发给订阅者。",
+  "description": "The TypeScript client for the app-server: starts the process, exchanges frames, and fans notifications out to subscribers.",
   "exports": {
     ".": "./src/index.ts"
   },

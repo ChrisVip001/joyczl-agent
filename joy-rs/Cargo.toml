@@ -27,16 +27,18 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
-# ---- 运行时依赖：刻意保持极小 --------------------------------------------
+# ---- Runtime dependencies: deliberately tiny ---------------------------------
 anyhow = "1"
+# Kernel-backed runtime ownership, compatible with the workspace Rust 1.85 minimum.
+fs2 = "0.4.3"
 thiserror = "2"
 chrono = { version = "0.4", features = ["clock"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-#   process = MCP 客户端要把服务器当子进程起起来（stdio 那条路）
-#   sync    = 几条连接要能被多个工具调用共享（tokio::sync::Mutex）
-#   time    = graph 的并行波次靠它验证「真的是同时跑的」
-#   net     = dashboard 的 HTTP 监听（TcpListener）
+#   process = the MCP client starts servers as child processes (the stdio route)
+#   sync    = a few connections get shared across tool calls (tokio::sync::Mutex)
+#   time    = how the graph's parallel waves prove they really ran at once
+#   net     = the dashboard's HTTP listener (TcpListener)
 tokio = { version = "1", features = [
     "io-std",
     "io-util",
@@ -47,17 +49,19 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
-# 工具参数的 JSON Schema 校验：模型给的参数不合法时，报错要具体到字段与期望值。
-# 关掉默认特性 —— resolve-http/file 那套远程引用我们用不上（schema 全是本地字面量）。
+# JSON Schema validation of tool arguments: when the model's arguments are invalid the error has
+# to name the field and the expected value. Default features are off — we have no use for the
+# resolve-http/file remote references (every schema is a local literal).
 jsonschema = { version = "0.56", default-features = false }
 
-# token 估算：压缩要按「离上下文上限有多近」触发，而不是按轮数。
-# 跨厂商近似（cl100k 编码器），准确用量仍以 provider 回报的 usage 为准。
-# 关掉默认特性：只用 cl100k_base。BPE 词表是编进二进制的，不联网。
+# Token estimation: compaction triggers on «how close to the context limit», not on round count.
+# A cross-vendor approximation (the cl100k encoder); the exact figure stays whatever usage the
+# provider reports. Default features off: cl100k_base only, with the BPE table compiled in, so
+# nothing touches the network.
 tiktoken-rs = { version = "0.12", default-features = false }
 
-# 非 test 构建下把 `#[derive(TS)]` / `#[derive(JsonSchema)]` 替换成空宏，
-# 这样协议 crate 不必把 ts-rs / schemars 打进线上二进制。
+# Outside test builds `#[derive(TS)]` / `#[derive(JsonSchema)]` become empty macros, so the
+# protocol crate need not carry ts-rs / schemars into the shipped binary.
 joyczl-protocol-noop-macros = { path = "joyczl-protocol-noop-macros" }
 joyczl-protocol = { path = "joyczl-protocol" }
 joyczl-schedule = { path = "joyczl-schedule" }
@@ -75,32 +79,33 @@ joyczl-eval = { path = "joyczl-eval" }
 joyczl-app-server = { path = "joyczl-app-server" }
 joyczl-ops = { path = "joyczl-ops" }
 
-# HTTP 客户端：只跟各家 LLM API 说话。
-# rustls 而不是 native-tls，省掉系统 OpenSSL 的编译依赖。
-# stream：SSE 流式（dashboard 的打字机效果靠它）。
+# HTTP client: it only ever talks to LLM APIs. rustls rather than native-tls, which drops the
+# system OpenSSL build dependency. stream: SSE streaming (what the dashboard's typewriter rests
+# on).
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
     "stream",
 ] }
-# 流式迭代（Stream / StreamExt / unfold）与 Bytes。
-# 刻意用 futures-util 而不是 `futures` 全家桶：后者默认开 async-await 宏，
-# 会拉 futures-macro =0.3.34 —— 这个版本在 crates.io 上已经拿不到了，
-# 整个解析直接失败。我们只用 Stream/StreamExt/unfold，用不着宏。
+# Stream iteration (Stream / StreamExt / unfold) and Bytes. futures-util on purpose rather than
+# the whole `futures` family: the latter turns the async-await macros on by default, which drags
+# in futures-macro =0.3.34 — a version crates.io no longer serves, so resolution fails outright.
+# We use Stream/StreamExt/unfold and nothing that wants a macro.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 bytes = "1"
 
-# PKCE 的 S256 challenge（MCP OAuth，见 joyczl-mcp/src/oauth.rs）。
+# The PKCE S256 challenge (MCP OAuth, see joyczl-mcp/src/oauth.rs).
 sha2 = "0.10"
 
 # SQLite。
-#   查询一律用运行时 API（`sqlx::query` / `query_as`），不用 `sqlx::query!` 宏：
-#   后者要编译期连上数据库，或先 `cargo sqlx prepare` 生成 sqlx-data.json。
-#   对一个 clone 下来就该能编译的项目，那是负担。
-#   derive  = `#[derive(FromRow)]`，把行映射成结构体
-#   macros  = 只为 `sqlx::migrate!`，它在编译期读 migrations/ 里的 .sql 文件，
-#             不需要数据库，于是二进制自带 schema
-#   default-features = false：不要 any/mysql/postgres/json，我们只用 sqlite
+#   Queries always go through the runtime API (`sqlx::query` / `query_as`), never the
+#   `sqlx::query!` macro: that one wants a live database at compile time, or a
+#   `cargo sqlx prepare` step producing sqlx-data.json — a burden for a project that should
+#   build straight after a clone.
+#   derive  = `#[derive(FromRow)]`, mapping a row onto a struct
+#   macros  = only for `sqlx::migrate!`, which reads the .sql files under migrations/ at compile
+#             time with no database needed, so the binary carries its own schema
+#   default-features = false: no any/mysql/postgres/json, sqlite only
 sqlx = { version = "0.8", default-features = false, features = [
     "derive",
     "macros",
@@ -109,25 +114,28 @@ sqlx = { version = "0.8", default-features = false, features = [
     "sqlite",
 ] }
 
-# HTTP 服务端（只给 joyczl-ops：dashboard 的驾驶舱页面）。
-#   axum = 路由 + SSE + JSON，它本身很薄，规则就是「用 hyper，别再造一套框架」。
-#   tower-http 的 fs = 静态文件。**不手写**：一个静态文件服务里最危险的是路径
-#   穿越（`GET /../../.env`），那是已经被写对过无数次的东西，没有理由再写一次。
-#   set-header = 给静态文件加 no-cache：前端还在天天改，浏览器缓存会让
-#   「我明明改了」变成十分钟的鬼故事。
+# The HTTP server (joyczl-ops only: the dashboard's cockpit page).
+#   axum = routing + SSE + JSON, thin by itself: the rule is «use hyper, do not build another
+#   framework».
+#   tower-http's fs = static files, **not written by hand**: the most dangerous thing in a static
+#   file server is path traversal (`GET /../../.env`), which has been got right countless times;
+#   there is no reason to write it once more.
+#   set-header = no-cache for static files: the front end still changes daily, and browser
+#   caching turns «but I did change it» into a ten-minute ghost story.
 axum = "0.8"
 tower-http = { version = "0.6", features = ["fs", "set-header", "cors"] }
 
-# ---- 仅代码生成 / 测试用 --------------------------------------------------
-# TypeScript 绑定
-#   serde-json-impl：让 `serde_json::Value` 也有 TS 实现（否则协议里的
-#                    任意 JSON 字段编译不过）
-#   no-serde-warnings：ts-rs 解析不了 `skip_serializing_if` 这类属性时会刷警告
-# 不开 `format`：它拖进 dprint-plugin-typescript → swc_common，后者跟
-# serde 1.0.229 不兼容（用了已被移走的 serde::__private）。生成物改用
-# node 的 prettier 后处理，见 scripts/write_schema.py。
+# ---- Code generation / tests only ------------------------------------------
+# TypeScript bindings
+#   serde-json-impl: gives `serde_json::Value` a TS implementation too (otherwise an arbitrary
+#                    JSON field in the protocol does not compile)
+#   no-serde-warnings: ts-rs spams warnings whenever it cannot parse an attribute such as
+#                    `skip_serializing_if`
+# `format` stays off: it drags in dprint-plugin-typescript → swc_common, and the latter is
+# incompatible with serde 1.0.229 (it uses the already-moved serde::__private). The artefacts are
+# post-processed with node's prettier instead, see scripts/write_schema.py.
 ts-rs = { version = "10", features = ["serde-json-impl", "no-serde-warnings"] }
-# JSON Schema（Python SDK 的 pydantic 模型由它再生成）
+# JSON Schema (the Python SDK's pydantic models are generated from it)
 schemars = "0.8"
 tempfile = "3"
 
@@ -135,14 +143,15 @@ tempfile = "3"
 unused_must_use = "warn"
 
 [workspace.lints.clippy]
-# 协议是纯数据结构：枚举人类可读的名字比内存布局重要
+# The protocol is pure data: a readable name beats a memory layout
 enum_variant_names = "allow"
 
-# ---- 构建体积 ----------------------------------------------------------------
-# 默认的 dev profile 会给 300 个依赖每个都带上完整 DWARF：一次干净的
-# `cargo build -p joyczl-cli` 就是 2.0G，`cargo test --workspace` 再叠一层。
-# 依赖的调试信息几乎从不用到（没人单步进 reqwest）；自己的 crate 保留行号表，
-# `RUST_BACKTRACE=1` 仍然能指到源码行 —— 实测干净构建从 2.0G 降到约 1.2G。
+# ---- Build size --------------------------------------------------------------
+# The default dev profile gives each of 300 dependencies a full DWARF: one clean
+# `cargo build -p joyczl-cli` comes to 2.0G, and `cargo test --workspace` stacks another layer.
+# Debug info for dependencies is almost never used (nobody steps into reqwest); our own crates
+# keep their line tables, so `RUST_BACKTRACE=1` still points at a source line — measured, a clean
+# build drops from 2.0G to about 1.2G.
 [profile.dev]
 debug = "line-tables-only"
 

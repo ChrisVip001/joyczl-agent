@@ -12,7 +12,7 @@ fn row(role: &str, meta: Option<&str>) -> MessageRow {
     MessageRow {
         id: 7,
         role: role.to_string(),
-        content: "你好".to_string(),
+        content: "hello".to_string(),
         at: "2026-09-19 16:46:49".to_string(),
         meta: meta.map(str::to_string),
     }
@@ -36,7 +36,7 @@ fn sqlite_datetime_goes_out_as_iso_8601_utc() {
 /// What it cannot parse passes through unchanged: this is only a formatting layer, with no standing to error the whole method.
 #[test]
 fn iso_passes_through_what_it_cannot_parse() {
-    for weird in ["", "2026-09-19T16:46:49+08:00", "不是时间"] {
+    for weird in ["", "2026-09-19T16:46:49+08:00", "not a time"] {
         assert_eq!(iso(weird.to_string()), weird);
     }
 }
@@ -66,14 +66,14 @@ fn broken_telemetry_does_not_take_the_message_with_it() {
     let meta = to_message(row("assistant", Some(raw)))
         .expect("assistant")
         .meta
-        .expect("这份遥测该被解析出来");
+        .expect("this telemetry should parse");
     assert_eq!(meta.model, "qwen");
     assert_eq!(meta.iterations, 2);
     assert_eq!(meta.provider, "dashscope");
 
-    let broken = to_message(row("assistant", Some("这不是 JSON"))).expect("assistant");
+    let broken = to_message(row("assistant", Some("this is not JSON"))).expect("assistant");
     assert!(broken.meta.is_none());
-    assert_eq!(broken.content, "你好");
+    assert_eq!(broken.content, "hello");
 }
 
 /// The row id and timestamp cross the bridge unchanged: the row id is the next page's cursor.
@@ -83,4 +83,108 @@ fn id_and_timestamp_survive_the_trip() {
     assert_eq!(message.id, 7);
     assert_eq!(message.at, "2026-09-19T16:46:49Z");
     assert!(message.meta.is_none());
+}
+
+#[tokio::test]
+async fn human_memory_validity_and_provenance_round_trip() {
+    let home = tempfile::tempdir().unwrap();
+    let pool = joyczl_state::open(&home.path().join("state.db"))
+        .await
+        .unwrap();
+    let server = crate::Server::boot(
+        pool,
+        joyczl_config::Settings {
+            home: home.path().into(),
+            provider: "test-unconfigured".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let (row, _) = server
+        .facts
+        .add_consolidated_from("alex", "likes tea", "user", &["chat:1@digest".into()])
+        .await
+        .unwrap()
+        .unwrap();
+    let (sink, _) = crate::EventSink::channel();
+    let id = joyczl_protocol::RequestId::Number(1);
+    let params =
+        serde_json::json!({"factId":row.id,"validFrom":null,"validUntil":"2000-01-01T00:00:00Z"});
+    let result = super::dispatch(
+        &server,
+        joyczl_protocol::methods::MEMORY_VALIDITY,
+        Some(&params),
+        &id,
+        &sink,
+    )
+    .await
+    .unwrap();
+    let super::Outcome::Value(value) = result else {
+        panic!("Expected response");
+    };
+    assert_eq!(value["changed"], true);
+    assert!(server.facts.search("tea", 10).await.unwrap().is_empty());
+    let params = serde_json::json!({"factId":row.id});
+    let result = super::dispatch(
+        &server,
+        joyczl_protocol::methods::MEMORY_PROVENANCE,
+        Some(&params),
+        &id,
+        &sink,
+    )
+    .await
+    .unwrap();
+    let super::Outcome::Value(value) = result else {
+        panic!("Expected response");
+    };
+    assert_eq!(value["observations"][0]["sourceRefs"][0], "chat:1@digest");
+    assert_eq!(value["validUntil"], "2000-01-01T00:00:00+00:00");
+    assert_eq!(value["validityOrigin"], "human");
+    server
+        .chat
+        .append_exchange("I feel tired today.", "I hear you.", "chat", "test", None)
+        .await
+        .unwrap();
+    let digest = joyczl_state::ledger::digest_of(
+        serde_json::to_string(&("user", "I feel tired today."))
+            .unwrap()
+            .as_bytes(),
+    );
+    let observation = joyczl_state::facts::TransientObservation {
+        source_ref: format!("chat:1@{digest}"),
+        quote: "feel tired today".into(),
+        confidence: 0.7,
+        ttl_hours: 3,
+    };
+    let (temporary, _) = server
+        .facts
+        .add_transient_from(
+            "user",
+            "Feels tired today",
+            "user",
+            std::slice::from_ref(&observation.source_ref),
+            &observation,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let params = serde_json::json!({"factId": temporary.id});
+    let result = super::dispatch(
+        &server,
+        joyczl_protocol::methods::MEMORY_PROVENANCE,
+        Some(&params),
+        &id,
+        &sink,
+    )
+    .await
+    .unwrap();
+    let super::Outcome::Value(value) = result else {
+        panic!("Expected response");
+    };
+    assert_eq!(value["validityOrigin"], "consolidation");
+    let assessment: serde_json::Value =
+        serde_json::from_str(value["observations"][0]["assessmentJson"].as_str().unwrap()).unwrap();
+    assert_eq!(assessment["sourceRef"], observation.source_ref);
+    assert_eq!(assessment["confidence"], 0.7);
+    assert_eq!(assessment["quote"], "feel tired today");
 }

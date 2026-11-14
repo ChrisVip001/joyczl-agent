@@ -3,7 +3,7 @@ name = "joyczl-provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "模型接入：多种 provider，一种方言，零框架。"
+description = "Model access: several providers, one dialect, no framework."
 
 [lib]
 name = "joyczl_provider"
@@ -11,6 +11,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+joyczl-protocol = { workspace = true }
 tiktoken-rs = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }

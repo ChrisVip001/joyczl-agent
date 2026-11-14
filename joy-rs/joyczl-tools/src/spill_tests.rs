@@ -19,30 +19,36 @@ fn a_text_that_already_fits_is_left_alone() {
 
 #[test]
 fn the_stub_fits_the_budget_and_only_cuts_complete_lines() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let text = long_text(200, 40);
     let budget = 400;
 
-    let stub = stub(Some(dir.path()), &text, budget, "tool-result").expect("该做桩");
+    let stub = stub(Some(dir.path()), &text, budget, "tool-result").expect("it should be stubbed");
     assert!(
         stub.text.chars().count() <= budget,
-        "桩必须放得下：{} > {budget}",
+        "the stub has to fit: {} > {budget}",
         stub.text.chars().count()
     );
-    assert!(stub.path.is_some(), "落了盘就该带上路径");
+    assert!(stub.path.is_some(), "spilled means the path comes along");
     assert!(stub.omitted_lines > 0);
 
     // Except the omission-notice line, every line must be a line that **really exists** in the original:
     // half a line (half a JSON, half a log entry) reads worse than one fewer line.
     for line in stub.text.lines() {
         if line.starts_with('…') {
-            assert!(line.contains("truncated"), "省略说明要诚实：{line}");
-            assert!(line.contains("full output at"), "有路径就要写出来：{line}");
+            assert!(
+                line.contains("truncated"),
+                "the elision has to be honest: {line}"
+            );
+            assert!(
+                line.contains("full output at"),
+                "with a path, the path is written out: {line}"
+            );
             continue;
         }
         assert!(
             text.lines().any(|original| original == line),
-            "这一行不是原文的完整行：{line}"
+            "this line is not a whole line of the original: {line}"
         );
     }
 }
@@ -50,11 +56,11 @@ fn the_stub_fits_the_budget_and_only_cuts_complete_lines() {
 #[test]
 fn without_a_directory_it_still_stubs_but_never_promises_a_path() {
     let text = long_text(200, 40);
-    let stub = stub(None, &text, 300, "tool-result").expect("该做桩");
+    let stub = stub(None, &text, 300, "tool-result").expect("it should be stubbed");
     assert_eq!(stub.path, None);
     assert!(
         !stub.text.contains("full output at"),
-        "没落盘就不能说有文件：{}",
+        "nothing spilled means no file may be mentioned: {}",
         stub.text
     );
     assert!(stub.text.contains("truncated"), "{}", stub.text);
@@ -63,20 +69,20 @@ fn without_a_directory_it_still_stubs_but_never_promises_a_path() {
 
 #[test]
 fn one_line_longer_than_the_budget_gets_no_fake_head() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     // One line of 5000 chars, budget 200: not even one line fits.
     let text = "y".repeat(5_000);
-    let stub = stub(Some(dir.path()), &text, 200, "tool-result").expect("该做桩");
+    let stub = stub(Some(dir.path()), &text, 200, "tool-result").expect("it should be stubbed");
     assert!(
         stub.text.chars().count() <= 200,
-        "桩必须放得下：{}",
+        "the stub has to fit: {}",
         stub.text.chars().count()
     );
     // "No half lines" is verified by **lines**: the whole text may contain other characters
     // (a path would contain y), but no line is a fragment of that oversized original.
     assert!(
         stub.text.lines().all(|line| line.chars().count() < 200),
-        "放不下一整行就别放半行：{:?}",
+        "if a whole line does not fit, do not put half of one in: {:?}",
         stub.text
     );
     assert!(stub.text.contains("full output at"), "{}", stub.text);
@@ -84,24 +90,27 @@ fn one_line_longer_than_the_budget_gets_no_fake_head() {
 
 #[test]
 fn spill_writes_the_whole_text_and_reports_a_relative_path() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let spill_dir = home.path().join("spill");
     let text = long_text(500, 40);
 
-    let path = spill_text(&spill_dir, &text, "command").expect("落盘");
-    assert!(path.starts_with("spill/"), "路径要相对 home：{path}");
-    let saved = std::fs::read_to_string(home.path().join(&path)).expect("读回来");
-    assert_eq!(saved, text, "落盘的必须是完整原文");
+    let path = spill_text(&spill_dir, &text, "command").expect("it reaches the disk");
+    assert!(
+        path.starts_with("spill/"),
+        "the path is relative to home: {path}"
+    );
+    let saved = std::fs::read_to_string(home.path().join(&path)).expect("read it back");
+    assert_eq!(saved, text, "the spilled file has to be the whole text");
 }
 
 #[test]
 fn the_stub_is_smaller_than_what_it_replaces() {
     // Regression guard: no stub when the budget exceeds the original; a produced stub is always shorter than the original.
     let text = long_text(100, 40);
-    let stub = stub(None, &text, 500, "t").expect("该做桩");
+    let stub = stub(None, &text, 500, "t").expect("it should be stubbed");
     assert!(
         stub.text.chars().count() < text.chars().count(),
-        "桩不该比原文更长"
+        "the stub must not be longer than the original"
     );
 }
 

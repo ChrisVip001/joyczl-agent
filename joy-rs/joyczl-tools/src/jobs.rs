@@ -69,6 +69,23 @@ pub trait JobRegistry: Send + Sync {
     ) -> JobFut<Result<JobId, String>> {
         self.spawn(owner, command, cwd)
     }
+    /// A checked host retains the permit beyond spawn, through process settlement.
+    fn spawn_guarded(
+        &self,
+        owner: &str,
+        command: &str,
+        cwd: Option<String>,
+        run_id: Option<String>,
+        lease: Option<crate::resources::Lease>,
+    ) -> JobFut<Result<JobId, String>> {
+        if lease.is_some() {
+            return Box::pin(async {
+                Err("This job host cannot retain mutation ownership".into())
+            });
+        }
+        self.spawn_for_run(owner, command, cwd, run_id)
+    }
+
     /// Read a slice. With `wait` true, wait a bounded while (until a result or the cap).
     fn output(
         &self,

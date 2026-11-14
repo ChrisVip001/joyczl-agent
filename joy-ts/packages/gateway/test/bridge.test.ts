@@ -38,14 +38,14 @@ class FakeServer implements Transport {
   /** Reply to request number `index`. */
   reply(index: number, result: unknown): void {
     const request = this.written[index];
-    assert.ok(request !== undefined, `第 ${index} 条请求还没写出去`);
+    assert.ok(request !== undefined, `request ${index} was never written out`);
     this.#onLine?.(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
   }
 
   /** Return an error for request number `index`. */
   fail(index: number, code: number, message: string): void {
     const request = this.written[index];
-    assert.ok(request !== undefined, `第 ${index} 条请求还没写出去`);
+    assert.ok(request !== undefined, `request ${index} was never written out`);
     this.#onLine?.(
       JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code, message } }),
     );
@@ -90,7 +90,7 @@ function started(turnId: string, sessionId = "telegram:42"): ServerNotification 
     type: "turnStarted",
     turnId,
     sessionId,
-    userMessage: "你好",
+    userMessage: "hello",
     ts: "2026-09-19T00:00:00.000Z",
   };
 }
@@ -115,27 +115,27 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-test("会话 id 由平台身份派生，网关因此不需要记任何映射", () => {
+test("the session id is derived from the platform identity, so the gateway keeps no map", () => {
   assert.equal(sessionIdFor("telegram:42"), "telegram:42");
   // The same person reconnecting lands on the same conversation, across restarts — nothing was stored.
   assert.equal(sessionIdFor("telegram:42"), "telegram:42");
 });
 
-test("一轮：请求写对了，答复和遥测原样带回来", async () => {
+test("one turn: the request is right, the reply and the telemetry come back as they were", async () => {
   const { bridge, server } = setup();
 
-  const promise = bridge.ask("telegram:42", "你好");
+  const promise = bridge.ask("telegram:42", "hello");
   await tick();
   assert.equal(server.written.length, 1);
 
   const request = server.written[0]!;
   assert.equal(request.method, "turn/start");
   assert.equal(request.params["sessionId"], "telegram:42");
-  assert.equal(request.params["message"], "你好");
+  assert.equal(request.params["message"], "hello");
   assert.equal(
     request.params["stream"],
     false,
-    "聊天平台要的是一整句，不是逐字抖动",
+    "a chat platform wants one whole sentence, not a per-character wobble",
   );
 
   server.notify(started("t1"));
@@ -145,106 +145,106 @@ test("一轮：请求写对了，答复和遥测原样带回来", async () => {
     turnId: "t1",
     toolUseId: "tu-1",
     tool: "memory_search",
-    output: "三条",
+    output: "three",
     status: "ok",
     durationMs: 3,
   });
-  server.notify(completed("t1", "你好呀", { model: "big-model", iterations: 2 }));
+  server.notify(completed("t1", "hello there", { model: "big-model", iterations: 2 }));
   server.reply(0, { turnId: "t1" });
 
   const outcome = await promise;
   assert.equal(outcome.sessionId, "telegram:42");
-  assert.equal(outcome.reply, "你好呀");
+  assert.equal(outcome.reply, "hello there");
   assert.deepEqual(outcome.tools, ["memory_search"]);
   assert.equal(outcome.model, "big-model");
   assert.equal(outcome.iterations, 2);
 });
 
-test("同一段对话连发两条：第二条必须等第一条走完", async () => {
+test("two messages in one conversation: the second waits for the first to finish", async () => {
   const { bridge, server } = setup();
 
-  const first = bridge.ask("telegram:42", "第一条");
-  const second = bridge.ask("telegram:42", "第二条");
+  const first = bridge.ask("telegram:42", "the first");
+  const second = bridge.ask("telegram:42", "the second");
 
   await tick();
-  assert.equal(server.written.length, 1, "两条消息不能同时占着服务端");
+  assert.equal(server.written.length, 1, "two messages must not hold the server at once");
 
   server.notify(started("t1"));
-  server.notify(completed("t1", "第一答"));
+  server.notify(completed("t1", "the first answer"));
   server.reply(0, { turnId: "t1" });
-  assert.equal((await first).reply, "第一答");
+  assert.equal((await first).reply, "the first answer");
 
   await tick();
-  assert.equal(server.written.length, 2, "第一条回来了，第二条才该出去");
-  assert.equal(server.written[1]!.params["message"], "第二条");
+  assert.equal(server.written.length, 2, "only once the first is back may the second go out");
+  assert.equal(server.written[1]!.params["message"], "the second");
 
   server.notify(started("t2"));
-  server.notify(completed("t2", "第二答"));
+  server.notify(completed("t2", "the second answer"));
   server.reply(1, { turnId: "t2" });
-  assert.equal((await second).reply, "第二答");
+  assert.equal((await second).reply, "the second answer");
 });
 
-test("不同对话之间互不影响", async () => {
+test("different conversations do not touch each other", async () => {
   const { bridge, server } = setup();
 
   // Two people speak at once: queues are per conversation and must not block each other.
-  const alice = bridge.ask("telegram:1", "我是甲");
-  const bob = bridge.ask("telegram:2", "我是乙");
+  const alice = bridge.ask("telegram:1", "I am alpha");
+  const bob = bridge.ask("telegram:2", "I am beta");
   await tick();
-  assert.equal(server.written.length, 2, "不同对话不该互相排队");
+  assert.equal(server.written.length, 2, "different conversations must not queue behind each other");
 
   assert.equal(server.written[0]!.params["sessionId"], "telegram:1");
   assert.equal(server.written[1]!.params["sessionId"], "telegram:2");
 
   server.notify(started("t1", "telegram:1"));
-  server.notify(completed("t1", "甲好"));
+  server.notify(completed("t1", "hello alpha"));
   server.reply(0, { turnId: "t1" });
   server.notify(started("t2", "telegram:2"));
-  server.notify(completed("t2", "乙好"));
+  server.notify(completed("t2", "hello beta"));
   server.reply(1, { turnId: "t2" });
 
-  assert.equal((await alice).reply, "甲好");
-  assert.equal((await bob).reply, "乙好");
+  assert.equal((await alice).reply, "hello alpha");
+  assert.equal((await bob).reply, "hello beta");
 });
 
-test("一轮失败：错误穿透出去，残骸不留到下一轮", async () => {
+test("a failed turn: the error comes through and no debris reaches the next turn", async () => {
   const { bridge, server } = setup();
 
-  const first = bridge.ask("telegram:42", "这句会失败");
+  const first = bridge.ask("telegram:42", "this one will fail");
   await tick();
   server.notify(started("t1"));
-  server.notify(completed("t1", "第一轮的答复"));
+  server.notify(completed("t1", "the first turn's answer"));
   // The notification stream finished but the response was an error — the stored copy must be dropped.
-  server.fail(0, CODES.INTERNAL_ERROR, "写库失败");
-  await assert.rejects(first, /写库失败/);
+  server.fail(0, CODES.INTERNAL_ERROR, "the write failed");
+  await assert.rejects(first, /the write failed/);
 
-  const second = bridge.ask("telegram:42", "这句会成功");
+  const second = bridge.ask("telegram:42", "this one will work");
   await tick();
   server.notify(started("t2"));
-  server.notify(completed("t2", "第二轮的答复"));
+  server.notify(completed("t2", "the second turn's answer"));
   server.reply(1, { turnId: "t2" });
 
-  assert.equal((await second).reply, "第二轮的答复", "不能捡到上一轮的答复");
+  assert.equal((await second).reply, "the second turn's answer", "it must not pick up the previous turn's answer");
 });
 
-test("应答来了通知串却断了：明确报错，不糊一个空答复过去", async () => {
+test("the answer came but the notification chain broke: report it plainly, do not invent an empty reply", async () => {
   const { bridge, server } = setup();
 
-  const promise = bridge.ask("telegram:42", "你好");
+  const promise = bridge.ask("telegram:42", "hello");
   await tick();
   server.notify(started("t1"));
   server.reply(0, { turnId: "t1" });
 
-  await assert.rejects(promise, /没有收到 turnCompleted/);
+  await assert.rejects(promise, /never saw turnCompleted/);
 });
 
-test("进度：工具开跑说一声，工具失败也值得说一声", async () => {
+test("progress: say when a tool starts, and say when one fails too", async () => {
   const notes: string[] = [];
   const { bridge, server } = setup({
     onProgress: (note) => notes.push(note.text),
   });
 
-  const promise = bridge.ask("telegram:42", "帮我查查");
+  const promise = bridge.ask("telegram:42", "look this up for me");
   await tick();
   server.notify(started("t1"));
   server.notify({ type: "toolStarted", turnId: "t1", toolUseId: "tu-read_file", tool: "read_file", args: {} });
@@ -270,35 +270,35 @@ test("进度：工具开跑说一声，工具失败也值得说一声", async ()
   });
   // This one carries no turnId and belongs to no conversation — silently dropped, never guessed.
   server.notify({ type: "consolidationCompleted", newFacts: 2 });
-  server.notify(completed("t1", "查到了"));
+  server.notify(completed("t1", "found it"));
   server.reply(0, { turnId: "t1" });
 
   await promise;
   assert.deepEqual(notes, [
-    "在用 read_file…",
-    "read_file 没成功，它换条路继续",
-    "在用 http_get…",
+    "using read_file…",
+    "read_file did not succeed; it is trying another way",
+    "using http_get…",
   ]);
 });
 
-test("错误翻成人话：模型没配好、还没做、连不上，是三件事", () => {
+test("errors are put into plain words: no model, not built yet, cannot connect are three different things", () => {
   const provider = new JoyError({
     code: CODES.PROVIDER_ERROR,
     message: "401 Unauthorized",
   });
-  assert.match(explain(provider), /joy config/, "得告诉用户去哪儿解决");
+  assert.match(explain(provider), /joy config/, "it has to tell the user where to fix it");
 
   const todo = new JoyError({
     code: CODES.NOT_IMPLEMENTED,
-    message: "'model/list' 还没实现",
+    message: "'model/list' is not implemented",
   });
-  assert.match(explain(todo), /还没做/);
+  assert.match(explain(todo), /not built yet/);
 
-  assert.match(explain(new Error("spawn joy ENOENT")), /连不上 Joy/);
-  assert.match(explain("随便什么东西"), /连不上 Joy/);
+  assert.match(explain(new Error("spawn joy ENOENT")), /cannot reach Joy/);
+  assert.match(explain("anything at all"), /cannot reach Joy/);
 });
 
-test("关掉网关就把 app-server 的 stdin 关上", () => {
+test("closing the gateway closes the app-server's stdin", () => {
   const { bridge, server } = setup();
   bridge.close();
   assert.ok(server.closeCalled);

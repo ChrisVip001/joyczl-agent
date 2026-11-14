@@ -21,7 +21,7 @@ async fn answering_an_unknown_request_is_false_not_an_error() {
         home: dir.path().to_path_buf(),
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配");
+    let server = crate::open(&settings).await.expect("assemble");
     assert!(!server.answer_approval("no-such-turn", "ap-1", true, RememberScope::Once));
 }
 
@@ -46,7 +46,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
         approval_timeout_secs: 20,
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配");
+    let server = crate::open(&settings).await.expect("assemble");
     server.install_provider(Resolved {
         context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
         vision: false,
@@ -58,7 +58,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
                 "run_command",
                 serde_json::json!({"command": "echo approved-ok"}),
             ),
-            Mock::text("跑完了。"),
+            Mock::text("done running."),
         ])),
         model: "test-model".to_string(),
         small_model: "test-model".to_string(),
@@ -101,7 +101,7 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
         TurnStartParams {
             attachments: None,
             session_id: Some("test".to_string()),
-            message: "跑一下 echo".to_string(),
+            message: "run echo".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -110,18 +110,21 @@ async fn a_turn_asks_and_runs_the_command_only_after_being_answered() {
         &sink,
     )
     .await
-    .expect("这一轮该跑完");
+    .expect("this turn should finish");
 
     drop(sink); // Close the channel so the answerer task can finish
-    let (asked, tool_output) = answerer.await.expect("回答任务");
-    let (preview, accepted) = asked.expect("该有批准请求");
-    assert_eq!(preview, "echo approved-ok", "问的必须是那条命令本身");
-    assert!(accepted, "回答在时限内送达");
+    let (asked, tool_output) = answerer.await.expect("the answering task");
+    let (preview, accepted) = asked.expect("there should be a request");
+    assert_eq!(
+        preview, "echo approved-ok",
+        "the question must be the command itself"
+    );
+    assert!(accepted, "the answer arrived within the deadline");
 
-    let output = tool_output.expect("该有工具完成通知");
+    let output = tool_output.expect("there should be a tool-finished notice");
     assert!(
         output.contains("approved-ok"),
-        "批准之后命令要真的在沙箱里跑起来：{output}"
+        "after approval the command has to really run in the sandbox: {output}"
     );
     assert!(output.contains("exit code 0"), "{output}");
 }
@@ -143,7 +146,7 @@ async fn without_on_request_the_command_is_simply_refused() {
         exec_allow: vec!["ls *".to_string()],
         ..Default::default()
     };
-    let server: Server = crate::open(&settings).await.expect("装配");
+    let server: Server = crate::open(&settings).await.expect("assemble");
     server.install_provider(Resolved {
         context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
         vision: false,
@@ -155,7 +158,7 @@ async fn without_on_request_the_command_is_simply_refused() {
                 "run_command",
                 serde_json::json!({"command": "echo nope"}),
             ),
-            Mock::text("好，不跑。"),
+            Mock::text("fine, it does not run."),
         ])),
         model: "test-model".to_string(),
         small_model: "test-model".to_string(),
@@ -182,7 +185,7 @@ async fn without_on_request_the_command_is_simply_refused() {
         TurnStartParams {
             attachments: None,
             session_id: Some("test".to_string()),
-            message: "跑一下".to_string(),
+            message: "run it".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -191,15 +194,15 @@ async fn without_on_request_the_command_is_simply_refused() {
         &sink,
     )
     .await
-    .expect("这一轮该跑完");
+    .expect("this turn should finish");
 
     drop(sink);
-    let (asked, output) = watcher.await.expect("观察任务");
-    assert!(!asked, "never 模式不该问任何问题");
+    let (asked, output) = watcher.await.expect("the watching task");
+    assert!(!asked, "never mode must not ask anything");
     assert!(output.starts_with("Error:"), "{output}");
     assert!(
         output.contains("No allow rule matched"),
-        "拒因要指向放行表：{output}"
+        "the refusal reason has to point at the allowlist: {output}"
     );
 }
 
@@ -236,7 +239,7 @@ fn settings_json(home: &std::path::Path) -> String {
     std::fs::read_to_string(joyczl_config::patch_path(home)).unwrap_or_default()
 }
 
-/// "记住这条" (command): written to `settings.json` **and** into the live cell, so the next call
+/// "remember this one" (command): written to `settings.json` **and** into the live cell, so the next call
 /// sees it — the old "takes effect after a restart" is gone.
 #[tokio::test]
 async fn remembering_a_command_persists_and_takes_effect_at_once() {
@@ -245,7 +248,7 @@ async fn remembering_a_command_persists_and_takes_effect_at_once() {
         home: dir.path().to_path_buf(),
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配");
+    let server = crate::open(&settings).await.expect("assemble");
 
     let rx = ask(
         &server,
@@ -254,15 +257,15 @@ async fn remembering_a_command_persists_and_takes_effect_at_once() {
         RememberTarget::Command("git status".to_string()),
     );
     assert!(server.answer_approval("t1", "ap-1", true, RememberScope::Always));
-    assert!(rx.await.expect("答案要送达"), "批准");
+    assert!(rx.await.expect("the answer has to arrive"), "approved");
 
     assert!(
         server
             .exec_session_allow
             .lock()
-            .expect("锁")
+            .expect("lock")
             .contains(&"git status".to_string()),
-        "本进程立刻生效"
+        "takes effect in this process at once"
     );
     assert!(
         server
@@ -270,10 +273,13 @@ async fn remembering_a_command_persists_and_takes_effect_at_once() {
             .exec_allow
             .iter()
             .any(|rule| rule == "git status"),
-        "也要进内存里的设置"
+        "and has to reach the in-memory settings too"
     );
     let raw = settings_json(dir.path());
-    assert!(raw.contains("git status"), "而且写进 settings.json：{raw}");
+    assert!(
+        raw.contains("git status"),
+        "and it lands in settings.json: {raw}"
+    );
 }
 
 /// `once` leaves no trace; `session` stays in memory and never reaches the disk.
@@ -284,7 +290,7 @@ async fn once_and_session_leave_different_traces() {
         home: dir.path().to_path_buf(),
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配");
+    let server = crate::open(&settings).await.expect("assemble");
 
     let rx = ask(
         &server,
@@ -293,16 +299,20 @@ async fn once_and_session_leave_different_traces() {
         RememberTarget::Command("make".to_string()),
     );
     assert!(server.answer_approval("t1", "ap-1", true, RememberScope::Once));
-    assert!(rx.await.expect("送达"));
+    assert!(rx.await.expect("delivered"));
     assert!(
         !server
             .exec_session_allow
             .lock()
-            .expect("锁")
+            .expect("lock")
             .contains(&"make".to_string()),
-        "只这次 = 什么都不记"
+        "once = nothing is remembered"
     );
-    assert_eq!(settings_json(dir.path()), "", "一次性的批准不写盘");
+    assert_eq!(
+        settings_json(dir.path()),
+        "",
+        "a one-off approval writes nothing"
+    );
 
     let rx = ask(
         &server,
@@ -311,16 +321,20 @@ async fn once_and_session_leave_different_traces() {
         RememberTarget::Command("cargo test".to_string()),
     );
     assert!(server.answer_approval("t2", "ap-2", true, RememberScope::Session));
-    assert!(rx.await.expect("送达"));
+    assert!(rx.await.expect("delivered"));
     assert!(
         server
             .exec_session_allow
             .lock()
-            .expect("锁")
+            .expect("lock")
             .contains(&"cargo test".to_string()),
-        "本会话记着"
+        "remembered for this session"
     );
-    assert_eq!(settings_json(dir.path()), "", "会话作用域不该写盘");
+    assert_eq!(
+        settings_json(dir.path()),
+        "",
+        "session scope writes nothing either"
+    );
 }
 
 /// A rejected answer remembers nothing — a "no" must never be turned into a standing rule.
@@ -331,7 +345,7 @@ async fn a_denial_is_never_remembered() {
         home: dir.path().to_path_buf(),
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配");
+    let server = crate::open(&settings).await.expect("assemble");
     let rx = ask(
         &server,
         "t1",
@@ -339,8 +353,8 @@ async fn a_denial_is_never_remembered() {
         RememberTarget::Command("rm x".to_string()),
     );
     assert!(server.answer_approval("t1", "ap-1", false, RememberScope::Always));
-    assert!(!rx.await.expect("送达"), "拒绝就是拒绝");
-    assert!(server.exec_session_allow.lock().expect("锁").is_empty());
+    assert!(!rx.await.expect("delivered"), "a refusal is a refusal");
+    assert!(server.exec_session_allow.lock().expect("lock").is_empty());
     assert_eq!(settings_json(dir.path()), "");
 }
 
@@ -350,14 +364,14 @@ async fn a_denial_is_never_remembered() {
 async fn a_remembered_write_directory_needs_no_answer() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let workspace = dir.path().join("ws");
-    std::fs::create_dir_all(&workspace).expect("建工作目录");
+    std::fs::create_dir_all(&workspace).expect("create the workspace");
     let settings = joyczl_config::Settings {
         home: dir.path().join("home"),
         write_enabled: true,
         approval: "on-request".to_string(),
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配");
+    let server = crate::open(&settings).await.expect("assemble");
 
     let rx = ask(
         &server,
@@ -366,7 +380,7 @@ async fn a_remembered_write_directory_needs_no_answer() {
         RememberTarget::Directory(workspace.clone()),
     );
     assert!(server.answer_approval("t1", "ap-1", true, RememberScope::Always));
-    assert!(rx.await.expect("送达"));
+    assert!(rx.await.expect("delivered"));
 
     // No broker in this ctx: only the remembered directory can let the write through.
     let ctx = server.tool_ctx("s1", Some(workspace.clone()), None);
@@ -380,13 +394,13 @@ async fn a_remembered_write_directory_needs_no_answer() {
         )
         .await;
     assert!(out.starts_with("Wrote"), "{out}");
-    assert!(path.exists(), "真写了");
+    assert!(path.exists(), "it really was written");
     // settings.json is JSON, so on Windows the backslashes of a path are escaped ("C:\\...").
     // Comparing against the raw path would fail there; compare the escaped form instead.
     let escaped = serde_json::to_string(workspace.to_string_lossy().as_ref())
         .expect("workspace path is valid UTF-8");
     assert!(
         settings_json(&settings.home).contains(escaped.trim_matches('"')),
-        "目录进了 settings.json"
+        "the directory reached settings.json"
     );
 }

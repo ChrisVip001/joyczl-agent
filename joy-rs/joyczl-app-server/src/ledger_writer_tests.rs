@@ -15,7 +15,8 @@ fn kinds(entries: &[joyczl_state::NewEntry]) -> Vec<&'static str> {
     entries.iter().map(|entry| entry.kind).collect()
 }
 
-/// 一轮的请求、工具调用、工具结果、回复，都成一类一行，顺序就是发生顺序。
+/// A turn's request, tool calls, tool results and reply each become one row, in the order they
+/// happened.
 #[test]
 fn a_turn_becomes_ordered_rows() {
     let home = temp_home("ledger_entries");
@@ -24,14 +25,14 @@ fn a_turn_becomes_ordered_rows() {
         Message {
             role: Role::User,
             content: vec![ContentBlock::Text {
-                text: "看看这个报错".to_string(),
+                text: "take a look at this error".to_string(),
             }],
         },
         Message {
             role: Role::Assistant,
             content: vec![
                 ContentBlock::Text {
-                    text: "先读日志".to_string(),
+                    text: "read the log first".to_string(),
                 },
                 ContentBlock::ToolUse {
                     id: "call-1".to_string(),
@@ -51,45 +52,53 @@ fn a_turn_becomes_ordered_rows() {
         Message {
             role: Role::Assistant,
             content: vec![ContentBlock::Text {
-                text: "日志不存在".to_string(),
+                text: "the log does not exist".to_string(),
             }],
         },
     ];
 
-    let entries = entries_for_turn(&sink, "s1", "t1", "看看这个报错", &messages, "日志不存在");
+    let entries = entries_for_turn(
+        &sink,
+        "s1",
+        "t1",
+        "take a look at this error",
+        &messages,
+        "the log does not exist",
+    );
     assert_eq!(
         kinds(&entries),
         vec!["user", "assistant", "tool_use", "tool_result", "assistant"],
-        "请求只记一次（messages 里那份要跳过）"
+        "the request is recorded once (the copy inside messages is skipped)"
     );
     assert!(
-        entries[0].payload.contains("看看这个报错"),
-        "小内容直接内联：{}",
+        entries[0].payload.contains("take a look at this error"),
+        "small content is inlined directly: {}",
         entries[0].payload
     );
     assert!(
         entries[2].payload.contains(r#""name":"read_file""#),
-        "工具调用要带名字与参数：{}",
+        "a tool call has to carry its name and arguments: {}",
         entries[2].payload
     );
     assert!(
         entries[3].payload.contains("no such file"),
-        "工具结果要带原文：{}",
+        "a tool result has to carry its text: {}",
         entries[3].payload
     );
 }
 
-/// 超阈值的内容转存成文件，行里留指针 + 摘要；指针能读回来，改一个字摘要就对不上。
+/// Content over the threshold is spilled to a file and the row keeps a pointer plus a digest;
+/// the pointer reads back, and one changed character breaks the digest.
 #[test]
 fn a_large_payload_spills_and_verifies() {
     let home = temp_home("ledger_spill");
     let sink = LedgerSink::new(&home, 64);
-    let big = "日志行\n".repeat(200);
+    let big = "log line\n".repeat(200);
     let messages = vec![
         Message {
             role: Role::User,
             content: vec![ContentBlock::Text {
-                text: "看日志".to_string(),
+                text: "look at the log".to_string(),
             }],
         },
         Message {
@@ -101,46 +110,54 @@ fn a_large_payload_spills_and_verifies() {
         },
     ];
 
-    let entries = entries_for_turn(&sink, "s1", "t1", "看日志", &messages, "");
+    let entries = entries_for_turn(&sink, "s1", "t1", "look at the log", &messages, "");
     let spilled = entries
         .iter()
         .find(|entry| entry.kind == "tool_result")
-        .expect("有工具结果");
+        .expect("there is a tool result");
     assert!(
         spilled.payload.contains(r#""ptr":"ledger/s1/"#),
-        "大内容该转存：{}",
+        "big content has to be spilled: {}",
         &spilled.payload[..60.min(spilled.payload.len())]
     );
     assert!(
         spilled.payload.len() < big.len() / 2,
-        "行里只留指针，不该把正文再抄一遍（{} vs {}）",
+        "the row keeps only the pointer, not a second copy of the body ({} vs {})",
         spilled.payload.len(),
         big.len()
     );
-    assert!(home.join("ledger/s1").exists(), "文件真的落盘了");
+    assert!(
+        home.join("ledger/s1").exists(),
+        "the file really reached the disk"
+    );
 
-    let text = payload_text(&home, &spilled.payload).expect("读回来");
-    assert!(text.contains("日志行"), "内容完整");
-    assert!(text.len() > big.len(), "读回来的是带 id 的完整 JSON");
+    let text = payload_text(&home, &spilled.payload).expect("read it back");
+    assert!(text.contains("log line"), "the content is complete");
+    assert!(
+        text.len() > big.len(),
+        "what reads back is the whole JSON with ids"
+    );
 
-    // 篡改：文件改一个字，读的时候必须报错，而不是把错的当对的。
+    // Tampering: change one character in the file and reading has to fail, rather than quietly
+    // treating the wrong bytes as right.
     let dir = home.join("ledger/s1");
     let file = std::fs::read_dir(&dir)
-        .expect("列目录")
+        .expect("list the directory")
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .next()
-        .expect("有文件");
-    let mut text = std::fs::read_to_string(&file).expect("读文件");
-    text.push_str("篡改");
-    std::fs::write(&file, text).expect("改文件");
+        .expect("there is a file");
+    let mut text = std::fs::read_to_string(&file).expect("read the file");
+    text.push_str("tampered");
+    std::fs::write(&file, text).expect("change the file");
     assert!(
         payload_text(&home, &spilled.payload).is_err(),
-        "被改过就必须报错"
+        "once altered it has to report an error"
     );
 }
 
-/// 重建：行读回来还原成消息块，同一角色的块合并在一条消息里。
+/// Rebuild: the rows come back as message blocks, and blocks of the same role merge into one
+/// message.
 #[test]
 fn a_turn_rebuilds_into_messages() {
     let home = temp_home("ledger_rebuild");
@@ -149,14 +166,14 @@ fn a_turn_rebuilds_into_messages() {
         Message {
             role: Role::User,
             content: vec![ContentBlock::Text {
-                text: "看看这个报错".to_string(),
+                text: "take a look at this error".to_string(),
             }],
         },
         Message {
             role: Role::Assistant,
             content: vec![
                 ContentBlock::Text {
-                    text: "先读日志".to_string(),
+                    text: "read the log first".to_string(),
                 },
                 ContentBlock::ToolUse {
                     id: "call-1".to_string(),
@@ -175,7 +192,14 @@ fn a_turn_rebuilds_into_messages() {
         },
     ];
 
-    let entries = entries_for_turn(&sink, "s1", "t1", "看看这个报错", &messages, "");
+    let entries = entries_for_turn(
+        &sink,
+        "s1",
+        "t1",
+        "take a look at this error",
+        &messages,
+        "",
+    );
     let rows: Vec<joyczl_state::EntryRow> = entries
         .iter()
         .enumerate()
@@ -189,17 +213,17 @@ fn a_turn_rebuilds_into_messages() {
         })
         .collect();
 
-    let rebuilt = rebuild_turn(&home, &rows).expect("重建");
+    let rebuilt = rebuild_turn(&home, &rows).expect("rebuild");
     assert_eq!(rebuilt.len(), 3, "user / assistant / user(tool_result)");
     assert_eq!(rebuilt[1].role, Role::Assistant);
     assert_eq!(
         rebuilt[1].content.len(),
         2,
-        "文本与工具调用合并在一条消息里"
+        "text and a tool call inside one message"
     );
-    assert_eq!(rebuilt[0].content.len(), 1, "请求只出现一次");
+    assert_eq!(rebuilt[0].content.len(), 1, "the request appears once only");
     match &rebuilt[2].content[0] {
         ContentBlock::ToolResult { content, .. } => assert_eq!(content, "no such file"),
-        other => panic!("该是工具结果，实际 {other:?}"),
+        other => panic!("this should be a tool result, actually {other:?}"),
     }
 }

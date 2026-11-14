@@ -5,12 +5,16 @@
  */
 export type CheckView = {
   /**
-   * The condition in the human's words ("report.md 里至少有 3 处结论").
+   * The condition in the human's words ("report.md contains at least 3 conclusions").
    */
   label: string;
   passed: boolean;
   /**
-   * Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md 不存在").
+   * Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md does not exist").
    */
   detail: string;
+  /**
+   * SHA-256 of the exact file bytes read for this measurement, when applicable.
+   */
+  artifactSha256?: string;
 };

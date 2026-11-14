@@ -80,7 +80,7 @@ JSONRPC
   条目流）、记忆库（目录、一次一页的正文，以及跳回来源轮次的 `ledger:…` chip）和上下文
   占用（六段分层条，快满之前先给一句提示）。想压缩就按一下，不必等它自己到点
   （[docs/operations.zh.md](docs/operations.zh.md)）
-- **行动**：29 个内置工具（21 个默认常驻，8 个在开关后面）外加 MCP 服务器
+- **行动**：34 个内置工具（23 个默认常驻，11 个在开关后面）外加 MCP 服务器
   （[docs/configuration.zh.md](docs/configuration.zh.md)）
 - **花得少一点**：系统提示是「稳定前缀 + 每轮尾巴」，供应商那边能缓存；技能目录一个技能
   一行、正文按需取；`JOY_TOOL_POLICY=deferred` 时请求里只放常驻工具的 schema
@@ -97,7 +97,8 @@ JSONRPC
   做（带上刚才的步骤，不是从头再来），用满 `JOY_AUTO_CONTINUE_MAX` 次才收尾，并说清
   还剩什么（[docs/configuration.zh.md](docs/configuration.zh.md)）
 - **被检验**：确定性 eval 把守每次发布；`joy eval --replay` 用录制对话钉住事件顺序
-  （压缩、审批超时、增量输出、MCP 断线、步数用尽自动续片）；judge 给回答质量打分
+  （压缩、审批超时、增量输出、MCP 断线、步数用尽自动续片）；judge 给回答质量打分，
+  非法分数不进入平均值
   （[docs/testing.zh.md](docs/testing.zh.md)）
 - **被观察**：每轮落一条 trace 与一行用量
   （[docs/architecture.zh.md](docs/architecture.zh.md)）
@@ -112,6 +113,8 @@ JSONRPC
 | `search_web` | DuckDuckGo HTML，设 `TAVILY_API_KEY` 升级 Tavily |
 | `read_file` | 读文本文件：分页（2000 行/50KB、不切半行）+ 行号 + 续读协议 + 重读短路；**默认开** |
 | `list_dir` | 列目录：目录在前、文件带大小，500 项上限；**默认开** |
+| `glob` | 按文件名找文件（`**` 跨目录、`*`/`?` 不跨；不含 `/` 的模式按文件名匹配任意深度），跳过 `.git`、`node_modules`、`target`、`dist`、`build` 等；**默认开** |
+| `grep` | 搜文件内容，返回 `path:line: 文本`（纯文本匹配，可加 `ignore_case` 与 `glob` 过滤），跳过同样的目录树、二进制文件与超过 2 MB 的文件，最多 200 条；**默认开** |
 | `fetch_url` | 抓网页正文（HTML→纯文本，50k 封顶）；SSRF 护栏（拒内网/metadata、重定向逐跳复检）+ 外站内容「数据不是指令」声明 |
 | `create_skill` | 把约定的工作流存成过程记忆 |
 | `job_output` / `job_list` / `job_kill` | 读写后台作业（`run_command` 的 `background=true` 起的那些） |
@@ -119,6 +122,9 @@ JSONRPC
 | `current_time` | 本地时间（含星期与时区） |
 | `write_file` / `edit` | 写文本文件 / 一次精确匹配替换（返回变更 hunk）——终端与 hub 默认关，驾驶舱默认开且每次写入在对话里问一次；可写范围 = **会话绑定的工作目录** + `JOY_EXEC_WRITABLE_ROOTS`（会话没选目录时可在这一轮临时指定），没有目录一处也写不了 |
 | `apply_patch` | 按补丁改文件：一次可以改多个文件、多处，**全中才落盘**（一处对不上就一处也不改）；与 `write_file` / `edit` 同一个可写范围与审批 |
+| `define_tool` | 给自己造工具：一份 JSON（名字、说明、参数 schema、命令模板）写进 `<home>/tools/`，**下一轮**就在表里 —— 不用重启、不用重编。执行仍走 `run_command` 同一套沙箱、白名单与审批；没开 `JOY_EXEC=1` 时不存在 |
+| `delete_file` | 删一个文件（目录不删）——边界与审批跟 `write_file` 完全一致；没开 `JOY_WRITE=1` 时不存在 |
+| `move_file` | 移动或改名一个文件，**两端**都得在边界内，目标已存在就拒绝；没开 `JOY_WRITE=1` 时不存在 |
 | `run_command` | 执行 shell 命令——沙箱 + 放行表，默认关（`JOY_EXEC=1` 才开，见 [SECURITY.zh.md](SECURITY.zh.md)）；`background=true` 丢到后台跑 |
 | `delegate_task` | 把一件自成一体的活交给子代理（`tasks: [...]` 一次最多派 4 件互不依赖的，并发跑、按顺序合并）——默认关（`JOY_DELEGATE=1` 才开），且它不能再派生；可给 `result_schema` 要结构化结论（不合规重试一次后回落散文） |
 | `read_skill` | 读一个技能的完整正文——常驻的目录里只有名字与一句话；**默认开** |
@@ -130,9 +136,7 @@ JSONRPC
 
 ### 模型与密钥
 
-**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切——而且不改代码也能扩：`<home>/models-catalog.json` 可以补丁内置默认值或新增一家，`scripts/gen_catalog.py` 还能从 [models.dev](https://models.dev) 直接生成这些行（context 上限、看图、工具调用都取自上游，joy 的 wire 与 key_env 映射已内置）。见 [docs/configuration.zh.md](docs/configuration.zh.md)。`/model` 看已配好的套，`/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。模型配置在终端的 `/model` 或 `models.json` 里，驾驶舱不再摆配置面板。密钥优先进系统钥匙串（macOS 钥匙串、Linux `secret-tool`、**Windows Credential Manager**）；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。密钥写入走 `SecretVault` 接缝，服务器形态的 KMS 后端出现时只加实现、不改调用方。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。驾驶舱也能自托管：`JOY_OPS_HOST=0.0.0.0` 时启动强制要求 `JOY_OPS_TOKEN`，`/api/*` 走 Bearer 鉴权（见 [docs/operations.zh.md](docs/operations.zh.md)）。
-
-工具失败以文本回给模型——loop 绝不因一次工具失败而崩。
+**12 家 LLM 厂商预适配在代码里**（`joyczl-provider`），模型随手切——而且不改代码也能扩：`<home>/models-catalog.json` 可以补丁内置默认值或新增一家，`scripts/gen_catalog.py` 还能从 [models.dev](https://models.dev) 直接生成这些行（context 上限、看图、工具调用都取自上游，joy 的 wire 与 key_env 映射已内置）。见 [docs/configuration.zh.md](docs/configuration.zh.md)。`/model` 看已配好的套，`/model add ds deepseek deepseek-flash --env DEEPSEEK_API_KEY` 加一套，`/model use ds` 切过去 —— 不用重发密钥，立刻生效、不用重启。模型配置在终端的 `/model` 或 `models.json` 里，驾驶舱不再摆配置面板。密钥优先进系统钥匙串（macOS 钥匙串、Linux `secret-tool`、**Windows Credential Manager**）；没有钥匙串时退回 `<home>/secrets.json`（0600 明文），保存后会如实说是哪一种。密钥写入走 `SecretVault` 接缝，服务器形态的 KMS 后端出现时只加实现、不改调用方。**旧的 `JOY_API_KEY` / `JOY_BASE_URL` 等环境变量已不再读取**——配置只有 `models.json` 这一条路。驾驶舱也能自托管：`JOY_OPS_HOST=0.0.0.0` 时启动强制要求 `JOY_OPS_TOKEN`，`/api/*` 走 Bearer 鉴权（见 [docs/operations.zh.md](docs/operations.zh.md)）。
 
 ## 文档
 
@@ -207,8 +211,9 @@ JSONRPC
 2. **协议只有一份定义。** `joyczl-protocol` 是跨语言契约的唯一事实来源：
    类型直接生成 TypeScript 与 Python 绑定，生成物 check-in。
 3. **客户端只做翻译。** CLI、dashboard、聊天网关、Python SDK 都是
-   `joy app-server`（JSON-RPC over stdio）的客户端；state.db 只在一个
-   进程里打开。
+   `joy app-server`（JSON-RPC over stdio）的客户端；state.db 由
+   app-server runtime 管理；独立启动多个 runtime 仍缺少跨进程回合协调，
+   详见运行边界。
 
 </details>
 
@@ -216,7 +221,30 @@ JSONRPC
 
 ## 运行可靠性
 
-任务恢复后重新验收，已授权任务可持久等待后台作业完成后继续，人工暂停或取消优先。工具批次与后台作业在执行前持久化意图，结果未知时等待核对。排队指令保留到结果落盘。快速聊天携带近期会话与 SOUL，技能发现支持中文描述。OpenAI 使用原生 Responses 并在本地保留加密接续数据，旧端点兼容方式见[配置文档](docs/configuration.zh.md#原生-openai-responses)。无人值守前请了解[恢复边界与限制](docs/limitations.zh.md)。 计划在重启后恢复完整版本。[限额真实模型评测](docs/live-reliability.zh.md)记录当前 DeepSeek 配置、证据和费用。
+生产入口按规范化状态数据库共享唯一执行归属，竞争运行时在恢复流程改动活动工作前被拒绝。参见[运行时归属](docs/limitations.zh.md#常驻与守护)。
 
+文件验收现用版本化回执记录所测内容摘要。检查结果与回执共同提交，证据保存失败会阻止完成。参见[验收证据](docs/protocol.zh.md#版本化验收证据)。
+
+驾驶舱支持逐项查看并用人工证据核对未知任务操作。核对仅记录回执，不重跑工具、不恢复任务，原验收仍须满足。参见[操作协议](docs/protocol.zh.md#操作日志与人工核对)。
+
+任务也可以保留草稿，等待一个人工声明的外部输入。驾驶舱支持声明条件和提供数据；事件持久化并可跨重启恢复，人工暂停和取消始终优先。参见[外部输入协议](docs/protocol.zh.md#持久化外部输入)。
+
+任务恢复后重新验收。恢复停止等待核对或缺少模型配置时，仍计入检查点已知 token，重复恢复不会重复计入；`just smoke-recovery` 使用隔离本地服务测试真实进程崩溃。已授权任务可持久等待后台作业完成后继续，人工暂停或取消优先。工具批次与后台作业在执行前持久化意图，结果未知时等待核对。排队指令保留到结果落盘。生成式记忆视图会响应内容更正与新事件、重试失败写入，已有记忆无需配置模型也可投影。后台提炼可保留绑定原消息、最多 24 小时有效的临时观察（[记忆合同](docs/protocol.zh.md#记忆有效期与提炼来源)）。快速聊天携带近期会话、SOUL 与有限已存个人偏好，技能发现支持中文描述。OpenAI 使用原生 Responses 并在本地保留加密接续数据，旧端点兼容方式见[配置文档](docs/configuration.zh.md#原生-openai-responses)。无人值守前请了解[恢复边界与限制](docs/limitations.zh.md)。 计划在重启后恢复完整版本。[限额真实模型评测](docs/live-reliability.zh.md)记录当前 DeepSeek 配置、证据和费用。
+
+人可点击「开始任务」授权持久入队，任务使用独立工作会话，原聊天仍可继续；参见[独立任务执行](docs/protocol.zh.md#独立任务执行)。
+
+任务/目标的停止状态与通知生产记录一起提交；提交失败不会宣告完成。通知失败可持久重试，原端点不被静默替换。
+
+定时触发结果与投递意图持久保存；文件失败只重试投递。未知领取需核对，不自动补跑；参见[调度恢复](docs/operations.zh.md#定时任务恢复与投递)。
+
+人工删除／纠正记忆后，后台提炼不会重新写入匹配的旧事实；忘记整个主题后持续阻止该主题自动提炼。人工明确记忆仍可写入。详见[记忆边界](docs/limitations.zh.md#记忆)。
+
+规划与模型调用前严格校验持久约束。恢复保留 checkpoint 轮次编号，已知用量只计入一次，并先检查剩余预算再继续。
 
 [English](README.md) | 简体中文 · Code is MIT.
+
+人工记忆有效期与提炼来源见[记忆协议](docs/protocol.zh.md#记忆有效期与提炼来源)。
+
+修改类工具现已跨会话协调，后台作业保留许可到结算；见[修改操作准入](docs/architecture.zh.md#修改操作准入)。
+结构化交付物验收现可检查有类型的 JSON 值，并保留文件版本证据；见[结构化文档验收](docs/protocol.zh.md#结构化文档验收)。
+普通聊天现支持[人工操作核对](docs/protocol.zh.md#普通聊天操作核对)；此前结果不明时，新回合仅保留读取能力。

@@ -18,24 +18,24 @@ fn server_names_become_safe_filenames() {
     // Path traversal parts all become underscores.
     assert_eq!(sanitise("../evil"), "___evil");
     assert_eq!(sanitise("a b/c"), "a_b_c");
-    assert_eq!(sanitise("很长的名字").len(), "很长的名字".len());
+    assert_eq!(sanitise("a very long name").len(), "a very long name".len());
 }
 
 #[test]
 fn token_store_round_trips_and_stays_private() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let store = TokenStore::new(dir.path(), "demo");
 
     store
         .save_client_info(json!({"client_id": "cid", "secret": "nope"}))
-        .expect("存 client_info");
+        .expect("store client_info");
     store
         .save_tokens(StoredTokens {
             access_token: "at".to_string(),
             refresh_token: Some("rt".to_string()),
             expires_at: Some(i64::MAX),
         })
-        .expect("存 tokens");
+        .expect("store the tokens");
 
     let loaded = store.load();
     assert_eq!(loaded.client_info.as_ref().unwrap()["client_id"], "cid");
@@ -50,17 +50,20 @@ fn token_store_round_trips_and_stays_private() {
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & 0o777, 0o600, "凭证文件必须是 0600");
+        assert_eq!(mode & 0o777, 0o600, "the credential file has to be 0600");
     }
 }
 
 #[test]
 fn a_corrupt_token_file_reads_as_absent() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let store = TokenStore::new(dir.path(), "broken");
     std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
-    std::fs::write(store.path(), "这不是 JSON").unwrap();
-    assert!(store.load().tokens.is_none(), "坏文件不该致命");
+    std::fs::write(store.path(), "this is not JSON").unwrap();
+    assert!(
+        store.load().tokens.is_none(),
+        "a bad file must not be fatal"
+    );
     assert!(store.tokens().is_none());
 }
 
@@ -115,7 +118,7 @@ fn base64url_avoids_the_url_hostile_alphabet() {
     assert_eq!(
         pkce_verifier().len(),
         64,
-        "48 字节的 base64url 恰好 64 字符"
+        "48 bytes of base64url is exactly 64 characters"
     );
 }
 
@@ -196,7 +199,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
                 .split('&')
                 .find(|p| p.starts_with("state="))
                 .map(|p| p.trim_start_matches("state=").to_string())
-                .expect("授权 URL 里有 state");
+                .expect("the authorisation URL carries a state");
 
             // Wait for the callback port to listen (sign_in binds before opening the browser); retry.
             let mut stream = None;
@@ -209,7 +212,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
                     Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
                 }
             }
-            let mut stream = stream.expect("回调端口没起来");
+            let mut stream = stream.expect("the callback port did not come up");
             stream
                 .write_all(
                     format!(
@@ -233,7 +236,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
         *authorize_slot.lock().unwrap() = Some(url.to_string());
     })
     .await
-    .expect("整个登录流程要通");
+    .expect("the whole sign-in flow has to work");
 
     assert_eq!(token, "at-1");
     browser.await.unwrap();
@@ -249,7 +252,7 @@ async fn sign_in_walks_the_whole_flow_against_a_local_authorization_server() {
 
     // The token exchange request carried client_id and the PKCE verifier.
     let forms = received.lock().await.clone();
-    let token_request = forms.last().expect("token 请求被收到");
+    let token_request = forms.last().expect("the token request arrives");
     assert!(token_request
         .iter()
         .any(|(k, v)| k == "client_id" && v == "client-123"));
@@ -266,7 +269,7 @@ async fn ensure_token_without_a_login_points_at_the_command() {
     let dir = tempfile::tempdir().unwrap();
     let error = ensure_access_token(dir.path(), "ghost", "http://127.0.0.1:1/mcp")
         .await
-        .expect_err("没登录过必须报错");
+        .expect_err("never signed in must error");
     assert!(error.contains("joy mcp login ghost"), "{error}");
 }
 

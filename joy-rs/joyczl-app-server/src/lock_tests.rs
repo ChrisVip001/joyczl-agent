@@ -14,12 +14,12 @@ fn temp_home() -> tempfile::TempDir {
 #[test]
 fn a_second_acquire_on_a_live_lock_fails() {
     let dir = temp_home();
-    let first = lock::acquire(dir.path()).expect("第一次该拿到");
+    let first = lock::acquire(dir.path()).expect("the first one should get it");
     let error = lock::acquire(dir.path()).unwrap_err();
     assert!(error.contains("already running"), "{error}");
     assert!(
         error.contains(&std::process::id().to_string()),
-        "该带 pid：{error}"
+        "it has to carry the pid: {error}"
     );
     drop(first);
 }
@@ -31,17 +31,20 @@ fn a_stale_lock_from_a_dead_process_is_reaped() {
     // Manufacture a "certainly dead" pid: spawn a child that exits immediately and wait for it.
     let mut child = std::process::Command::new("true")
         .spawn()
-        .expect("起子进程");
+        .expect("start the subprocess");
     let dead_pid = child.id();
-    child.wait().expect("等子进程退出");
+    child.wait().expect("wait for the child to exit");
 
     let lock_path = dir.path().join("app-server.lock");
-    let mut file = std::fs::File::create(&lock_path).expect("造残骸");
-    writeln!(file, "{dead_pid}").expect("写 pid");
+    let mut file = std::fs::File::create(&lock_path).expect("plant the wreckage");
+    writeln!(file, "{dead_pid}").expect("write the pid");
 
-    let second = lock::acquire(dir.path()).expect("残骸该被收掉");
+    let second = lock::acquire(dir.path()).expect("the wreckage should be collected");
     drop(second);
-    assert!(!lock_path.exists(), "Drop 后锁文件该没了");
+    assert!(
+        !lock_path.exists(),
+        "after Drop the lock file should be gone"
+    );
 }
 
 /// A corrupt lock file (not a number): reaped like wreckage too, never a hang.
@@ -49,8 +52,8 @@ fn a_stale_lock_from_a_dead_process_is_reaped() {
 fn a_corrupt_lock_file_is_also_reaped() {
     let dir = temp_home();
     let lock_path = dir.path().join("app-server.lock");
-    std::fs::write(&lock_path, "不是数字").expect("造坏文件");
-    let guard = lock::acquire(dir.path()).expect("坏文件该被收掉");
+    std::fs::write(&lock_path, "not a number").expect("plant the broken file");
+    let guard = lock::acquire(dir.path()).expect("a bad file should be collected");
     drop(guard);
     assert!(!lock_path.exists());
 }
@@ -59,7 +62,63 @@ fn a_corrupt_lock_file_is_also_reaped() {
 #[test]
 fn release_then_acquire_again() {
     let dir = temp_home();
-    let first = lock::acquire(dir.path()).expect("第一次");
+    let first = lock::acquire(dir.path()).expect("the first time");
     drop(first);
-    let _second = lock::acquire(dir.path()).expect("释放后第二次");
+    let _second = lock::acquire(dir.path()).expect("the second one after the release");
+}
+
+/// A separate test process holds the OS lock until the parent kills it.
+#[test]
+fn child_process_ownership_probe() {
+    let Some(home) = std::env::var_os("JOY_TEST_LOCK_PROBE_HOME") else {
+        return;
+    };
+    let home = std::path::PathBuf::from(home);
+    let _owner = lock::acquire(&home).expect("child acquires execution ownership");
+    std::fs::write(home.join("ownership.ready"), "ready").unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(10));
+}
+
+#[test]
+fn a_crashed_process_releases_kernel_ownership_without_deleting_its_inode() {
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let home = temp_home();
+    let mut child = ChildGuard(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lock_tests::child_process_ownership_probe",
+                "--nocapture",
+            ])
+            .env("JOY_TEST_LOCK_PROBE_HOME", home.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !home.path().join("ownership.ready").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Child did not publish ownership readiness"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(lock::acquire(home.path()).is_err());
+    let inode = home.path().join("state.db.runtime.lock");
+    assert!(inode.exists());
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    let next = lock::acquire(home.path()).unwrap();
+    drop(next);
+    assert!(
+        inode.exists(),
+        "The advisory lock inode must remain stable after release"
+    );
 }

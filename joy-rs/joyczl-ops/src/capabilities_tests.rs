@@ -16,78 +16,86 @@ use crate::capabilities::{
 /// Write `<dir>/<name>/SKILL.md`.
 fn put_skill(dir: &Path, name: &str, description: &str) {
     let folder = dir.join(name);
-    std::fs::create_dir_all(&folder).expect("建目录");
+    std::fs::create_dir_all(&folder).expect("create the directory");
     std::fs::write(
         folder.join("SKILL.md"),
-        format!("---\nname: {name}\ndescription: {description}\n---\n\n正文\n"),
+        format!("---\nname: {name}\ndescription: {description}\n---\n\nthe body\n"),
     )
-    .expect("写技能");
+    .expect("write the skill");
 }
 
 #[test]
 fn skills_carry_where_they_came_from_and_home_wins() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let user = home.path().join("skills");
     let pack = home.path().join("pack");
-    std::fs::create_dir_all(&user).expect("建用户目录");
-    std::fs::create_dir_all(&pack).expect("建内置包");
+    std::fs::create_dir_all(&user).expect("create the user directory");
+    std::fs::create_dir_all(&pack).expect("create the built-in pack");
 
-    put_skill(&user, "mine", "我自己写的");
-    put_skill(&pack, "bundled", "随 Joy 分发的");
+    put_skill(&user, "mine", "written by me");
+    put_skill(&pack, "bundled", "shipped with Joy");
     // Same name in both: the user's copy wins — and the row says so.
-    put_skill(&pack, "shared", "内置包里的版本");
-    put_skill(&user, "shared", "我自己改过的版本");
+    put_skill(&pack, "shared", "the version in the built-in pack");
+    put_skill(&user, "shared", "the version I edited myself");
     // The staging area is not a skill, and a SKILL.md in the root is not either.
-    std::fs::create_dir_all(pack.join("_incoming")).expect("建暂存");
+    std::fs::create_dir_all(pack.join("_incoming")).expect("create the staging area");
     std::fs::write(
         pack.join("_incoming/SKILL.md"),
         "---\nname: x\ndescription: y\n---\n",
     )
-    .expect("写");
+    .expect("write");
     std::fs::write(
         pack.join("SKILL.md"),
         "---\nname: root\ndescription: y\n---\n",
     )
-    .expect("写");
+    .expect("write");
 
     let (rows, error) = skill_rows_in(&[user.clone(), pack.clone()]);
-    assert!(error.is_none(), "没有错误该报：{error:?}");
+    assert!(
+        error.is_none(),
+        "there should be nothing to report: {error:?}"
+    );
     let by_name = |name: &str| {
         rows.iter()
             .find(|row| row.name == name)
-            .expect("该有这一行")
+            .expect("this row should be here")
     };
 
     assert_eq!(by_name("mine").source, "user");
     assert_eq!(by_name("bundled").source, "builtin");
     // The shared one is the user's row — same priority the loader uses.
     assert_eq!(by_name("shared").source, "user");
-    assert_eq!(by_name("shared").description, "我自己改过的版本");
-    assert_eq!(rows.len(), 3, "暂存区和根目录里的不算：{rows:?}");
+    assert_eq!(by_name("shared").description, "the version I edited myself");
+    assert_eq!(
+        rows.len(),
+        3,
+        "what sits in staging and the root does not count: {rows:?}"
+    );
 }
 
 #[test]
 fn a_missing_user_directory_is_not_an_error() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let (rows, error) = skill_rows_in(&[home.path().join("skills"), home.path().join("pack")]);
     assert!(rows.is_empty());
     assert!(
         error.is_none(),
-        "没建过技能目录是新装机的默认状态，不是错误"
+        "never having made a skills directory is the default on a fresh install, not an error"
     );
 }
 
 #[test]
 fn only_user_skills_can_be_deleted() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let user = home.path().join("skills");
     let pack = home.path().join("pack");
-    std::fs::create_dir_all(&user).expect("建目录");
-    put_skill(&user, "mine", "我的");
-    put_skill(&pack, "bundled", "内置的");
+    std::fs::create_dir_all(&user).expect("create the directory");
+    put_skill(&user, "mine", "mine");
+    put_skill(&pack, "bundled", "the built-in one");
 
     // The built-in one does not live under home/skills — refused, not "not found".
-    let refusal = remove_skill(home.path(), "bundled").expect_err("内置技能删不得");
+    let refusal =
+        remove_skill(home.path(), "bundled").expect_err("a built-in skill cannot be deleted");
     assert!(refusal.contains("built-in"), "{refusal}");
 
     // A traversal attempt is not even a name.
@@ -95,10 +103,10 @@ fn only_user_skills_can_be_deleted() {
     assert!(remove_skill(home.path(), "").is_err());
 
     assert_eq!(
-        remove_skill(home.path(), "mine").expect("删得掉"),
+        remove_skill(home.path(), "mine").expect("it deletes"),
         "Deleted skill 'mine'"
     );
-    assert!(!user.join("mine").exists(), "目录该没了");
+    assert!(!user.join("mine").exists(), "the directory should be gone");
     // Deleting twice says so instead of pretending.
     assert!(remove_skill(home.path(), "mine").is_err());
 }
@@ -142,13 +150,13 @@ fn the_form_fence_says_what_is_wrong_with_the_input() {
         args: Some(vec!["-y".to_string(), "server".to_string()]),
         ..base.clone()
     };
-    validate_server(&stdio).expect("stdio 合法");
+    validate_server(&stdio).expect("stdio is legal");
     let http = ServerSpec {
         url: Some("https://h/mcp".to_string()),
         auth_env: Some("NOTES_API_KEY".to_string()),
         ..base
     };
-    validate_server(&http).expect("http 合法");
+    validate_server(&http).expect("http is legal");
 }
 
 fn both_url_err(spec: &ServerSpec) -> String {
@@ -157,7 +165,7 @@ fn both_url_err(spec: &ServerSpec) -> String {
 
 #[test]
 fn mcp_rows_merge_like_the_runtime_does() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let user = home.path().join("mcp.json");
     let pack = home.path().join("pack.json");
     std::fs::write(
@@ -168,7 +176,7 @@ fn mcp_rows_merge_like_the_runtime_does() {
         ]})
         .to_string(),
     )
-    .expect("写用户配置");
+    .expect("write the user config");
     std::fs::write(
         &pack,
         json!({"servers": [
@@ -178,17 +186,24 @@ fn mcp_rows_merge_like_the_runtime_does() {
         ]})
         .to_string(),
     )
-    .expect("写内置包");
+    .expect("write the built-in pack");
 
     let (rows, error) = mcp_rows_in(&[user, pack]);
-    assert!(error.is_none(), "用户配置读得动：{error:?}");
+    assert!(
+        error.is_none(),
+        "the user config should be readable: {error:?}"
+    );
     let by_name = |name: &str| {
         rows.iter()
             .find(|row| row.name == name)
-            .expect("该有这一行")
+            .expect("this row should be here")
     };
 
-    assert_eq!(rows.len(), 3, "无名条目跳过，重名的不重复：{rows:?}");
+    assert_eq!(
+        rows.len(),
+        3,
+        "nameless entries are skipped and duplicates not repeated: {rows:?}"
+    );
     assert_eq!(by_name("fs").source, "user");
     assert_eq!(by_name("fs").kind, "command");
     assert_eq!(by_name("fs").args, vec!["-y", "server"]);
@@ -196,7 +211,7 @@ fn mcp_rows_merge_like_the_runtime_does() {
     assert_eq!(
         by_name("notes").source,
         "user",
-        "先读到的赢 —— 和运行时一样"
+        "the first one read wins — the same as at runtime"
     );
     assert_eq!(by_name("notes").auth, "auth_env");
     assert_eq!(by_name("notes").auth_env.as_deref(), Some("NOTES_API_KEY"));
@@ -206,27 +221,27 @@ fn mcp_rows_merge_like_the_runtime_does() {
 
 #[test]
 fn a_broken_user_config_is_reported_a_broken_pack_is_not_fatal() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let user = home.path().join("mcp.json");
     let pack = home.path().join("pack.json");
-    std::fs::write(&user, "{ not json").expect("写坏用户配置");
-    std::fs::write(&pack, "{ also not json").expect("写坏内置包");
+    std::fs::write(&user, "{ not json").expect("write the broken user config");
+    std::fs::write(&pack, "{ also not json").expect("write the broken built-in pack");
 
     let (rows, error) = mcp_rows_in(&[user, pack]);
     assert!(rows.is_empty());
-    let error = error.expect("用户那份读不动必须说");
+    let error = error.expect("an unreadable user file has to be reported");
     assert!(error.contains("mcp.json"), "{error}");
 }
 
 #[test]
 fn saving_a_server_refuses_a_name_the_builtin_pack_owns() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let pack = home.path().join("pack.json");
     std::fs::write(
         &pack,
         json!({"servers": [{"name": "cloud", "url": "https://h/mcp"}]}).to_string(),
     )
-    .expect("写内置包");
+    .expect("write the built-in pack");
 
     let spec = ServerSpec {
         name: "cloud".to_string(),
@@ -235,14 +250,18 @@ fn saving_a_server_refuses_a_name_the_builtin_pack_owns() {
     };
     // Shadowing would be worse than refusing: the runtime's first-wins would make the
     // user's edit do nothing at all.
-    let refusal = save_server_among(home.path(), &spec, &[pack]).expect_err("内置占用的名字拒写");
+    let refusal = save_server_among(home.path(), &spec, &[pack])
+        .expect_err("a name a built-in owns is refused");
     assert!(refusal.contains("built-in"), "{refusal}");
-    assert!(!home.path().join("mcp.json").exists(), "被拒就不该落盘");
+    assert!(
+        !home.path().join("mcp.json").exists(),
+        "a refusal must not touch the disk"
+    );
 }
 
 #[test]
 fn saving_a_server_creates_upserts_and_never_duplicates() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let fs = ServerSpec {
         name: "fs".to_string(),
         command: Some("npx".to_string()),
@@ -257,24 +276,34 @@ fn saving_a_server_creates_upserts_and_never_duplicates() {
     };
 
     // No file yet: the first save writes one.
-    save_server_among(home.path(), &fs, &[]).expect("首次保存");
-    save_server_among(home.path(), &notes, &[]).expect("第二条");
-    let text = std::fs::read_to_string(home.path().join("mcp.json")).expect("读配置");
-    assert_eq!(text.matches("\"name\"").count(), 2, "两条各一行：{text}");
-    assert!(text.contains("\"args\""), "参数要写进去：{text}");
-    assert!(!text.contains("null"), "没填的字段不该写成 null：{text}");
+    save_server_among(home.path(), &fs, &[]).expect("the first save");
+    save_server_among(home.path(), &notes, &[]).expect("the second entry");
+    let text = std::fs::read_to_string(home.path().join("mcp.json")).expect("read the config");
+    assert_eq!(
+        text.matches("\"name\"").count(),
+        2,
+        "one line per entry: {text}"
+    );
+    assert!(
+        text.contains("\"args\""),
+        "the arguments have to be written: {text}"
+    );
+    assert!(
+        !text.contains("null"),
+        "an unset field must not be written as null: {text}"
+    );
 
     // Replace by name: still two rows, the new values in place.
     let moved = ServerSpec {
         url: Some("https://moved/mcp".to_string()),
         ..notes.clone()
     };
-    save_server_among(home.path(), &moved, &[]).expect("改名保存");
-    let text = std::fs::read_to_string(home.path().join("mcp.json")).expect("再读");
+    save_server_among(home.path(), &moved, &[]).expect("save under the new name");
+    let text = std::fs::read_to_string(home.path().join("mcp.json")).expect("read it again");
     assert_eq!(
         text.matches("\"name\"").count(),
         2,
-        "同名是替换不是新增：{text}"
+        "the same name replaces rather than adds: {text}"
     );
     assert!(text.contains("https://moved/mcp"), "{text}");
 
@@ -288,7 +317,7 @@ fn saving_a_server_creates_upserts_and_never_duplicates() {
 
 #[test]
 fn removing_a_server_only_touches_the_users_file() {
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let path: PathBuf = home.path().join("mcp.json");
     std::fs::write(
         &path,
@@ -298,22 +327,25 @@ fn removing_a_server_only_touches_the_users_file() {
         ]})
         .to_string(),
     )
-    .expect("写配置");
+    .expect("write the config");
 
     assert!(remove_server(home.path(), "cloud")
         .unwrap_err()
         .contains("no connector named"));
     assert!(remove_server(home.path(), "../escape").is_err());
-    remove_server(home.path(), "fs").expect("删得掉");
+    remove_server(home.path(), "fs").expect("it deletes");
 
-    let text = std::fs::read_to_string(&path).expect("读配置");
-    assert!(!text.contains("\"fs\""), "该没了：{text}");
-    assert!(text.contains("\"notes\""), "别的不该被动：{text}");
+    let text = std::fs::read_to_string(&path).expect("read the config");
+    assert!(!text.contains("\"fs\""), "it should be gone: {text}");
+    assert!(
+        text.contains("\"notes\""),
+        "the other one must be left alone: {text}"
+    );
 }
 
 #[test]
 fn removing_from_a_missing_file_says_so() {
-    let home = tempfile::tempdir().expect("临时目录");
-    let refusal = remove_server(home.path(), "fs").expect_err("没有文件");
+    let home = tempfile::tempdir().expect("temp dir");
+    let refusal = remove_server(home.path(), "fs").expect_err("there is no file");
     assert!(refusal.contains("there is no"), "{refusal}");
 }

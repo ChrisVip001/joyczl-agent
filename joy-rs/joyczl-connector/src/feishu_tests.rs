@@ -25,9 +25,10 @@ impl Fixture {
         let home = self.dir.path().to_path_buf();
         let pool = joyczl_state::open(&home.join("state.db"))
             .await
-            .expect("打开库");
+            .expect("open the store");
         ToolCtx {
             on_uncertain: None,
+            resource_lease: None,
             task_run_id: None,
             activate: None,
             embedder: None,
@@ -79,7 +80,7 @@ impl Fake {
 
 impl ApprovalBroker for Fake {
     fn request(&self, request: ApprovalRequest) -> ApprovalFut {
-        self.seen.lock().expect("锁").push(request);
+        self.seen.lock().expect("lock").push(request);
         let answer = self.answer;
         Box::pin(async move { answer })
     }
@@ -96,8 +97,8 @@ struct FakeFeishu {
 }
 
 async fn fake_feishu(token_code: i64, message_code: i64) -> FakeFeishu {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("监听");
-    let port = listener.local_addr().expect("地址").port();
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+    let port = listener.local_addr().expect("the address").port();
     let token_requests = Arc::new(AtomicUsize::new(0));
     let messages: Arc<Mutex<Vec<MessageCall>>> = Arc::new(Mutex::new(Vec::new()));
     let (tokens, msgs) = (token_requests.clone(), messages.clone());
@@ -118,7 +119,7 @@ async fn fake_feishu(token_code: i64, message_code: i64) -> FakeFeishu {
                     json!({"code": token_code, "msg": if token_code == 0 { "ok" } else { "app not found" },
                            "tenant_access_token": "t-fake", "expire": 7200})
                 } else if path.contains("/im/v1/messages") {
-                    msgs.lock().expect("锁").push((auth, body));
+                    msgs.lock().expect("lock").push((auth, body));
                     json!({"code": message_code,
                            "msg": if message_code == 0 { "ok" } else { "invalid receive_id" },
                            "data": {"message_id": "om_fake"}})
@@ -187,36 +188,40 @@ async fn read_request(
 #[tokio::test]
 async fn a_dry_run_is_only_a_draft() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let tool = feishu_send_tool(config("http://127.0.0.1:9".to_string(), false));
     let ctx = fixture.ctx(None).await;
 
-    let reply = call(&tool, ctx, json!({"to": "ou_alice", "text": "明天见"}))
-        .await
-        .expect("草稿该成功");
+    let reply = call(
+        &tool,
+        ctx,
+        json!({"to": "ou_alice", "text": "see you tomorrow"}),
+    )
+    .await
+    .expect("the draft should succeed");
     assert!(reply.contains("draft"), "{reply}");
     let outbox = fixture.dir.path().join("outbox");
     let entry = std::fs::read_dir(&outbox)
         .expect("outbox")
         .next()
-        .expect("有草稿")
-        .expect("读");
-    let text = std::fs::read_to_string(entry.path()).expect("读草稿");
+        .expect("there is a draft")
+        .expect("read");
+    let text = std::fs::read_to_string(entry.path()).expect("read the draft");
     assert!(text.contains("To: ou_alice (open_id)"), "{text}");
-    assert!(text.contains("明天见"), "{text}");
+    assert!(text.contains("see you tomorrow"), "{text}");
 }
 
 #[tokio::test]
 async fn an_unknown_recipient_is_refused() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let tool = feishu_send_tool(config("http://127.0.0.1:9".to_string(), false));
     let ctx = fixture.ctx(None).await;
     let error = call(&tool, ctx, json!({"to": "ou_mallory", "text": "hi"}))
         .await
-        .expect_err("白名单外必须拒绝");
+        .expect_err("anything outside the whitelist must be refused");
     assert!(error.to_string().contains("ou_mallory"), "{error}");
     assert!(error.to_string().contains("allow_recipients"), "{error}");
 }
@@ -224,7 +229,7 @@ async fn an_unknown_recipient_is_refused() {
 #[tokio::test]
 async fn a_denied_approval_never_touches_the_network() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     std::env::set_var("JOY_FEISHU_TEST_SECRET", "s3cret");
     let server = fake_feishu(0, 0).await;
@@ -234,26 +239,26 @@ async fn a_denied_approval_never_touches_the_network() {
 
     let error = call(&tool, ctx, json!({"to": "ou_alice", "text": "hi"}))
         .await
-        .expect_err("没批准不发");
+        .expect_err("no approval, nothing sent");
     assert!(error.to_string().contains("not approved"), "{error}");
-    assert_eq!(broker.seen.lock().expect("锁").len(), 1);
+    assert_eq!(broker.seen.lock().expect("lock").len(), 1);
     assert!(
-        broker.seen.lock().expect("锁")[0]
+        broker.seen.lock().expect("lock")[0]
             .args_preview
             .contains("ou_alice"),
-        "卡片要写清发给谁"
+        "the card has to say who it goes to"
     );
     assert_eq!(
         server.token_requests.load(Ordering::SeqCst),
         0,
-        "拒绝之后连 token 都不该去要"
+        "after a refusal it should not even go asking for a token"
     );
 }
 
 #[tokio::test]
 async fn an_approved_send_carries_a_tenant_token_and_a_text_message() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     std::env::set_var("JOY_FEISHU_TEST_SECRET", "s3cret");
     let server = fake_feishu(0, 0).await;
@@ -261,51 +266,60 @@ async fn an_approved_send_carries_a_tenant_token_and_a_text_message() {
     let tool = feishu_send_tool(config(server.base_url.clone(), true));
     let ctx = fixture.ctx(Some(broker)).await;
 
-    let reply = call(&tool, ctx, json!({"to": "ou_alice", "text": "部署完成了"}))
-        .await
-        .expect("批准后该发成功");
+    let reply = call(
+        &tool,
+        ctx,
+        json!({"to": "ou_alice", "text": "the deployment is done"}),
+    )
+    .await
+    .expect("after approval it should send");
     assert!(reply.contains("om_fake"), "{reply}");
 
-    let messages = server.messages.lock().expect("锁");
+    let messages = server.messages.lock().expect("lock");
     assert_eq!(messages.len(), 1);
     let (auth, body) = &messages[0];
-    assert_eq!(auth.as_deref(), Some("Bearer t-fake"), "消息要带应用 token");
+    assert_eq!(
+        auth.as_deref(),
+        Some("Bearer t-fake"),
+        "the message has to carry the app token"
+    );
     assert_eq!(body["receive_id"], json!("ou_alice"));
     assert_eq!(body["msg_type"], json!("text"));
     // Feishu wants `content` as a JSON *string*, not an object.
-    let content: Value = serde_json::from_str(body["content"].as_str().expect("content 是字符串"))
-        .expect("content 里是 JSON");
-    assert_eq!(content["text"], json!("部署完成了"));
+    let content: Value =
+        serde_json::from_str(body["content"].as_str().expect("content is a string"))
+            .expect("content holds JSON");
+    assert_eq!(content["text"], json!("the deployment is done"));
 }
 
 #[tokio::test]
 async fn the_token_is_fetched_once_and_reused() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     std::env::set_var("JOY_FEISHU_TEST_SECRET", "s3cret");
     let server = fake_feishu(0, 0).await;
     let broker = Fake::answering(true);
     let tool = feishu_send_tool(config(server.base_url.clone(), true));
 
-    for text in ["第一条", "第二条"] {
+    for text in ["the first one", "the second one"] {
         let ctx = fixture.ctx(Some(broker.clone())).await;
         call(&tool, ctx, json!({"to": "ou_alice", "text": text}))
             .await
-            .expect("该发成功");
+            .expect("it should send");
     }
     assert_eq!(
         server.token_requests.load(Ordering::SeqCst),
         1,
-        "两小时内 token 该复用（进程内缓存）"
+        "within two hours the token is reused (in-process cache)"
     );
-    assert_eq!(server.messages.lock().expect("锁").len(), 2);
+    assert_eq!(server.messages.lock().expect("lock").len(), 2);
 }
 
 #[tokio::test]
 async fn feishu_s_own_error_words_are_passed_through() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     std::env::set_var("JOY_FEISHU_TEST_SECRET", "s3cret");
     let server = fake_feishu(0, 99991663).await;
@@ -315,19 +329,19 @@ async fn feishu_s_own_error_words_are_passed_through() {
 
     let error = call(&tool, ctx, json!({"to": "ou_alice", "text": "hi"}))
         .await
-        .expect_err("飞书报错就该失败");
+        .expect_err("a Feishu error should fail");
     let text = error.to_string();
     assert!(text.contains("99991663"), "{text}");
     assert!(
         text.contains("invalid receive_id"),
-        "要带上飞书的原话：{text}"
+        "it has to carry Feishu's own words: {text}"
     );
 }
 
 #[tokio::test]
 async fn a_missing_secret_is_reported_before_the_human_is_asked() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let broker = Fake::answering(true);
     std::env::remove_var("JOY_FEISHU_TEST_SECRET_MISSING");
@@ -338,7 +352,10 @@ async fn a_missing_secret_is_reported_before_the_human_is_asked() {
 
     let error = call(&tool, ctx, json!({"to": "ou_alice", "text": "hi"}))
         .await
-        .expect_err("没有 secret 就该失败");
+        .expect_err("no secret means failure");
     assert!(error.to_string().contains("app_secret"), "{error}");
-    assert!(broker.seen.lock().expect("锁").is_empty(), "别浪费那次点击");
+    assert!(
+        broker.seen.lock().expect("lock").is_empty(),
+        "do not waste that click"
+    );
 }

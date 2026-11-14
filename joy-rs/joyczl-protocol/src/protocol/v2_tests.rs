@@ -16,7 +16,7 @@ fn notification_is_tagged_with_type() {
             query: Some("alex meetings".to_string()),
         },
     });
-    let v: serde_json::Value = serde_json::to_value(&n).expect("序列化");
+    let v: serde_json::Value = serde_json::to_value(&n).expect("serialise");
     assert_eq!(v["type"], "gateDecided");
     assert_eq!(v["decision"]["decision"], "retrieve");
     assert_eq!(v["decision"]["query"], "alex meetings");
@@ -69,8 +69,8 @@ fn every_notification_variant_has_a_stable_tag() {
     ];
 
     for (n, expected) in cases {
-        let v: serde_json::Value = serde_json::to_value(&n).expect("序列化");
-        assert_eq!(v["type"], expected, "{expected} 的判别式变了");
+        let v: serde_json::Value = serde_json::to_value(&n).expect("serialise");
+        assert_eq!(v["type"], expected, "{expected}'s discriminant changed");
     }
 }
 
@@ -84,7 +84,7 @@ fn params_are_camel_case_on_the_wire() {
         attachments: None,
         tier: None,
     };
-    let v: serde_json::Value = serde_json::to_value(&p).expect("序列化");
+    let v: serde_json::Value = serde_json::to_value(&p).expect("serialise");
     // Option fields also appear on *Params (as null), so the frontend can tell "not sent" from "empty".
     assert!(v.as_object().expect("object").contains_key("sessionId"));
     assert!(v["sessionId"].is_null());
@@ -96,9 +96,9 @@ fn params_are_camel_case_on_the_wire() {
 #[test]
 fn tool_status_round_trips() {
     for (status, wire) in [(ToolStatus::Ok, "ok"), (ToolStatus::Error, "error")] {
-        let v: serde_json::Value = serde_json::to_value(status).expect("序列化");
+        let v: serde_json::Value = serde_json::to_value(status).expect("serialise");
         assert_eq!(v, wire);
-        let back: ToolStatus = serde_json::from_value(v).expect("反序列化");
+        let back: ToolStatus = serde_json::from_value(v).expect("deserialise");
         assert_eq!(back, status);
     }
 }
@@ -111,7 +111,7 @@ fn graph_route_and_gate_decision_share_the_camel_case_rule() {
         reason: "trivial".into(),
         path: vec![],
     };
-    let v: serde_json::Value = serde_json::to_value(&g).expect("序列化");
+    let v: serde_json::Value = serde_json::to_value(&g).expect("serialise");
     assert_eq!(v["route"], "quick");
 }
 
@@ -121,7 +121,7 @@ fn message_role_and_page_cursor_are_camel_case_on_the_wire() {
         (MessageRole::User, "user"),
         (MessageRole::Assistant, "assistant"),
     ] {
-        let v: serde_json::Value = serde_json::to_value(role).expect("序列化");
+        let v: serde_json::Value = serde_json::to_value(role).expect("serialise");
         assert_eq!(v, wire);
     }
 
@@ -131,7 +131,7 @@ fn message_role_and_page_cursor_are_camel_case_on_the_wire() {
         cursor: Some("42".into()),
         limit: None,
     };
-    let v: serde_json::Value = serde_json::to_value(&p).expect("序列化");
+    let v: serde_json::Value = serde_json::to_value(&p).expect("serialise");
     assert_eq!(v["sessionId"], "default");
     assert_eq!(v["cursor"], "42");
     assert!(v.as_object().unwrap().contains_key("limit"));
@@ -140,18 +140,18 @@ fn message_role_and_page_cursor_are_camel_case_on_the_wire() {
         data: vec![],
         next_cursor: None,
     };
-    let v: serde_json::Value = serde_json::to_value(&r).expect("序列化");
+    let v: serde_json::Value = serde_json::to_value(&r).expect("serialise");
     assert_eq!(v["nextCursor"], serde_json::Value::Null);
 }
 
 #[test]
 fn settings_patch_default_leaves_everything_unset() {
     // An all-null patch written in must change nothing.
-    let v: serde_json::Value = serde_json::to_value(SettingsPatch::default()).expect("序列化");
+    let v: serde_json::Value = serde_json::to_value(SettingsPatch::default()).expect("serialise");
     let obj = v.as_object().expect("object");
     assert!(
         !obj.is_empty(),
-        "patch 字段全都得出现在 wire 上（值为 null）"
+        "every patch field has to appear on the wire (as null)"
     );
     assert!(obj.values().all(|x| x.is_null()));
 }

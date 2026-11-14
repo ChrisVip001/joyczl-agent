@@ -1,0 +1,40 @@
+{
+  "capturedOn": "2026-11-14",
+  "platform": "Darwin arm64",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "gitRevision": "8898ef06ed6c1a8d21498192a792b4254c2944fb",
+  "uncommittedChanges": true,
+  "checks": {
+    "justCheckExitCode": 0,
+    "rustTestsPassed": 935,
+    "rustTestsFailed": 0,
+    "ignoredIncludingDocTests": 2,
+    "typeScriptTestsPassed": 113,
+    "pythonTestsPassed": 14,
+    "deterministicPassed": 70,
+    "replayPassed": 5,
+    "endToEnd": {
+      "app-server": 0,
+      "gateway": 0,
+      "dashboard": 0,
+      "python-sdk": 0
+    },
+    "recoveryExitCode": 0,
+    "recoveryCases": 5,
+    "appServerTestsPassed": 226,
+    "liveHarnessOfflineTestsPassed": 5
+  },
+  "recoveryReport": "process-recovery-2026-11-14-projection.json",
+  "sourceSha256": {
+    "joy-rs/joyczl-app-server/src/resume.rs": "210823d7baefa0d51e1d095e2ab5bc195128363565b6ab4b7351605bba0fcdfc",
+    "joy-rs/joyczl-app-server/src/task_contract.rs": "d8814ab4a22cb800da2dc502eb151fed3b17a81797a87ffb6dc8413fc82d1217",
+    "joy-rs/joyczl-app-server/src/memory_worker.rs": "e5e5e7397acb28ecc05e4d8ce2a681aa6314842815515eb9fe7064e539b263c6",
+    "joy-rs/joyczl-state/src/chat_claims.rs": "4838c32605dc12d257acdb7946c3ae74d4d83f8469834768405810fd3e6c39bb",
+    "joy-rs/joyczl-state/src/transient_memory.rs": "7b23bbbd5bf57dfc4e753ef75c825b55bc854dc363e82e983f008244e334099f",
+    "joy-rs/joyczl-memory/src/consolidation.rs": "02931fb706c3beb2babc60dd24afe5bc15f601f8d63659c4c4471a840ba5bccb",
+    "joy-rs/joyczl-protocol/src/protocol/v2.rs": "d6711f22dc7d642b431a61b028976bbd91afe83955ce083ed24f292782a5da0b",
+    "scripts/smoke-recovery.py": "214ba32ed71757710f5b7694c28c29897f723915f7c497ce259f0132c73c5c06"
+  },
+  "checkLogSha256": "d97b5b9721eccd7a1f0d62c2973e40dcaa5af7f18748e43b624b5c1cc32d2748",
+  "scope": "Production runtime after projection refresh/retry/offline fixes; all five integration commands exited 0. Research harness checks are recorded separately."
+}

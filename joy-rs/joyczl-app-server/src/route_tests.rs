@@ -29,7 +29,7 @@ fn tier_is_reasoning_past_half_the_window() {
     assert_eq!(
         pick_tier(499_999, 1_000_000),
         "chat",
-        "大窗口要消息真的很大才换"
+        "a big window only switches once the message is really big"
     );
     assert_eq!(pick_tier(600_000, 1_000_000), "reasoning");
 }
@@ -42,13 +42,17 @@ fn tier_lookup_falls_back_through_the_chain() {
     assert_eq!(
         profile_for_tier(&empty, "reasoning", Some("ds")).as_deref(),
         Some("ds"),
-        "reasoning 缺项 → chat → active"
+        "a missing reasoning tier → chat → active"
     );
     assert_eq!(
         profile_for_tier(&empty, "fast", Some("ds")).as_deref(),
         Some("ds")
     );
-    assert_eq!(profile_for_tier(&empty, "chat", None), None, "全缺 = None");
+    assert_eq!(
+        profile_for_tier(&empty, "chat", None),
+        None,
+        "all missing = None"
+    );
 
     let full = routes_with(&[("reasoning", "ds-r1"), ("chat", "ds")]);
     assert_eq!(
@@ -58,7 +62,7 @@ fn tier_lookup_falls_back_through_the_chain() {
     assert_eq!(
         profile_for_tier(&full, "fast", Some("oa")).as_deref(),
         Some("ds"),
-        "fast 缺项 → chat 那套"
+        "a missing fast tier → the chat set"
     );
     assert_eq!(
         profile_for_tier(&full, "chat", Some("oa")).as_deref(),
@@ -79,24 +83,29 @@ fn tier_lookup_falls_back_through_the_chain() {
 fn a_declared_tier_is_validated_not_guessed() {
     use super::clean_tier;
 
-    assert_eq!(clean_tier(None).expect("缺省合法"), None);
-    assert_eq!(clean_tier(Some("   ")).expect("空白 = 没声明"), None);
+    assert_eq!(clean_tier(None).expect("the default is legal"), None);
+    assert_eq!(
+        clean_tier(Some("   ")).expect("blank means undeclared"),
+        None
+    );
     assert_eq!(
         clean_tier(Some(" reasoning "))
-            .expect("去掉空白")
+            .expect("strip the whitespace")
             .as_deref(),
         Some("reasoning")
     );
     for tier in ["fast", "chat", "reasoning"] {
         assert_eq!(
-            clean_tier(Some(tier)).expect("三档都合法").as_deref(),
+            clean_tier(Some(tier))
+                .expect("all three tiers are legal")
+                .as_deref(),
             Some(tier)
         );
     }
-    let error = clean_tier(Some("reasoining")).expect_err("拼错必须报错");
+    let error = clean_tier(Some("reasoining")).expect_err("a misspelling must fail");
     assert!(
         error.message.contains("fast") && error.message.contains("reasoining"),
-        "错误要说清可选值和收到的值：{}",
+        "the error has to say the allowed values and the one received: {}",
         error.message
     );
 }
@@ -107,12 +116,15 @@ fn a_declared_tier_is_validated_not_guessed() {
 fn classification_only_runs_in_the_ambiguous_band() {
     use super::needs_classify;
 
-    assert!(!needs_classify(1_999, 32_768), "短消息不分类");
+    assert!(
+        !needs_classify(1_999, 32_768),
+        "a short message is not classified"
+    );
     assert!(needs_classify(2_000, 32_768));
     assert!(needs_classify(16_383, 32_768));
     assert!(
         !needs_classify(16_384, 32_768),
-        "过半已被 L0 判成 reasoning"
+        "more than half already judged reasoning by L0"
     );
 }
 
@@ -127,13 +139,13 @@ fn tier_reply_parsing_fails_open() {
     assert_eq!(
         parse_tier_reply("Reasoning\n"),
         Some("reasoning"),
-        "大小写与换行不敏感"
+        "case and newlines do not matter"
     );
     assert_eq!(parse_tier_reply("chat"), None);
     assert_eq!(parse_tier_reply(""), None);
     assert_eq!(
-        parse_tier_reply("这看起来像 reasoning 任务，因为……"),
+        parse_tier_reply("this looks like a reasoning task, because…"),
         None,
-        "多余解释不算数 —— 只要一个词"
+        "extra explanation does not count — one word only"
     );
 }

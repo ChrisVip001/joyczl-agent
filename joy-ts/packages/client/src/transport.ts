@@ -72,10 +72,10 @@ export class StdioTransport implements Transport {
     });
 
     this.#child.on("error", (error) => {
-      this.#shutdown(`起不来：${error.message}`);
+      this.#shutdown(`cannot start: ${error.message}`);
     });
     this.#child.on("close", (code, signal) => {
-      this.#shutdown(`退出（code=${code ?? "?"} signal=${signal ?? "?"}）`);
+      this.#shutdown(`exited (code=${code ?? "?"} signal=${signal ?? "?"})`);
     });
   }
 

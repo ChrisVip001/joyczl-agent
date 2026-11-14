@@ -80,14 +80,14 @@ mod freshness_tests {
     use std::time::Duration;
 
     fn touch(path: &Path) {
-        std::fs::create_dir_all(path.parent().unwrap()).expect("建目录");
-        std::fs::write(path, "x").expect("写文件");
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create the directory");
+        std::fs::write(path, "x").expect("write the file");
     }
 
     /// Source newer than dist → error, with the rebuild command in the message.
     #[test]
     fn stale_dist_is_a_hard_error_with_the_fix() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let dist = dir.path().join("packages/dashboard/dist");
         let src = dir.path().join("packages/dashboard/src");
         touch(&dist.join("main.js"));
@@ -101,22 +101,22 @@ mod freshness_tests {
     /// dist newer than (or equal to) source → pass; no src dir (release) → pass.
     #[test]
     fn fresh_or_sourceless_passes() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let dist = dir.path().join("packages/dashboard/dist");
         let src = dir.path().join("packages/dashboard/src");
         touch(&src.join("main.ts"));
         std::thread::sleep(Duration::from_millis(20));
         touch(&dist.join("main.js"));
-        check_dashboard_freshness(&dist).expect("新的 dist 该放行");
+        check_dashboard_freshness(&dist).expect("a fresh dist should pass");
 
         // No dist → the other error (not built), not "stale".
-        let empty = tempfile::tempdir().expect("临时目录");
+        let empty = tempfile::tempdir().expect("temp dir");
         let error = check_dashboard_freshness(empty.path()).unwrap_err();
         assert!(error.contains("has not been built"), "{error}");
 
         // No src (release scene) → pass, even if dist is old.
-        let lonely = tempfile::tempdir().expect("临时目录");
+        let lonely = tempfile::tempdir().expect("temp dir");
         touch(&lonely.path().join("dist/main.js"));
-        check_dashboard_freshness(&lonely.path().join("dist")).expect("无源码不检查");
+        check_dashboard_freshness(&lonely.path().join("dist")).expect("no source, no check");
     }
 }

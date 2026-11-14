@@ -126,6 +126,9 @@ pub fn memory_tools() -> Vec<Tool> {
                     let bundle = joyczl_memory::bundle::Bundle::new(&ctx.home);
                     match bundle.read(&page)? {
                         Some(found) => {
+                            if !joyczl_memory::mirror::page_is_current(&ctx.facts, &found).await? {
+                                return Ok("This memory page has obsolete or time-bounded sources and is excluded from recall. Search current memories instead.".to_string());
+                            }
                             // Provenance rides along: a page without its sources is a claim
                             // the model cannot check, and this project does not ship those.
                             let sources = if found.sources.is_empty() {
@@ -315,5 +318,11 @@ pub fn build_default() -> crate::ToolRegistry {
     // Read-only file tools: no side effects, present by default (reads skip the execution gate — see fs.rs docs).
     registry.register(crate::fs::read_file());
     registry.register(crate::fs::list_dir());
+    // Finding things without a shell. Before these, "where is this defined" meant either a
+    // `list_dir` staircase or `JOY_EXEC` + `rg` — and on a machine with exec off the honest
+    // answer was "I cannot search", which is the one answer an agent should never have to give
+    // about its own working directory.
+    registry.register(crate::search::glob_tool());
+    registry.register(crate::search::grep_tool());
     registry
 }

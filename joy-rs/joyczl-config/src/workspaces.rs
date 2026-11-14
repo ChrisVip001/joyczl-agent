@@ -56,17 +56,17 @@ mod workspaces_tests {
 
     #[test]
     fn missing_or_broken_file_means_empty() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         assert!(load_workspaces(dir.path()).paths.is_empty());
-        std::fs::write(workspaces_path(dir.path()), "{ 坏的").unwrap();
+        std::fs::write(workspaces_path(dir.path()), "{ broken").unwrap();
         assert!(load_workspaces(dir.path()).paths.is_empty());
     }
 
     #[test]
     fn recording_dedupes_moves_to_front_and_caps() {
-        let dir = tempfile::tempdir().expect("临时目录");
-        let a = dir.path().join("甲");
-        let b = dir.path().join("乙");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let a = dir.path().join("alpha");
+        let b = dir.path().join("beta");
         std::fs::create_dir(&a).unwrap();
         std::fs::create_dir(&b).unwrap();
 
@@ -96,9 +96,9 @@ mod workspaces_tests {
 
     #[test]
     fn the_list_is_capped() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         for i in 0..(MAX_PATHS + 3) {
-            let p = dir.path().join(format!("目录{i}"));
+            let p = dir.path().join(format!("dir{i}"));
             std::fs::create_dir(&p).unwrap();
             record_workspace(dir.path(), &p.to_string_lossy());
         }
@@ -109,8 +109,8 @@ mod workspaces_tests {
     /// to go but not built yet" is legitimate intent; the picker will say so in plain words.
     #[test]
     fn a_missing_directory_is_still_recorded() {
-        let dir = tempfile::tempdir().expect("临时目录");
-        let ghost = dir.path().join("还没建");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let ghost = dir.path().join("not-created-yet");
         record_workspace(dir.path(), &ghost.to_string_lossy());
         assert_eq!(
             load_workspaces(dir.path()).paths,

@@ -16,6 +16,7 @@ use sqlx::{FromRow, SqlitePool};
 #[derive(Debug, Clone, FromRow)]
 pub struct CheckpointRow {
     pub round_id: Option<String>,
+    pub round_no: Option<i32>,
     pub turn_id: String,
     pub session_id: String,
     pub user_message: String,
@@ -86,11 +87,74 @@ impl Checkpoints {
         run_id: Option<&str>,
         round_id: Option<&str>,
     ) -> Result<()> {
+        self.save_numbered_round(
+            turn_id,
+            session_id,
+            user_message,
+            messages_json,
+            iterations,
+            usage_json,
+            run_id,
+            round_id,
+            None,
+        )
+        .await
+    }
+
+    /// Commit round admission and working memory together before any execution.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_numbered_round(
+        &self,
+        turn_id: &str,
+        session_id: &str,
+        user_message: &str,
+        messages_json: &str,
+        iterations: i32,
+        usage_json: &str,
+        run_id: Option<&str>,
+        round_id: Option<&str>,
+        round_no: Option<i32>,
+    ) -> Result<()> {
+        self.save_with_operations(
+            turn_id,
+            session_id,
+            user_message,
+            messages_json,
+            iterations,
+            usage_json,
+            run_id,
+            round_id,
+            round_no,
+            &[],
+        )
+        .await
+    }
+
+    /// Operation intent/results and the resumable boundary share one commit.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_with_operations(
+        &self,
+        turn_id: &str,
+        session_id: &str,
+        user_message: &str,
+        messages_json: &str,
+        iterations: i32,
+        usage_json: &str,
+        run_id: Option<&str>,
+        round_id: Option<&str>,
+        round_no: Option<i32>,
+        operations: &[crate::operations::OperationSnapshot],
+    ) -> Result<()> {
+        anyhow::ensure!(
+            round_no.is_none_or(|number| number > 0),
+            "Invalid checkpoint round number"
+        );
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO turn_checkpoints
                  (turn_id, session_id, user_message, messages_json, iterations, usage_json,
-                  run_id, step_seq, round_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  run_id, step_seq, round_id, round_no)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(turn_id) DO UPDATE SET
                  session_id = excluded.session_id,
                  user_message = excluded.user_message,
@@ -100,6 +164,7 @@ impl Checkpoints {
                  run_id = excluded.run_id,
                  step_seq = excluded.step_seq,
                  round_id = excluded.round_id,
+                 round_no = excluded.round_no,
                  status = 'open',
                  updated_at = datetime('now')",
         )
@@ -112,8 +177,29 @@ impl Checkpoints {
         .bind(run_id)
         .bind(iterations)
         .bind(round_id)
-        .execute(&self.pool)
+        .bind(round_no)
+        .execute(&mut *tx)
         .await?;
+        if let (Some(run), Some(number)) = (run_id, round_no) {
+            let changed = sqlx::query("UPDATE agent_tasks SET rounds_used = ?, updated_at=datetime('now') WHERE id=(SELECT task_id FROM task_runs WHERE id=?)")
+                .bind(number).bind(run).execute(&mut *tx).await?.rows_affected();
+            anyhow::ensure!(changed == 1, "Checkpoint run has no task");
+        }
+        if !operations.is_empty() {
+            let round = round_id
+                .ok_or_else(|| anyhow::anyhow!("Operation checkpoint has no round identity"))?;
+            crate::operations::checkpoint(
+                &mut tx,
+                turn_id,
+                session_id,
+                run_id,
+                round,
+                "checkpoint",
+                operations,
+            )
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -140,16 +226,52 @@ impl Checkpoints {
         Ok(())
     }
 
+    /// Recovery failures cannot reopen terminal tasks, revoke pauses, or stop a newer run.
+    pub async fn review(&self, turn_id: &str, run_id: Option<&str>, reason: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(run_id) = run_id {
+            let changed=sqlx::query("UPDATE agent_tasks SET status='needs_attention',suspend_reason=?,last_stop_reason=?,current_turn_id=NULL,updated_at=datetime('now')
+                WHERE status IN ('pending','running','suspended','needs_attention')
+                AND (current_turn_id IS NULL OR current_turn_id=?)
+                AND NOT EXISTS(SELECT 1 FROM task_pause_fences p WHERE p.task_id=agent_tasks.id)
+                AND id=(SELECT r.task_id FROM task_runs r JOIN turn_checkpoints c ON c.run_id=r.id
+                    WHERE c.turn_id=? AND r.id=? AND (r.session_id IS NULL OR r.session_id=c.session_id)
+                    AND (r.turn_id=c.turn_id OR (r.turn_id IS NULL AND r.id=c.turn_id))
+                    AND r.id=(SELECT latest.id FROM task_runs latest WHERE latest.task_id=r.task_id ORDER BY latest.started_at DESC,latest.rowid DESC LIMIT 1))")
+                .bind(reason).bind(reason).bind(turn_id).bind(turn_id).bind(run_id).execute(&mut *tx).await?.rows_affected();
+            if changed == 1 {
+                sqlx::query("UPDATE task_runs SET status='waiting',stop_reason=?,ended_at=datetime('now') WHERE id=? AND status IN ('running','waiting','suspended')")
+                    .bind(reason).bind(run_id).execute(&mut *tx).await?;
+            }
+        }
+        sqlx::query("UPDATE turn_checkpoints SET status='suspended',updated_at=datetime('now') WHERE turn_id=? AND status IN ('open','suspended','waiting_jobs','waiting_input')")
+            .bind(turn_id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// One checkpoint by turn id — `task/resume` looks up the `suspended` row it wants to continue.
     pub async fn get(&self, turn_id: &str) -> Result<Option<CheckpointRow>> {
         Ok(sqlx::query_as::<_, CheckpointRow>(
             "SELECT turn_id, session_id, user_message, messages_json, iterations, usage_json,
-                    status, run_id, step_seq, plan_version, updated_at, round_id
+                    status, run_id, step_seq, plan_version, updated_at, round_id, round_no
              FROM turn_checkpoints WHERE turn_id = ?",
         )
         .bind(turn_id)
         .fetch_optional(&self.pool)
         .await?)
+    }
+
+    /// Recoverable ordinary-chat boundaries, including legacy rows without an operation journal.
+    pub async fn chat_boundaries(&self, session: &str) -> Result<Vec<CheckpointRow>> {
+        Ok(sqlx::query_as("SELECT * FROM turn_checkpoints WHERE session_id=? AND run_id IS NULL AND status IN ('open','suspended','abandoned') ORDER BY rowid")
+            .bind(session).fetch_all(&self.pool).await?)
+    }
+
+    /// Human review may stop an unclaimed uncertain boundary without authorizing replay.
+    pub async fn stop_chat_review(&self, row: &CheckpointRow) -> Result<bool> {
+        Ok(sqlx::query("UPDATE turn_checkpoints SET status='suspended' WHERE turn_id=? AND session_id=? AND run_id IS NULL AND status='open' AND messages_json=?")
+            .bind(&row.turn_id).bind(&row.session_id).bind(&row.messages_json).execute(&self.pool).await?.rows_affected() == 1)
     }
 
     /// Startup reconciliation: all `open` checkpoints (leftovers of the last crash),
@@ -159,7 +281,7 @@ impl Checkpoints {
     pub async fn open_rows(&self) -> Result<Vec<CheckpointRow>> {
         Ok(sqlx::query_as::<_, CheckpointRow>(
             "SELECT turn_id, session_id, user_message, messages_json, iterations, usage_json,
-                    status, run_id, step_seq, plan_version, updated_at, round_id
+                    status, run_id, step_seq, plan_version, updated_at, round_id, round_no
              FROM turn_checkpoints WHERE status = 'open' ORDER BY rowid ASC",
         )
         .fetch_all(&self.pool)

@@ -241,8 +241,8 @@ impl Hooks {
                     continue;
                 };
                 for raw in list {
-                    // Handler 二选一：`command`（shell 可执行文件）或 `url`（HTTP 端点）。
-                    // 两个都写或都没写都是配置错误——跳过并欠一行 stderr。
+                    // A handler is one of two things: `command` (a shell executable) or `url` (an HTTP endpoint).
+                    // Both or neither is a config mistake — skip it and owe one line on stderr.
                     let command = raw
                         .get("command")
                         .and_then(Value::as_str)

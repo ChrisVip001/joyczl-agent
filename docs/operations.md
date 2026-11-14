@@ -285,3 +285,27 @@ startup log says so:
 ```
 
 The ledger keeps the row either way: `abandoned` is a status, not a deletion.
+
+## Schedule recovery and delivery
+
+`catch_up` only covers missed triggers that were never claimed. An unsettled claimed trigger may already have produced external effects: restart does not replay it, and later minutes cannot overwrite it. Stop the resident scheduler, review the actual effects, then run:
+
+```sh
+joy schedule acknowledge morning-news
+```
+
+This releases the reviewed old claim without replaying it; future authorized triggers may proceed. Do not bypass an unreviewed outcome by deleting state, changing the clock or repeatedly starting it. Failed claim persistence prevents model execution.
+
+SQLite stores the result, settlement and delivery intent. A failed outbox write retries from stored content; different existing content is retained for review rather than replacing human edits. With notifications enabled, enqueue follows confirmed file delivery and stays tied to the original configured destination across retries/restart. `produced` denotes generated output, not domain acceptance or user readership.
+
+## Waiting for task input
+
+Before **Start task**, choose **Waiting for input** and describe the required data, optionally setting its latest arrival time. **Provide input** stores the data; receiving it does not itself satisfy acceptance. The task keeps its draft while waiting and resumes when the input arrives. You can keep chatting in the originating conversation. **Pause** stops automatic wake-up; data remains stored and **Resume** explicitly authorizes continuation. A resume request may wait up to ten seconds for the previous execution to stop; a refusal leaves the pause intact.
+
+SDK hosts use the authenticated `task/wait` and `task/signal` methods described in the [protocol](protocol.md#durable-external-input). Keep the same event ID and data when retrying a signal. An input deadline applies to arrival; accepted input remains usable after it. Restart the runtime normally to recover a committed event and draft. Unknown tool effects still require reconciliation before resuming.
+
+## Reviewing unknown operations
+
+For a paused task or one needing attention, choose **Review operations**. Check the actual external service or file, select the observed outcome and record supporting evidence or an external receipt. A transport error alone does not prove that nothing happened. The form retains evidence when the server refuses a save. Recording the result keeps the task stopped; use **Resume** separately after every unresolved operation is settled.
+
+SDK hosts can inspect and reconcile through the [operation protocol](protocol.md#operation-journal-and-human-reconciliation). Re-read the checkpoint digest after another operation is reconciled. Do not use reconciliation to manufacture a successful `toolsOk` measurement or provider idempotency guarantee.

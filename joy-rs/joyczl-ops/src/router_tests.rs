@@ -44,9 +44,9 @@ pub(crate) async fn status_of(router: axum::Router, path: &str, auth: Option<&st
         builder = builder.header("authorization", format!("Bearer {token}"));
     }
     let response = router
-        .oneshot(builder.body(Body::empty()).expect("请求体"))
+        .oneshot(builder.body(Body::empty()).expect("the request body"))
         .await
-        .expect("路由响应");
+        .expect("the routed response");
     response.status()
 }
 
@@ -63,17 +63,17 @@ async fn a_token_gates_the_api() {
     assert_eq!(
         status_of(router.clone(), "/api/data", None).await,
         StatusCode::UNAUTHORIZED,
-        "不带 token 不该放行"
+        "no token means no pass"
     );
     assert_eq!(
-        status_of(router.clone(), "/api/data", Some("错的")).await,
+        status_of(router.clone(), "/api/data", Some("wrong")).await,
         StatusCode::UNAUTHORIZED,
-        "错 token 不该放行"
+        "a wrong token means no pass"
     );
     assert_eq!(
         status_of(router.clone(), "/api/data", Some("s3cret")).await,
         StatusCode::OK,
-        "对 token 该放行"
+        "the right token has to pass"
     );
     // Even the Bearer prefix is required — a bare token in the header is not enough.
     let response = router
@@ -82,10 +82,10 @@ async fn a_token_gates_the_api() {
                 .uri("/api/data")
                 .header("authorization", "s3cret")
                 .body(Body::empty())
-                .expect("请求体"),
+                .expect("the request body"),
         )
         .await
-        .expect("路由响应");
+        .expect("the routed response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
@@ -98,7 +98,7 @@ async fn without_a_token_the_api_is_open() {
     assert_eq!(
         status_of(router, "/api/data", None).await,
         StatusCode::OK,
-        "没配 token 时中间件不该拦任何请求"
+        "with no token configured the middleware must block nothing"
     );
 }
 
@@ -118,10 +118,10 @@ async fn interrupt_answers_with_the_turns_own_fate() {
                 .uri("/api/interrupt")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"turnId":"no-such-turn"}"#))
-                .expect("请求体"),
+                .expect("the request body"),
         )
         .await
-        .expect("路由响应");
+        .expect("the routed response");
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -130,7 +130,7 @@ async fn interrupt_answers_with_the_turns_own_fate() {
 #[tokio::test]
 async fn static_files_are_not_gated() {
     let (app, _fake) = fake();
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let router = router(
         Gate::single(Arc::new(app), Some("s3cret".to_string())),
         dir.path().to_path_buf(),
@@ -140,10 +140,10 @@ async fn static_files_are_not_gated() {
             Request::builder()
                 .uri("/")
                 .body(Body::empty())
-                .expect("请求体"),
+                .expect("the request body"),
         )
         .await
-        .expect("路由响应");
+        .expect("the routed response");
     assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
 }
 

@@ -13,10 +13,10 @@ use super::skills::{parse_skill_text, SkillLoader};
 use joyczl_state::{Chat, Episodes, Facts};
 
 async fn stores() -> (Facts, Episodes, Chat) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     (
         Facts::new(pool.clone()),
@@ -32,7 +32,7 @@ async fn gate_says_retrieve_with_a_query() {
     let mock = Mock::new(vec![Mock::text(
         r#"{"retrieve": true, "query": "alex meetings", "reason": "mentions a person"}"#,
     )]);
-    let d = should_retrieve(&mock, "small", "我什么时候和阿明开会").await;
+    let d = should_retrieve(&mock, "small", "when am I meeting Alex").await;
     assert!(d.retrieve);
     assert_eq!(d.query, "alex meetings");
     assert_eq!(d.reason, "mentions a person");
@@ -43,7 +43,7 @@ async fn gate_lets_small_talk_through() {
     let mock = Mock::new(vec![Mock::text(
         r#"{"retrieve": false, "query": "", "reason": "just math"}"#,
     )]);
-    let d = should_retrieve(&mock, "small", "2+2 等于几").await;
+    let d = should_retrieve(&mock, "small", "what is 2+2").await;
     assert!(!d.retrieve);
 }
 
@@ -62,15 +62,18 @@ async fn gate_fails_open_on_model_error() {
                     + '_,
             >,
         > {
-            Box::pin(std::future::ready(Err(ProviderError::Api("挂了".into()))))
+            Box::pin(std::future::ready(Err(ProviderError::Api("died".into()))))
         }
     }
-    let d = should_retrieve(&Broken, "small", "我什么时候和阿明开会").await;
-    assert!(d.retrieve, "门坏了必须失败开放");
-    assert_eq!(d.query, "我什么时候和阿明开会", "检索词退回原消息");
+    let d = should_retrieve(&Broken, "small", "when am I meeting Alex").await;
+    assert!(d.retrieve, "a broken gate has to fail open");
+    assert_eq!(
+        d.query, "when am I meeting Alex",
+        "the query falls back to the raw message"
+    );
     assert!(
         d.reason.contains("failing open"),
-        "理由要说明是失败开放：{}",
+        "the reason has to say it failed open: {}",
         d.reason
     );
 }
@@ -78,8 +81,10 @@ async fn gate_fails_open_on_model_error() {
 #[tokio::test]
 async fn gate_fails_open_when_model_only_thinks() {
     // Reasoning models sometimes emit only thinking, no JSON — not an error, but no answer.
-    let mock = Mock::new(vec![Mock::text("让我想想……这是一个关于日程的问题。")]);
-    let d = should_retrieve(&mock, "small", "我什么时候和阿明开会").await;
+    let mock = Mock::new(vec![Mock::text(
+        "let me think… this is a question about the calendar.",
+    )]);
+    let d = should_retrieve(&mock, "small", "when am I meeting Alex").await;
     assert!(d.retrieve);
     assert!(d.reason.contains("failing open"));
 }
@@ -88,9 +93,9 @@ async fn gate_fails_open_when_model_only_thinks() {
 async fn gate_tolerates_prose_around_the_json() {
     // Reasoning models often add prose around the JSON.
     let mock = Mock::new(vec![Mock::text(
-        "好的，判断如下：\n{\"retrieve\": true, \"query\": \"alex\", \"reason\": \"person\"}\n以上。",
+        "all right, the verdict:\n{\"retrieve\": true, \"query\": \"alex\", \"reason\": \"person\"}\nthat is all.",
     )]);
-    let d = should_retrieve(&mock, "small", "alex 是谁").await;
+    let d = should_retrieve(&mock, "small", "who is alex").await;
     assert!(d.retrieve);
     assert_eq!(d.query, "alex");
 }
@@ -98,10 +103,10 @@ async fn gate_tolerates_prose_around_the_json() {
 #[test]
 fn extract_json_picks_the_braces() {
     assert_eq!(
-        extract_json("前缀 {\"a\":1} 后缀").as_deref(),
+        extract_json("prefix {\"a\":1} suffix").as_deref(),
         Some("{\"a\":1}")
     );
-    assert_eq!(extract_json("没有括号"), None);
+    assert_eq!(extract_json("no brackets"), None, "no braces, no JSON");
     // nested: take the outermost
     assert_eq!(
         extract_json("{\"a\":{\"b\":2}}").as_deref(),
@@ -139,7 +144,7 @@ async fn retrieve_context_is_empty_when_nothing_matches() {
     let text = retrieve_context(&facts, &episodes, "??? ", 4, None)
         .await
         .unwrap();
-    assert!(text.is_empty(), "没检索到就不该拼标题：{text:?}");
+    assert!(text.is_empty(), "no hits means no heading: {text:?}");
 }
 
 // ---- consolidation --------------------------------------------------------
@@ -155,10 +160,10 @@ async fn consolidation_waits_until_enough_exchanges() {
     let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 6)
         .await
         .unwrap();
-    assert_eq!(written, 0, "只攒了 1 轮，不该提炼");
+    assert_eq!(written, 0, "one turn in hand is not enough to distil");
     assert!(
         mock.received.lock().unwrap().is_empty(),
-        "还没到量就不该调模型"
+        "below the threshold the model must not be called"
     );
 }
 
@@ -188,10 +193,13 @@ async fn consolidation_distills_facts_and_marks_rows() {
 
     let all = facts.recent(10, 0).await.unwrap();
     assert_eq!(all.len(), 1);
-    assert_eq!(all[0].source, "consolidation", "提炼来的要标明来源");
+    assert_eq!(
+        all[0].source, "consolidation",
+        "a distilled fact has to name its source"
+    );
     assert!(
         chat.unconsolidated().await.unwrap().is_empty(),
-        "成功之后才标记"
+        "marked only after success"
     );
 
     let eps = episodes.recent(10).await.unwrap();
@@ -209,7 +217,7 @@ async fn consolidation_drops_temporary_statements_but_keeps_facts() {
     }
     let mock = Mock::new(vec![Mock::text(
         r#"{"facts": [
-             {"subject": "plan", "content": "这个方案本次会话先用 A"},
+             {"subject": "plan", "content": "use plan A for this session"},
              {"subject": "alex", "content": "Alex prefers mornings"}
            ],
            "episode": "planned the week"}"#,
@@ -218,7 +226,7 @@ async fn consolidation_drops_temporary_statements_but_keeps_facts() {
     let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 6)
         .await
         .unwrap();
-    assert_eq!(written, 1, "只该写进一条");
+    assert_eq!(written, 1, "exactly one fact should be written");
 
     let all = facts.recent(10, 0).await.unwrap();
     assert_eq!(all.len(), 1);
@@ -241,7 +249,9 @@ async fn consolidation_failure_keeps_the_log() {
     }
 
     // The model replied with prose containing no JSON.
-    let mock = Mock::new(vec![Mock::text("我觉得这段对话没什么值得记的。")]);
+    let mock = Mock::new(vec![Mock::text(
+        "I do not think this conversation is worth remembering.",
+    )]);
     let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 6)
         .await
         .unwrap();
@@ -251,11 +261,11 @@ async fn consolidation_failure_keeps_the_log() {
     assert_eq!(
         chat.unconsolidated().await.unwrap().len(),
         0,
-        "失败过的行要退避，不能立刻又捞出来"
+        "a row that failed backs off; it must not be picked up again at once"
     );
     // The rows stay in the store, not marked consolidated.
     let log = chat.session_history("default").await.unwrap();
-    assert_eq!(log.len(), 6, "日志一行都不能丢");
+    assert_eq!(log.len(), 6, "not one log line may go missing");
 
     // Empty subject / content must not be written either.
     let mock = Mock::new(vec![Mock::text(
@@ -274,9 +284,12 @@ async fn gate_prompt_carries_the_message() {
     let mock = Mock::new(vec![Mock::text(
         r#"{"retrieve": true, "query": "q", "reason": "r"}"#,
     )]);
-    let _ = should_retrieve(&mock, "small", "阿明喜欢什么").await;
+    let _ = should_retrieve(&mock, "small", "what does Alex like").await;
     let sent = mock.received.lock().unwrap()[0].messages[0].text();
-    assert!(sent.contains("阿明喜欢什么"), "用户消息没进 prompt：{sent}");
+    assert!(
+        sent.contains("what does Alex like"),
+        "the user message never reached the prompt: {sent}"
+    );
 }
 
 // ---- consolidation's temporary-statement filter ---------------------------------------------
@@ -285,11 +298,20 @@ async fn gate_prompt_carries_the_message() {
 fn temporary_statements_are_kept_out_of_long_term_memory() {
     use super::consolidation::temporary_marker;
     // Both Chinese and English markers are recognized.
-    assert!(temporary_marker("这次会话先用这个方案").is_some());
+    assert!(
+        temporary_marker("use this plan for this session").is_some(),
+        "a this-session marker is caught"
+    );
     assert!(temporary_marker("We will use this path for now").is_some());
-    assert!(temporary_marker("暂时把会议挪到下午").is_some());
+    assert!(
+        temporary_marker("move the meeting to the afternoon for now").is_some(),
+        "a temporary marker is caught"
+    );
     // Real facts must not be caught in the filter.
-    assert!(temporary_marker("Alex 喜欢早上的会议").is_none());
+    assert!(
+        temporary_marker("Alex likes morning meetings").is_none(),
+        "a durable fact is not a temporary one"
+    );
     assert!(temporary_marker("The release is on October 15").is_none());
     // Case-insensitive.
     assert!(temporary_marker("FOR NOW keep it simple").is_some());
@@ -299,13 +321,13 @@ fn temporary_statements_are_kept_out_of_long_term_memory() {
 
 #[test]
 fn a_skill_can_opt_out_of_implicit_invocation_and_be_summoned_by_name() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path().to_path_buf();
     let folder = home.join("skills").join("weekly-review");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
         folder.join("SKILL.md"),
-        "---\nname: weekly-review\ndescription: plan the quarterly roadmap review\nallow-model-invocation: false\n---\n只走显式引用。\n",
+        "---\nname: weekly-review\ndescription: plan the quarterly roadmap review\nallow-model-invocation: false\n---\nexplicit reference only.\n",
     )
     .unwrap();
 
@@ -314,31 +336,37 @@ fn a_skill_can_opt_out_of_implicit_invocation_and_be_summoned_by_name() {
     let implicit = loader.hits("help me plan the quarterly roadmap review");
     assert!(
         implicit.section.is_empty(),
-        "声明了 allow-model-invocation: false 就不该被隐式触发：{}",
+        "with allow-model-invocation: false it must not be triggered implicitly: {}",
         implicit.section
     );
 
     // An explicit reference (`$name`) force-loads the body and strips the reference from the message.
-    let explicit = loader.hits("$weekly-review 帮我看看这周");
+    let explicit = loader.hits("$weekly-review take a look at this week for me");
     assert!(
-        explicit.section.contains("只走显式引用。"),
+        explicit.section.contains("explicit reference only."),
         "{}",
         explicit.section
     );
-    assert_eq!(explicit.message, "帮我看看这周");
+    assert_eq!(
+        explicit.message, "take a look at this week for me",
+        "an explicit request keeps its own message"
+    );
     assert!(explicit.hints.is_empty());
 }
 
 #[test]
 fn a_reference_to_an_unknown_skill_becomes_a_hint_not_an_error() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path().to_path_buf();
     std::fs::create_dir_all(home.join("skills")).unwrap();
 
     let mut loader = SkillLoader::new(SkillLoader::dirs_for(&home));
-    let hits = loader.hits("$nope 帮我做点什么");
+    let hits = loader.hits("$nope do something for me");
     assert!(hits.section.is_empty());
-    assert_eq!(hits.message, "帮我做点什么");
+    assert_eq!(
+        hits.message, "do something for me",
+        "a memory hit carries the current message"
+    );
     assert_eq!(hits.hints.len(), 1);
     assert!(
         hits.hints[0].contains("no skill is named 'nope'"),
@@ -349,13 +377,13 @@ fn a_reference_to_an_unknown_skill_becomes_a_hint_not_an_error() {
 
 #[test]
 fn a_skill_with_a_missing_dependency_does_not_fire_implicitly() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path().to_path_buf();
     let folder = home.join("skills").join("deploy");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
         folder.join("SKILL.md"),
-        "---\nname: deploy\ndescription: ship the quarterly roadmap release\ndependencies: changelog, nobody\n---\n正文\n",
+        "---\nname: deploy\ndescription: ship the quarterly roadmap release\ndependencies: changelog, nobody\n---\nthe body\n",
     )
     .unwrap();
 
@@ -363,7 +391,7 @@ fn a_skill_with_a_missing_dependency_does_not_fire_implicitly() {
     let hits = loader.hits("ship the quarterly roadmap release");
     assert!(
         hits.section.is_empty(),
-        "依赖缺失就不参与隐式触发：{}",
+        "with a dependency missing it takes no part in implicit triggering: {}",
         hits.section
     );
 
@@ -373,7 +401,7 @@ fn a_skill_with_a_missing_dependency_does_not_fire_implicitly() {
     assert_eq!(dangling[0].0, "deploy");
     assert!(
         dangling[0].1 == "changelog" || dangling[0].1 == "nobody",
-        "报告一个缺失的依赖即可：{dangling:?}"
+        "reporting one missing dependency is enough: {dangling:?}"
     );
 }
 
@@ -391,13 +419,16 @@ description: Summarize the week and draft the Monday brief
 
 #[test]
 fn skill_frontmatter_must_carry_name_and_description() {
-    let skill = parse_skill_text(SKILL_MD).expect("合法的 SKILL.md");
+    let skill = parse_skill_text(SKILL_MD).expect("a legal SKILL.md");
     assert_eq!(skill.name, "weekly-review");
     assert!(skill.description.contains("Monday brief"));
     assert!(skill.body.starts_with("1. Pull"), "{:?}", skill.body);
 
     // No frontmatter / missing fields → not a skill.
-    assert!(parse_skill_text("没有 frontmatter 的普通 markdown").is_none());
+    assert!(
+        parse_skill_text("plain markdown with no frontmatter").is_none(),
+        "no frontmatter, no skill"
+    );
     assert!(parse_skill_text("---\nname: x\n---\nbody").is_none());
     // Quoted values are accepted too.
     let skill = parse_skill_text("---\nname: 'a'\ndescription: \"b\"\n---\nx\n").unwrap();
@@ -409,7 +440,7 @@ fn skill_frontmatter_must_carry_name_and_description() {
 
 #[test]
 fn trigger_is_transparent_keyword_overlap() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let skills = dir.path().join("skills");
     std::fs::create_dir_all(skills.join("weekly-review")).unwrap();
     std::fs::write(skills.join("weekly-review").join("SKILL.md"), SKILL_MD).unwrap();
@@ -423,13 +454,13 @@ fn trigger_is_transparent_keyword_overlap() {
     assert!(hit.contains("Pull last week's episodes"), "{hit}");
 
     // An unrelated message: not one body gets in (the whole point of progressive disclosure).
-    let miss = loader.hits("2+2 等于几").section;
-    assert!(miss.is_empty(), "不该触发：{miss}");
+    let miss = loader.hits("what is 2+2").section;
+    assert!(miss.is_empty(), "nothing should fire: {miss}");
 }
 
 #[test]
 fn a_skill_created_mid_session_is_live_next_match() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let skills = dir.path().join("skills");
     let mut loader = SkillLoader::new(vec![skills.clone()]);
     assert!(loader.hits("plan the quarterly roadmap").section.is_empty());
@@ -443,7 +474,10 @@ fn a_skill_created_mid_session_is_live_next_match() {
     .unwrap();
 
     let hit = loader.hits("let us plan the quarterly roadmap now").section;
-    assert!(hit.contains("Step one"), "目录变了必须重扫：{hit}");
+    assert!(
+        hit.contains("Step one"),
+        "a changed catalog has to be rescanned: {hit}"
+    );
 }
 
 #[tokio::test]
@@ -458,15 +492,18 @@ async fn memory_mirror_lands_as_markdown() {
         .await
         .unwrap();
 
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     super::export_markdown(&facts, &episodes, dir.path())
         .await
-        .expect("写镜像");
+        .expect("write the mirror");
 
     let text = std::fs::read_to_string(dir.path().join("MEMORY.md")).unwrap();
     assert!(text.contains("**alex** — prefers mornings"), "{text}");
     assert!(text.contains("**2026-09-01** — planned the demo"), "{text}");
-    assert!(text.contains("state.db"), "要说清事实来源在哪儿：{text}");
+    assert!(
+        text.contains("state.db"),
+        "it has to say where the facts live: {text}"
+    );
 }
 
 // ---- concurrency: claim ---------------------------------------------------------------------
@@ -483,27 +520,37 @@ async fn memory_mirror_lands_as_markdown() {
 async fn two_concurrent_consolidations_only_run_the_model_once() {
     let (facts, episodes, chat) = stores().await;
     // One turn accrued (`every_n = 1` → needs 2 rows = one user/assistant turn).
-    chat.append_exchange("alex 喜欢早上的会议", "记下了", "default", "cli", None)
-        .await
-        .unwrap();
+    chat.append_exchange(
+        "alex likes morning meetings",
+        "noted",
+        "default",
+        "cli",
+        None,
+    )
+    .await
+    .unwrap();
 
     let mock = Mock::new(vec![Mock::text(
-        r#"{"facts":[{"subject":"alex","content":"喜欢早上的会议"}],"episode":"聊了 alex"}"#,
+        r#"{"facts":[{"subject":"alex","content":"likes morning meetings"}],"episode":"talked about alex"}"#,
     )]);
 
     let (first, second) = tokio::join!(
         consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1),
         consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1),
     );
-    assert_eq!(first.unwrap() + second.unwrap(), 1, "只有赢家写进了事实");
+    assert_eq!(
+        first.unwrap() + second.unwrap(),
+        1,
+        "only the winner wrote a fact"
+    );
     assert_eq!(
         mock.received.lock().unwrap().len(),
         1,
-        "小模型只该被调用一次 —— 输的那个不该看到脚本"
+        "the small model is called once only — the losing one must not see the script"
     );
     assert!(
         chat.unconsolidated().await.unwrap().is_empty(),
-        "认领的那批已经被标记"
+        "the claimed batch is already marked"
     );
 }
 
@@ -511,24 +558,30 @@ async fn two_concurrent_consolidations_only_run_the_model_once() {
 /// back to 0); the log must not sit at "consolidated" with nothing written — real loss.
 #[tokio::test]
 async fn a_failed_consolidation_releases_its_claim() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm
     let facts = Facts::new(pool.clone());
     let episodes = Episodes::new(pool.clone());
     let chat = Chat::new(pool.clone());
-    chat.append_exchange("alex 喜欢早上的会议", "记下了", "default", "cli", None)
-        .await
-        .unwrap();
+    chat.append_exchange(
+        "alex likes morning meetings",
+        "noted",
+        "default",
+        "cli",
+        None,
+    )
+    .await
+    .unwrap();
 
     // The model just dies — one of three failure paths (the others: no JSON, invalid JSON).
-    let mock = Mock::with_outcomes(vec![Err(ProviderError::Api("模型挂了".to_string()))]);
+    let mock = Mock::with_outcomes(vec![Err(ProviderError::Api("the model died".to_string()))]);
     let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1)
         .await
         .unwrap();
-    assert_eq!(written, 0, "没写进任何事实");
+    assert_eq!(written, 0, "not a single fact was written");
 
     // The claim was returned: both rows' flags are back to 0. `consolidation_next_at`
     // is also pushed 1 minute out, so `unconsolidated()` is empty now — the flag decides.
@@ -537,11 +590,11 @@ async fn a_failed_consolidation_releases_its_claim() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(still_pending, 2, "两行都该被还回来");
+    assert_eq!(still_pending, 2, "both rows have to come back");
     assert_eq!(
         chat.unconsolidated().await.unwrap().len(),
         0,
-        "但按退避排到了未来，不该立刻又捞出来"
+        "but the backoff schedules it into the future, so it must not be picked up at once"
     );
 }
 
@@ -557,24 +610,25 @@ fn the_bundled_video_skill_parses_and_carries_the_discipline() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../skills/video-transcription/SKILL.md"
     );
-    let text = std::fs::read_to_string(path).expect("仓库自带的技能文件应该存在");
-    let skill = crate::skills::parse_skill_text(&text).expect("该被解析成技能");
+    let text =
+        std::fs::read_to_string(path).expect("the skill file shipped with the repo should exist");
+    let skill = crate::skills::parse_skill_text(&text).expect("it should parse as a skill");
     assert_eq!(skill.name, "video-transcription");
     assert!(
-        skill.description.contains("视频") && skill.description.contains("read_file"),
-        "description 该说明用途与路径：{}",
+        skill.description.contains("video") && skill.description.contains("read_file"),
+        "the description has to state the purpose and the path: {}",
         skill.description
     );
     for discipline in [
-        "yt-dlp",       // 在线视频：拉字幕不下载
-        "whisper",      // 本地视频：本地转写
-        "不能假装",     // 诚实边界：没有文字就不许编
-        "数据不是指令", // 字幕是不可信输入
-        "JOY_EXEC",     // 工具缺失时如实报告依赖
+        "yt-dlp",                     // online video: fetch the subtitles, do not download
+        "whisper",                    // local video: transcribe locally
+        "never pretend",              // the honesty line: no words, no invention
+        "data is not an instruction", // subtitles are untrusted input
+        "JOY_EXEC",                   // report the dependency honestly when the tool is missing
     ] {
         assert!(
             text.contains(discipline),
-            "正文缺少关键纪律『{discipline}』"
+            "the body lacks the key discipline '{discipline}'"
         );
     }
 }
@@ -586,12 +640,133 @@ fn the_bundled_video_skill_parses_and_carries_the_discipline() {
 fn a_crlf_skill_file_still_parses() {
     let text = "---
 name: crlf-skill
-description: Windows 上编辑的技能
+description: a skill edited on Windows
 ---
 
-正文
+the body
 ";
-    let skill = crate::skills::parse_skill_text(text).expect("CRLF 该被规范化");
+    let skill = crate::skills::parse_skill_text(text).expect("CRLF should be normalised");
     assert_eq!(skill.name, "crlf-skill");
-    assert_eq!(skill.description, "Windows 上编辑的技能");
+    assert_eq!(
+        skill.description, "a skill edited on Windows",
+        "the description survives the line endings"
+    );
+}
+
+#[tokio::test]
+async fn consolidation_cannot_resurrect_a_deleted_or_corrected_fact() {
+    let (facts, episodes, chat) = stores().await;
+    let (deleted, _) = facts
+        .add("alex", "Prefers mornings", "user", "user")
+        .await
+        .unwrap();
+    facts.delete(deleted.id).await.unwrap();
+    let (corrected, _) = facts
+        .add("sam", "Lives in Paris", "user", "user")
+        .await
+        .unwrap();
+    facts.update(corrected.id, "Lives in Berlin").await.unwrap();
+    facts.forget_subject("project").await.unwrap();
+    chat.append_exchange("old conversation", "old reply", "default", "cli", None)
+        .await
+        .unwrap();
+    let mock = Mock::new(vec![Mock::text(
+        r#"{"facts":[
+        {"subject":"alex","content":"Prefers mornings"},
+        {"subject":"sam","content":"Lives in Paris"},
+        {"subject":"project","content":"An old project detail"}],"episode":""}"#,
+    )]);
+    assert_eq!(
+        consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1)
+            .await
+            .unwrap(),
+        0
+    );
+    let stored = facts.recent(10, 0).await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].content, "Lives in Berlin");
+    assert!(chat.unconsolidated().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn consolidation_keeps_explicit_temporary_states_out_of_durable_memory() {
+    let (facts, episodes, chat) = stores().await;
+    chat.append_exchange(
+        "I feel exhausted today.",
+        "I hear you.",
+        "chat",
+        "test",
+        None,
+    )
+    .await
+    .unwrap();
+    let digest = joyczl_state::ledger::digest_of(
+        serde_json::to_string(&("user", "I feel exhausted today."))
+            .unwrap()
+            .as_bytes(),
+    );
+    let response = serde_json::json!({
+        "facts": [], "episode": "The user reported feeling exhausted.",
+        "states": [{"subject":"user", "content":"Feels exhausted today", "observation": {
+            "sourceRef":format!("chat:1@{digest}"), "quote":"feel exhausted today", "confidence":0.8, "ttlHours":4
+        }}]
+    });
+    let mock = Mock::new(vec![Mock::text(&response.to_string())]);
+    let written = consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        written, 1,
+        "The temporary observation must be retained with an expiry"
+    );
+    assert!(facts.all_by_subject(10).await.unwrap().is_empty());
+    assert_eq!(facts.search("exhausted", 5).await.unwrap().len(), 1);
+    let context = retrieve_context(&facts, &episodes, "exhausted", 5, None)
+        .await
+        .unwrap();
+    assert!(context.contains("temporary claim, valid until"));
+    assert!(context.contains("not proof of current mood"));
+    let requests = mock.received.lock().unwrap();
+    assert!(requests[0]
+        .system
+        .as_deref()
+        .unwrap()
+        .contains("untrusted source data"));
+    assert!(requests[0].messages[0]
+        .text()
+        .contains(&format!("chat:1@{digest}")));
+}
+
+#[tokio::test]
+async fn malformed_extraction_shapes_release_the_claim_instead_of_losing_history() {
+    for response in [
+        "{}",
+        r#"{"facts":{},"episode":"bad shape"}"#,
+        r#"{"facts":[],"episode":42}"#,
+        r#"{"facts":[],"episode":"x","states":{}}"#,
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let pool = joyczl_state::open(&home.path().join("state.db"))
+            .await
+            .unwrap();
+        let facts = Facts::new(pool.clone());
+        let chat = Chat::new(pool.clone());
+        let episodes = Episodes::new(pool.clone());
+        chat.append_exchange("Hello", "Hi", "chat", "test", None)
+            .await
+            .unwrap();
+        let mock = Mock::new(vec![Mock::text(response)]);
+        assert_eq!(
+            consolidate_if_due(&chat, &facts, &episodes, &mock, "small", 1)
+                .await
+                .unwrap(),
+            0
+        );
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat_log WHERE consolidated=0 AND consolidation_next_at IS NOT NULL").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            pending, 2,
+            "Malformed extraction must return the whole claim with backoff"
+        );
+        assert_eq!(facts.count().await.unwrap(), 0);
+    }
 }

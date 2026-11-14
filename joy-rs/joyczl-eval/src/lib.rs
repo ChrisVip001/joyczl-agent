@@ -391,7 +391,23 @@ async fn run_scenario(home: &Path, scenario: &Scenario) -> Result<TurnOutput> {
         // "the task survived a restart" is measured, not assumed.
         if turn.restart {
             drop(server);
-            server = open_server(&settings).await?;
+            // A completed turn's queue-drain task can still own the previous runtime
+            // while finishing its final SQLite query. A simulated restart must await it.
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            server = loop {
+                match open_server(&settings).await {
+                    Ok(server) => break server,
+                    Err(error)
+                        if error.to_string().contains(
+                            "A Joy runtime for this state database is already running",
+                        ) && tokio::time::Instant::now() < deadline =>
+                    {
+                        eprintln!("(joy) eval restart waiting for the previous runtime to release ownership");
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    }
+                    Err(error) => return Err(error),
+                }
+            };
             server.install_provider(Resolved {
                 provider_id: "eval-mock".to_string(),
                 client: recording.clone(),
@@ -760,9 +776,9 @@ async fn run_suite(
 /// asks "did autonomous task work get better or worse" — so it **records and never blocks**
 /// (exit 0 even when cases fail). Two numbers come out separately:
 ///
-///   * 任务成功率: cases that reached the outcome their own case file declares (all of them
+///   * task success rate: cases that reached the outcome their own case file declares (all of them
 ///     declare `done` — acceptance passed on facts);
-///   * 中断恢复率: the subset tagged `recovery` (a turn is cut short, a fresh process boots on
+///   * resume rate: the subset tagged `recovery` (a turn is cut short, a fresh process boots on
 ///     the same home, a later turn finishes the task) that still reached that outcome.
 ///
 /// Mixing the two would hide the thing worth watching: a change that keeps the happy path

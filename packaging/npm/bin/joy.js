@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// `joy` 的命令行入口：转发全部参数给随包下载的二进制。垫片零逻辑——
-// 参数、退出码、信号都原样过去。
+// The `joy` command-line entry: forwards every argument to the binary that came with the
+// package. Zero logic in the shim — arguments, exit codes and signals all pass straight through.
 "use strict";
 
 const { spawn } = require("node:child_process");
@@ -10,8 +10,8 @@ const binary = path.join(__dirname, process.platform === "win32" ? "joy.exe" : "
 const child = spawn(binary, process.argv.slice(2), { stdio: "inherit" });
 child.on("error", (error) => {
   console.error(
-    `(joyczl-agent) 启动失败：${error.message}。重装本包（npm i -g joyczl-agent）` +
-      `或从源码安装：cargo install --path joy-rs/joyczl-cli`
+    `(joyczl-agent) failed to start: ${error.message}. reinstall this package (npm i -g joyczl-agent) ` +
+      `or install from source: cargo install --path joy-rs/joyczl-cli`
   );
   process.exit(1);
 });

@@ -51,31 +51,34 @@ def main() -> int:
     }
     if len(entries) < 100:
         problems.append(
-            f"只解析出 {len(entries)} 条翻译 —— 先修这个脚本，别让它一直绿着"
+            f"only {len(entries)} translations parsed — fix this script rather than leaving it green"
         )
         report()
         return 1
 
+    # Every .ts under src/ except the dictionary itself: a `t()` call in login.ts is as much a
+    # call site as one in render.ts, and the dictionary entry it needs is as mandatory.
     used: dict[str, str] = {}
-    for name in ("main.ts", "render.ts"):
-        text = (SRC / name).read_text(encoding="utf-8")
-        for key in CALL.findall(text):
-            used.setdefault(unquote(key), name)
+    for path in sorted(SRC.glob("*.ts")):
+        if path.name == "i18n.ts":
+            continue
+        for key in CALL.findall(path.read_text(encoding="utf-8")):
+            used.setdefault(unquote(key), path.name)
     html = (SRC / "index.html").read_text(encoding="utf-8")
     for key in DATA_ATTR.findall(html):
         used.setdefault(key, "index.html")
 
     for key, where in sorted(used.items()):
         if key not in entries:
-            problems.append(f"{where} 用了没翻译的文案：{key}")
+            problems.append(f"{where} uses text with no translation: {key}")
     for key in sorted(entries):
         if key not in used:
-            problems.append(f"i18n.ts 里有没人用的翻译：{key}")
+            problems.append(f"i18n.ts carries a translation nobody uses: {key}")
 
     for zh, en in entries.items():
         if PLACEHOLDER.findall(zh) != PLACEHOLDER.findall(en):
             problems.append(
-                f"占位符对不上：{zh} → {en}"
+                f"placeholders do not match: {zh} → {en}"
                 f"（{sorted(PLACEHOLDER.findall(zh))} vs {sorted(PLACEHOLDER.findall(en))}）"
             )
 
@@ -87,9 +90,9 @@ def report(translated: int = 0, used: int = 0) -> None:
     if problems:
         for problem in problems:
             print(f"✗ {problem}")
-        print(f"\n{len(problems)} 处需要修")
+        print(f"\n{len(problems)} things to fix")
         return
-    print(f"✓ 界面文案双语对齐：{translated} 条翻译，{used} 个调用点")
+    print(f"✓ UI text is bilingual: {translated} translations, {used} call sites")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "把聊天平台接到 Joy 上：一个 app-server 子进程，多个人共用。",
+  "description": "Brings a chat platform to Joy: one app-server child process, shared by several people.",
   "exports": {
     ".": "./src/bridge.ts",
     "./telegram": "./src/telegram.ts",

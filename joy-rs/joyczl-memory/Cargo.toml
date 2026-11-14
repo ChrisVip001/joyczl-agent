@@ -3,7 +3,7 @@ name = "joyczl-memory"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "两个管理记忆的智能体：检索门（要不要查）和 consolidation（记什么）。"
+description = "Two agents that manage memory: the retrieval gate (should it look?) and consolidation (what to keep)."
 
 [lib]
 name = "joyczl_memory"
@@ -15,12 +15,13 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 joyczl-provider = { workspace = true }
 joyczl-state = { workspace = true }
-# `joy skill install <url>` 抓 SKILL.md 原文；reqwest 早已在依赖树里（provider 就在用），
-# 不是新编译物。
+# `joy skill install <url>` fetches the raw SKILL.md; reqwest is long since in the tree (the
+# provider uses it), so nothing new to compile.
 reqwest = { workspace = true }
-# 记忆页与账本的行摘要（sha256），workspace 里已有。
+# Row digests (sha256) for memory pages and the ledger; already in the workspace.
 sha2 = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }

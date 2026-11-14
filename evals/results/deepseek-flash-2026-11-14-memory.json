@@ -1,0 +1,80 @@
+{
+  "budgetCny": 0.5,
+  "cases": [
+    {
+      "durableFacts": 1,
+      "error": null,
+      "facts": [
+        {
+          "assessments": [
+            {
+              "basis": "model-classified user quotation; not independently verified",
+              "confidence": 0.9,
+              "quote": "今天有些疲惫，这是临时状态，不要存成长期事实。",
+              "sourceRef": "chat:1@782d81dc583bb32c844ff18f3f83177e41e66b8199d6f24e2fa0bc07f3491a52",
+              "ttlHours": 6,
+              "validUntil": "2026-11-14T11:09:11+00:00"
+            }
+          ],
+          "content": "今天感到有些疲惫，这是临时状态。",
+          "durable": false,
+          "id": 2,
+          "kind": "user",
+          "observations": [
+            [
+              "68d9ddfdd66689589e1289ceb340c2d88fbfb751e0951c1b47c0d589092fbbad",
+              "[\"chat:1@782d81dc583bb32c844ff18f3f83177e41e66b8199d6f24e2fa0bc07f3491a52\",\"chat:2@6d3a578a905a3a3118c2aba4b28a0693ed1b74f58994dbfd6b42e26f085b458e\"]",
+              "2026-11-14 05:09:13",
+              "{\"basis\":\"model-classified user quotation; not independently verified\",\"confidence\":0.9,\"quote\":\"今天有些疲惫，这是临时状态，不要存成长期事实。\",\"sourceRef\":\"chat:1@782d81dc583bb32c844ff18f3f83177e41e66b8199d6f24e2fa0bc07f3491a52\",\"ttlHours\":6,\"validUntil\":\"2026-11-14T11:09:11+00:00\"}"
+            ]
+          ],
+          "source": "consolidation",
+          "subject": "小林",
+          "validFrom": null,
+          "validUntil": "2026-11-14T11:09:11+00:00"
+        },
+        {
+          "assessments": [],
+          "content": "用户的称呼是小林。",
+          "durable": true,
+          "id": 1,
+          "kind": "user",
+          "observations": [
+            [
+              "68d9ddfdd66689589e1289ceb340c2d88fbfb751e0951c1b47c0d589092fbbad",
+              "[\"chat:1@782d81dc583bb32c844ff18f3f83177e41e66b8199d6f24e2fa0bc07f3491a52\",\"chat:2@6d3a578a905a3a3118c2aba4b28a0693ed1b74f58994dbfd6b42e26f085b458e\"]",
+              "2026-11-14 05:09:13",
+              null
+            ]
+          ],
+          "source": "consolidation",
+          "subject": "小林",
+          "validFrom": null,
+          "validUntil": null
+        }
+      ],
+      "id": "transient-memory",
+      "input": "我的称呼是小林，请只把这个称呼作为长期事实。今天有些疲惫，这是临时状态，不要存成长期事实。",
+      "latencyMs": 2576,
+      "modelText": [
+        "{\"facts\":[{\"subject\":\"小林\",\"content\":\"用户的称呼是小林。\",\"kind\":\"user\"}],\"states\":[{\"subject\":\"小林\",\"content\":\"今天感到有些疲惫，这是临时状态。\",\"observation\":{\"sourceRef\":\"chat:1@782d81dc583bb32c844ff18f3f83177e41e66b8199d6f24e2fa0bc07f3491a52\",\"quote\":\"今天有些疲惫，这是临时状态，不要存成长期事实。\",\"confidence\":0.9,\"ttlHours\":6}}],\"episode\":\"小林说明了希望被称呼为小林，并提到当天有些疲惫且属于临时状态。\"}"
+      ],
+      "newFacts": 2,
+      "nicknameFacts": 1,
+      "passed": true,
+      "quotedTemporaryStates": 1,
+      "scope": "One synthetic Chinese extraction: literal nickname retention, no extra durable fact, and a source-quoted expiring observation. Not an emotional-support, semantic-correctness or confidence-calibration score."
+    }
+  ],
+  "model": "deepseek-flash",
+  "peakRateEstimateCny": 0.00364,
+  "pricingSource": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "profile": "ds",
+  "provider": "deepseek",
+  "reportedInputTokens": 440,
+  "reportedOutputTokens": 345,
+  "requests": 1,
+  "requestsWithoutUsage": 0,
+  "reservedUpperCny": 0.07218,
+  "suite": "memory"
+}

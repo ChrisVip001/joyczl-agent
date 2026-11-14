@@ -1,10 +1,11 @@
-"""协议里的两组常量。**生成物，别手改。**
+"""The two constant tables from the protocol. **Generated; do not hand-edit.**
 
-由 `scripts/write_schema.py` 从 `schema/json/consts.json` 生成，而那份 JSON
-由 Rust 的 `joyczl-protocol`（`rpc::codes`、`protocol::v2::methods`）导出。
+Written by `scripts/write_schema.py` from `schema/json/consts.json`, and that JSON is
+exported by Rust's `joyczl-protocol` (`rpc::codes`, `protocol::v2::methods`).
 
-TS 侧同一份东西在 `schema/typescript/v2/{codes,methods}.mts` —— 同一个源头。
-**所以「memory/remember」这个字符串全仓库只有一处定义**，三种语言都从它生成。
+The TypeScript side of the same thing is `schema/typescript/v2/{codes,methods}.mts` —
+one source. **So the string "memory/remember" is defined exactly once in this repo**,
+and all three languages are generated from it.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from enum import Enum, IntEnum
 
 
 class Codes(IntEnum):
-    """错误码。名字跟 Rust 侧常量同名，好让两边 grep 得到同一处。"""
+    """Error codes. The names match the Rust constants so one grep finds both sides."""
 
     INTERNAL_ERROR = -32603
     INVALID_PARAMS = -32602
@@ -27,10 +28,10 @@ class Codes(IntEnum):
 
 
 class Methods(str, Enum):
-    """方法名。值就是线上传的字符串。"""
+    """Method names. The values are the strings that travel on the wire."""
 
-    # 3.10 没有 StrEnum；`str, Enum` 这手在 f-string 里会打出
-    # "Methods.TURN_START"，而方法名是要拼进日志和报错里的 —— 换回来。
+    # 3.10 has no StrEnum; `str, Enum` would render inside an f-string as
+    # "Methods.TURN_START", and method names get spliced into logs and errors — undo it.
     __str__ = str.__str__
 
     APPROVAL_LOG = "approval/log"
@@ -42,8 +43,10 @@ class Methods(str, Enum):
     MEMORY_FORGET = "memory/forget"
     MEMORY_LIST = "memory/list"
     MEMORY_LIST_EPISODES = "memory/list-episodes"
+    MEMORY_PROVENANCE = "memory/provenance"
     MEMORY_REMEMBER = "memory/remember"
     MEMORY_SEARCH = "memory/search"
+    MEMORY_VALIDITY = "memory/setValidity"
     MODEL_LIST = "model/list"
     MODEL_PROFILES = "model/profiles"
     MODEL_REMOVE = "model/remove"
@@ -61,14 +64,21 @@ class Methods(str, Enum):
     TASK_CREATE = "task/create"
     TASK_GET = "task/get"
     TASK_LIST = "task/list"
+    TASK_OPERATIONS = "task/operations"
+    TASK_RECONCILE = "task/reconcile"
     TASK_RESUME = "task/resume"
     TASK_RUNS = "task/runs"
+    TASK_SIGNAL = "task/signal"
+    TASK_START = "task/start"
     TASK_SUSPEND = "task/suspend"
     TASK_VIEW = "task/view"
+    TASK_WAIT = "task/wait"
     TODO_VIEW = "todo/view"
     TURN_FOLLOW_UP = "turn/follow-up"
     TURN_INTERRUPT = "turn/interrupt"
     TURN_LIST = "turn/list"
+    TURN_OPERATIONS = "turn/operations"
+    TURN_RECONCILE = "turn/reconcile"
     TURN_START = "turn/start"
     TURN_STEER = "turn/steer"
     USAGE_SUMMARY = "usage/summary"

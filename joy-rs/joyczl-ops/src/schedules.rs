@@ -157,16 +157,16 @@ mod tests {
 
     fn now() -> NaiveDateTime {
         chrono::NaiveDate::from_ymd_opt(2026, 11, 12)
-            .expect("日期")
+            .expect("date")
             .and_hms_opt(9, 0, 0)
-            .expect("时间")
+            .expect("time")
     }
 
     fn body(name: &str, cron: &str) -> declarations::JobBody {
         declarations::JobBody {
             name: name.to_string(),
             cron: cron.to_string(),
-            prompt: "写一份简报".to_string(),
+            prompt: "write a briefing".to_string(),
             delivery: "outbox".to_string(),
             catch_up: None,
         }
@@ -174,9 +174,9 @@ mod tests {
 
     #[test]
     fn a_saved_job_lists_with_its_next_run_and_state() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let home = dir.path().to_path_buf();
-        save(&home, &body("digest", "0 8 * * *")).expect("保存");
+        save(&home, &body("digest", "0 8 * * *")).expect("save");
 
         let state = vec![ScheduleStateRow {
             name: "digest".to_string(),
@@ -195,21 +195,21 @@ mod tests {
         );
         assert_eq!(jobs[0].next_run.as_deref(), Some("2026-11-13 08:00"));
 
-        remove(&home, "digest").expect("删除");
+        remove(&home, "digest").expect("delete");
         assert!(rows(&home, &[], now()).0.is_empty());
     }
 
     #[test]
     fn an_impossible_pattern_shows_why_instead_of_a_blank() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let home = dir.path().to_path_buf();
-        save(&home, &body("never", "0 0 30 2 *")).expect("保存");
+        save(&home, &body("never", "0 0 30 2 *")).expect("save");
         let (jobs, _) = rows(&home, &[], now());
         assert_eq!(jobs[0].next_run, None);
         assert!(jobs[0]
             .next_run_note
             .as_deref()
-            .expect("要有说明")
+            .expect("must say why")
             .contains("within a year"));
     }
 }

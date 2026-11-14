@@ -37,8 +37,9 @@ use serde_json::json;
 use crate::workflow_def::{builtin_routes, WorkflowDef};
 use crate::{writes, Boxed, Graph, NodeCtx, NodeFn, NodeWrites, State, Topology};
 
-/// 拓扑的唯一定义，编译期内嵌（`definitions/gather.json`）。工作流是代码的一部分，
-/// 随二进制发布——改动走 review，不走运行时加载。
+/// The one definition of the topology, embedded at compile time (`definitions/gather.json`).
+/// A workflow is part of the code and ships with the binary — changes go through review,
+/// not through runtime loading.
 const GATHER_DEF: &str = include_str!("definitions/gather.json");
 
 /// Each scan only writes keys carrying its own prefix. Parallel nodes writing the same
@@ -130,8 +131,9 @@ pub fn build_gather_graph(
     synth_fn: SynthFn,
     draft_fn: DraftFn,
 ) -> Result<Graph, String> {
-    // 拓扑在 definitions/gather.json 里（编译期内嵌，启动即校验）；这里只按节点名
-    // 注入行为 —— JSON 声明形状，代码提供动作。
+    // The topology lives in definitions/gather.json (embedded at compile time, validated at
+    // startup); this file only attaches behaviour by node name — JSON declares the shape, code
+    // provides the action.
     let mut bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
 
     bindings.insert(
@@ -223,7 +225,7 @@ pub fn gather_topology() -> Topology {
     ) {
         Ok(graph) => graph.describe(),
         // Reaching here means the graph itself is wrong — and it is hard-coded in this file.
-        Err(error) => panic!("gather 图写错了：{error}"),
+        Err(error) => panic!("the gather graph is wrong: {error}"),
     }
 }
 

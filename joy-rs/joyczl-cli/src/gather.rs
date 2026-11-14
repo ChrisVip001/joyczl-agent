@@ -197,6 +197,7 @@ async fn bind_web(home: &std::path::Path) -> WebScanFn {
         .expect("open the library");
     let ctx = ToolCtx {
         on_uncertain: None,
+        resource_lease: None,
         task_run_id: None,
         activate: None,
         embedder: None,

@@ -1,0 +1,296 @@
+{
+  "budgetCny": 2.0,
+  "cases": [
+    {
+      "artifact": {
+        "_draftRef": "meeting.draft.json",
+        "approved": 42,
+        "approvedSource": {
+          "conditionId": "task1794582114811:input",
+          "eventId": "approved-figures-1",
+          "receivedAt": "2026-11-13 15:02:13",
+          "source": "synthetic-approved-host"
+        },
+        "generatedAt": "2026-11-13T23:02:00+08:00",
+        "title": "Synthetic meeting data"
+      },
+      "chat": {
+        "reply": "好，数字那边我不动：会议任务还是原样挂着（等授权的数据进来），我不会改它、也不会替你编数字。你也不用管它，来了我会喊你。\n\n累了就先歇着。你是那种一整天都在被人拉着说话、到最后脑子嗡嗡响的累，还是纯身体上熬空了的那种？两种歇法不一样，我想知道该不该劝你去躺着。\n\n要是懒得说也行——我就在这儿，等数字到了我第一时间告诉你。",
+        "tools": []
+      },
+      "completionError": null,
+      "duplicate": {
+        "accepted": true,
+        "duplicate": true,
+        "taskId": "task1794582114811"
+      },
+      "id": "waiting-chat-delivery",
+      "latencyMs": 24769,
+      "noEarlyArtifact": true,
+      "operations": {
+        "checkpointDigest": "f8ff69e87ae0d7a27cad24e960b80e67dfcc6a8fc21b068ac2b822bbc32b81e6",
+        "operations": [
+          {
+            "arguments": {
+              "path": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW"
+            },
+            "evidence": null,
+            "id": "6ab6769886f6ade346ea6485f1626e922c9b0faecc532e432e47e1d39a70c2f8",
+            "inputDigest": "2e63ed1fdbee6ce50974130f00e3293a9c08842258970acf0f5f3d993182524b",
+            "origin": "checkpoint",
+            "outputDigest": "edc9b8bbd2d37a15a1484da7d865a603ecaad0b43c8653b747540a66cd962647",
+            "replayPolicy": "never",
+            "roundId": "round-89791-1794582118688704000-0",
+            "runId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "settledAt": "2026-11-13 15:02:00",
+            "startedAt": "2026-11-13 15:02:00",
+            "status": "succeeded",
+            "tool": "list_dir",
+            "toolUseId": "call_00_Fq9dfom6JQ8UZH9tEwSP5598",
+            "turnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e"
+          },
+          {
+            "arguments": {},
+            "evidence": null,
+            "id": "5f9079fbdf8a006edf83ee860aa3149da475672318adfd9981126fa3742ff06d",
+            "inputDigest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "origin": "checkpoint",
+            "outputDigest": "f0d21946e9004ce021f5ef6f7f9cb3f083deee16f77bdb44059168a135ba0839",
+            "replayPolicy": "never",
+            "roundId": "round-89791-1794582118688704000-0",
+            "runId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "settledAt": "2026-11-13 15:02:00",
+            "startedAt": "2026-11-13 15:02:00",
+            "status": "succeeded",
+            "tool": "current_time",
+            "toolUseId": "call_01_86PX7tH7XodAW6yGngTL7083",
+            "turnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e"
+          },
+          {
+            "arguments": {
+              "content": "{\n  \"_draft\": true,\n  \"_note\": \"Private working draft. Final meeting.json is written only after the host supplies the approved figures. No figures are guessed or invented here.\",\n  \"_blockedOn\": \"external input 'figures' from namespace synthetic-approved-host (not yet received)\",\n  \"title\": \"Synthetic meeting data\",\n  \"generatedAt\": \"2026-11-13T23:02:00+08:00\",\n  \"approved\": null,\n  \"approvedSource\": null\n}\n",
+              "path": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW/meeting.draft.json"
+            },
+            "evidence": null,
+            "id": "30ec38c6dd3ad6123067cfb7e297b972599ab78f79e9677d1c054b9b19b464ac",
+            "inputDigest": "315e0fb728cc15209301d40efa57014daaaccb81b406562d6c033b6d64541b87",
+            "origin": "checkpoint",
+            "outputDigest": "076575eb922a53c0d8ed329739c386a1fc2f23f1f814227e25fcbf2a70df3ccd",
+            "replayPolicy": "never",
+            "roundId": "round-89791-1794582118688704000-0",
+            "runId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "settledAt": "2026-11-13 15:02:04",
+            "startedAt": "2026-11-13 15:02:04",
+            "status": "succeeded",
+            "tool": "write_file",
+            "toolUseId": "call_00_lmQRhf9Cj5WDw85jIbc34275",
+            "turnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e"
+          },
+          {
+            "arguments": {
+              "path": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW/meeting.draft.json"
+            },
+            "evidence": null,
+            "id": "b0d6bcbebbf977ce50af92bd34cff0700f9856f4b849fdf481f98db71aef71c5",
+            "inputDigest": "68ffddd8a8178cbadea1e8da03d2bb5ae59c27e4d764108ec23dfd7b13aa0748",
+            "origin": "checkpoint",
+            "outputDigest": "9455b0f535e30a710d83d87f20a097b8d4de453b71f49652469c235417788138",
+            "replayPolicy": "never",
+            "roundId": "round-89791-1794582118688704000-0",
+            "runId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "settledAt": "2026-11-13 15:02:05",
+            "startedAt": "2026-11-13 15:02:05",
+            "status": "succeeded",
+            "tool": "read_file",
+            "toolUseId": "call_00_Hl7f7NHHDMQwwVuNwyUl4282",
+            "turnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e"
+          },
+          {
+            "arguments": {
+              "content": "{\n  \"title\": \"Synthetic meeting data\",\n  \"generatedAt\": \"2026-11-13T23:02:00+08:00\",\n  \"approved\": 42,\n  \"approvedSource\": {\n    \"conditionId\": \"task1794582114811:input\",\n    \"eventId\": \"approved-figures-1\",\n    \"source\": \"synthetic-approved-host\",\n    \"receivedAt\": \"2026-11-13 15:02:13\"\n  },\n  \"_draftRef\": \"meeting.draft.json\"\n}\n",
+              "path": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW/meeting.json"
+            },
+            "evidence": null,
+            "id": "61807d5dc95002a800575c52dc9b21e3fcf2c4f11e9c1c25e4e1278809842629",
+            "inputDigest": "d2cc4bb0309d8bd7efbccd3322cd0fc8411b91cfb7fe856ce45ef3e40626a708",
+            "origin": "checkpoint",
+            "outputDigest": "d36dd7aac68f72e5a5bf4922c0976fb95919516476c0e5308d18da6f07f75c5b",
+            "replayPolicy": "never",
+            "roundId": "round-89791-1794582118688704000-0",
+            "runId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "settledAt": "2026-11-13 15:02:15",
+            "startedAt": "2026-11-13 15:02:15",
+            "status": "succeeded",
+            "tool": "write_file",
+            "toolUseId": "call_00_HLpDCDR1yXWJINczTVNP1579",
+            "turnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e"
+          },
+          {
+            "arguments": {
+              "path": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW/meeting.json"
+            },
+            "evidence": null,
+            "id": "5820e1e48bda458d3a53db9a71185721bf1508b3e212763ab46ecbc3a8b2d8db",
+            "inputDigest": "7338f54d965e045f60f5649bce3f600edb86d94893b8c37a2728f3ac6b1f8f53",
+            "origin": "checkpoint",
+            "outputDigest": "42d96163261e7158cba968b7f503fdb43d43744c712f671a97f8f5400f14de5d",
+            "replayPolicy": "never",
+            "roundId": "round-89791-1794582118688704000-0",
+            "runId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "settledAt": "2026-11-13 15:02:17",
+            "startedAt": "2026-11-13 15:02:17",
+            "status": "succeeded",
+            "tool": "read_file",
+            "toolUseId": "call_00_ET_WwXnKDJtEcRg6x97qbCA1872",
+            "turnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e"
+          },
+          {
+            "arguments": {
+              "path": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW"
+            },
+            "evidence": null,
+            "id": "f7d3a6537f5441434d72ce30da27ccb0f7ccdc735775629f3940fda989d423b6",
+            "inputDigest": "2e63ed1fdbee6ce50974130f00e3293a9c08842258970acf0f5f3d993182524b",
+            "origin": "checkpoint",
+            "outputDigest": "e39ba56339cd4b984ca85ceccd212369c884ad518d52c0041c40c4847f891659",
+            "replayPolicy": "never",
+            "roundId": "round-89791-1794582118688704000-0",
+            "runId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "settledAt": "2026-11-13 15:02:17",
+            "startedAt": "2026-11-13 15:02:17",
+            "status": "succeeded",
+            "tool": "list_dir",
+            "toolUseId": "call_01_ET_00q7LaK4Hy2ue4c9NV8P6770",
+            "turnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e"
+          }
+        ]
+      },
+      "passed": false,
+      "runs": {
+        "runs": [
+          {
+            "endedAt": "2026-11-13 15:02:19",
+            "id": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+            "rounds": 1,
+            "startedAt": "2026-11-13 15:01:54",
+            "status": "completed",
+            "tokensIn": 23909,
+            "tokensOut": 1525,
+            "toolsFailed": 0,
+            "toolsOk": 7
+          }
+        ]
+      },
+      "task": {
+        "task": {
+          "acceptance": [
+            {
+              "expectedJson": "42",
+              "kind": "jsonEquals",
+              "label": "meeting.json /approved matches the expected JSON value",
+              "min": 1,
+              "path": "meeting.json",
+              "pointer": "/approved"
+            }
+          ],
+          "checks": [
+            {
+              "artifactSha256": "24f0ad67de918b58020667430596f0fda8a30fe9b145f7cc629e84af35efbb49",
+              "detail": "meeting.json /approved matches the expected JSON value",
+              "label": "meeting.json /approved matches the expected JSON value",
+              "passed": true
+            }
+          ],
+          "createdAt": "2026-11-13 15:01:54",
+          "cwd": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW",
+          "dispatchState": "finished",
+          "executionSessionId": "task-work:c544854b5aa300519bd2a8dbf7cbab9f",
+          "finishedAt": "2026-11-13 15:02:19",
+          "id": "task1794582114811",
+          "inputCondition": {
+            "conditionId": "task1794582114811:input",
+            "data": {
+              "value": 42
+            },
+            "description": "Wait for approved figures before writing the final meeting.json",
+            "eventId": "approved-figures-1",
+            "eventKey": "figures",
+            "receivedAt": "2026-11-13 15:02:13",
+            "source": "synthetic-approved-host",
+            "state": "consumed"
+          },
+          "maxRounds": 3,
+          "roundsUsed": 1,
+          "runCount": 1,
+          "sessionId": "chat",
+          "spent": {
+            "tokens": 25434,
+            "tools": 7,
+            "wallMs": 18607
+          },
+          "status": "done",
+          "title": "Synthetic meeting data"
+        }
+      },
+      "waiting": {
+        "task": {
+          "acceptance": [
+            {
+              "expectedJson": "42",
+              "kind": "jsonEquals",
+              "label": "meeting.json /approved matches the expected JSON value",
+              "min": 1,
+              "path": "meeting.json",
+              "pointer": "/approved"
+            }
+          ],
+          "checks": [
+            {
+              "detail": "Could not measure JSON document meeting.json: No such file or directory (os error 2)",
+              "label": "meeting.json /approved matches the expected JSON value",
+              "passed": false
+            }
+          ],
+          "createdAt": "2026-11-13 15:01:54",
+          "currentTurnId": "task-turn:b008d0bc5dfb1c50af4e42bf612a6a5e",
+          "cwd": "/var/folders/hg/qjjpjx9x3vld8dw_w4nw5rcw0000gn/T/.tmp99fgPW",
+          "dispatchState": "finished",
+          "executionSessionId": "task-work:c544854b5aa300519bd2a8dbf7cbab9f",
+          "id": "task1794582114811",
+          "inputCondition": {
+            "conditionId": "task1794582114811:input",
+            "description": "Wait for approved figures before writing the final meeting.json",
+            "eventKey": "figures",
+            "source": "synthetic-approved-host",
+            "state": "pending"
+          },
+          "lastStopReason": "waiting for authorized external input",
+          "maxRounds": 3,
+          "roundsUsed": 1,
+          "runCount": 1,
+          "sessionId": "chat",
+          "spent": {
+            "tokens": 10485,
+            "tools": 4,
+            "wallMs": 12859
+          },
+          "status": "suspended",
+          "suspendReason": "waiting for authorized external input",
+          "title": "Synthetic meeting data"
+        }
+      },
+      "writeOperations": 2
+    }
+  ],
+  "model": "deepseek-flash",
+  "peakRateEstimateCny": 0.07204,
+  "pricingSource": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "profile": "ds",
+  "provider": "deepseek",
+  "reportedInputTokens": 25736,
+  "reportedOutputTokens": 2571,
+  "requests": 10,
+  "requestsWithoutUsage": 0,
+  "reservedUpperCny": 1.032696,
+  "suite": "expanded"
+}

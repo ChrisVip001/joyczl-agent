@@ -1,7 +1,7 @@
 {
   "name": "joyczl-agent",
   "version": "0.17.0",
-  "description": "Joy 的 npm 垫片：安装时按平台从 GitHub Releases 下载 `joy` 二进制（Joy 本体是 Rust，npm 只负责把它放到 PATH 上）",
+  "description": "The npm shim for Joy: at install time it fetches the `joy` binary for your platform from GitHub Releases (Joy itself is Rust; npm only puts it on your PATH)",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",

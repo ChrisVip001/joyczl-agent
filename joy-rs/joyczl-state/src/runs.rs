@@ -210,6 +210,26 @@ impl Runs {
         )
     }
 
+    /// Preserve terminal outcomes when an older unfinished attempt is superseded.
+    pub async fn supersede(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE task_runs SET status='suspended',stop_reason='Superseded by a newer task execution',ended_at=datetime('now') WHERE id=? AND status IN ('running','waiting','suspended')")
+            .bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Resolve execution identity without assuming run and turn identifiers are equal.
+    pub async fn for_turn(&self, turn_id: &str) -> Result<Option<RunRow>> {
+        let mut rows = sqlx::query_as::<_, RunRow>(&format!(
+            "SELECT {COLS} FROM task_runs WHERE turn_id=? OR (turn_id IS NULL AND id=?) LIMIT 2"
+        ))
+        .bind(turn_id)
+        .bind(turn_id)
+        .fetch_all(&self.pool)
+        .await?;
+        anyhow::ensure!(rows.len() <= 1, "Turn has ambiguous task run bindings");
+        Ok(rows.pop())
+    }
+
     /// One task's runs, newest first — the card's "executed N times" and the detail panel.
     pub async fn list_by_task(&self, task_id: &str, limit: i64) -> Result<Vec<RunRow>> {
         Ok(sqlx::query_as::<_, RunRow>(&format!(

@@ -1,17 +1,20 @@
-"""全仓库唯一指向 Python 生成物的地方。
+"""The one place in the whole repo that points at the Python artefacts.
 
-别的文件一律从 `joyczl_agent.protocol` 引，这样「生成物躺在哪」这件事整个包里
-只有一处知道 —— 挪目录、或者哪天生成物换个装法，只需要改这一个文件。
+Everything else imports from `joyczl_agent.protocol`, so "where the artefacts lie" is known
+in exactly one place in the package — move a directory, or change how they are packaged,
+and only this file changes.
 
-跟 TS 侧的 `packages/client/src/protocol.ts` 是同一个角色，但那文件里是一行
-`export type * from ...`。**这里只能是一份手写清单，不是偷懒，是 Python 的静态
-类型跟不上算出来的再导出**：`__all__ = sorted({...})` 这种在运行时完美，而 mypy
-无法求值，于是 `__init__.py` 的 `from .protocol import *` 在它眼里一个名字都没
-导入 —— 用户写 `from joyczl_agent import Methods` 会直接报「没有这个属性」。
-对一个卖点就是标注的 SDK，那比清单漂了更糟。
+The same role as `packages/client/src/protocol.ts` on the TS side, except that file is one
+line of `export type * from ...`. **Here it has to be a hand-written list, which is not
+laziness but Python's static types failing to follow a computed re-export**:
+`__all__ = sorted({...})` is perfect at runtime, and mypy cannot evaluate it, so
+`from .protocol import *` in `__init__.py` imports nothing as far as mypy is concerned —
+and a user writing `from joyczl_agent import Methods` is told there is no such attribute.
+For an SDK whose selling point is its annotations, that is worse than a drifted list.
 
-清单漂了的代价由 `tests/test_client.py::test_every_method_type_is_exported` 兜着：
-Rust 加了方法、生成物跟上了、这里忘了补，那条测试会红。
+The cost of the list drifting is covered by
+`tests/test_client.py::test_every_method_type_is_exported`: Rust adds a method, the
+artefacts follow, this is not updated, and that test goes red.
 """
 
 from __future__ import annotations
@@ -34,6 +37,11 @@ from .generated.v2 import (
     MemoryListEpisodesResponse,
     MemoryListParams,
     MemoryListResponse,
+    MemoryValidityParams,
+    MemoryValidityResponse,
+    MemoryProvenanceParams,
+    MemoryProvenanceResponse,
+    MemoryObservation,
     MemoryRememberParams,
     MemoryRememberResponse,
     MemorySearchParams,
@@ -46,6 +54,7 @@ from .generated.v2 import (
     ModelProfilesParams,
     ModelProfilesResponse,
     ModelProfileView,
+    ModelCapabilities,
     ModelRemoveParams,
     ModelRemoveResponse,
     ModelRoutesResponse,
@@ -87,6 +96,16 @@ UsageByModel,
     ApprovalRespondResponse,
     SessionViewParams,
     TaskCreateParams,
+    TaskStartParams,
+    TaskOperationsResponse,
+    TaskReconcileParams,
+    TurnOperationsParams,
+    TurnReconcileParams,
+    ToolOperationView,
+    TaskWaitParams,
+    TaskSignalParams,
+    TaskSignalResponse,
+    TaskInputView,
     TaskListParams,
     TaskActionParams,
     TaskEnvelope,
@@ -108,8 +127,9 @@ UsageByModel,
     TurnMeta,
     TurnStartParams,
     TurnStartResponse,
-    # 记忆中心的窗口、手动压缩、会话分叉：都是 0.16–0.17 加进来的方法，
-    # 生成物早就有，清单一直没跟上（`test_every_method_type_reaches_the_package` 红的）。
+    # The memory center's windows, manual compaction, session forking: all methods added in
+    # 0.16–0.17. The artefacts had them long ago; this list never followed
+    # (`test_every_method_type_reaches_the_package` was red).
     ContextUsageParams,
     ContextUsageResponse,
     MemoryIndexResponse,
@@ -125,33 +145,38 @@ UsageByModel,
     RememberScope,
 )
 
-#: 通知的联合类型，从生成的 `RootModel` 上摘下来。
+#: The notification union, plucked off the generated `RootModel`.
 #:
-#: **不手抄那 12 个名字**：手抄的话，Rust 那边加一个通知类型，这边会安静地少一支，
-#: 而那正是这个工程到处在消灭的东西。`model_fields["root"]` 就是那个 `A | B | ...`。
+#: **The 12 names are not copied by hand**: done by hand, a notification type added in Rust
+#: would quietly leave a missing arm here, and that is exactly what this project spends its
+#: time eliminating. `model_fields["root"]` is that `A | B | ...`.
 #:
-#: 代价要说清楚：mypy 求不出这个表达式，`Notification` 在它眼里是 `Any`。所以
-#: 静态窄化没有，`n.delta` 过得了检查但不被检查。运行时是对的 —— 判别式 `type`
-#: 是 Literal，pydantic 会挑中正确的那一支。
+#: The cost, stated plainly: mypy cannot evaluate this expression, so `Notification` is `Any`
+#: to it. No static narrowing, and `n.delta` passes the check by not being checked. Runtime
+#: is right — the discriminant `type` is a Literal, and pydantic picks the correct arm.
 Notification = ServerNotification.model_fields["root"].annotation
 
-#: 通知在线上统一挂在这个方法名底下，真正的判别式在 `params.type`。
+#: Notifications all travel under this method name on the wire; the real discriminant is
+#: `params.type`.
 NOTIFICATION_METHOD = "turn/notification"
 
-# ── 关于那 12 个具名通知类（`TextDeltaNotification` 等）─────────────────────
+# ── About those 12 named notification classes (`TextDeltaNotification` and kin) ──────
 #
-# 生成物里它们存在，但**故意不从这里出去**：联合里的变体是 schemars 内联出来的
-# 另一份副本，两边不是同一个类 —— `isinstance(n, TextDeltaNotification)` 会是
-# False。导出它们等于发一个陷阱。
+# They exist in the artefacts but are **deliberately not exported from here**: the variant
+# inside the union is another copy that schemars inlined, and the two are not the same
+# class — `isinstance(n, TextDeltaNotification)` would be False. Exporting them hands out
+# a trap.
 #
-# 根因在 JSON Schema 侧：schemars 对内部标记枚举（`#[serde(tag = "type")]`）只能
-# 把载荷摊平进 `oneOf`，于是具名定义和内联副本各生成一套。TS 侧没有这问题，它
-# 是 ts-rs 生成的组合写法（`{ type: "turnStarted" } & TurnStartedNotification`）。
-# 要消掉得在导出 JSON Schema 时把内联变体改写成 `allOf: [$ref]`，那是 Rust 侧的
-# 事，跟这个包无关。
+# The root cause sits in the JSON Schema: for an internally tagged enum
+# (`#[serde(tag = "type")]`) schemars can only flatten the payload into `oneOf`, so the
+# named definition and the inlined copy each get generated. TS does not have this problem —
+# it is a composition generated by ts-rs
+# (`{ type: "turnStarted" } & TurnStartedNotification`). Removing it means rewriting the
+# inlined variants as `allOf: [$ref]` when exporting the JSON Schema, which is Rust's
+# business, not this package's.
 #
-# 所以取判别式的方式是 `n.type == "textDelta"` —— 跟 TS 那边
-# `if (n.type === "textDelta")` 是同一个写法。
+# So the discriminant is taken as `n.type == "textDelta"` — the same spelling as
+# `if (n.type === "textDelta")` on the TS side.
 
 __all__ = [
     "NOTIFICATION_METHOD",
@@ -159,7 +184,7 @@ __all__ = [
     "Methods",
     "Notification",
     "ServerNotification",
-    # 参数与应答：一个方法一对。
+    # Arguments and responses: one pair per method.
     "ConfigReadParams",
     "ConfigReadResponse",
     "ConfigWriteParams",
@@ -170,6 +195,11 @@ __all__ = [
     "MemoryListEpisodesResponse",
     "MemoryListParams",
     "MemoryListResponse",
+    "MemoryValidityParams",
+    "MemoryValidityResponse",
+    "MemoryProvenanceParams",
+    "MemoryProvenanceResponse",
+    "MemoryObservation",
     "MemoryRememberParams",
     "MemoryRememberResponse",
     "MemorySearchParams",
@@ -179,6 +209,7 @@ __all__ = [
     "ModelProfilesParams",
     "ModelProfilesResponse",
     "ModelProfileView",
+    "ModelCapabilities",
     "ModelRemoveParams",
     "ModelRemoveResponse",
     "ModelRoutesResponse",
@@ -213,6 +244,16 @@ __all__ = [
     "ApprovalRespondResponse",
     "SessionViewParams",
     "TaskCreateParams",
+    "TaskStartParams",
+    "TaskOperationsResponse",
+    "TaskReconcileParams",
+    "TurnOperationsParams",
+    "TurnReconcileParams",
+    "ToolOperationView",
+    "TaskWaitParams",
+    "TaskSignalParams",
+    "TaskSignalResponse",
+    "TaskInputView",
     "TaskListParams",
     "TaskActionParams",
     "TaskEnvelope",
@@ -233,7 +274,7 @@ __all__ = [
     "TurnFollowUpResponse",
     "TurnStartParams",
     "TurnStartResponse",
-    # 记忆中心 / 压缩 / 分叉
+    # Memory center / compaction / forking
     "ContextUsageParams",
     "ContextUsageResponse",
     "MemoryIndexResponse",
@@ -247,8 +288,8 @@ __all__ = [
     "SessionForkResponse",
     "SkillStatsResponse",
     "RememberScope",
-    # 应答和通知**里面**的那些类型。不给出来的话，用户能拿到
-    # `reply.facts[0]`，却没法给自己的函数写 `def show(fact: Fact)`。
+    # The types **inside** responses and notifications. Without these a user can reach
+    # `reply.facts[0]` but cannot write `def show(fact: Fact)` for their own function.
     "Episode",
     "ErrorObject",
     "Fact",

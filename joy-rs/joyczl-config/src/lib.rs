@@ -247,6 +247,7 @@ pub struct Settings {
     /// (deepseek-v4.1-flash next to deepseek-v4-pro), `Some(false)` = text-only. Filled
     /// by `models::apply_profile` — a per-model property, not a per-vendor one.
     pub vision: Option<bool>,
+    pub model_capabilities: Option<joyczl_protocol::ModelCapabilities>,
 
     // ---- Home: all of Joy's state lives here (state.db, SOUL.md, traces/).
     pub home: PathBuf,
@@ -449,7 +450,7 @@ pub struct Settings {
     /// absolute paths, must already exist). For build caches like `cargo build`.
     pub exec_writable_roots: Vec<PathBuf>,
     /// `JOY_WRITE_ALLOW_DIRS`: directories whose writes **need no confirmation** in
-    /// `on-request` mode — what "记住这条" writes for `write_file`/`edit`.
+    /// `on-request` mode — what "remember this one" writes for `write_file`/`edit`.
     ///
     /// It never widens the writable boundary: containment is checked first, so a directory listed
     /// here but outside `JOY_EXEC_WRITABLE_ROOTS`/workdir unlocks nothing.
@@ -465,6 +466,7 @@ impl Default for Settings {
             model: None,
             small_model: None,
             vision: None,
+            model_capabilities: None,
             home: PathBuf::from(".joy"),
             goal_max_rounds: 5,
             plan_enabled: false,
@@ -538,6 +540,7 @@ impl Settings {
             small_model: None,
             // Filled by `models::apply_profile` with the profile's own declaration.
             vision: None,
+            model_capabilities: None,
             home: env("JOY_HOME").map(PathBuf::from).unwrap_or(d.home),
             goal_max_rounds: env_int("JOY_GOAL_MAX_ROUNDS", d.goal_max_rounds),
             plan_enabled: env_bool("JOY_PLAN"),
@@ -721,7 +724,7 @@ impl Settings {
             }
         }
 
-        // Directories a write was approved for ("记住这条"). Not a writable root — just "stop
+        // Directories a write was approved for ("remember this one"). Not a writable root — just "stop
         // asking" — but a relative or missing path would silently never match, which reads as
         // "the button does nothing", so both are refused at the door.
         for dir in &self.write_allow_dirs {
@@ -786,7 +789,8 @@ pub fn validate_patch_values(patch: &joyczl_protocol::SettingsPatch) -> Result<(
     if let Some(rules) = &patch.exec_allow {
         check_exec_rules(rules)?;
     }
-    // Same for the write-side "don't ask again" list ("记住这条" on a write remembers a directory).
+    // Same for the write-side "don't ask again" list ("remember this one" on a write remembers a
+    // directory rather than a file).
     if let Some(dirs) = &patch.write_allow_dirs {
         if dirs.len() > MAX_EXEC_RULES {
             return Err(format!(
@@ -921,7 +925,8 @@ mod config_tests {
         assert_eq!(s.history_turns, 12);
         assert_eq!(s.consolidate_every, 6);
         assert_eq!(s.retrieval_top_k, 4);
-        // 崩溃恢复的窗口是一小时：再久就不是「同一个回合接着跑」了（见 resume.rs）。
+        // The crash-recovery window is one hour: past that it is no longer "the same turn
+        // carrying on" (see resume.rs).
         assert_eq!(s.resume_max_age_minutes, 60);
         assert_eq!(s.home, PathBuf::from(".joy"));
     }
@@ -930,7 +935,7 @@ mod config_tests {
     fn reads_joy_provider_from_env() {
         std::env::set_var("JOY_PROVIDER", "deepseek");
         let s = Settings::from_env();
-        assert_eq!(s.provider, "deepseek", "应当读到 JOY_PROVIDER");
+        assert_eq!(s.provider, "deepseek", "JOY_PROVIDER should have been read");
         std::env::remove_var("JOY_PROVIDER");
     }
 
@@ -988,11 +993,11 @@ mod config_tests {
     #[test]
     fn the_patch_has_no_model_or_key_fields_to_leak() {
         let patch = joyczl_protocol::SettingsPatch::default();
-        let serialized = serde_json::to_string(&patch).expect("序列化");
+        let serialized = serde_json::to_string(&patch).expect("serialise");
         for leaked in ["provider", "model", "smallModel", "apiKey", "baseUrl"] {
             assert!(
                 !serialized.contains(leaked),
-                "补丁不该有模型/密钥字段：{serialized}"
+                "a patch must not carry model or key fields: {serialized}"
             );
         }
     }
@@ -1011,25 +1016,29 @@ mod config_tests {
         };
         base.merge_newer(&newer);
         assert_eq!(base.max_iterations, Some(9));
-        assert_eq!(base.max_tokens, Some(1024), "新补丁没带的字段要留着");
+        assert_eq!(
+            base.max_tokens,
+            Some(1024),
+            "fields the new patch does not mention must survive"
+        );
         assert_eq!(base.graph_workflows, Some(true));
     }
 
     #[test]
     fn patch_round_trips_through_disk() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let patch = joyczl_protocol::SettingsPatch {
             max_iterations: Some(20),
             ..Default::default()
         };
-        save_patch(dir.path(), &patch).expect("落盘");
+        save_patch(dir.path(), &patch).expect("write to disk");
         let loaded = load_patch(dir.path());
         assert_eq!(loaded.max_iterations, Some(20));
     }
 
     #[test]
     fn saving_an_empty_patch_removes_the_file() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         save_patch(
             dir.path(),
             &joyczl_protocol::SettingsPatch {
@@ -1037,15 +1046,18 @@ mod config_tests {
                 ..Default::default()
             },
         )
-        .expect("先落一份");
-        save_patch(dir.path(), &joyczl_protocol::SettingsPatch::default()).expect("再清掉");
-        assert!(!patch_path(dir.path()).exists(), "空补丁不该留文件");
+        .expect("write one first");
+        save_patch(dir.path(), &joyczl_protocol::SettingsPatch::default()).expect("then clear it");
+        assert!(
+            !patch_path(dir.path()).exists(),
+            "an empty patch must not leave a file"
+        );
     }
 
     #[test]
     fn a_corrupt_patch_file_reads_as_no_patch() {
-        let dir = tempfile::tempdir().expect("临时目录");
-        std::fs::write(patch_path(dir.path()), "这不是 JSON").expect("写坏文件");
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(patch_path(dir.path()), "this is not JSON").expect("write the broken file");
         assert!(load_patch(dir.path()).is_empty());
         // A missing file is the same.
         assert!(load_patch(std::path::Path::new("/definitely/not/here")).is_empty());
@@ -1065,9 +1077,12 @@ mod config_tests {
             history_turns: -5,
             ..Settings::default()
         };
-        let error = s.validate().expect_err("负数窗口要被抓到");
+        let error = s.validate().expect_err("a negative window must be caught");
         assert!(error.contains("JOY_HISTORY_TURNS"), "{error}");
-        assert!(error.contains("-5"), "要说清收到的值：{error}");
+        assert!(
+            error.contains("-5"),
+            "the value received must be stated: {error}"
+        );
 
         let s = Settings {
             exec_timeout_secs: 0,
@@ -1075,7 +1090,7 @@ mod config_tests {
         };
         assert!(s
             .validate()
-            .expect_err("0 秒超时没意义")
+            .expect_err("a zero-second timeout means nothing")
             .contains("JOY_EXEC_TIMEOUT"));
 
         let s = Settings {
@@ -1084,7 +1099,7 @@ mod config_tests {
         };
         assert!(s
             .validate()
-            .expect_err("4 个 token 什么都答不出来")
+            .expect_err("4 tokens cannot answer anything")
             .contains("JOY_MAX_TOKENS"));
     }
 
@@ -1097,7 +1112,7 @@ mod config_tests {
         };
         assert!(s
             .validate()
-            .expect_err("空规则要被抓到")
+            .expect_err("an empty rule must be caught")
             .contains("empty rule"));
 
         // Newline: most likely a whole script pasted into an env var.
@@ -1107,7 +1122,7 @@ mod config_tests {
         };
         assert!(s
             .validate()
-            .expect_err("换行规则要被抓到")
+            .expect_err("a rule with a newline must be caught")
             .contains("newline"));
 
         // Overlong.
@@ -1117,7 +1132,7 @@ mod config_tests {
         };
         assert!(s
             .validate()
-            .expect_err("超长规则要被抓到")
+            .expect_err("an over-long rule must be caught")
             .contains("at most"));
 
         // Too many entries.
@@ -1127,7 +1142,7 @@ mod config_tests {
         };
         assert!(s
             .validate()
-            .expect_err("规则太多要被抓到")
+            .expect_err("too many rules must be caught")
             .contains("at most"));
 
         // An empty list is legal: allowing nothing is the **default**, not an error.
@@ -1146,7 +1161,9 @@ mod config_tests {
                 compact_threshold: bad,
                 ..Settings::default()
             };
-            let error = s.validate().expect_err("越界的比例要被抓到");
+            let error = s
+                .validate()
+                .expect_err("a ratio out of range must be caught");
             assert!(error.contains("JOY_COMPACT_THRESHOLD"), "{error}");
         }
         let s = Settings {
@@ -1164,7 +1181,7 @@ mod config_tests {
         };
         assert!(too_small
             .validate()
-            .expect_err("10 的窗口没意义")
+            .expect_err("a window of 10 means nothing")
             .contains("JOY_CONTEXT_WINDOW"));
 
         // Answer budget larger than the window: it never finishes — a misconfiguration.
@@ -1175,7 +1192,7 @@ mod config_tests {
         };
         assert!(impossible
             .validate()
-            .expect_err("答案放不下")
+            .expect_err("the answer does not fit")
             .contains("JOY_MAX_TOKENS"));
 
         let ok = Settings {
@@ -1188,7 +1205,7 @@ mod config_tests {
 
     #[test]
     fn writable_roots_must_exist_and_be_absolute() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let ok = Settings {
             exec_writable_roots: vec![dir.path().to_path_buf()],
             ..Settings::default()
@@ -1203,10 +1220,12 @@ mod config_tests {
             exec_writable_roots: vec![std::env::temp_dir().join("joy-not-here-9f3a1")],
             ..Settings::default()
         };
-        let why = missing.validate().expect_err("不存在的目录要被抓到");
+        let why = missing
+            .validate()
+            .expect_err("a directory that does not exist must be caught");
         assert!(
             why.contains("does not exist"),
-            "要落在「不存在」这条分支上：{why}"
+            "this must land on the \"does not exist\" branch: {why}"
         );
 
         let relative = Settings {
@@ -1215,7 +1234,7 @@ mod config_tests {
         };
         assert!(relative
             .validate()
-            .expect_err("相对路径没法塞进沙箱规则")
+            .expect_err("a relative path cannot go into a sandbox rule")
             .contains("absolute path"));
     }
 
@@ -1234,9 +1253,12 @@ mod config_tests {
             max_tokens: Some(1),
             ..Default::default()
         };
-        let error = validate_patch_values(&bad).expect_err("越界补丁要拒");
+        let error = validate_patch_values(&bad).expect_err("an out-of-range patch must be refused");
         assert!(error.contains("maxTokens"), "{error}");
-        assert!(error.contains("128"), "要说清下界：{error}");
+        assert!(
+            error.contains("128"),
+            "the lower bound must be stated: {error}"
+        );
 
         let ok = SettingsPatch {
             max_tokens: Some(4096),

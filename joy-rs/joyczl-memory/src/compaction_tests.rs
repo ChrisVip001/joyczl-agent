@@ -6,7 +6,7 @@ use super::compaction::{newly_evicted, refresh, roll_forward, summary_section};
 
 fn pairs(n: usize) -> Vec<(String, String)> {
     (0..n)
-        .map(|i| (format!("问题 {i}"), format!("回答 {i}")))
+        .map(|i| (format!("question {i}"), format!("answer {i}")))
         .collect()
 }
 
@@ -16,10 +16,10 @@ async fn stores() -> (
     joyczl_state::Episodes,
     joyczl_state::Chat,
 ) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     (
         joyczl_state::Facts::new(pool.clone()),
@@ -37,32 +37,40 @@ fn the_waterline_only_reports_turns_newly_pushed_out() {
     // Two more turns → only the two newly evicted, no full recompute.
     let fresh = newly_evicted(&pairs(12), 4, 6);
     assert_eq!(fresh.len(), 2);
-    assert_eq!(fresh[0].0, "问题 6");
+    assert_eq!(fresh[0].0, "question 6");
     // Session still within the window → nothing to do.
     assert!(newly_evicted(&pairs(3), 12, 0).is_empty());
 }
 
 #[tokio::test]
 async fn rolling_forward_folds_new_turns_into_the_previous_summary() {
-    let mock = Mock::new(vec![Mock::text("阿明喜欢早上的会议；下周一要发版。")]);
+    let mock = Mock::new(vec![Mock::text(
+        "Alex likes morning meetings; the release is next Monday.",
+    )]);
     let (covered, summary) = roll_forward(
         &mock,
         "small",
-        Some((2, "之前聊过项目排期。".to_string())),
+        Some((
+            2,
+            "we talked about the project schedule before.".to_string(),
+        )),
         &pairs(3)[2..3],
     )
     .await;
 
-    assert_eq!(covered, 3, "水位线要往前走");
-    assert!(summary.contains("发版"), "{summary}");
+    assert_eq!(covered, 3, "the watermark has to move forward");
+    assert!(summary.contains("the release"), "{summary}");
 
     // Fed to the model: the previous summary and the new turns — folded, not redone.
     let sent = mock.received.lock().unwrap()[0].messages[0].text();
     assert!(
-        sent.contains("之前聊过项目排期。"),
-        "上一版摘要没带上：{sent}"
+        sent.contains("we talked about the project schedule before."),
+        "the previous summary was not carried over: {sent}"
     );
-    assert!(sent.contains("回答 2"), "新挤出去的轮次没带上：{sent}");
+    assert!(
+        sent.contains("answer 2"),
+        "the newly pushed-out turns were left behind: {sent}"
+    );
 }
 
 #[tokio::test]
@@ -71,9 +79,15 @@ async fn a_dead_summarizer_falls_back_to_a_deterministic_excerpt() {
     let mock = Mock::new(vec![]);
     let (covered, summary) = roll_forward(&mock, "small", None, &pairs(2)).await;
 
-    assert_eq!(covered, 2, "折叠过就是折叠过，跟上不上模型无关");
-    assert!(summary.contains("问题 0"), "兜底要留住原话：{summary}");
-    assert!(summary.contains("回答 1"), "{summary}");
+    assert_eq!(
+        covered, 2,
+        "folded is folded, whether or not a model is involved"
+    );
+    assert!(
+        summary.contains("question 0"),
+        "the fallback has to keep the words: {summary}"
+    );
+    assert!(summary.contains("answer 1"), "{summary}");
     assert!(
         summary.starts_with("(the model summary is unavailable"),
         "{summary}"
@@ -85,43 +99,48 @@ async fn an_empty_model_answer_is_treated_as_a_failure() {
     // An empty string reply: treated as failure — an empty summary is lost content.
     let mock = Mock::new(vec![Mock::text("   ")]);
     let (_, summary) = roll_forward(&mock, "small", None, &pairs(1)).await;
-    assert!(summary.contains("问题 0"), "{summary}");
+    assert!(summary.contains("question 0"), "{summary}");
 }
 
 #[test]
 fn the_summary_section_is_omitted_when_empty() {
     assert!(summary_section("   ").is_none());
-    let section = summary_section("阿明喜欢早会。").expect("非空就有段落");
+    let section =
+        summary_section("Alex likes morning meetings.").expect("non-empty means a section");
     assert!(
         section.contains("Earlier in this conversation"),
         "{section}"
     );
-    assert!(section.contains("阿明喜欢早会。"));
+    assert!(section.contains("Alex likes morning meetings."));
 }
 
 #[tokio::test]
 async fn refresh_persists_the_waterline_so_the_next_turn_does_not_recompute() {
     let (facts, episodes, chat) = stores().await;
     let _ = (facts, episodes);
-    let mock = Mock::new(vec![Mock::text("第一版摘要。")]);
+    let mock = Mock::new(vec![Mock::text("the first version of the summary.")]);
 
     let first = refresh(&chat, &mock, "small", "s1", &pairs(5), 0)
         .await
-        .expect("算得出来");
-    assert_eq!(first.as_deref(), Some("第一版摘要。"));
-    let stored = chat.load_rollup("s1").await.unwrap().expect("落了库");
+        .expect("it can be computed");
+    assert_eq!(first.as_deref(), Some("the first version of the summary."));
+    let stored = chat
+        .load_rollup("s1")
+        .await
+        .unwrap()
+        .expect("it reached the store");
     assert_eq!(stored.0, 5);
-    assert_eq!(stored.1, "第一版摘要。");
+    assert_eq!(stored.1, "the first version of the summary.");
 
     // Turn count unchanged: no second model call this round (nothing left in the queue).
     let again = refresh(&chat, &mock, "small", "s1", &pairs(5), 0)
         .await
-        .expect("不重算");
-    assert_eq!(again.as_deref(), Some("第一版摘要。"));
+        .expect("it does not recompute");
+    assert_eq!(again.as_deref(), Some("the first version of the summary."));
     assert_eq!(
         mock.received.lock().unwrap().len(),
         1,
-        "水位线没过，不该再调一次模型"
+        "the watermark is not reached, so the model must not be called again"
     );
 }
 
@@ -130,15 +149,23 @@ fn the_token_budget_decides_how_many_turns_survive() {
     use super::compaction::turns_that_fit;
 
     let pairs = pairs(5);
-    assert_eq!(turns_that_fit(&pairs, usize::MAX), 5, "预算够就全留");
-    assert_eq!(turns_that_fit(&pairs, 0), 1, "预算再紧也要留最新一轮");
+    assert_eq!(
+        turns_that_fit(&pairs, usize::MAX),
+        5,
+        "with enough budget, all of it stays"
+    );
+    assert_eq!(
+        turns_that_fit(&pairs, 0),
+        1,
+        "however tight the budget, the newest turn stays"
+    );
     assert!(turns_that_fit(&pairs, 1_000_000) == 5);
-    assert_eq!(turns_that_fit(&[], 100), 0, "没有历史就没有轮次");
+    assert_eq!(turns_that_fit(&[], 100), 0, "no history, no turns");
 
     // The budget fits only a trailing part: packed from the **newest** backwards.
     let tight = turns_that_fit(&pairs, 40);
     assert!(
         (1..5).contains(&tight),
-        "装不下 5 轮，但也不该是 0：{tight}"
+        "five rounds do not fit, but it must not be 0 either: {tight}"
     );
 }

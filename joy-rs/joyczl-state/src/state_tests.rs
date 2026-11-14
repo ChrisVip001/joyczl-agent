@@ -5,44 +5,52 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::{Chat, Episodes, Facts, NewTask, TaskStatus, Tasks};
 
-/// 任务卡的取值：开着的那条优先，但**完成后也要看得见** —— 验收结论与交付物正是
-/// 那时候才值得读，用 `active` 会让它在变得有用的同一刻消失。
+/// What a task card reads: the open one wins, but it has to stay visible **after it is done**
+/// — the acceptance verdict and the deliverables are only worth reading then, and `active`
+/// would make the card vanish at the very moment it becomes useful.
 #[tokio::test]
 async fn latest_task_prefers_open_but_never_hides_a_finished_one() {
     let pool = temp_db("task_latest").await;
     let tasks = Tasks::new(pool);
 
     tasks
-        .create(bare_task("old-done", "s1", "做完了"))
+        .create(bare_task("old-done", "s1", "finished"))
         .await
-        .expect("建任务");
+        .expect("create the task");
     tasks
         .finish("old-done", TaskStatus::Done)
         .await
-        .expect("收尾");
+        .expect("finish it");
     tasks
-        .create(bare_task("new-open", "s1", "还在跑"))
+        .create(bare_task("new-open", "s1", "still running"))
         .await
-        .expect("建任务");
+        .expect("create the task");
 
-    let latest = tasks.latest("s1").await.expect("查").expect("该有一条");
-    assert_eq!(latest.id, "new-open", "开着的那条优先");
+    let latest = tasks
+        .latest("s1")
+        .await
+        .expect("query")
+        .expect("there should be one");
+    assert_eq!(latest.id, "new-open", "the open one wins");
 
     tasks
         .finish("new-open", TaskStatus::Done)
         .await
-        .expect("收尾");
+        .expect("finish it");
     let latest = tasks
         .latest("s1")
         .await
-        .expect("查")
-        .expect("完成态也要读得到");
-    assert_eq!(latest.id, "new-open", "做完的任务不该从卡片上消失");
+        .expect("query")
+        .expect("a finished one has to be readable too");
+    assert_eq!(
+        latest.id, "new-open",
+        "a finished task must not vanish from the card"
+    );
     assert_eq!(latest.status, TaskStatus::Done);
 
     assert!(
-        tasks.latest("s2").await.expect("查").is_none(),
-        "别的会话看不到"
+        tasks.latest("s2").await.expect("query").is_none(),
+        "other sessions cannot see it"
     );
 }
 
@@ -61,9 +69,9 @@ fn bare_task<'a>(id: &'a str, session: &'a str, title: &'a str) -> NewTask<'a> {
 }
 
 async fn temp_db(name: &str) -> SqlitePool {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join(name);
-    let pool = crate::open(&path).await.expect("打开数据库");
+    let pool = crate::open(&path).await.expect("open the database");
     // TempDir deletes the directory when it leaves scope, but sqlite also creates -wal/-shm
     // files. The test process exits right away anyway; leaking beats a vanishing database.
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
@@ -75,32 +83,50 @@ async fn temp_db(name: &str) -> SqlitePool {
 async fn a_duplicate_fact_is_not_stored_twice() {
     let facts = Facts::new(temp_db("dedup.db").await);
 
-    let (first, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
-    assert!(is_new, "第一次当然是新记的");
+    let (first, is_new) = facts
+        .add("alex", "likes morning meetings", "user", "user")
+        .await
+        .unwrap();
+    assert!(is_new, "the first time is of course new");
 
     // Exactly identical: not new, the existing row comes back.
-    let (again, is_new) = facts.add("alex", "喜欢早会", "user", "user").await.unwrap();
+    let (again, is_new) = facts
+        .add("alex", "likes morning meetings", "user", "user")
+        .await
+        .unwrap();
     assert!(!is_new);
     assert_eq!(again.id, first.id);
 
     // Case and edge whitespace are not differences (model and consolidation formatting
     // drift); source and kind aren't either — it's still the same statement.
     let (spaced, is_new) = facts
-        .add("alex", "  喜欢早会  ", "consolidation", "fact")
+        .add(
+            "alex",
+            "  likes morning meetings  ",
+            "consolidation",
+            "fact",
+        )
         .await
         .unwrap();
-    assert!(!is_new, "首尾空白不该让它变成新的一条");
+    assert!(
+        !is_new,
+        "surrounding whitespace must not make it a new fact"
+    );
     assert_eq!(spaced.id, first.id);
 
     // Only genuinely different content counts as new.
     let (other, is_new) = facts
-        .add("alex", "喜欢下午的会", "user", "user")
+        .add("alex", "likes the afternoon meeting", "user", "user")
         .await
         .unwrap();
     assert!(is_new);
     assert!(other.id > first.id);
 
-    assert_eq!(facts.recent(10, 0).await.unwrap().len(), 2, "库里就两条");
+    assert_eq!(
+        facts.recent(10, 0).await.unwrap().len(),
+        2,
+        "the store holds exactly two"
+    );
 }
 
 /// Measured calibrates estimated: ratio = measured / estimated, clamped to 0.5..=2.0.
@@ -110,20 +136,20 @@ async fn context_observations_pair_measured_with_estimated() {
     assert_eq!(
         chat.context_factor("s").await.unwrap(),
         None,
-        "没有记录就不校准"
+        "no record, no calibration"
     );
 
     chat.observe_context("s", 1000, 800).await.unwrap();
     let factor = chat.context_factor("s").await.unwrap().unwrap();
     assert!(
         (factor - 1.25).abs() < 1e-9,
-        "实测比估算大 → 1.25，实际 {factor}"
+        "the measurement beats the estimate → 1.25, actually {factor}"
     );
 
     // Overwrite: only the latest matters (model/toolset changed, old ratio is void).
     chat.observe_context("s", 900, 1800).await.unwrap();
     let factor = chat.context_factor("s").await.unwrap().unwrap();
-    assert!(factor < 1.0, "这次估多了：{factor}");
+    assert!(factor < 1.0, "the estimate came out too high: {factor}");
 
     // Zero values are not recorded (graph path skips loop; a ratio from 0 is absurd).
     chat.observe_context("zero", 0, 100).await.unwrap();
@@ -139,23 +165,20 @@ async fn context_observations_pair_measured_with_estimated() {
 async fn fact_kinds_are_normalised_at_the_write_entry() {
     let facts = Facts::new(temp_db("kinds.db").await);
     facts
-        .add("a", "写歪的类别", "user", "PREFERENCE")
+        .add("a", "a misshapen category", "user", "PREFERENCE")
         .await
         .unwrap();
     let rows = facts.recent(10, 0).await.unwrap();
-    assert_eq!(rows[0].kind, "fact", "未知类别落兜底");
+    assert_eq!(rows[0].kind, "fact", "an unknown kind falls back");
 
     facts
-        .add("b", "正经类别", "user", "feedback")
+        .add("b", "a proper category", "user", "feedback")
         .await
         .unwrap();
     let rows = facts.recent(10, 0).await.unwrap();
     assert!(rows.iter().any(|row| row.kind == "feedback"));
     // Case-insensitive (the model may write "Feedback").
-    facts
-        .add("c", "大小写", "user", "  Project ")
-        .await
-        .unwrap();
+    facts.add("c", "case", "user", "  Project ").await.unwrap();
     let rows = facts.recent(10, 0).await.unwrap();
     assert!(rows.iter().any(|row| row.kind == "project"));
 }
@@ -175,7 +198,7 @@ async fn failed_consolidation_rows_are_backed_off() {
     assert_eq!(
         chat.unconsolidated().await.unwrap().len(),
         0,
-        "退避期间捞不到"
+        "nothing is picked up during the backoff"
     );
 
     // The rows remain (failure keeps logs) and are not marked consolidated.
@@ -189,11 +212,11 @@ async fn open_creates_the_schema() {
         sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
             .fetch_all(&pool)
             .await
-            .expect("查表名");
+            .expect("query the table names");
     for expected in ["facts", "facts_fts", "episodes", "episodes_fts", "chat_log"] {
         assert!(
             tables.contains(&expected.to_string()),
-            "缺表 {expected}：{tables:?}"
+            "missing table {expected}: {tables:?}"
         );
     }
 }
@@ -212,7 +235,7 @@ async fn facts_search_finds_by_keyword() {
         .unwrap();
 
     let hit = facts.search("morning", 4).await.unwrap();
-    assert_eq!(hit.len(), 1, "应当只命中一条：{hit:?}");
+    assert_eq!(hit.len(), 1, "exactly one hit expected: {hit:?}");
     assert_eq!(hit[0].subject, "alex");
 
     let hit = facts.search("acme", 4).await.unwrap();
@@ -231,7 +254,11 @@ async fn search_never_errors_on_junk_input() {
     // The retrieval gate is fail-open: if any of these error the SQL, it degrades to "search every turn".
     for junk in ["", "???", "\"", "a:b", "(unclosed", "*", "alex OR", "---"] {
         let out = facts.search(junk, 4).await;
-        assert!(out.is_ok(), "{junk:?} 让检索报错了：{:?}", out.err());
+        assert!(
+            out.is_ok(),
+            "{junk:?} made the search fail: {:?}",
+            out.err()
+        );
     }
 }
 
@@ -250,7 +277,7 @@ async fn deleting_a_fact_keeps_the_index_in_sync() {
     // Without the trigger sync, this would fetch a ghost row pointing at the deleted line.
     assert!(
         facts.search("morning", 4).await.unwrap().is_empty(),
-        "FTS 索引没跟着删"
+        "the FTS index was not deleted along with it"
     );
 }
 
@@ -268,7 +295,10 @@ async fn episodes_search_and_recent() {
     assert_eq!(eps.search("acme", 4).await.unwrap().len(), 1);
 
     let recent = eps.recent(10).await.unwrap();
-    assert_eq!(recent[0].happened_at, "2026-09-10", "最近的应当排最前");
+    assert_eq!(
+        recent[0].happened_at, "2026-09-10",
+        "the most recent comes first"
+    );
 }
 
 #[tokio::test]
@@ -289,11 +319,11 @@ async fn chat_log_round_trip_and_consolidation_marking() {
     .unwrap();
 
     let pending = chat.unconsolidated().await.unwrap();
-    assert_eq!(pending.len(), 4, "4 行（2 轮 × user/assistant）");
+    assert_eq!(pending.len(), 4, "4 rows (2 turns × user/assistant)");
 
     // Claiming marks: after claiming there must be no pending rows left.
     let claimed = chat.claim_unconsolidated().await.unwrap();
-    assert_eq!(claimed.len(), 4, "认领拿回自己认到的那 4 行");
+    assert_eq!(claimed.len(), 4, "a claim returns the 4 rows it claimed");
     assert!(chat.unconsolidated().await.unwrap().is_empty());
 
     let history = chat.session_history("default").await.unwrap();
@@ -316,67 +346,96 @@ async fn sessions_are_just_labels_on_the_chat_log() {
         .unwrap();
 
     let sessions = chat.sessions().await.unwrap();
-    assert_eq!(sessions.len(), 2, "写消息就会把会话行建出来，不用先 new");
-    let s2 = sessions.iter().find(|s| s.id == "s2").expect("s2 存在");
-    assert_eq!(s2.messages, 4, "s2 有 2 轮 = 4 行");
-    assert_eq!(s2.title, "second topic", "标题应当是该会话第一条用户消息");
+    assert_eq!(
+        sessions.len(),
+        2,
+        "writing a message creates the session row; no `new` first"
+    );
+    let s2 = sessions.iter().find(|s| s.id == "s2").expect("s2 exists");
+    assert_eq!(s2.messages, 4, "s2 has 2 turns = 4 rows");
+    assert_eq!(
+        s2.title, "second topic",
+        "the title should be the session's first user message"
+    );
 }
 
-/// 0018：空会话也是会话 —— 它必须出现在列表里，带着自己的名字和工作目录。
+/// 0018: an empty session is still a session — it has to show up in the list, with its own
+/// name and working directory.
 #[tokio::test]
 async fn an_empty_session_is_listed_with_its_name_and_working_directory() {
     let pool = temp_db("sessions_empty.db").await;
     let chat = Chat::new(pool);
-    chat.create_session("s1", Some("发版检查"), Some("/tmp/joy-work"))
+    chat.create_session("s1", Some("release check"), Some("/tmp/joy-work"))
         .await
-        .expect("建会话");
+        .expect("create the session");
 
-    let all = chat.sessions().await.expect("列表");
-    assert_eq!(all.len(), 1, "一条消息都没有，但它存在");
-    assert_eq!(all[0].title, "发版检查");
+    let all = chat.sessions().await.expect("list");
+    assert_eq!(all.len(), 1, "not a single message, and it still exists");
+    assert_eq!(all[0].title, "release check");
     assert_eq!(all[0].messages, 0);
     assert_eq!(all[0].cwd.as_deref(), Some("/tmp/joy-work"));
 }
 
-/// 改名与清空：`Some("")` 是「清掉」，标题回退第一条用户消息，工作目录回退「没选」。
+/// Rename and clear: `Some("")` means "clear", the title falls back to the first user message
+/// and the working directory back to "not chosen".
 #[tokio::test]
 async fn update_renames_and_clears_back_to_the_first_message() {
     let pool = temp_db("sessions_update.db").await;
     let chat = Chat::new(pool);
-    chat.append_exchange("第一句", "答", "s1", "cli", None)
+    chat.append_exchange("the first line", "answer", "s1", "cli", None)
         .await
-        .expect("写一轮");
+        .expect("write one turn");
 
-    chat.update_session("s1", Some("重新起的名字"), Some("/tmp/w"))
+    chat.update_session("s1", Some("a name I picked"), Some("/tmp/w"))
         .await
-        .expect("改名");
-    let row = chat.session("s1").await.expect("查").expect("该有一条");
-    assert_eq!(row.title, "重新起的名字");
+        .expect("rename");
+    let row = chat
+        .session("s1")
+        .await
+        .expect("query")
+        .expect("there should be one");
+    assert_eq!(row.title, "a name I picked");
     assert_eq!(row.cwd.as_deref(), Some("/tmp/w"));
 
     chat.update_session("s1", Some(""), Some(""))
         .await
-        .expect("清空");
-    let row = chat.session("s1").await.expect("查").expect("该有一条");
-    assert_eq!(row.title, "第一句", "清空后回退首条用户消息");
-    assert_eq!(row.cwd, None, "清空后就是没选目录");
+        .expect("clear it");
+    let row = chat
+        .session("s1")
+        .await
+        .expect("query")
+        .expect("there should be one");
+    assert_eq!(
+        row.title, "the first line",
+        "clearing falls back to the first user message"
+    );
+    assert_eq!(row.cwd, None, "cleared means no directory chosen");
 }
 
-/// `session/new` 是幂等的：同一个 id 再叫一次，不能把人起的名字改掉。
+/// `session/new` is idempotent: calling it again with the same id must not undo the name the
+/// human gave it.
 #[tokio::test]
 async fn creating_twice_keeps_the_name_that_is_already_there() {
     let pool = temp_db("sessions_idem.db").await;
     let chat = Chat::new(pool);
-    chat.create_session("s1", Some("原名"), None)
+    chat.create_session("s1", Some("the original name"), None)
         .await
-        .expect("建");
-    chat.create_session("s1", Some("另一个名字"), Some("/tmp/x"))
+        .expect("create");
+    chat.create_session("s1", Some("another name"), Some("/tmp/x"))
         .await
-        .expect("再建一次");
+        .expect("create it again");
 
-    let row = chat.session("s1").await.expect("查").expect("该有一条");
-    assert_eq!(row.title, "原名");
-    assert_eq!(row.cwd.as_deref(), Some("/tmp/x"), "空字段被补上");
+    let row = chat
+        .session("s1")
+        .await
+        .expect("query")
+        .expect("there should be one");
+    assert_eq!(row.title, "the original name");
+    assert_eq!(
+        row.cwd.as_deref(),
+        Some("/tmp/x"),
+        "the empty field gets filled in"
+    );
 }
 
 #[tokio::test]
@@ -385,8 +444,8 @@ async fn messages_page_backwards_from_the_newest() {
     let chat = Chat::new(pool);
     for round in 1..=2 {
         chat.append_exchange(
-            &format!("问 {round}"),
-            &format!("答 {round}"),
+            &format!("question {round}"),
+            &format!("answer {round}"),
             "default",
             "cli",
             None,
@@ -395,22 +454,26 @@ async fn messages_page_backwards_from_the_newest() {
         .unwrap();
     }
     chat.append_exchange(
-        "问 3",
-        "答 3",
+        "question 3",
+        "answer 3",
         "default",
         "cli",
         Some(r#"{"iterations":7}"#),
     )
     .await
     .unwrap();
-    chat.append_exchange("别的会话", "不该混进来", "other", "cli", None)
+    chat.append_exchange("another session", "must not leak in", "other", "cli", None)
         .await
         .unwrap();
 
     // The newest page, **newest first** — direction chosen by usage: latest page, then older.
     let page = chat.messages("default", None, 2).await.unwrap();
     let contents: Vec<&str> = page.iter().map(|m| m.content.as_str()).collect();
-    assert_eq!(contents, ["答 3", "问 3"], "最新的那条该在最前");
+    assert_eq!(
+        contents,
+        ["answer 3", "question 3"],
+        "the newest comes first"
+    );
     assert_eq!(page[0].role, "assistant");
 
     // Telemetry passed out as-is (JSON text in the column; parsing shape is the exit layer's
@@ -424,12 +487,18 @@ async fn messages_page_backwards_from_the_newest() {
         .await
         .unwrap();
     let contents: Vec<&str> = older.iter().map(|m| m.content.as_str()).collect();
-    assert_eq!(contents, ["答 2", "问 2", "答 1", "问 1"]);
+    assert_eq!(
+        contents,
+        ["answer 2", "question 2", "answer 1", "question 1"]
+    );
 
     // Sessions are a hard boundary.
     let other = chat.messages("other", None, 10).await.unwrap();
     assert_eq!(other.len(), 2);
-    assert_eq!(other[0].content, "不该混进来");
+    assert_eq!(
+        other[0].content, "must not leak in",
+        "another session must not leak in"
+    );
 }
 
 #[tokio::test]
@@ -437,12 +506,12 @@ async fn chinese_search_works_character_wise() {
     let pool = temp_db("cjk.db").await;
     let facts = Facts::new(pool);
     facts
-        .add("阿明", "阿明喜欢早上的会议", "user", "user")
+        .add("Alex", "Alex likes morning meetings", "user", "user")
         .await
         .unwrap();
 
-    let hit = facts.search("早上", 4).await.unwrap();
-    assert_eq!(hit.len(), 1, "中文检索没命中：{hit:?}");
+    let hit = facts.search("morning", 4).await.unwrap();
+    assert_eq!(hit.len(), 1, "the Chinese search found nothing: {hit:?}");
 }
 
 // ---- The rolling summary's monotonic guard ----------------------------------
@@ -456,24 +525,41 @@ async fn a_rollup_only_moves_forward() {
     let chat = Chat::new(temp_db("rollup.db").await);
 
     // First: covers 5 turns.
-    assert!(chat.save_rollup("s", 5, "前五轮的摘要").await.unwrap());
+    assert!(chat
+        .save_rollup("s", 5, "summary of the first five turns")
+        .await
+        .unwrap());
     // The newer one (10 turns) lands.
-    assert!(chat.save_rollup("s", 10, "前十轮的摘要").await.unwrap());
-    let (covered, summary) = chat.load_rollup("s").await.unwrap().expect("有摘要");
+    assert!(chat
+        .save_rollup("s", 10, "summary of the first ten turns")
+        .await
+        .unwrap());
+    let (covered, summary) = chat
+        .load_rollup("s")
+        .await
+        .unwrap()
+        .expect("there is a summary");
     assert_eq!(covered, 10);
-    assert_eq!(summary, "前十轮的摘要");
+    assert_eq!(summary, "summary of the first ten turns");
 
     // An older one (7 turns) is blocked: the DB's copy is still newer.
     assert!(
-        !chat.save_rollup("s", 7, "第七轮的摘要").await.unwrap(),
-        "回退该被挡下"
+        !chat
+            .save_rollup("s", 7, "a summary of round seven")
+            .await
+            .unwrap(),
+        "the rollback has to be blocked"
     );
-    let (covered, summary) = chat.load_rollup("s").await.unwrap().expect("有摘要");
-    assert_eq!(covered, 10, "没被旧的盖掉");
-    assert_eq!(summary, "前十轮的摘要");
+    let (covered, summary) = chat
+        .load_rollup("s")
+        .await
+        .unwrap()
+        .expect("there is a summary");
+    assert_eq!(covered, 10, "not overwritten by the older one");
+    assert_eq!(summary, "summary of the first ten turns");
 
     // The same covered_turns is not an update (not strictly greater) — rewriting is pointless.
-    assert!(!chat.save_rollup("s", 10, "又一版").await.unwrap());
+    assert!(!chat.save_rollup("s", 10, "one more version").await.unwrap());
 }
 
 /// The concurrency knobs are really configured: **10 seconds** lock wait + WAL.
@@ -488,13 +574,20 @@ async fn the_pool_waits_for_locks_and_uses_wal() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(busy_timeout, 10_000, "等锁该是 10 秒（SQLite 官方建议值）");
+    assert_eq!(
+        busy_timeout, 10_000,
+        "the lock wait should be 10 seconds (SQLite's own advice)"
+    );
 
     let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(journal.to_lowercase(), "wal", "读不该被写堵住");
+    assert_eq!(
+        journal.to_lowercase(),
+        "wal",
+        "reads must not be blocked by writes"
+    );
 }
 /// Checkpoints: every boundary overwrites the previous one (only the newest working memory
 /// is worth resuming from); reconciliation hands out exactly the still-`open` rows.
@@ -509,7 +602,7 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
         .save(
             "t1",
             "s",
-            "帮我排三天会",
+            "schedule three days of meetings for me",
             r#"[{"m":1}]"#,
             2,
             r#"{"input_tokens":100}"#,
@@ -521,7 +614,7 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
         .save(
             "t1",
             "s",
-            "帮我排三天会",
+            "schedule three days of meetings for me",
             r#"[{"m":2}]"#,
             5,
             r#"{"input_tokens":300}"#,
@@ -531,11 +624,11 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
         .unwrap();
 
     let rows = checkpoints.open_rows().await.unwrap();
-    assert_eq!(rows.len(), 1, "同一个回合只有一行");
-    assert_eq!(rows[0].iterations, 5, "只留最新的");
+    assert_eq!(rows.len(), 1, "one row per turn");
+    assert_eq!(rows[0].iterations, 5, "only the latest is kept");
     assert!(
         rows[0].messages_json.contains(r#"{"m":2}"#),
-        "工作记忆是新版"
+        "working memory is the new version"
     );
     assert_eq!(rows[0].status, "open");
 
@@ -545,7 +638,7 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
 
     // An abandoned one (human interrupt) is not resumed either.
     checkpoints
-        .save("t2", "s", "长任务", "[]", 1, "{}", None)
+        .save("t2", "s", "a long task", "[]", 1, "{}", None)
         .await
         .unwrap();
     checkpoints.finish("t2", "abandoned").await.unwrap();
@@ -553,141 +646,175 @@ async fn checkpoints_keep_the_newest_working_memory_open() {
 
     // Two open checkpoints from two turns: reconciliation sees both, oldest first.
     checkpoints
-        .save("t3", "s", "先来的", "[]", 1, "{}", None)
+        .save("t3", "s", "the one that came first", "[]", 1, "{}", None)
         .await
         .unwrap();
     checkpoints
-        .save("t4", "s", "后来的", "[]", 1, "{}", None)
+        .save("t4", "s", "the one that came later", "[]", 1, "{}", None)
         .await
         .unwrap();
     let rows = checkpoints.open_rows().await.unwrap();
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].turn_id, "t3", "先来先续");
+    assert_eq!(rows[0].turn_id, "t3", "first in, first resumed");
 }
 
-/// 0.16 follow-up：队列是**按会话**的先进先出，取走即消失（claim-then-run）。
+/// 0.16 follow-up: the queue is first-in-first-out **per session**, and a taken message is gone
+/// (claim-then-run).
 #[tokio::test]
 async fn the_follow_up_queue_is_fifo_per_session_and_pops_once() {
     let pool = temp_db("session_queue").await;
     let queue = crate::Queue::new(pool);
 
-    assert_eq!(queue.push("s1", "第一句").await.expect("排"), 1);
-    assert_eq!(queue.push("s1", "第二句").await.expect("排"), 2);
     assert_eq!(
-        queue.push("s2", "别的会话").await.expect("排"),
+        queue.push("s1", "the first line").await.expect("enqueue"),
+        1
+    );
+    assert_eq!(
+        queue.push("s1", "the second line").await.expect("enqueue"),
+        2
+    );
+    assert_eq!(
+        queue.push("s2", "another session").await.expect("enqueue"),
         1,
-        "按会话各算各的"
+        "each session counts its own"
     );
 
-    let first = queue.pop("s1").await.expect("取").expect("该有一条");
-    assert_eq!(first.message, "第一句", "先进先出");
+    let first = queue
+        .pop("s1")
+        .await
+        .expect("take")
+        .expect("there should be one");
+    assert_eq!(first.message, "the first line", "first in, first out");
     assert!(queue.pop("s1").await.expect("claim blocked").is_none());
     queue.release(first.id).await.expect("release");
     let reclaimed = queue.pop("s1").await.unwrap().unwrap();
     assert_eq!(reclaimed.id, first.id);
     queue.complete(first.id).await.expect("complete");
-    let second = queue.pop("s1").await.expect("取").expect("该有一条");
-    assert_eq!(second.message, "第二句");
+    let second = queue
+        .pop("s1")
+        .await
+        .expect("take")
+        .expect("there should be one");
+    assert_eq!(second.message, "the second line");
     let interrupted = queue.reconcile_interrupted().await.unwrap();
     assert_eq!(interrupted.len(), 1);
     assert_eq!(interrupted[0].id, second.id);
     assert_eq!(interrupted[0].message, second.message);
     assert!(queue.reconcile_interrupted().await.unwrap().is_empty());
     assert!(
-        queue.pop("s1").await.expect("取").is_none(),
-        "取走就不再来一次"
+        queue.pop("s1").await.expect("take").is_none(),
+        "once taken, it does not come again"
     );
 
-    assert_eq!(queue.count("s2").await.expect("数"), 1, "别的会话不受影响");
     assert_eq!(
-        queue.sessions_with_pending().await.expect("列"),
+        queue.count("s2").await.expect("count"),
+        1,
+        "another session is untouched"
+    );
+    assert_eq!(
+        queue.sessions_with_pending().await.expect("list"),
         vec!["s2".to_string()],
-        "启动对账要知道还欠谁一条"
+        "the startup reconcile has to know who is still owed a line"
     );
 }
 
-// ---- 会话账本 ---------------------------------------------------------------
+// ---- the session ledger -----------------------------------------------------
 
 fn entry(kind: &'static str, text: &str) -> crate::NewEntry {
     crate::NewEntry::exact(kind, format!(r#"{{"text":"{text}"}}"#))
 }
 
-/// 一轮写进去、按原序读回来 —— 重建的全部前提。
+/// A turn goes in and comes back in the original order — the whole premise of rebuilding.
 #[tokio::test]
 async fn a_turn_round_trips_in_append_order() {
     let ledger = crate::Ledger::new(temp_db("ledger_roundtrip").await);
     let entries = vec![
-        entry("user", "帮我看看这个报错"),
-        entry("assistant", "先读日志"),
+        entry("user", "take a look at this error for me"),
+        entry("assistant", "read the log first"),
         entry("tool_use", "read_file"),
         entry("tool_result", "no such file"),
     ];
 
     let digest = ledger
-        .append("s1", "t1", &entries, "帮我看看这个报错")
+        .append("s1", "t1", &entries, "take a look at this error for me")
         .await
-        .expect("写账");
-    assert_eq!(digest.len(), 64, "摘要是 sha256 的小写十六进制");
+        .expect("write the ledger");
+    assert_eq!(digest.len(), 64, "the digest is lowercase sha256 hex");
 
-    let rows = ledger.entries("s1", "t1").await.expect("读账");
+    let rows = ledger.entries("s1", "t1").await.expect("read the ledger");
     assert_eq!(
         rows.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(),
         vec!["user", "assistant", "tool_use", "tool_result"],
-        "顺序就是发生顺序"
+        "the order is the order things happened"
     );
     assert_eq!(rows[3].payload, r#"{"text":"no such file"}"#);
     assert!(
-        ledger.verify("s1", "t1").await.expect("验"),
-        "刚写完就该验得过"
+        ledger.verify("s1", "t1").await.expect("verify"),
+        "written just now, so verification has to pass"
     );
 }
 
-/// 同一个 turn 重写一次是幂等的：崩溃重试不能让记录翻倍。
+/// Rewriting the same turn is idempotent: a crash retry must not double the records.
 #[tokio::test]
 async fn appending_the_same_turn_twice_writes_once() {
     let ledger = crate::Ledger::new(temp_db("ledger_idempotent").await);
-    let entries = vec![entry("user", "只此一句")];
+    let entries = vec![entry("user", "only this one sentence")];
 
     let first = ledger
-        .append("s1", "t1", &entries, "只此一句")
+        .append("s1", "t1", &entries, "only this one sentence")
         .await
-        .expect("第一次");
+        .expect("first time");
     let second = ledger
-        .append("s1", "t1", &entries, "只此一句")
+        .append("s1", "t1", &entries, "only this one sentence")
         .await
-        .expect("第二次");
-    assert_eq!(first, second, "第二次返回第一次的摘要，不再写");
+        .expect("second time");
     assert_eq!(
-        ledger.entries("s1", "t1").await.expect("读").len(),
-        1,
-        "只有一行"
+        first, second,
+        "the second call returns the first digest without writing again"
     );
-    assert_eq!(ledger.count().await.expect("数"), 1, "一轮只记一次");
+    assert_eq!(
+        ledger.entries("s1", "t1").await.expect("read").len(),
+        1,
+        "only one line"
+    );
+    assert_eq!(
+        ledger.count().await.expect("count"),
+        1,
+        "a turn is recorded once"
+    );
 }
 
-/// 内容被改一个字节，轮摘要就对不上 —— 这就是「可核验」的意思。
+/// Change one byte of the content and the turn digest no longer matches — that is what
+/// "verifiable" means.
 #[tokio::test]
 async fn editing_a_row_breaks_the_turn_digest() {
     let ledger = crate::Ledger::new(temp_db("ledger_tamper").await);
     ledger
-        .append("s1", "t1", &[entry("user", "原始内容")], "原始内容")
+        .append(
+            "s1",
+            "t1",
+            &[entry("user", "the original content")],
+            "the original content",
+        )
         .await
-        .expect("写账");
-    assert!(ledger.verify("s1", "t1").await.expect("验"));
+        .expect("write the ledger");
+    assert!(ledger.verify("s1", "t1").await.expect("verify"));
 
-    // 模拟篡改：直接改库里的一行（应用层没有这条路，这正是要证明的）。
-    sqlx::query("UPDATE ledger SET payload = '{\"text\":\"改过了\"}' WHERE turn_id = 't1'")
+    // Simulated tampering: change a row in the store directly (the application layer has no such
+    // path, which is exactly the point).
+    sqlx::query("UPDATE ledger SET payload = '{\"text\":\"edited\"}' WHERE turn_id = 't1'")
         .execute(ledger.pool())
         .await
-        .expect("篡改");
+        .expect("tamper");
 
     assert!(
-        !ledger.verify("s1", "t1").await.expect("验"),
-        "内容变了，轮摘要必须对不上"
+        !ledger.verify("s1", "t1").await.expect("verify"),
+        "the content changed, so the turn digest has to disagree"
     );
 }
 
-/// `chat_log` 回填的行标 `folded`：那一轮的工具输出本来就只剩 200 字符。
+/// Rows backfilled from `chat_log` are marked `folded`: that turn's tool output was already
+/// down to 200 characters.
 #[tokio::test]
 async fn a_folded_turn_is_declared_as_such() {
     let ledger = crate::Ledger::new(temp_db("ledger_folded").await);
@@ -696,24 +823,25 @@ async fn a_folded_turn_is_declared_as_such() {
             "s1",
             "t0",
             &[
-                crate::NewEntry::folded("user", r#"{"text":"旧的一句话"}"#),
+                crate::NewEntry::folded("user", r#"{"text":"one old line"}"#),
                 crate::NewEntry::folded(
                     "assistant",
-                    r#"{"text":"旧回复\n[tools used: read_file(…)]"}"#,
+                    r#"{"text":"old reply\n[tools used: read_file(…)]"}"#,
                 ),
             ],
-            "旧的一句话",
+            "one old line",
         )
         .await
-        .expect("回填");
+        .expect("backfill");
 
-    let turns = ledger.turns("s1", 10).await.expect("列");
-    assert_eq!(turns[0].fidelity, "folded", "保真度如实标注");
+    let turns = ledger.turns("s1", 10).await.expect("list");
+    assert_eq!(turns[0].fidelity, "folded", "fidelity is labelled honestly");
     assert_eq!(turns[0].events, 2);
-    assert_eq!(turns[0].preview, "旧的一句话");
+    assert_eq!(turns[0].preview, "one old line");
 }
 
-/// 待整理的一轮只会被一个赢家拿走（两个进程共享同一个库时的唯一保证）。
+/// A turn waiting to be tidied is taken by exactly one winner (the only guarantee there is
+/// when two processes share one store).
 #[tokio::test]
 async fn claiming_pending_turns_has_one_winner() {
     let ledger = crate::Ledger::new(temp_db("ledger_claim").await);
@@ -721,100 +849,132 @@ async fn claiming_pending_turns_has_one_winner() {
         ledger
             .append("s1", turn, &[entry("user", "…")], "…")
             .await
-            .expect("写账");
+            .expect("write the ledger");
     }
 
-    assert_eq!(ledger.pending(10).await.expect("待办").len(), 2);
-    let claimed = ledger.claim_pending(10).await.expect("认领");
-    assert_eq!(claimed.len(), 2, "一次认领全部");
+    assert_eq!(ledger.pending(10).await.expect("pending").len(), 2);
+    let claimed = ledger.claim_pending(10).await.expect("claim");
+    assert_eq!(claimed.len(), 2, "one claim takes all of them");
     assert!(
-        ledger.pending(10).await.expect("待办").is_empty(),
-        "认领走了就不再待办"
+        ledger.pending(10).await.expect("pending").is_empty(),
+        "once claimed, it is no longer pending"
     );
     assert!(
-        ledger.claim_pending(10).await.expect("再认领").is_empty(),
-        "别人拿不到"
+        ledger
+            .claim_pending(10)
+            .await
+            .expect("claim again")
+            .is_empty(),
+        "nobody else gets it"
     );
 
-    // 失败交还，并按退避排到未来 —— 不会立刻被重试。
-    ledger.mark_failed("s1", "t1").await.expect("交还");
+    // A failure gives it back and schedules it into the future with a backoff — no immediate
+    // retry.
+    ledger.mark_failed("s1", "t1").await.expect("hand it back");
     assert!(
-        ledger.pending(10).await.expect("待办").is_empty(),
-        "退避期内不该重新出现"
+        ledger.pending(10).await.expect("pending").is_empty(),
+        "it must not reappear inside the backoff"
     );
 }
 
-/// 新事实自带新鲜度：写进去就有 `confirm_count=1`，重复写会加分而不是多一行。
+/// A new fact carries its own freshness: written once it is `confirm_count=1`, and writing it
+/// again scores it up rather than adding a line.
 #[tokio::test]
 async fn a_fact_carries_its_freshness() {
     let facts = Facts::new(temp_db("facts_freshness").await);
     let (fact, is_new) = facts
-        .add("alex", "喜欢早会", "user", "user")
+        .add("alex", "likes morning meetings", "user", "user")
         .await
-        .expect("写");
+        .expect("write");
     assert!(is_new);
 
-    let meta = facts.meta(fact.id).await.expect("查").expect("有");
+    let meta = facts.meta(fact.id).await.expect("query").expect("present");
     assert_eq!(meta.confirm_count, 1);
-    assert!(meta.last_confirmed_at.is_some(), "写入即确认一次");
-    assert!(meta.page_path.is_none(), "还没镜像到明文库");
+    assert!(
+        meta.last_confirmed_at.is_some(),
+        "a write is one confirmation"
+    );
+    assert!(
+        meta.page_path.is_none(),
+        "not mirrored into the plaintext pages yet"
+    );
 
     let (again, is_new) = facts
-        .add("alex", "喜欢早会", "user", "user")
+        .add("alex", "likes morning meetings", "user", "user")
         .await
-        .expect("再写");
-    assert!(!is_new, "重复不新增行");
+        .expect("write again");
+    assert!(!is_new, "a repeat adds no row");
     assert_eq!(again.id, fact.id);
-    let meta = facts.meta(fact.id).await.expect("查").expect("有");
-    assert_eq!(meta.confirm_count, 2, "再观察到一次就是更可信一点");
+    let meta = facts.meta(fact.id).await.expect("query").expect("present");
+    assert_eq!(
+        meta.confirm_count, 2,
+        "seeing it once more makes it a little more credible"
+    );
 
     facts
         .set_page(fact.id, "memory/alex.md", "abc123")
         .await
-        .expect("记页");
-    let meta = facts.meta(fact.id).await.expect("查").expect("有");
+        .expect("record the page");
+    let meta = facts.meta(fact.id).await.expect("query").expect("present");
     assert_eq!(meta.page_path.as_deref(), Some("memory/alex.md"));
     assert_eq!(meta.digest.as_deref(), Some("abc123"));
 }
 
-/// 回填：把 chat_log 的折叠视图变成账本行，并如实标成 folded。
+/// Backfill: the folded view of chat_log becomes ledger rows, honestly marked folded.
 #[tokio::test]
 async fn backfilling_marks_history_as_folded() {
     let pool = temp_db("ledger_backfill").await;
     let chat = Chat::new(pool.clone());
-    chat.append_exchange_for("旧问题一", "旧回答一", "默认", "app-server", None, None)
-        .await
-        .expect("写一问一答");
-    chat.append_exchange_for("旧问题二", "旧回答二", "默认", "app-server", None, None)
-        .await
-        .expect("写第二问");
+    chat.append_exchange_for(
+        "old question one",
+        "old answer one",
+        "default",
+        "app-server",
+        None,
+        None,
+    )
+    .await
+    .expect("write one question and answer");
+    chat.append_exchange_for(
+        "old question two",
+        "old answer two",
+        "default",
+        "app-server",
+        None,
+        None,
+    )
+    .await
+    .expect("write the second question");
 
     let report = crate::ledger::backfill_from_chat(&pool)
         .await
-        .expect("回填");
+        .expect("backfill");
     assert_eq!(report.sessions, 1);
-    assert_eq!(report.turns, 2, "一问一答算一轮");
-    assert_eq!(report.rows, 4, "两句用户 + 两句助手");
+    assert_eq!(
+        report.turns, 2,
+        "one question and one answer count as a turn"
+    );
+    assert_eq!(report.rows, 4, "two user lines and two assistant lines");
 
     let turns = crate::Ledger::new(pool.clone())
-        .turns("默认", 10)
+        .turns("default", 10)
         .await
-        .expect("列账");
+        .expect("list the ledger");
     assert_eq!(turns.len(), 2);
     assert!(
         turns.iter().all(|turn| turn.fidelity == "folded"),
-        "历史只能是折叠保真度"
+        "the history can only be the fidelity of the fold"
     );
 
-    // 再跑一次是幂等的：轮次翻倍就说明去重坏了。
+    // Running it again is idempotent: doubled turn counts would mean deduplication broke.
     let again = crate::ledger::backfill_from_chat(&pool)
         .await
-        .expect("再回填");
+        .expect("backfill again");
     assert_eq!(again.turns, 2);
     assert_eq!(
-        crate::Ledger::new(pool).count().await.expect("数"),
+        crate::Ledger::new(pool).count().await.expect("count"),
         2,
-        "回填不该写出第二轮"
+        "backfilling must not write a second round"
     );
 }
 
@@ -825,8 +985,8 @@ async fn forking_copies_the_last_turns_and_leaves_the_original_alone() {
     let chat = Chat::new(temp_db("fork.db").await);
     for i in 1..=4 {
         chat.append_exchange(
-            &format!("问 {i}"),
-            &format!("答 {i}"),
+            &format!("question {i}"),
+            &format!("answer {i}"),
             "src",
             "dashboard",
             None,
@@ -834,44 +994,71 @@ async fn forking_copies_the_last_turns_and_leaves_the_original_alone() {
         .await
         .unwrap();
     }
-    chat.create_session("src", Some("原会话"), Some("/tmp/work"))
+    chat.create_session("src", Some("the original session"), Some("/tmp/work"))
         .await
         .unwrap();
 
     let copied = chat.fork_session("src", "branch", 2).await.unwrap();
-    assert_eq!(copied, 4, "两轮 = 四行（user/assistant 成对）");
+    assert_eq!(copied, 4, "two turns = four rows (user/assistant in pairs)");
 
     let branch = chat.session_history("branch").await.unwrap();
     let texts: Vec<&str> = branch.iter().map(|(_, text)| text.as_str()).collect();
-    assert_eq!(texts, vec!["答 3", "答 4"], "只复制最近两轮，且顺序不变");
+    assert_eq!(
+        texts,
+        vec!["answer 3", "answer 4"],
+        "only the last two turns, in the same order"
+    );
     assert_eq!(
         chat.session("branch").await.unwrap().unwrap().messages,
         4,
-        "四行原始记录（两问两答）"
+        "four raw rows (two questions, two answers)"
     );
 
     let original = chat.session_history("src").await.unwrap();
-    assert_eq!(original.len(), 4, "原会话一轮都不能少");
+    assert_eq!(
+        original.len(),
+        4,
+        "not one turn may go missing from the original session"
+    );
     assert_eq!(
         chat.session("src").await.unwrap().unwrap().messages,
         8,
-        "原会话四行原始记录一行都不能少"
+        "not one of the original session's four raw rows may go missing"
     );
 
-    let meta = chat.session("branch").await.unwrap().expect("分支有元数据");
-    assert_eq!(meta.forked_from.as_deref(), Some("src"), "记下来源");
-    assert_eq!(meta.cwd.as_deref(), Some("/tmp/work"), "工作目录要继承");
-    assert!(meta.title.contains("branch"), "标题带后缀：{}", meta.title);
+    let meta = chat
+        .session("branch")
+        .await
+        .unwrap()
+        .expect("the branch has metadata");
+    assert_eq!(
+        meta.forked_from.as_deref(),
+        Some("src"),
+        "the source is recorded"
+    );
+    assert_eq!(
+        meta.cwd.as_deref(),
+        Some("/tmp/work"),
+        "the working directory is inherited"
+    );
+    assert!(
+        meta.title.contains("branch"),
+        "the title carries the suffix: {}",
+        meta.title
+    );
 }
 
 #[tokio::test]
 async fn forking_an_unknown_session_is_an_error_not_an_empty_branch() {
     let chat = Chat::new(temp_db("fork_missing.db").await);
     let result = chat.fork_session("nope", "branch", 2).await;
-    assert!(result.is_err(), "源会话不存在时不能造一个空分支");
+    assert!(
+        result.is_err(),
+        "a missing source session must not produce an empty branch"
+    );
     assert!(
         chat.session("branch").await.unwrap().is_none(),
-        "失败不留半成品"
+        "a failure leaves no half-made product"
     );
 }
 
@@ -881,7 +1068,11 @@ async fn a_session_that_was_never_forked_has_no_source() {
     chat.append_exchange("hi", "hello", "plain", "cli", None)
         .await
         .unwrap();
-    let meta = chat.session("plain").await.unwrap().expect("有元数据");
+    let meta = chat
+        .session("plain")
+        .await
+        .unwrap()
+        .expect("it has metadata");
     assert_eq!(meta.forked_from, None);
 }
 
@@ -1151,7 +1342,7 @@ async fn durable_job_waits_roll_back_bad_dependencies_and_honor_human_pause() {
     jobs.record_started_for_run("current", "s", "work", "log", Some("wait-run"))
         .await
         .unwrap();
-    let waits = crate::waits::JobWaits::new(pool);
+    let waits = crate::waits::JobWaits::new(pool.clone());
     assert!(waits
         .register(
             "wait-task",
@@ -1205,7 +1396,10 @@ async fn durable_job_waits_roll_back_bad_dependencies_and_honor_human_pause() {
             .as_deref(),
         Some("human pause")
     );
-    tasks.resume("wait-task").await.unwrap();
+    crate::human_pauses::HumanPauses::new(pool.clone())
+        .resume_checkpoint("wait-task", "wait-run", "[]")
+        .await
+        .unwrap();
     runs.reopen("wait-run").await.unwrap();
     waits
         .register(

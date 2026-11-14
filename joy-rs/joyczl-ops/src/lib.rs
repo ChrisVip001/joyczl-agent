@@ -10,9 +10,8 @@
 //!   GET  /*            static files from joy-ts/packages/dashboard/dist
 //! ```
 //!
-//! **Why state.db is not opened directly here**: that would add a second process holding
-//! state.db — the whole architecture avoids that (README: "state.db lives in one process").
-//! Everything the dashboard sees comes from the protocol, so it sees the same world.
+//! The dashboard reads runtime-owned state through the protocol. It must not create a
+//! competing execution owner or run recovery. Every client observes the same runtime.
 
 mod api;
 mod auth;
@@ -326,6 +325,7 @@ pub fn router(gate: Gate, assets: PathBuf) -> Router {
         // Long tasks: list + one door for create/suspend/resume/cancel (human-only switches).
         .route("/api/tasks", get(api::tasks))
         .route("/api/task", post(api::task))
+        .route("/api/turn-operation", post(api::turn_operation))
         // Inbound mail: the human's "handle these".
         .route("/api/inbox", post(api::inbox))
         .route("/api/usage", get(api::usage))

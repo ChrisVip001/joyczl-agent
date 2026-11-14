@@ -23,9 +23,9 @@ class FakeSocket implements LarkSocket {
   onerror: (() => void) | null = null;
 
   send(data: string | Uint8Array): void {
-    assert.ok(data instanceof Uint8Array, "飞书这根线上只发二进制，不发文本");
+    assert.ok(data instanceof Uint8Array, "only binary travels on the Feishu wire, never text");
     const frame = decodeFrame(data);
-    assert.ok(frame !== null, "自己编出来的帧自己都解不开");
+    assert.ok(frame !== null, "a frame we built ourselves does not come apart");
     this.sent.push(frame);
   }
 
@@ -67,7 +67,7 @@ class FakeSockets {
 
   get latest(): FakeSocket {
     const socket = this.all.at(-1);
-    assert.ok(socket !== undefined, "还没有连过");
+    assert.ok(socket !== undefined, "it never connected at all");
     return socket;
   }
 }
@@ -127,7 +127,7 @@ class FakeLark {
       this.said.push(JSON.parse(String(body["content"]))["text"] as string);
       return reply(200, { code: 0 });
     }
-    throw new Error(`假飞书没准备这条路径：${url}`);
+    throw new Error(`the fake Feishu does not handle this path: ${url}`);
   };
 }
 
@@ -145,13 +145,13 @@ function reply(status: number, value: unknown): Response {
  *
  * The deadline is 5 seconds: the reconnect case walks a 2-second backoff, which genuinely waits.
  */
-async function waitFor(condition: () => boolean, what = "条件", timeoutMs = 5_000): Promise<void> {
+async function waitFor(condition: () => boolean, what = "the condition", timeoutMs = 5_000): Promise<void> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     if (condition()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.fail(`等不到：${what}`);
+  assert.fail(`waited in vain for ${what}`);
 }
 
 /** Drain the queued microtasks. */
@@ -198,7 +198,7 @@ function harness(options: Partial<LarkAdapterOptions>, respond: Responder): Harn
     running,
     logs,
     connect: async () => {
-      await waitFor(() => sockets.all.length > 0, "连上");
+      await waitFor(() => sockets.all.length > 0, "the connection");
       const socket = sockets.latest;
       socket.open();
       await settle();
@@ -235,11 +235,11 @@ function eventBody(options: {
         chat_id: options.chatId ?? "oc_chat",
         chat_type: options.chatType ?? "p2p",
         message_type: options.messageType ?? "text",
-        content: JSON.stringify({ text: options.text ?? "你好" }),
+        content: JSON.stringify({ text: options.text ?? "hello" }),
         mentions: (options.mentions ?? []).map((mention, index) => ({
           key: mention.key ?? `@_user_${index + 1}`,
           id: { open_id: mention.open_id },
-          name: "某人",
+          name: "someone",
         })),
       },
     },
@@ -283,8 +283,8 @@ function fragments(body: string, count: number, messageId = "om_1"): LarkFrame[]
 
 // ---- Handshake and frames --------------------------------------------------------------
 
-test("换地址：拿 AppID/AppSecret 去要一个有票据的地址", async () => {
-  const world = harness({}, async () => "嗯");
+test("exchanging the address: AppID/AppSecret buy an address with a ticket", async () => {
+  const world = harness({}, async () => "hm");
   await world.connect();
 
   assert.deepEqual(world.lark.handshake, { AppID: "cli_test", AppSecret: "secret" });
@@ -294,8 +294,8 @@ test("换地址：拿 AppID/AppSecret 去要一个有票据的地址", async () 
   await world.stop();
 });
 
-test("连上就先发心跳，service 是地址里解出来的那个", async () => {
-  const world = harness({}, async () => "嗯");
+test("it heartbeats right after connecting, with the service parsed out of the address", async () => {
+  const world = harness({}, async () => "hm");
   const socket = await world.connect();
 
   // The server never speaks first, so this first frame must be ours — and only after onopen.
@@ -325,32 +325,32 @@ function pongWith(config: unknown): LarkFrame {
   };
 }
 
-test("心跳按服务端给的间隔发", async (t) => {
+test("the heartbeat follows the interval the server gave", async (t) => {
   // Swap only setInterval for a fake. setTimeout must stay real — the handshake and the waits
   // depend on it. Actually waiting 120s is unrealistic, and that interval is what's under test.
   t.mock.timers.enable({ apis: ["setInterval"] });
 
-  const world = harness({}, async () => "嗯");
+  const world = harness({}, async () => "hm");
   const socket = await world.connect();
-  assert.equal(socket.frames("ping").length, 1, "连上就该先发一次");
+  assert.equal(socket.frames("ping").length, 1, "one right after connecting");
 
   t.mock.timers.tick(120_000);
-  assert.equal(socket.frames("ping").length, 2, "默认 120 秒一次");
+  assert.equal(socket.frames("ping").length, 2, "once every 120 s by default");
 
   await world.stop();
 });
 
-test("服务端可以在 pong 里把心跳间隔改掉", async (t) => {
+test("the server can change the heartbeat interval in a pong", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
 
-  const world = harness({}, async () => "嗯");
+  const world = harness({}, async () => "hm");
   const socket = await world.connect();
 
   socket.push(pongWith({ ClientConfig: { PingInterval: 20 } }));
   await settle();
   assert.ok(
-    world.logs.some((line) => line.includes("20 秒")),
-    `日志里该说一句：${world.logs.join(" / ")}`,
+    world.logs.some((line) => line.includes("20 s")),
+    `the log has to say so: ${world.logs.join(" / ")}`,
   );
 
   // The new interval really took effect: still on the old 120s, nothing should fire in these 20s.
@@ -360,35 +360,35 @@ test("服务端可以在 pong 里把心跳间隔改掉", async (t) => {
   await world.stop();
 });
 
-test("小于 10 秒的心跳间隔不吃", async (t) => {
+test("a heartbeat interval under 10 s is not taken", async (t) => {
   // The official SDK "silently ignores" intervals under 10 seconds; so do we — the server counts
   // its rounds by that number, and beating faster than 10s only scrambles them.
   t.mock.timers.enable({ apis: ["setInterval"] });
 
-  const world = harness({}, async () => "嗯");
+  const world = harness({}, async () => "hm");
   const socket = await world.connect();
 
   socket.push(pongWith({ ClientConfig: { PingInterval: 1 } }));
   await settle();
 
   t.mock.timers.tick(1_000);
-  assert.equal(socket.frames("ping").length, 1, "1 秒一次不该被采纳");
+  assert.equal(socket.frames("ping").length, 1, "once a second must not be adopted");
   t.mock.timers.tick(120_000);
-  assert.equal(socket.frames("ping").length, 2, "还是按默认的 120 秒走");
+  assert.equal(socket.frames("ping").length, 2, "it stays on the default 120 s");
 
   await world.stop();
 });
 
-test("数据帧：先 ACK 再回答，且 ACK 把原帧原样回显", async () => {
-  const world = harness({}, async () => "你好，世界");
+test("a data frame: ACK first, then answer, and the ACK echoes the frame as it came", async () => {
+  const world = harness({}, async () => "hello, world");
   const socket = await world.connect();
   const before = socket.sent.length;
 
   socket.push(dataFrame(eventBody({}), { logId: 9_007_199_254_740_993n }));
-  await waitFor(() => world.lark.said.length > 0, "答复");
+  await waitFor(() => world.lark.said.length > 0, "the answer");
 
   const acked = socket.sent.slice(before);
-  assert.equal(acked.length, 1, "除了 ACK 不该再往这根连接上写东西 —— 答复走 HTTP");
+  assert.equal(acked.length, 1, "nothing but the ACK may go on this connection — the answer goes over HTTP");
   const ack = acked[0];
   assert.ok(ack !== undefined);
   // Echo: the ids identical, not one invented by us.
@@ -403,11 +403,11 @@ test("数据帧：先 ACK 再回答，且 ACK 把原帧原样回显", async () =
     data: [],
   });
 
-  assert.deepEqual(world.lark.said, ["你好，世界"]);
+  assert.deepEqual(world.lark.said, ["hello, world"]);
   await world.stop();
 });
 
-test("ACK 不等回答 —— 想多久都不耽误那 3 秒", async () => {
+test("the ACK does not wait for the answer — thinking as long as it likes costs none of those 3 s", async () => {
   // Lark's biggest difference from WeChat: acknowledgment and answer are two things. Hold the
   // "thinking" step on purpose — the ACK must already have arrived.
   let release: (() => void) | undefined;
@@ -416,7 +416,7 @@ test("ACK 不等回答 —— 想多久都不耽误那 3 秒", async () => {
   });
   const world = harness({}, async () => {
     await thinking;
-    return "想好了";
+    return "thought it over";
   });
   const socket = await world.connect();
   const before = socket.sent.length;
@@ -424,71 +424,71 @@ test("ACK 不等回答 —— 想多久都不耽误那 3 秒", async () => {
   socket.push(dataFrame(eventBody({}), { messageId: "om_slow" }));
   await waitFor(() => socket.sent.length > before, "ACK");
 
-  assert.equal(world.lark.said.length, 0, "这时候还不该有答复");
+  assert.equal(world.lark.said.length, 0, "there must be no answer yet");
   release?.();
-  await waitFor(() => world.lark.said.length > 0, "答复");
-  assert.deepEqual(world.lark.said, ["想好了"]);
+  await waitFor(() => world.lark.said.length > 0, "the answer");
+  assert.deepEqual(world.lark.said, ["thought it over"]);
 
   await world.stop();
 });
 
 // ---- Fragments ------------------------------------------------------------------
 
-test("分片：凑齐了才处理", async () => {
-  const world = harness({}, async () => "齐了");
+test("fragments: handled only once they add up", async () => {
+  const world = harness({}, async () => "all here");
   const socket = await world.connect();
-  const parts = fragments(eventBody({ text: "分片来的" }), 3);
+  const parts = fragments(eventBody({ text: "this came in pieces" }), 3);
   assert.equal(parts.length, 3);
 
   socket.push(parts[0] as LarkFrame);
   socket.push(parts[1] as LarkFrame);
   await settle();
-  assert.equal(world.lark.said.length, 0, "还差一片，别急着回答");
+  assert.equal(world.lark.said.length, 0, "one piece short, so hold the answer");
 
   socket.push(parts[2] as LarkFrame);
-  await waitFor(() => world.lark.said.length > 0, "凑齐之后的答复");
-  assert.deepEqual(world.lark.said, ["齐了"]);
+  await waitFor(() => world.lark.said.length > 0, "the answer once it all arrived");
+  assert.deepEqual(world.lark.said, ["all here"]);
 
   // All three pieces must be ACKed — acknowledgment and completeness are two things.
   assert.equal(socket.frames("event").length, 3);
   await world.stop();
 });
 
-test("分片：乱序号或者没给分组键的，丢掉不当整条", async () => {
+test("fragments: a wrong sequence number, or no group key, drops it instead of treating it as whole", async () => {
   // Breaking here is fatal: decoding half a JSON as a whole yields only "event isn't JSON", and
   // you'd never learn the real cause was one large message.
-  const world = harness({}, async () => "不该走到这儿");
+  const world = harness({}, async () => "this should never run");
   const socket = await world.connect();
 
   socket.push(dataFrame(eventBody({}), { messageId: "", sum: 2, seq: 0 }));
   await settle();
   assert.equal(world.lark.said.length, 0);
-  assert.ok(world.logs.some((line) => line.includes("分片帧不对劲")), world.logs.join(" / "));
+  assert.ok(world.logs.some((line) => line.includes("does not add up")), world.logs.join(" / "));
 
   await world.stop();
 });
 
 // ---- Duplicates and filtering ------------------------------------------------------------
 
-test("同一条重发两遍，只回答一次（但两遍都得 ACK）", async () => {
-  const world = harness({}, async () => "只答一次");
+test("the same message resent twice is answered once (but both get an ACK)", async () => {
+  const world = harness({}, async () => "answered once");
   const socket = await world.connect();
   const body = eventBody({});
 
   socket.push(dataFrame(body, { messageId: "om_dup" }));
-  await waitFor(() => world.lark.said.length === 1, "第一次答复");
+  await waitFor(() => world.lark.said.length === 1, "the first answer");
 
   socket.push(dataFrame(body, { messageId: "om_dup" }));
   await settle();
 
-  assert.equal(world.lark.said.length, 1, "重发的别再答一遍");
+  assert.equal(world.lark.said.length, 1, "the resend must not be answered again");
   // Re-sends must be ACKed too: otherwise Lark keeps re-sending forever.
   assert.equal(socket.frames("event").length, 2);
   await world.stop();
 });
 
-test("自己发的消息不接（不然就是自问自答）", async () => {
-  const world = harness({}, async () => "不该走到这儿");
+test("its own messages are not taken (or it answers itself)", async () => {
+  const world = harness({}, async () => "this should never run");
   const socket = await world.connect();
 
   socket.push(dataFrame(eventBody({ senderType: "app" })));
@@ -499,11 +499,11 @@ test("自己发的消息不接（不然就是自问自答）", async () => {
   await world.stop();
 });
 
-test("白名单：不在里头就不理，且说清楚为什么不理", async () => {
+test("the allowlist: outside it means no answer, and the log says why", async () => {
   const heard: string[] = [];
   const world = harness({ allow: ["ou_alice"] }, async (_conversation, text) => {
     heard.push(text);
-    return "在";
+    return "here";
   });
   const socket = await world.connect();
 
@@ -511,18 +511,18 @@ test("白名单：不在里头就不理，且说清楚为什么不理", async ()
   await settle();
 
   assert.deepEqual(heard, []);
-  assert.ok(world.logs.some((line) => line.includes("不在白名单")), world.logs.join(" / "));
+  assert.ok(world.logs.some((line) => line.includes("outside the allowlist")), world.logs.join(" / "));
   await world.stop();
 });
 
 // This also pins the response shape: it passes only if `open_id` is read from the **top-level**
 // `bot` (the fake Lark returns the flat on-the-wire `{code, msg, bot}`). The day someone changes
 // it to `data.bot`, this goes red immediately.
-test("群里：@ 的是别人就不插嘴，@ 到自己才接", async () => {
+test("in a group: an @ to someone else is not its business, an @ to itself is", async () => {
   const heard: string[] = [];
   const world = harness({}, async (_conversation, text) => {
     heard.push(text);
-    return "在";
+    return "here";
   });
   const socket = await world.connect();
 
@@ -533,29 +533,29 @@ test("群里：@ 的是别人就不插嘴，@ 到自己才接", async () => {
     ),
   );
   await settle();
-  assert.deepEqual(heard, [], "@ 别人不该接话 —— 群里的机器人多嘴一次就该被移出去了");
+  assert.deepEqual(heard, [], "an @ to someone else must not be answered — a bot that talks out of turn gets removed");
 
   socket.push(
     dataFrame(
       eventBody({
         chatId: "oc_group",
         chatType: "group",
-        text: "@_user_1 在吗",
+        text: "@_user_1 are you there",
         mentions: [{ open_id: "ou_joy", key: "@_user_1" }],
       }),
       { messageId: "om_me" },
     ),
   );
-  await waitFor(() => world.lark.said.length > 0, "被 @ 之后的答复");
+  await waitFor(() => world.lark.said.length > 0, "the answer after the @");
 
   // The placeholder must be stripped — that string is noise to the model.
-  assert.deepEqual(heard, ["在吗"]);
+  assert.deepEqual(heard, ["are you there"]);
   await world.stop();
 });
 
-test("问不到自己是谁时退回去「有 @ 就算」，且把这件事喊出来", async () => {
+test("when it cannot learn who it is, «an @ counts» is the fallback, and the log says so loudly", async () => {
   // This fallback is chattier, so the log must say so — "why did it answer someone else" is untraceable.
-  const world = harness({}, async () => "在");
+  const world = harness({}, async () => "here");
   world.lark.selfId = undefined;
   const socket = await world.connect();
 
@@ -565,20 +565,20 @@ test("问不到自己是谁时退回去「有 @ 就算」，且把这件事喊�
       { messageId: "om_fallback" },
     ),
   );
-  await waitFor(() => world.lark.said.length > 0, "退路生效后的答复");
+  await waitFor(() => world.lark.said.length > 0, "the answer once the fallback kicks in");
 
   assert.ok(
-    world.logs.some((line) => line.includes("问不到机器人自己的 open_id")),
+    world.logs.some((line) => line.includes("cannot ask for the bot's own open_id")),
     world.logs.join(" / "),
   );
   await world.stop();
 });
 
-test("机器人信息被拒时，日志里要带上那个 code", async () => {
+test("when the bot info is refused, the log has to carry that code", async () => {
   // With bot capability off / unpublished, this API answers "a response, but useless": a non-zero
   // code and no bot. Shouting only "can't fetch open_id" isn't enough — it sends people chasing
   // the network when the cause sits in the developer console.
-  const world = harness({}, async () => "在");
+  const world = harness({}, async () => "here");
   world.lark.script("/open-apis/bot/v3/info", { code: 10_001, msg: "app not enabled" });
   const socket = await world.connect();
 
@@ -588,75 +588,75 @@ test("机器人信息被拒时，日志里要带上那个 code", async () => {
       { messageId: "om_denied" },
     ),
   );
-  await waitFor(() => world.logs.some((line) => line.includes("10001")), "被拒的那条日志");
+  await waitFor(() => world.logs.some((line) => line.includes("10001")), "the refusal line");
   await world.stop();
 });
 
-test("单聊里不用 @", async () => {
-  const world = harness({}, async () => "在");
+test("a direct chat needs no @", async () => {
+  const world = harness({}, async () => "here");
   const socket = await world.connect();
 
   socket.push(dataFrame(eventBody({ chatType: "p2p" })));
-  await waitFor(() => world.lark.said.length > 0, "答复");
-  assert.deepEqual(world.lark.said, ["在"]);
+  await waitFor(() => world.lark.said.length > 0, "the answer");
+  assert.deepEqual(world.lark.said, ["here"]);
   await world.stop();
 });
 
 // ---- Replies ------------------------------------------------------------------
 
-test("读不了的消息（图片之类）明说一句，不是装作没看见", async () => {
-  const world = harness({}, async () => "不该走到这儿");
+test("an unreadable message (an image, say) gets a plain word, not silent ignorance", async () => {
+  const world = harness({}, async () => "this should never run");
   const socket = await world.connect();
 
   socket.push(dataFrame(eventBody({ messageType: "image", text: "" })));
-  await waitFor(() => world.lark.said.length > 0, "那句话");
+  await waitFor(() => world.lark.said.length > 0, "that sentence");
 
-  assert.match(world.lark.said[0] ?? "", /读不了/);
+  assert.match(world.lark.said[0] ?? "", /cannot read this one/);
   await world.stop();
 });
 
-test("答复太长就切成几条发，一条都不丢", async () => {
-  const long = "字".repeat(30_001);
+test("an answer that is too long goes out in several, losing nothing", async () => {
+  const long = "x".repeat(30_001);
   const world = harness({}, async () => long);
   const socket = await world.connect();
 
   socket.push(dataFrame(eventBody({})));
-  await waitFor(() => world.lark.said.length >= 2, "切过之后的两条");
+  await waitFor(() => world.lark.said.length >= 2, "the two after the split");
 
-  assert.equal(world.lark.said.length, 2, "30001 个字，30_000 一条，正好两条");
+  assert.equal(world.lark.said.length, 2, "30001 characters, 30_000 each, exactly two");
   assert.equal(world.lark.said.join("").length, long.length);
-  assert.equal(world.lark.said.join(""), long, "切完拼回来得一模一样");
+  assert.equal(world.lark.said.join(""), long, "joined back it has to be identical");
   await world.stop();
 });
 
 // ---- Bad input and reconnects ----------------------------------------------------------
 
-test("认不出的帧丢掉，连接和后面的事都不受影响", async () => {
-  const world = harness({}, async () => "还在");
+test("an unrecognised frame is dropped, and neither the connection nor what follows is affected", async () => {
+  const world = harness({}, async () => "still here");
   const socket = await world.connect();
 
   socket.push(Uint8Array.from([0x08])); // breaks off mid-decode
-  socket.pushRaw("纯文本，这根线上不该有");
+  socket.pushRaw("plain text, which has no business on this wire");
   await settle();
 
-  assert.ok(world.logs.some((line) => line.includes("认不出一帧")), world.logs.join(" / "));
+  assert.ok(world.logs.some((line) => line.includes("could not be recognised")), world.logs.join(" / "));
   assert.ok(
-    world.logs.some((line) => line.includes("不是二进制")),
+    world.logs.some((line) => line.includes("not binary")),
     world.logs.join(" / "),
   );
 
   // Work continues as usual afterwards.
   socket.push(dataFrame(eventBody({}), { messageId: "om_after" }));
-  await waitFor(() => world.lark.said.length > 0, "坏帧之后的答复");
-  assert.deepEqual(world.lark.said, ["还在"]);
+  await waitFor(() => world.lark.said.length > 0, "the answer after the bad frame");
+  assert.deepEqual(world.lark.said, ["still here"]);
   await world.stop();
 });
 
-test("帧是 Blob 递过来的一定得喊一声", async () => {
+test("frames arriving as Blobs have to be shouted about", async () => {
   // The sneakiest failure: connected, not one frame decodes, and the log says nothing. The root
   // is WebSocket's default `binaryType` of blob, readable only asynchronously — so this shout is
   // the only clue. Tested with the **first** frame, because the warning fires once per connection.
-  const world = harness({}, async () => "嗯");
+  const world = harness({}, async () => "hm");
   const socket = await world.connect();
 
   socket.pushRaw(new Blob([Uint8Array.from([1, 2])]));
@@ -666,36 +666,36 @@ test("帧是 Blob 递过来的一定得喊一声", async () => {
   await world.stop();
 });
 
-test("断了会退避重连，而且退避能被 stop() 打断", async () => {
-  const world = harness({}, async () => "嗯");
+test("a drop backs off and reconnects, and the backoff can be cut short by stop()", async () => {
+  const world = harness({}, async () => "hm");
   await world.connect();
   assert.equal(world.sockets.all.length, 1);
 
   world.sockets.latest.close();
   await settle();
   assert.ok(
-    world.logs.some((line) => line.includes("2 秒后重连")),
-    `该说清楚等多久：${world.logs.join(" / ")}`,
+    world.logs.some((line) => line.includes("reconnecting in 2 s")),
+    `it has to say how long the wait is: ${world.logs.join(" / ")}`,
   );
 
   // The first backoff is 2 seconds (1000 * 2^1).
-  await waitFor(() => world.sockets.all.length === 2, "第二次连接");
+  await waitFor(() => world.sockets.all.length === 2, "the second connection");
 
   world.sockets.latest.open();
   await settle();
-  assert.equal(world.sockets.latest.frames("ping").length, 1, "新连接上照样得先发心跳");
+  assert.equal(world.sockets.latest.frames("ping").length, 1, "a new connection still heartbeats first");
 
   await world.stop();
 });
 
-test("退避中途叫停，不用干等完", async () => {
+test("stopping mid-backoff does not wait it out", async () => {
   // After Ctrl-C the process must exit immediately. Sitting out the 2 seconds would hang scripts.
-  const world = harness({}, async () => "嗯");
+  const world = harness({}, async () => "hm");
   await world.connect();
   world.sockets.latest.close();
   await settle();
 
   const started = Date.now();
   await world.stop();
-  assert.ok(Date.now() - started < 1_000, `退避该被打断，却等了 ${Date.now() - started} 毫秒`);
+  assert.ok(Date.now() - started < 1_000, `the backoff should have been cut short, but it waited ${Date.now() - started} ms`);
 });

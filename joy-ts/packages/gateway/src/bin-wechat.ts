@@ -5,7 +5,7 @@ import { WeChatAdapter } from "./wechat.ts";
 function required(name: string, hint: string): string {
   const value = process.env[name]?.trim();
   if (value === undefined || value === "") {
-    console.error(`${name} 没给。${hint}`);
+    console.error(`${name} was not given. ${hint}`);
     process.exit(1);
   }
   return value;
@@ -13,11 +13,12 @@ function required(name: string, hint: string): string {
 
 const token = required(
   "WECHAT_TOKEN",
-  "它在公众平台的「设置与开发 → 基本配置 → 服务器配置」里，你自己填的那个 Token。",
+  "The Token you filled in yourself under Settings & development → Basic configuration → "
+  + "Server configuration.",
 );
 const appId = required(
   "WECHAT_APP_ID",
-  "公众号的 AppID，wx 开头那串，同一页面上就有。",
+  "The account's AppID — the string starting with wx, right there on the same page.",
 );
 const appSecret = process.env["WECHAT_APP_SECRET"]?.trim() || undefined;
 const aesKey = process.env["WECHAT_AES_KEY"]?.trim() || undefined;
@@ -33,8 +34,9 @@ if (allow.length === 0) {
   // Usable unset, but that means "every follower can command it" — and it spends your model
   // quota. Such a default must announce itself, not wait for an incident.
   console.error(
-    "注意：没设 WECHAT_ALLOW，关注这个号的人谁都能用，消耗的是你的模型额度。\n" +
-      "      只给自己用的话，填你的 OpenID（在公众平台的用户列表里能看到）。",
+    "Note: WECHAT_ALLOW is unset, so anyone who follows this account can use it and spend your\n" +
+    "      model quota.\n" +
+      "      To keep it to yourself, put your OpenID here (visible in the platform's user list).",
   );
 }
 
@@ -42,23 +44,24 @@ if (appSecret === undefined) {
   // This isn't "an optional feature is off" but "half the messages will have no reply" — it must
   // be spelled out, or the symptom looks like Joy refusing to answer.
   console.error(
-    "注意：没设 WECHAT_APP_SECRET。微信只给 5 秒，超了它就把用户那句丢掉，\n" +
-      "      而 Joy 跑一轮（尤其带工具调用）通常远超 5 秒 —— 所以没有它的话，\n" +
-      "      绝大多数消息都不会有回答。\n" +
-      "      另外客服接口只有**认证过的**公众号能调，个人未认证订阅号开了也调不通。",
+    "Note: WECHAT_APP_SECRET is unset. WeChat allows 5 seconds and then drops the user's line,\n" +
+      "      and a Joy turn (especially with tool calls) usually takes far longer — so without it,\n" +
+      "      most messages get no answer at all.\n" +
+      "      Also, the customer-service API only answers for a **verified** account; on an unverified\n" +
+    "      personal subscription account it stays closed.",
   );
 }
 
 if (aesKey !== undefined && aesKey.length !== 43) {
   console.error(
-    `提醒：WECHAT_AES_KEY 是 ${aesKey.length} 个字符，应该是 43 个。` +
-      "多半是复制的时候少了或多了一位 —— 那样一条消息都解不开。",
+    `Reminder: WECHAT_AES_KEY is ${aesKey.length} characters, expected 43.` +
+      "One character was probably lost or added while copying — then nothing decrypts at all.",
   );
 }
 
 console.error(
-  `提醒：微信要一个**公网可达**的地址，而且只认 80 和 443 端口。\n` +
-    `      本地跑得先配内网穿透，然后把 ${path} 那个地址填进「服务器配置」。`,
+  `Reminder: WeChat wants a **publicly reachable** address, and only ports 80 and 443.\n` +
+    `      A local run needs a tunnel first, then put the ${path} address into «Server configuration».`,
 );
 
 const bridge = new JoyBridge();
@@ -87,6 +90,6 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 console.error(
-  `Joy 微信网关上来了，在 ${port} 端口等 ${path}。在公众号里说句话试试。`,
+  `The Joy WeChat gateway is up, waiting for ${path} on port ${port}. Say something in the account.`,
 );
 await adapter.run();

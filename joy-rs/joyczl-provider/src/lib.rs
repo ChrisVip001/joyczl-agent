@@ -15,6 +15,7 @@
 //!     shares one logic across both paths, and the dashboard's typewriter effect uses it.
 
 pub mod anthropic;
+pub mod capabilities;
 pub mod embed;
 pub mod error;
 pub mod mock;
@@ -545,6 +546,9 @@ pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<R
         .or_else(|| (!info.needs_key()).then(String::new))
         .ok_or_else(|| no_key_message(&info.id, &info.key_env, &catalog.ids().join(", ")))?;
 
+    let model = settings.model.clone().unwrap_or_else(|| info.model.clone());
+    let caps = settings.model_capabilities.as_ref();
+    capabilities::validate(caps, info.wire, &model)?;
     let base_url = settings.base_url.clone().or_else(|| info.base_url.clone());
     let timeout = Duration::from_secs(settings.llm_timeout_secs.max(1) as u64);
 
@@ -556,12 +560,10 @@ pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<R
             timeout,
             max_retries,
         )),
-        Wire::Responses => Arc::new(responses::Client::new(
-            &api_key,
-            base_url.as_deref(),
-            timeout,
-            max_retries,
-        )),
+        Wire::Responses => Arc::new(
+            responses::Client::new(&api_key, base_url.as_deref(), timeout, max_retries)
+                .with_reasoning(&model, caps.and_then(|caps| caps.reasoning_effort.clone())),
+        ),
         Wire::OpenAi => Arc::new(
             openai::Client::new(&api_key, base_url.as_deref(), timeout, max_retries)
                 .with_reasoning_content(info.id == "deepseek"),
@@ -570,14 +572,22 @@ pub fn resolve_with(settings: &Settings, catalog: &catalog::Catalog) -> Result<R
 
     Ok(Resolved {
         provider_id: info.id.clone(),
-        client,
-        model: settings.model.clone().unwrap_or_else(|| info.model.clone()),
+        client: Arc::new(capabilities::Checked {
+            inner: client,
+            main_model: model.clone(),
+            tools: caps.and_then(|caps| caps.tools).unwrap_or(true),
+            wire: info.wire,
+        }),
+        model,
         small_model: settings.small_model.clone().unwrap_or_else(|| {
             info.small_model
                 .clone()
                 .unwrap_or_else(|| info.model.clone())
         }),
-        context_window: info.context_window,
+        context_window: caps
+            .and_then(|caps| caps.context_window)
+            .map(|value| value as u32)
+            .unwrap_or(info.context_window),
         // The profile's own declaration wins: one vendor can ship a vision model and a
         // text-only one, and the catalog row only describes the vendor's **default** model.
         vision: settings.vision.unwrap_or(info.vision),

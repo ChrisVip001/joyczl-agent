@@ -17,10 +17,12 @@
 
 mod agents_md;
 mod approval;
+mod completion_delivery;
 mod dispatch;
 mod goal;
 mod image_meta;
 mod inbox;
+mod input_wake;
 mod job_delivery;
 mod jobs;
 mod ledger_writer;
@@ -31,14 +33,25 @@ pub mod memory_center;
 mod memory_center_tests;
 mod memory_worker;
 pub mod models;
+mod resources;
 mod resume;
 mod route;
+mod schedule_output;
 mod stdio;
 mod subagent;
 mod task;
+mod task_contract;
+mod task_dispatch;
+mod task_handoff;
+mod task_inputs;
+mod task_operations;
+mod task_recovery;
 mod task_waits;
 mod trace;
 mod turn;
+mod turn_failure;
+mod turn_operations;
+mod wake;
 
 #[cfg(test)]
 mod turn_tests;
@@ -208,11 +221,11 @@ pub struct Server {
     /// Approval requests waiting for a human: `approval/respond` finds one by turn_id + request_id
     /// and delivers the answer back. Same lifecycle discipline as `turns` (the whole bucket is dropped when a turn ends).
     pub(crate) approvals: approval::Pending,
-    /// Commands a human answered "本会话总是允许" to, live for this process: the very same cell the
+    /// Commands a human answered "always allow in this session" to, live for this process: the very same cell the
     /// exec tool reads (`ExecPolicy::session_allow`), so the next call sees the yes immediately —
     /// not after a restart. Never persisted (that is `settings.json`'s `execAllow`).
     pub(crate) exec_session_allow: Arc<Mutex<Vec<String>>>,
-    /// Directories a write was approved for ("本会话总是允许" / "记住这条"), same idea: the cell is
+    /// Directories a write was approved for ("always allow in this session" / "remember this one"), same idea: the cell is
     /// shared with `WritePolicy::approved_dirs`, so the next write skips the question. The
     /// persisted half comes from `settings.json`'s `writeAllowDirs` at startup.
     pub(crate) write_approved_dirs: Arc<Mutex<Vec<PathBuf>>>,
@@ -229,6 +242,8 @@ pub struct Server {
     /// Long tasks (migration 0014, rebuilt in 0017): identity, status, acceptance, budget,
     /// spent. Human-only switches live in task.rs; the goal loop is the engine that drives rounds.
     pub(crate) tasks: joyczl_state::Tasks,
+    pub(crate) completions: Arc<joyczl_state::completions::Completions>,
+    pub(crate) completion_lock: Arc<AsyncMutex<()>>,
     /// One row per execution of a task (migration 0017): "executed N times", what each cost.
     pub(crate) runs: joyczl_state::Runs,
     /// One row per tool call (migration 0017) — where idempotency lives: a step left `running`
@@ -259,6 +274,7 @@ pub struct Server {
     /// Lazily created and **never removed**: removal would race two concurrent turns
     /// into holding two different locks.
     pub(crate) session_locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
+    _execution_owner: Option<Arc<lock::DaemonLock>>,
     pub(crate) pool: SqlitePool,
     /// The last turn's context breakdown per session — the memory center's meter.
     ///
@@ -292,6 +308,7 @@ impl Server {
             episodes: self.episodes.clone(),
             settings: self.settings.clone(),
             resolved: self.resolved.clone(),
+            _execution_owner: self._execution_owner.clone(),
         });
         self.memory_worker = Some(worker);
     }
@@ -372,7 +389,17 @@ impl Server {
             .clone()
     }
 
-    pub async fn boot(pool: SqlitePool, mut settings: Settings) -> Self {
+    /// Isolated embedding: the caller must exclusively own the supplied store.
+    /// Production entry points use `open` to acquire ownership before recovery.
+    pub async fn boot(pool: SqlitePool, settings: Settings) -> Self {
+        Self::boot_owned(pool, settings, None).await
+    }
+
+    async fn boot_owned(
+        pool: SqlitePool,
+        mut settings: Settings,
+        execution_owner: Option<Arc<lock::DaemonLock>>,
+    ) -> Self {
         // The model profile picked in the UI is newer and speaks louder than env vars typed at startup.
         let secrets = models::new_secrets();
         models::apply_at_boot(&mut settings, &secrets);
@@ -446,7 +473,13 @@ impl Server {
 
         let notifier = joyczl_tools::notify::load(&snapshot.home, snapshot.notify_enabled);
         let approval_log = joyczl_state::Approvals::new(pool.clone());
-        let builtin = builtin_tools(&snapshot, pool.clone(), notifier.clone()).await;
+        let builtin = builtin_tools(
+            &snapshot,
+            pool.clone(),
+            notifier.clone(),
+            execution_owner.clone(),
+        )
+        .await;
         let BuiltinTools {
             mut tools,
             jobs: jobs_handle,
@@ -454,9 +487,15 @@ impl Server {
             write_approved_dirs,
         } = builtin;
         tools.set_hooks(hooks.clone());
+        tools.set_resources(Arc::new(resources::Mutations::default()));
         let facts = Facts::new(pool.clone());
         let episodes = Episodes::new(pool.clone());
         let chat = Chat::new(pool.clone());
+        match chat.recover_consolidation_claims().await {
+            Ok(count) if count > 0 => eprintln!("(joy) recovered {count} unfinished memory source rows; extraction will retry without replaying task tools"),
+            Ok(_) => {}
+            Err(error) => eprintln!("(joy) memory claim recovery failed; claims retained for the next startup: {error}"),
+        }
         // One-shot: an existing home starts with an empty ledger. Fill it from the folded
         // view once, and say so — a memory center that shows nothing on day one looks
         // broken, and pretending old turns are rebuildable would be worse.
@@ -527,6 +566,8 @@ impl Server {
             jobs: jobs_handle,
             queue: joyczl_state::Queue::new(pool.clone()),
             tasks: joyczl_state::Tasks::new(pool.clone()),
+            completions: Arc::new(joyczl_state::completions::Completions::new(pool.clone())),
+            completion_lock: Arc::new(AsyncMutex::new(())),
             runs: joyczl_state::Runs::new(pool.clone()),
             steps: joyczl_state::Steps::new(pool.clone()),
             events: joyczl_state::Events::new(pool.clone()),
@@ -538,11 +579,23 @@ impl Server {
             session_locks: Arc::new(Mutex::new(HashMap::new())),
             secrets,
             pool,
+            _execution_owner: execution_owner,
             context_usage: Arc::new(Mutex::new(HashMap::new())),
             activations: Arc::new(Mutex::new(HashMap::new())),
         };
         server.restore_tasks().await;
+        crate::completion_delivery::start(
+            &server.completions,
+            server.notifier.as_ref(),
+            &server.completion_lock,
+            server.settings().home,
+        );
         server
+    }
+
+    /// Flush already committed production receipts; this grants no execution capability.
+    pub async fn flush_completion_notices(&self) {
+        crate::completion_delivery::flush(self).await;
     }
 
     /// Boot restore for long tasks (migrations 0014 + 0017), in dependency order:
@@ -619,6 +672,20 @@ impl Server {
                 "(joy) task reconciliation could not read the database (not blocking startup): {e}"
             ),
         }
+        let dispatch = joyczl_state::dispatch::TaskDispatch::new(self.pool.clone());
+        match dispatch.reconcile().await {
+            Ok(ids) => {
+                for id in ids {
+                    eprintln!(
+                        "(joy) task {id}: dispatch interrupted before checkpoint; needs review"
+                    );
+                }
+            }
+            Err(e) => eprintln!("(joy) task dispatch reconciliation failed: {e}"),
+        }
+        let (dispatch_sink, dispatch_rx) = EventSink::channel();
+        drop(dispatch_rx);
+        crate::task_dispatch::kick(self.clone(), dispatch_sink);
         match self.queue.reconcile_interrupted().await {
             Ok(rows) => {
                 for row in rows {
@@ -661,6 +728,23 @@ impl Server {
                 }
             }
             Err(e) => eprintln!("(joy) durable job waits could not be restored: {e}"),
+        }
+        match joyczl_state::external_waits::ExternalWaits::new(self.pool.clone())
+            .pending()
+            .await
+        {
+            Ok(waits) => {
+                let (sink, receiver) = EventSink::channel();
+                drop(receiver);
+                for wait in waits {
+                    eprintln!(
+                        "(joy) restored external-input wait for task {}",
+                        wait.task_id
+                    );
+                    crate::input_wake::arm(self.clone(), sink.clone(), wait);
+                }
+            }
+            Err(error) => eprintln!("(joy) external-input waits could not be restored: {error}"),
         }
         // A queued follow-up is a promise made before the restart: "do this when you are done".
         // Handing it back to a turn is the difference between a queue and a note to self.
@@ -733,18 +817,6 @@ impl Server {
                     })
                     .collect(),
             })
-    }
-
-    /// Push goal endings outward (M3a): satisfied/impossible/round-limit/blocked all count —
-    /// when the autonomous loop stops, a human should know, however ungracefully it stopped.
-    pub(crate) fn notify_goal_finished(&self, session_id: &str, status: &str, reason: &str) {
-        if let Some(notifier) = &self.notifier {
-            notifier.notify(joyczl_tools::notify::NotifyEvent::GoalFinished {
-                session_id: session_id.to_string(),
-                status: status.to_string(),
-                reason: reason.to_string(),
-            });
-        }
     }
 
     /// This turn's approval channel. `never` mode (the default) returns `None` — nobody asks, so nobody
@@ -829,7 +901,7 @@ impl Server {
         }
     }
 
-    /// "记住这条" for a command: replace the allow table wholesale and persist into `settings.json`.
+    /// "remember this one" for a command: replace the allow table wholesale and persist into `settings.json`.
     ///
     /// What is remembered is **this command itself**, no wildcards — what the user saw and approved was
     /// it, not the whole class. The live table was already updated by `remember`, so this only has to
@@ -850,7 +922,7 @@ impl Server {
         }
     }
 
-    /// "记住这条" for a write: remember the **directory**, never the file name.
+    /// "remember this one" for a write: remember the **directory**, never the file name.
     ///
     /// The directory is a "don't ask again" note, not a writable root — containment still decides
     /// whether a write may land there at all.
@@ -952,6 +1024,11 @@ impl Server {
             .resolved
             .write()
             .expect("the resolved lock should not be poisoned") = resolved;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            let (sink, receiver) = EventSink::channel();
+            drop(receiver);
+            crate::task_dispatch::kick(self.clone(), sink);
+        }
     }
 
     /// Inject a provider resolution. The injection point for eval and tests: the normal path goes
@@ -1070,10 +1147,16 @@ impl Server {
 
     /// Remove a turn. Once finished, there is nothing left to interrupt.
     pub(crate) fn finish_turn(&self, turn_id: &str) {
-        self.turns
+        let mut turns = self
+            .turns
             .lock()
-            .expect("the turns lock should not be poisoned")
+            .expect("the turns lock should not be poisoned");
+        self.suspending
+            .lock()
+            .expect("the suspending lock should not be poisoned")
             .remove(turn_id);
+        turns.remove(turn_id);
+        drop(turns);
         // Same principle: unanswered approval requests for this turn are invalidated too (their receiver
         // is already gone; keeping them only takes up space).
         self.approvals
@@ -1087,20 +1170,18 @@ impl Server {
     /// the *next* turn (a resume!) think it was paused, and finalize would keep it suspended.
     /// Returns false = no live turn (the task was idle; nothing to interrupt).
     pub(crate) fn suspend_turn(&self, turn_id: &str) -> bool {
-        let interrupt = self
+        let turns = self
             .turns
             .lock()
-            .expect("the turns lock should not be poisoned")
-            .get(turn_id)
-            .map(|turn| turn.interrupt.clone());
-        let Some(interrupt) = interrupt else {
+            .expect("the turns lock should not be poisoned");
+        let Some(turn) = turns.get(turn_id) else {
             return false;
         };
         self.suspending
             .lock()
             .expect("the suspending lock should not be poisoned")
             .insert(turn_id.to_string());
-        interrupt.cancel();
+        turn.interrupt.cancel();
         true
     }
 
@@ -1193,8 +1274,9 @@ pub async fn open(settings: &Settings) -> Result<Server> {
     }
 
     settings.ensure_home()?;
+    let ownership = Arc::new(lock::acquire(&settings.home).map_err(anyhow::Error::msg)?);
     let pool = joyczl_state::open(&settings.home.join("state.db")).await?;
-    Ok(Server::boot(pool, settings).await)
+    Ok(Server::boot_owned(pool, settings, Some(ownership)).await)
 }
 
 /// The built-in tool table, plus the two live cells the approval answer writes into.
@@ -1217,10 +1299,36 @@ struct BuiltinTools {
 /// "a tool execution failure must not crash a turn"). Without mcp.json it is as if nothing was
 /// configured: no file read, no process spawned, no network. Built-in tool table + background job
 /// table (the job table is built alongside `run_command`; both share one exec policy, same return place).
+/// The execution policy, built in one place.
+///
+/// Two callers: `builtin_tools` at boot (for `run_command` and the job host), and `turn::run_turn`
+/// every turn (for declarative tools, which are re-read per turn — see `joyczl_tools::declarative`).
+/// The `session_allow` cell is the same `Arc` in both, so an "always allow in this session"
+/// answered for `run_command` also covers a declarative tool running the same command.
+pub(crate) fn exec_policy(
+    settings: &Settings,
+    session_allow: Arc<Mutex<Vec<String>>>,
+) -> joyczl_tools::exec::ExecPolicy {
+    joyczl_tools::exec::ExecPolicy {
+        allow: settings.exec_allow.clone(),
+        timeout_secs: settings.exec_timeout_secs,
+        network: settings.exec_network,
+        // Approval only affects the allow-table gate: on no match, reject outright or ask once.
+        approval: settings.approval == "on-request",
+        approval_timeout_secs: settings.approval_timeout_secs,
+        // Overlong output spills to disk: truncation still happens (the context must be protected), but the original remains.
+        spill_dir: Some(settings.home.join("spill")),
+        extra_roots: settings.exec_writable_roots.clone(),
+        home: settings.home.clone(),
+        session_allow,
+    }
+}
+
 async fn builtin_tools(
     settings: &Settings,
     pool: sqlx::SqlitePool,
     notifier: Option<Arc<dyn joyczl_tools::notify::Notifier>>,
+    execution_owner: Option<Arc<lock::DaemonLock>>,
 ) -> BuiltinTools {
     let mut tools = joyczl_tools::handlers::build_default();
     // The live half of "remember": approvals land here and take effect on the next call. The
@@ -1294,28 +1402,23 @@ async fn builtin_tools(
                     .join(", ")
             );
         }
-        let policy = joyczl_tools::exec::ExecPolicy {
-            allow: settings.exec_allow.clone(),
-            timeout_secs: settings.exec_timeout_secs,
-            network: settings.exec_network,
-            // Approval only affects the allow-table gate: on no match, reject outright or ask once.
-            approval: settings.approval == "on-request",
-            approval_timeout_secs: settings.approval_timeout_secs,
-            // Overlong output spills to disk: truncation still happens (the context must be protected), but the original remains.
-            spill_dir: Some(settings.home.join("spill")),
-            extra_roots: settings.exec_writable_roots.clone(),
-            home: settings.home.clone(),
-            // Shared with the server: an approval answered "本会话总是允许" is visible to the very
-            // next call, not to the next process.
-            session_allow: exec_session_allow.clone(),
-        };
+        // Shared with the server: an approval answered "always allow in this session" is visible to the very
+        // next call, not to the next process.
+        let policy = exec_policy(settings, exec_session_allow.clone());
         tools.register_exclusive(joyczl_tools::exec::run_command(policy.clone()));
+        // Declarative tools: the model writes a JSON definition, the next turn can call it. It
+        // lives here because the switch is the same one — a definition is inert without exec,
+        // and `define_tool` would be a tool that cannot do anything.
+        tools.register_exclusive(joyczl_tools::declarative::define_tool(
+            settings.home.clone(),
+        ));
 
         // Background jobs: share the same policy with run_command (sandbox, no network, allow table,
         // approval all identical) — background is not a side door around them.
         let ledger = joyczl_state::Jobs::new(pool.clone());
-        let jobs_impl =
-            jobs::Jobs::new(policy, settings.home.clone(), ledger).with_notifier(notifier.clone());
+        let jobs_impl = jobs::Jobs::new(policy, settings.home.clone(), ledger)
+            .with_notifier(notifier.clone())
+            .with_execution_owner(execution_owner);
         jobs_impl.reconcile().await;
         let jobs: Arc<dyn joyczl_tools::jobs::JobRegistry> = Arc::new(jobs_impl);
         tools.register(joyczl_tools::jobs::job_output(Some(jobs.clone())));
@@ -1335,14 +1438,16 @@ async fn builtin_tools(
             approval: settings.approval == "on-request",
             approval_timeout_secs: settings.approval_timeout_secs,
             extra_roots: settings.exec_writable_roots.clone(),
-            // Persisted "记住这条" choices plus whatever this session answers from now on.
+            // Persisted "remember this one" choices plus whatever this session answers from now on.
             approved_dirs: write_approved_dirs.clone(),
         };
         tools.register_exclusive(joyczl_tools::fs_write::write_file(policy.clone()));
         tools.register_exclusive(joyczl_tools::fs_write::edit(policy.clone()));
-        tools.register_exclusive(joyczl_tools::patch::apply_patch(policy));
+        tools.register_exclusive(joyczl_tools::patch::apply_patch(policy.clone()));
+        tools.register_exclusive(joyczl_tools::fs_manage::delete_file(policy.clone()));
+        tools.register_exclusive(joyczl_tools::fs_manage::move_file(policy));
         eprintln!(
-            "(joy) file-writing tools enabled: write_file / edit / apply_patch (writable = this turn's working directory + extra roots; with no directory picked nothing can be written; with JOY_APPROVAL=on-request every write asks)"
+            "(joy) file tools enabled: write_file / edit / apply_patch / delete_file / move_file (writable = this turn's working directory + extra roots; with no directory picked nothing can be written; with JOY_APPROVAL=on-request every write asks)"
         );
     }
     // Connectors: `<home>/connectors.json` **is** the switch — no file, no connector tools
@@ -1412,7 +1517,8 @@ async fn builtin_tools(
     let mcp_tools = mcp.tools();
     let count = mcp_tools.len();
     for tool in mcp_tools {
-        tools.register(tool);
+        // Remote schemas do not prove read-only behavior. Serialize unknown effects.
+        tools.register_exclusive(tool);
     }
     if !servers.is_empty() {
         eprintln!(
@@ -1465,6 +1571,7 @@ pub(crate) fn tool_ctx(
 ) -> ToolCtx {
     ToolCtx {
         on_uncertain: None,
+        resource_lease: None,
         task_run_id: None,
         activate: None,
         embedder: None,
@@ -1521,3 +1628,35 @@ fn push_unique<T: PartialEq>(cell: &Mutex<Vec<T>>, value: T) {
         list.push(value);
     }
 }
+
+#[cfg(test)]
+mod task_dispatch_tests;
+
+#[cfg(test)]
+mod task_recovery_tests;
+
+#[cfg(test)]
+mod completion_tests;
+
+#[cfg(test)]
+mod input_wake_tests;
+
+#[cfg(test)]
+mod task_operations_tests;
+
+#[cfg(test)]
+mod input_control_tests;
+
+#[cfg(test)]
+mod runtime_ownership_tests;
+
+#[cfg(test)]
+mod turn_operations_tests;
+
+#[cfg(test)]
+mod recovery_usage_tests;
+
+mod quick_context;
+
+#[cfg(test)]
+mod memory_recovery_tests;

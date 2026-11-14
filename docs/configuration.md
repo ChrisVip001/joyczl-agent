@@ -15,7 +15,7 @@ all a user does is pick one and supply a key:
 
 ```
 /model                       list configured profiles (★ marks the active one)
-/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY
+/model add ds deepseek deepseek-flash --env DEEPSEEK_API_KEY
 /model use ds                switch (no need to retype the key)
 ```
 
@@ -791,3 +791,30 @@ For a custom endpoint that only implements Chat Completions, patch the catalog a
 ```
 
 A checkpoint containing native Responses continuation cannot be resumed through a different wire; choose a Responses profile or begin a fresh turn. This follows the current [function-calling](https://developers.openai.com/api/docs/guides/function-calling) and [Responses migration](https://developers.openai.com/api/docs/guides/migrate-to-responses) contracts.
+
+## Per-model capability declarations
+
+`model/save` accepts an optional `capabilities` object, also persisted on the profile
+in `models.json` and returned by `model/profiles`. For an existing profile:
+
+```json
+{"id":"oa","capabilities":{"tools":true,"contextWindow":128000,"reasoningEffort":"high"}}
+```
+
+`tools:false` refuses main-model requests containing function declarations before the
+provider is called. `contextWindow` must be positive and replaces the provider's default
+estimate; the existing `JOY_CONTEXT_WINDOW` runtime override still applies. Image support
+continues to use the profile's `vision` declaration. These are human declarations, not
+capabilities inferred from a model name or proved by a network probe.
+
+`reasoningEffort` currently requires the Responses adapter. Accepted spellings are `none`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, `max`; each model may support fewer. Known invalid
+GPT-6 Astra / GPT-6.1 Sol combinations and their Chat Completions function-tool mismatch
+are rejected locally. Unknown model-specific restrictions remain the provider's decision.
+Explicit effort applies only when the request uses this profile's main model, not a different
+`smallModel`. No effort field is sent when omitted. [Official reasoning parameter contract](https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort).
+
+Omitting `capabilities` preserves an existing declaration; `{}` replaces it with inherited
+defaults. Unknown capability fields are rejected rather than accepted as inactive switches.
+Invalid declarations submitted by `model/save` are rejected before storing credentials.
+Hosted tools, native compaction and asynchronous API tools are still unsupported.

@@ -15,7 +15,8 @@ use super::{run_graph, writes, NodeFn, State, DEFAULT_MAX_STEPS};
 
 /// The full binding set triage.json needs, with stubbed behaviour.
 fn triage_def() -> WorkflowDef {
-    WorkflowDef::parse(include_str!("workflows/definitions/triage.json")).expect("triage.json 合法")
+    WorkflowDef::parse(include_str!("workflows/definitions/triage.json"))
+        .expect("triage.json is legal")
 }
 
 fn triage_bindings(route: &'static str) -> BTreeMap<String, NodeFn> {
@@ -44,18 +45,20 @@ fn triage_bindings(route: &'static str) -> BTreeMap<String, NodeFn> {
 async fn triage_json_builds_and_runs_the_quick_path() {
     let def = triage_def();
     let bindings = triage_bindings("quick");
-    let graph = def.build(&bindings, &builtin_routes()).expect("建图");
+    let graph = def
+        .build(&bindings, &builtin_routes())
+        .expect("build the graph");
 
     let mut state = State::new();
     state.set("message", json!("thanks!"));
     let report = run_graph(graph, state, None, DEFAULT_MAX_STEPS)
         .await
-        .expect("跑图");
+        .expect("run the graph");
 
     assert_eq!(
         report.path,
         vec!["classify", "check_calendar", "gather", "quick_reply"],
-        "quick 分支的路由经 gather 汇合后跳转：{:?}",
+        "the quick branch's route jumps after meeting at gather: {:?}",
         report.path
     );
     assert_eq!(report.state.str("reply"), Some("hi"));
@@ -65,13 +68,15 @@ async fn triage_json_builds_and_runs_the_quick_path() {
 async fn triage_json_routes_the_full_path_too() {
     let def = triage_def();
     let bindings = triage_bindings("full");
-    let graph = def.build(&bindings, &builtin_routes()).expect("建图");
+    let graph = def
+        .build(&bindings, &builtin_routes())
+        .expect("build the graph");
 
     let mut state = State::new();
     state.set("message", json!("plan a swim on saturday"));
     let report = run_graph(graph, state, None, DEFAULT_MAX_STEPS)
         .await
-        .expect("跑图");
+        .expect("run the graph");
 
     assert!(report.path.contains(&"full_agent".to_string()));
     assert!(!report.path.contains(&"quick_reply".to_string()));
@@ -88,13 +93,16 @@ fn static_cycle_refuses_to_build() {
             "edges": [["a", "b"], ["b", "a"]]
         }"#,
     )
-    .expect("JSON 合法");
+    .expect("legal JSON");
     let bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
     let error = def
         .build(&bindings, &builtin_routes())
         .err()
-        .expect("应建图失败");
-    assert!(error.contains("cycle"), "应报静态边有环：{error}");
+        .expect("building the graph should fail");
+    assert!(
+        error.contains("cycle"),
+        "a cycle in the static edges should be reported: {error}"
+    );
 }
 
 #[test]
@@ -107,15 +115,19 @@ fn unregistered_router_refuses_to_build() {
             "routers": [{ "src": "a", "router": "ask_the_model", "targets": { "x": "a" } }]
         }"#,
     )
-    .expect("JSON 合法");
+    .expect("legal JSON");
     let mut bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
     bindings.insert("a".to_string(), fn_node(|_| serde_json::Map::new()));
     let error = def
         .build(&bindings, &builtin_routes())
         .err()
-        .expect("应建图失败");
-    // 控制流绝不交给模型：白名单外的路由名在装载期就拒绝。
-    assert!(error.contains("not registered"), "应报路由未注册：{error}");
+        .expect("building the graph should fail");
+    // Control flow never goes to the model: a route name outside the whitelist is refused at load
+    // time.
+    assert!(
+        error.contains("not registered"),
+        "an unregistered route should be reported: {error}"
+    );
     assert!(error.contains("ask_the_model"));
 }
 
@@ -123,15 +135,15 @@ fn unregistered_router_refuses_to_build() {
 fn node_without_binding_refuses_to_build() {
     let def =
         WorkflowDef::parse(r#"{ "name": "bad", "nodes": [{ "name": "a" }], "entry": ["a"] }"#)
-            .expect("JSON 合法");
+            .expect("legal JSON");
     let bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
     let error = def
         .build(&bindings, &builtin_routes())
         .err()
-        .expect("应建图失败");
+        .expect("building the graph should fail");
     assert!(
         error.contains("no bound implementation"),
-        "应报缺绑定：{error}"
+        "a missing binding should be reported: {error}"
     );
 }
 
@@ -145,21 +157,24 @@ fn route_builder_with_bad_params_refuses_to_build() {
             "routers": [{ "src": "a", "router": "key_router", "params": {}, "targets": { "x": "a" } }]
         }"#,
     )
-    .expect("JSON 合法");
+    .expect("legal JSON");
     let mut bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
     bindings.insert("a".to_string(), fn_node(|_| serde_json::Map::new()));
     let error = def
         .build(&bindings, &builtin_routes())
         .err()
-        .expect("应建图失败");
-    assert!(error.contains("params.key"), "应报参数缺失：{error}");
+        .expect("building the graph should fail");
+    assert!(
+        error.contains("params.key"),
+        "a missing argument should be reported: {error}"
+    );
 }
 
 #[test]
 fn the_route_whitelist_is_exactly_the_two_builtins() {
     let routes = builtin_routes();
     let names: Vec<&String> = routes.keys().collect();
-    assert_eq!(names.len(), 2, "白名单是封闭的：{names:?}");
+    assert_eq!(names.len(), 2, "the allowlist is closed: {names:?}");
     assert!(names.contains(&&"key_router".to_string()));
     assert!(names.contains(&&"needs_action".to_string()));
 }

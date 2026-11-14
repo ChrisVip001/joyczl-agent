@@ -72,10 +72,34 @@ fn parse_score(text: &str) -> Result<(i64, String)> {
         .get("score")
         .and_then(serde_json::Value::as_i64)
         .ok_or_else(|| anyhow::anyhow!("the judge's JSON has no score: {verdict}"))?;
+    anyhow::ensure!(
+        (0..=10).contains(&score),
+        "the judge's score must be between 0 and 10"
+    );
     let reason = verdict
         .get("reason")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_string();
     Ok((score, reason))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_scores_outside_the_rubric() {
+        for score in ["-1", "11", "100", "1.5", "true", "null", "\"10\""] {
+            assert!(parse_score(&format!(r#"{{"score":{score},"reason":"Invalid."}}"#)).is_err());
+        }
+    }
+
+    #[test]
+    fn accepts_boundary_scores_and_surrounding_prose() {
+        for score in [0, 10] {
+            let text = format!(r#"Verdict: {{"score":{score},"reason":"Reviewed."}}"#);
+            assert_eq!(parse_score(&text).unwrap(), (score, "Reviewed.".into()));
+        }
+    }
 }

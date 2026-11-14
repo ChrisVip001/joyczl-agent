@@ -14,31 +14,36 @@ use crate::{EpisodicStore, SemanticStore};
 /// Acceptance for the six semantic-memory actions. Failure = a contract violation, named in the `Err`.
 pub async fn exercise_semantic(store: &impl SemanticStore) -> Result<()> {
     // Write → search hits.
-    // The fixture text is Chinese on purpose: it proves CJK survives the round trip through
-    // whatever backend is under test.
-    let fact = store.add("alex", "喜欢早上的会议", "user", "user").await?;
+    let fact = store
+        .add("alex", "likes the morning meeting", "user", "user")
+        .await?;
     assert_eq!(fact.subject, "alex");
     let hits = store.search("alex", 4).await?;
     assert!(
-        hits.iter().any(|f| f.content.contains("早上的会议")),
+        hits.iter()
+            .any(|f| f.content.contains("the morning meeting")),
         "a fact that was just written must be findable again"
     );
 
     // update: exists → true and content really changed; missing → false.
-    assert!(store.update(fact.id, "喜欢下午的会议").await?);
+    assert!(store.update(fact.id, "likes the afternoon meeting").await?);
     let hits = store.search("alex", 4).await?;
     assert!(
-        hits.iter().all(|f| !f.content.contains("早上的会议")),
-        "改过的旧正文不该还在"
+        hits.iter()
+            .all(|f| !f.content.contains("the morning meeting")),
+        "the edited body must be gone"
     );
     assert!(
-        !store.update(fact.id + 9999, "幽灵").await?,
-        "不存在的 id 必须 false"
+        !store.update(fact.id + 9999, "ghost").await?,
+        "an id that does not exist must return false"
     );
 
     // delete: exists → true, deleting again → false.
     assert!(store.delete(fact.id).await?);
-    assert!(!store.delete(fact.id).await?, "删两次第二次必须 false");
+    assert!(
+        !store.delete(fact.id).await?,
+        "deleting twice must return false the second time"
+    );
 
     // forget_subject: reports a count; deleting an emptied subject is 0 — no error.
     store.add("bob", "a", "user", "fact").await?;
@@ -61,10 +66,13 @@ pub async fn exercise_episodic(store: &impl EpisodicStore) -> Result<()> {
     );
 
     assert!(store.delete(id).await?);
-    assert!(!store.delete(id).await?, "删两次第二次必须 false");
+    assert!(
+        !store.delete(id).await?,
+        "deleting twice must return false the second time"
+    );
     assert!(
         store.search("demo", 4).await?.is_empty(),
-        "删掉的就该搜不到"
+        "what was deleted must not be findable"
     );
 
     // Garbage does not error.

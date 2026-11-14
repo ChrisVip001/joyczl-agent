@@ -34,7 +34,7 @@ fn the_home_is_never_an_extra_root() {
     assert_eq!(
         roots.workspaces,
         vec![workspace.path().to_path_buf()],
-        "home 必须被丢掉，工作目录照留"
+        "home has to be dropped, the working directory stays"
     );
     assert_eq!(roots.dropped, vec![home.path().to_path_buf()]);
 }
@@ -42,11 +42,11 @@ fn the_home_is_never_an_extra_root() {
 #[test]
 fn an_ancestor_of_home_is_never_an_extra_root() {
     let (home, _) = dirs();
-    let parent = home.path().parent().expect("tempdir 有父目录");
+    let parent = home.path().parent().expect("a tempdir has a parent");
     let roots = sandbox_roots(None, &paths(&[parent]), home.path());
     assert!(
         roots.workspaces.is_empty(),
-        "home 的父目录等于把控制面一起交出去：{:?}",
+        "home's parent directory hands over the control plane too: {:?}",
         roots.workspaces
     );
     assert_eq!(roots.dropped.len(), 1);
@@ -56,9 +56,15 @@ fn an_ancestor_of_home_is_never_an_extra_root() {
 fn the_disk_root_is_never_a_root() {
     let (home, _) = dirs();
     let as_extra = sandbox_roots(None, &paths(&[Path::new("/")]), home.path());
-    assert!(as_extra.workspaces.is_empty(), "/ 不能作为额外可写根");
+    assert!(
+        as_extra.workspaces.is_empty(),
+        "/ cannot be an extra writable root"
+    );
     let as_cwd = sandbox_roots(Some(Path::new("/")), &[], home.path());
-    assert!(as_cwd.workspaces.is_empty(), "/ 也不能作为工作目录");
+    assert!(
+        as_cwd.workspaces.is_empty(),
+        "/ cannot be a working directory either"
+    );
 }
 
 #[test]
@@ -67,7 +73,10 @@ fn every_control_plane_entry_is_refused() {
     for entry in HOME_CONTROL {
         let target = home.path().join(entry);
         let roots = sandbox_roots(None, std::slice::from_ref(&target), home.path());
-        assert!(roots.workspaces.is_empty(), "控制面条目 {entry} 不能被放开");
+        assert!(
+            roots.workspaces.is_empty(),
+            "a control-plane entry ({entry}) must not be opened up"
+        );
         assert_eq!(roots.dropped, vec![target.clone()], "{entry}");
     }
 }
@@ -78,7 +87,7 @@ fn a_normal_subdirectory_of_home_can_be_opted_in() {
     // directory explicitly — the escape hatch exists, it just isn't the whole home.
     let (home, _) = dirs();
     let cache = home.path().join("build-cache");
-    std::fs::create_dir(&cache).expect("建目录");
+    std::fs::create_dir(&cache).expect("create the directory");
     let roots = sandbox_roots(None, std::slice::from_ref(&cache), home.path());
     assert_eq!(roots.workspaces, vec![cache]);
 }
@@ -114,14 +123,14 @@ fn the_sandbox_and_the_write_tools_share_one_list() {
     );
     assert_eq!(
         with_cwd.workspaces, listed.workspaces,
-        "cwd 与额外根走同一条规则，两个消费者不能给出两套边界"
+        "cwd and extra roots follow one rule; two consumers must not produce two sets of bounds"
     );
     assert!(
         with_cwd
             .workspaces
             .iter()
             .all(|p| !p.starts_with(home.path()) || p == &cache),
-        "home 下只允许显式列出的那个子目录"
+        "under home only the explicitly listed subdirectory is allowed"
     );
 }
 

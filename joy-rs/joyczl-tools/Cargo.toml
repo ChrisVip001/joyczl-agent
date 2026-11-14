@@ -3,7 +3,7 @@ name = "joyczl-tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Joy 能做的事：模型读 schema，Rust 执行。"
+description = "What Joy can do: the model reads the schema, Rust does the work."
 
 [lib]
 name = "joyczl_tools"
@@ -21,10 +21,10 @@ joyczl-provider = { workspace = true }
 joyczl-schedule = { workspace = true }
 joyczl-state = { workspace = true }
 serde_json = { workspace = true }
-#   search_web 的两个后端都是 HTTP：Tavily 是 JSON API，
-#   DuckDuckGo 是拉一页 HTML 自己抠。同一份 reqwest，不再引第二个客户端。
+#   Both search_web backends speak HTTP: Tavily is a JSON API, DuckDuckGo means fetching a page
+#   of HTML and picking it apart. One reqwest, no second client.
 reqwest = { workspace = true }
-#   osascript 是子进程（Apple Calendar 同步走 AppleScript）。
+#   osascript is a child process (Apple Calendar sync goes through AppleScript).
 tokio = { workspace = true }
 
 [dev-dependencies]

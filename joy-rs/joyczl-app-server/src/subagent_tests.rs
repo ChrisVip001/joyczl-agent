@@ -24,7 +24,7 @@ async fn server_with(
         delegate_enabled: true,
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配");
+    let server = crate::open(&settings).await.expect("assemble");
     server.install_provider(Resolved {
         context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
         vision: false,
@@ -53,7 +53,7 @@ async fn collect(server: &crate::Server, message: &str) -> (String, String) {
         &sink,
     )
     .await
-    .expect("这一轮该跑完");
+    .expect("this turn should finish");
     drop(sink);
 
     let mut tool_output = String::new();
@@ -80,7 +80,7 @@ async fn a_structured_result_is_validated_and_retried_once() {
             "call-1",
             "delegate_task",
             json!({
-                "task": "算一下 2+2",
+                "task": "work out 2+2",
                 "result_schema": {
                     "type": "object",
                     "required": ["answer"],
@@ -89,28 +89,28 @@ async fn a_structured_result_is_validated_and_retried_once() {
             }),
         ),
         // Subagent first attempt: prose (non-compliant)
-        Mock::text("我觉得是四吧。"),
+        Mock::text("I think it is four."),
         // Subagent second attempt (retry with the error attached): compliant JSON
         Mock::text(r#"{"answer": 4}"#),
         // Parent turn wind-down
-        Mock::text("子代理说答案是 4。"),
+        Mock::text("the subagent says the answer is 4."),
     ])
     .await;
 
-    let (tool_output, reply) = collect(&server, "派个子代理去算 2+2").await;
+    let (tool_output, reply) = collect(&server, "send a subagent to work out 2+2").await;
 
     assert!(reply.contains("4"), "{reply}");
     assert!(
         tool_output.contains("reported"),
-        "报告要标明是转述：{tool_output}"
+        "the report has to mark it as reported speech: {tool_output}"
     );
     assert!(
         tool_output.contains(r#"{"answer":4}"#),
-        "合规之后带回的该是紧凑 JSON：{tool_output}"
+        "once compliant, what comes back should be compact JSON: {tool_output}"
     );
     assert!(
-        !tool_output.contains("我觉得是四吧"),
-        "不合规的那一版不该留在结论里：{tool_output}"
+        !tool_output.contains("I think it is four"),
+        "the non-compliant version must not stay in the conclusion: {tool_output}"
     );
 }
 
@@ -122,7 +122,7 @@ async fn a_structured_result_falls_back_to_prose_after_two_failures() {
             "call-1",
             "delegate_task",
             json!({
-                "task": "算一下 2+2",
+                "task": "work out 2+2",
                 "result_schema": {
                     "type": "object",
                     "required": ["answer"],
@@ -130,20 +130,20 @@ async fn a_structured_result_falls_back_to_prose_after_two_failures() {
                 }
             }),
         ),
-        Mock::text("四。"),     // First attempt: not JSON
-        Mock::text("还是四。"), // Second attempt: still non-compliant
-        Mock::text("它说是四。"),
+        Mock::text("four."),       // First attempt: not JSON
+        Mock::text("four again."), // Second attempt: still non-compliant
+        Mock::text("it says four."),
     ])
     .await;
 
-    let (tool_output, _) = collect(&server, "派个子代理去算 2+2").await;
+    let (tool_output, _) = collect(&server, "send a subagent to work out 2+2").await;
 
     assert!(
         tool_output.contains("failed validation twice"),
-        "两次都不合规要如实说出来：{tool_output}"
+        "two non-compliant tries have to be reported plainly: {tool_output}"
     );
     assert!(
-        tool_output.contains("四。"),
-        "回落时保留它的原始文字（不让活白跑）：{tool_output}"
+        tool_output.contains("four."),
+        "on falling back, keep its own words (the work must not be wasted): {tool_output}"
     );
 }

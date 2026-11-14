@@ -150,14 +150,14 @@ async function start(
     },
     async (conversation, text) => {
       asked.push(`${conversation}|${text}`);
-      return await (options.reply?.(text) ?? "答复");
+      return await (options.reply?.(text) ?? "the answer");
     },
   );
 
   const running = adapter.run();
   const deadline = Date.now() + 5000;
   while (adapter.port === 0) {
-    if (Date.now() > deadline) throw new Error("服务器没起来");
+    if (Date.now() > deadline) throw new Error("the server never came up");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
@@ -182,7 +182,7 @@ async function until(
 ): Promise<void> {
   const deadline = Date.now() + ms;
   while (!ok()) {
-    if (Date.now() > deadline) throw new Error(`没等到：${what}`);
+    if (Date.now() > deadline) throw new Error(`waited in vain for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
@@ -194,7 +194,7 @@ async function post(base: string, query: string, body: string): Promise<string> 
 
 // ---- The server-configuration step --------------------------------------------------------
 
-test("验证 URL：签名对就把 echostr 原样回过去", async () => {
+test("URL verification: with the right signature echostr goes back verbatim", async () => {
   const harness = await start();
   const query = new URLSearchParams({
     signature: signatureOf(TOKEN, TIMESTAMP, NONCE),
@@ -208,7 +208,7 @@ test("验证 URL：签名对就把 echostr 原样回过去", async () => {
   await harness.stop();
 });
 
-test("验证 URL：签名不对就 403，不是「随便给点什么都行」", async () => {
+test("URL verification: a wrong signature is 403, not «anything will do»", async () => {
   const harness = await start();
   const query = new URLSearchParams({
     signature: "0".repeat(40),
@@ -220,44 +220,44 @@ test("验证 URL：签名不对就 403，不是「随便给点什么都行」", 
   assert.equal(response.status, 403);
   await harness.stop();
   assert.ok(
-    harness.logs.some((line) => line.includes("URL 验证没通过")),
-    "得留个痕，不然「验证失败」这句只能靠猜",
+    harness.logs.some((line) => line.includes("URL verification failed")),
+    "it has to leave a trace, or «verification failed» can only be guessed at",
   );
 });
 
 // ---- Fast answers: passive reply in place ----------------------------------------------------
 
-test("答得快：直接在响应里回，一次 API 都不调", async () => {
-  const harness = await start({ reply: () => "我看过了" });
+test("answered quickly: straight back in the response, no API call at all", async () => {
+  const harness = await start({ reply: () => "I have read it" });
   const body = await post(
     harness.base,
     plainQuery(),
-    incoming("openid-1", "帮我看下", "1001"),
+    incoming("openid-1", "take a look for me", "1001"),
   );
 
-  assert.match(body, /<Content><!\[CDATA\[我看过了\]\]><\/Content>/);
+  assert.match(body, /<Content><!\[CDATA\[I have read it\]\]><\/Content>/);
   // Who it goes to, and who replies — these two are **swapped**.
   assert.equal(tag(body, "ToUserName"), "openid-1");
   assert.equal(tag(body, "FromUserName"), ACCOUNT);
   assert.equal(tag(body, "MsgType"), "text");
-  assert.deepEqual(harness.asked, ["wechat:openid-1|帮我看下"]);
-  assert.equal(harness.api.sent.length, 0, "走被动回复就不该再去调客服接口");
+  assert.deepEqual(harness.asked, ["wechat:openid-1|take a look for me"]);
+  assert.equal(harness.api.sent.length, 0, "a passive reply means no call to the customer-service API");
 
   await harness.stop();
 });
 
-test("答得快但回答很长：就不走被动了，那段要切成几条", async () => {
-  const long = "字".repeat(MESSAGE_LIMIT + 50);
+test("answered quickly but too long: passive is out, and the text goes out in several", async () => {
+  const long = "x".repeat(MESSAGE_LIMIT + 50);
   const harness = await start({ reply: () => long });
   const body = await post(
     harness.base,
     plainQuery(),
-    incoming("openid-1", "详细讲讲", "1002"),
+    incoming("openid-1", "tell me in detail", "1002"),
   );
 
   // A passive reply is **one** message only, so a two-chunk answer must go via customer service.
   assert.equal(body, "success");
-  await until("客服消息发出去", () => harness.api.sent.length === 2);
+  await until("the customer-service messages go out", () => harness.api.sent.length === 2);
   assert.equal(harness.api.sent[0]!.length, MESSAGE_LIMIT);
   assert.equal(harness.api.sent.join(""), long);
 
@@ -266,132 +266,132 @@ test("答得快但回答很长：就不走被动了，那段要切成几条", as
 
 // ---- Slow answers: send WeChat away first, then push customer-service messages --------------------------------------
 
-test("答得慢：先回 success 把微信打发走，再把答复推回去", async () => {
+test("answered slowly: send success to get WeChat off the line, then push the answer back", async () => {
   const harness = await start({
     replyBudgetMs: 50,
     reply: async () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
-      return "想好了";
+      return "thought it over";
     },
   });
 
   const body = await post(
     harness.base,
     plainQuery(),
-    incoming("openid-1", "帮我算个东西", "1003"),
+    incoming("openid-1", "work something out for me", "1003"),
   );
 
   // WeChat waits only 5 seconds. Joy is still running; an answer must already be given here —
   // otherwise it pushes the same request twice more, and the user sees three identical replies.
   assert.equal(body, "success");
-  await until("客服消息推回去", () => harness.api.sent.length === 1);
-  assert.deepEqual(harness.api.sent, ["想好了"]);
+  await until("the customer-service message goes back", () => harness.api.sent.length === 1);
+  assert.deepEqual(harness.api.sent, ["thought it over"]);
   assert.equal(harness.api.tokenRequests, 1);
 
   await harness.stop();
 });
 
-test("微信把同一条再推一遍：不重问 Joy，也不重发", async () => {
+test("WeChat pushes the same message again: Joy is not asked twice and nothing is resent", async () => {
   const harness = await start({
     replyBudgetMs: 50,
     reply: async () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
-      return "想好了";
+      return "thought it over";
     },
   });
 
   const query = plainQuery();
-  const xml = incoming("openid-1", "帮我算个东西", "1004");
+  const xml = incoming("openid-1", "work something out for me", "1004");
   assert.equal(await post(harness.base, query, xml), "success");
   // Second and third pushes: what WeChat does when its 5 seconds pass without a reply.
   assert.equal(await post(harness.base, query, xml), "success");
   assert.equal(await post(harness.base, query, xml), "success");
 
-  await until("客服消息推回去", () => harness.api.sent.length === 1);
-  assert.equal(harness.asked.length, 1, "同一条消息只能问 Joy 一次");
-  assert.ok(harness.logs.some((line) => line.includes("又")));
+  await until("the customer-service message goes back", () => harness.api.sent.length === 1);
+  assert.equal(harness.asked.length, 1, "one message may reach Joy only once");
+  assert.ok(harness.logs.some((line) => line.includes("again")));
 
   await harness.stop();
 });
 
-test("客服消息被拒（未认证的号）：说清楚，网关不能跟着倒", async () => {
+test("the customer-service message is refused (an unverified account): say so, the gateway must not fall over", async () => {
   const harness = await start({
     replyBudgetMs: 50,
     reply: async () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
-      return "想好了";
+      return "thought it over";
     },
   });
   harness.api.refuseOnce();
 
   assert.equal(
-    await post(harness.base, plainQuery(), incoming("openid-1", "在吗", "1005")),
+    await post(harness.base, plainQuery(), incoming("openid-1", "are you there", "1005")),
     "success",
   );
 
-  await until("日志里说清原因", () =>
-    harness.logs.some((line) => line.includes("客服消息没发出去")),
+  await until("the log says why", () =>
+    harness.logs.some((line) => line.includes("did not go out")),
   );
   assert.ok(harness.logs.some((line) => line.includes("48001")));
 
   await harness.stop();
 });
 
-test("客服接口说「这把 token 不算数了」：自己重取一把再来，别让用户白等", async () => {
+test("the customer-service API says «this token no longer counts»: fetch another and come back, do not leave the user waiting", async () => {
   // It must take the customer-service path — a fast answer never fetches a token at all.
   const harness = await start({
     replyBudgetMs: 50,
     reply: async () => {
       await new Promise((resolve) => setTimeout(resolve, 150));
-      return "答复";
+      return "the answer";
     },
   });
   harness.api.expireOnce();
 
   assert.equal(
-    await post(harness.base, plainQuery(), incoming("openid-1", "在吗", "1009")),
+    await post(harness.base, plainQuery(), incoming("openid-1", "are you there", "1009")),
     "success",
   );
 
-  await until("答复推回去", () => harness.api.sent.length === 1);
-  assert.equal(harness.api.tokenRequests, 2, "第一次被拒之后要重取");
-  assert.deepEqual(harness.api.sent, ["答复"]);
+  await until("the answer is pushed back", () => harness.api.sent.length === 1);
+  assert.equal(harness.api.tokenRequests, 2, "after the first refusal it fetches again");
+  assert.deepEqual(harness.api.sent, ["the answer"]);
 
   await harness.stop();
 });
 
 // ---- Allowlist ------------------------------------------------------------------
 
-test("不在白名单里：不搭理，也不告诉他自己没权限", async () => {
+test("outside the allowlist: no answer, and no telling them they lack permission", async () => {
   const harness = await start({ allow: ["openid-yes"] });
   const body = await post(
     harness.base,
     plainQuery(),
-    incoming("openid-no", "你好", "1010"),
+    incoming("openid-no", "hello", "1010"),
   );
 
   assert.equal(body, "success");
-  assert.deepEqual(harness.asked, [], "不在名单里的人不该花掉你的模型额度");
-  assert.ok(harness.logs.some((line) => line.includes("不在白名单")));
+  assert.deepEqual(harness.asked, [], "someone off the list must not spend your model quota");
+  assert.ok(harness.logs.some((line) => line.includes("outside the allowlist")));
 
   await harness.stop();
 });
 
 // ---- Encrypted mode ----------------------------------------------------------------
 
-test("加密模式：解得开，回包也是加密的", async () => {
-  const harness = await start({ encodingAesKey: AES_KEY, reply: () => "收到" });
-  const { body, query } = encrypted(incoming("openid-1", "你好", "1011"));
+test("encrypted mode: it opens the message, and the reply goes back encrypted too", async () => {
+  const harness = await start({ encodingAesKey: AES_KEY, reply: () => "got it" });
+  const { body, query } = encrypted(incoming("openid-1", "hello", "1011"));
   const reply = await post(harness.base, query, body);
 
   const encrypt = tag(reply, "Encrypt");
-  assert.notEqual(encrypt, "", "加密模式下回包得是密文");
+  assert.notEqual(encrypt, "", "in encrypted mode the reply has to be ciphertext");
   // Decrypt the reply — pinning both "the reply's plaintext layout" and "the AppID matches".
   const inner = decryptMessage(encrypt, {
     encodingAesKey: AES_KEY,
     appId: APPID,
   });
-  assert.match(inner, /<Content><!\[CDATA\[收到\]\]><\/Content>/);
+  assert.match(inner, /<Content><!\[CDATA\[got it\]\]><\/Content>/);
   assert.equal(
     tag(reply, "MsgSignature"),
     signatureOf(TOKEN, tag(reply, "TimeStamp"), NONCE, encrypt),
@@ -400,9 +400,9 @@ test("加密模式：解得开，回包也是加密的", async () => {
   await harness.stop();
 });
 
-test("密文被改过：403，不拿它去猜", async () => {
+test("tampered ciphertext: 403, and it is not used to guess", async () => {
   const harness = await start({ encodingAesKey: AES_KEY });
-  const { body, query } = encrypted(incoming("openid-1", "你好", "1012"));
+  const { body, query } = encrypted(incoming("openid-1", "hello", "1012"));
   const tampered = query.replace(
     /msg_signature=[^&]+/,
     `msg_signature=${"0".repeat(40)}`,
@@ -418,9 +418,9 @@ test("密文被改过：403，不拿它去猜", async () => {
   await harness.stop();
 });
 
-test("微信那边选了加密模式，但没给密钥：403 并说清是为什么", async () => {
+test("the WeChat side is in encrypted mode with no key given: 403, and the log says why", async () => {
   const harness = await start();
-  const { body, query } = encrypted(incoming("openid-1", "你好", "1013"));
+  const { body, query } = encrypted(incoming("openid-1", "hello", "1013"));
 
   const response = await fetch(`${harness.base}?${query}`, {
     method: "POST",

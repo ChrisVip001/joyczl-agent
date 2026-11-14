@@ -14,7 +14,7 @@ import {
 const DOC_KEY = "A".repeat(43);
 const DOC_APPID = "wxba5fad812f8e6fb9";
 
-test("签名：官方文档那三条都算得出来", () => {
+test("signature: all three from the official docs compute", () => {
   // Inbound in plain mode: token + timestamp + nonce.
   assert.equal(
     signatureOf("AAAAA", "1714037059", "486452656"),
@@ -39,7 +39,7 @@ test("签名：官方文档那三条都算得出来", () => {
   );
 });
 
-test("解密：官方文档那条密文解得开", () => {
+test("decrypt: the official docs' ciphertext opens", () => {
   // One assertion pinning four things: the AESKey is "append = then base64-decode", CBC with
   // the IV from the first 16 bytes, padding in 32-byte blocks, and the 16+4-byte plaintext layout.
   assert.equal(
@@ -51,8 +51,8 @@ test("解密：官方文档那条密文解得开", () => {
   );
 });
 
-test("加密再解密：中文、emoji、空串都回得来", () => {
-  for (const message of ["", "嗯", "好的，我看一下这个文件 🎉", "a".repeat(500)]) {
+test("encrypt then decrypt: text, emoji and the empty string all come back", () => {
+  for (const message of ["", "hm", "fine, let me look at this file 🎉", "a".repeat(500)]) {
     const encrypted = encryptMessage(message, {
       encodingAesKey: DOC_KEY,
       appId: DOC_APPID,
@@ -60,12 +60,12 @@ test("加密再解密：中文、emoji、空串都回得来", () => {
     assert.equal(
       decryptMessage(encrypted, { encodingAesKey: DOC_KEY, appId: DOC_APPID }),
       message,
-      `「${message.slice(0, 20)}」没能原样回来`,
+      `"${message.slice(0, 20)}" did not come back unchanged`,
     );
   }
 });
 
-test("补齐的边界：正好整除时要补满一整块", () => {
+test("padding edge: an exact multiple still gets a whole block", () => {
   // Plaintext length = 16 + 4 + msg + appid. With a two-char appId and a 10-byte message the
   // total is an exact multiple of 32 — then **a full 32-byte pad is mandatory**: with zero pad
   // WeChat's side decrypts to nothing at the tail and treats the message as broken.
@@ -82,8 +82,8 @@ test("补齐的边界：正好整除时要补满一整块", () => {
   );
 });
 
-test("AppID 对不上就抛：这是「这条确实是发给我的」的唯一证据", () => {
-  const encrypted = encryptMessage("你好", {
+test("a mismatched AppID throws: that is the only proof the message was really for me", () => {
+  const encrypted = encryptMessage("hello", {
     encodingAesKey: DOC_KEY,
     appId: DOC_APPID,
   });
@@ -97,10 +97,10 @@ test("AppID 对不上就抛：这是「这条确实是发给我的」的唯一�
   );
 });
 
-test("EncodingAESKey 长度不对：当场就说清楚", () => {
+test("a wrong EncodingAESKey length says so on the spot", () => {
   // Unchecked, the symptom is "signature check failed" or "decrypted to garbage", with the cause dozens of lines away.
-  assert.throws(() => aesKeyOf("A".repeat(40)), /应该是 32/);
-  assert.throws(() => aesKeyOf("A".repeat(44)), /应该是 32/);
+  assert.throws(() => aesKeyOf("A".repeat(40)), /expected 32/);
+  assert.throws(() => aesKeyOf("A".repeat(44)), /expected 32/);
   assert.equal(aesKeyOf(DOC_KEY).length, 32);
 
   // Say what this check can't catch: it only counts bytes. A key with **the same length but one

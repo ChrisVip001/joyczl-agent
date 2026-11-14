@@ -35,6 +35,54 @@ impl Episodes {
         Ok(id)
     }
 
+    /// One immutable summary per unchanged extraction context, including after a crash.
+    pub async fn add_consolidated(
+        &self,
+        happened_at: &str,
+        summary: &str,
+        source_refs: &[String],
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            !source_refs.is_empty() && source_refs.len() <= 4096,
+            "Invalid episode extraction context"
+        );
+        anyhow::ensure!(
+            source_refs
+                .iter()
+                .all(|value| !value.is_empty() && value.len() <= 256),
+            "Invalid episode source reference"
+        );
+        let mut refs = source_refs.to_vec();
+        refs.sort();
+        refs.dedup();
+        let refs_json = serde_json::to_string(&refs)?;
+        let digest = crate::ledger::digest_of(refs_json.as_bytes());
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query("INSERT INTO memory_episode_contexts(context_digest,source_refs_json) VALUES(?,?) ON CONFLICT DO NOTHING")
+            .bind(&digest).bind(refs_json).execute(&mut *tx).await?.rows_affected();
+        if inserted == 0 {
+            tx.commit().await?;
+            eprintln!(
+                "(joy) episode source batch already summarized; no duplicate episode written"
+            );
+            return Ok(false);
+        }
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO episodes(happened_at,summary) VALUES(?,?) RETURNING id",
+        )
+        .bind(happened_at)
+        .bind(summary)
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE memory_episode_contexts SET episode_id=? WHERE context_digest=?")
+            .bind(id)
+            .bind(digest)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     /// Same as `Facts::search`: FTS5 (trigram) first, fall back to LIKE on no hits.
     pub async fn search(&self, query: &str, top_k: u32) -> Result<Vec<EpisodeRow>> {
         if let Some(expr) = to_match_expr(query) {

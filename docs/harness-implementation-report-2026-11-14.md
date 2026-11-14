@@ -1,0 +1,84 @@
+# Joy harness implementation report
+
+English | [简体中文](harness-implementation-report-2026-11-14.zh.md)
+
+Date: 2026-11-14. Scope: work pursued in this conversation since the 2026-11-12 architecture review.
+
+**The reliability foundation and a synthetic delivery workflow have been substantially implemented. The original report is not fully delivered. Final integrated and end-to-end validation after the latest memory changes now passes. Release review, real domain workflows and quality validation remain incomplete; passing gates do not establish generally reliable unattended personal assistance.**
+
+## Implemented capabilities
+
+The initial architecture review, priorities and exit criteria were delivered, and CodeGraph was initialized as authorized. Implementation retained the existing technology foundation.
+
+| Area | Implemented behavior and limits |
+|---|---|
+| Effects and recovery | Persist tool intent before execution, journal individual operations, stop on unknown outcomes, and bind human reconciliation to exact operations/checkpoints. Human receipts do not count as observed tool success. Arbitrary remote effects still have no exactly-once guarantee. |
+| Task advancement | Share fresh/recovered task driving, accounting, acceptance and finalization; enforce task/run/turn identity; persist round identities and cumulative usage watermarks. |
+| Accounting on stops | Charge known checkpoint usage even when uncertainty or missing configuration prevents continuation. Repeated recovery does not charge it twice. Unreceived or uncheckpointed provider usage remains unknown. |
+| Independent tasks | Human-started durable queue, one worker, independent transcripts and session-scoped progress. Models cannot grant themselves execution authority. |
+| Waiting and waking | Associate background jobs with tasks, declare external input conditions, target and deduplicate signals, resume authorized work, and preserve human pause priority. Correlation fields do not authenticate external events. |
+| Completion and delivery | Atomically commit terminal status/receipts, retain outbox records and retry failures, and record schedule settlement/delivery. Redelivery does not rerun the model. Real delivery-channel reliability is not established. |
+| Acceptance | Version and hash observed file bytes, bind verification to the exact run, compare typed JSON values at pointers, and label unverified production. This does not verify domain truth or remote results. |
+| Ownership and conflicts | Hold canonical-database kernel ownership across runtime/background work; coordinate exclusive tool mutations across sessions. This is not distributed isolation or protection against separate homes, human editors or remote concurrency. |
+| Ordinary chat uncertainty | Human inspection/reconciliation methods, generated clients and dashboard controls; fence subsequent same-session mutations. Reconciliation leaves the old turn stopped; fresh instructions use the current workspace. |
+| Handoffs | Rebuild structured handoffs from persistent contracts, plans, steps and artifacts; retain whole immutable plan versions; stop on corrupt or foreign state. |
+| Model adaptation | Native Responses text/images/function tools/SSE/encrypted continuation, DeepSeek reasoning continuation, and declared tool/context/effort capabilities. Reject unsupported requests locally. Automatic probing, hosted tools, WebSocket steering and asynchronous API tools remain unsupported. |
+| Chat continuity | Bounded recent session context, SOUL and saved personal preferences for quick replies; Chinese skill discovery; classifier instructions favor the full route for emotional/relationship support. No extra quick-reply provider call. Historical source=user entries may be tool-written, and support quality is unmeasured. |
+| Memory corrections | Suppression/correction lineage, extraction-context digests, validity windows, recall filtering, source checks for static pages, and protection of unmanaged human files. Semantic paraphrases and historical redaction remain incomplete. |
+| Temporary observations | Separate durable facts from temporary states, validate user-role quotation/source digests, retain uncalibrated model confidence, and anchor 1–24 hour expiry to source time. Retry does not renew a claim; human edits prevail. Quotation matching does not verify meaning. |
+| Extraction lifecycle | Persist admission/completion separately, recover original source batches without merging new chats, transact backoff, deduplicate episode summaries by source context, retain worker execution ownership, and cancel/join stalled calls on shutdown. Legacy untracked claims cannot be identified automatically. |
+| Engineering artifacts | Extend migrations through 0042, generated protocol artifacts, TS/Python clients, dashboard controls, regression/process tests and bilingual documentation. Final integrated validation passes; change packaging remains unfinished. |
+
+See [implementation tracking](harness-upgrade.md) and [protocol contracts](protocol.md).
+
+## Observed validation
+
+| Check | Result and interpretation |
+|---|---|
+| Latest full `just check` | Exit 0, 935 Rust tests passed, zero failures, zero Clippy warnings; includes the final memory lifecycle changes. |
+| Latest deterministic/replay evaluations | 70/70 and 5/5 observed passing; scripted behavior is not general live-model reliability. |
+| Key crates | State 89, memory 70 and app-server 226 passed within the final workspace run, including memory lifecycle and provenance. |
+| Clients | Zero schema drift, 113 frontend tests and 14 Python tests passed in final validation. |
+| Real process death | Five local-fixture cases observed passing: baseline, pre-dispatch, effect committed without reply, durable tool result, and admitted memory extraction. No tool replay observed. Unknown stops retained 15 known task tokens; baseline/result recovery retained 30. The memory case recovered the same two pending source rows, not a completed extraction. |
+| Four end-to-end suites | App-server, gateway, dashboard and Python SDK all reran successfully after the final memory changes, using local fixtures. |
+| Browser component checks | Reconciliation input preservation, snapshot binding, operation selection, keyboard focus and narrow-screen layout verified. This was not a complete product usability audit. |
+| Earlier full-check failure | The disk-exhaustion attempt failed; a subsequent full rerun now passed. The failed attempt is not counted as a pass. |
+
+The complete rerun finished with sufficient disk space. Retained evidence: [final validation metadata and source hashes](../evals/results/harness-validation-2026-11-14-projection.json), [five-case raw process report](../evals/results/process-recovery-2026-11-14-projection.json). The [earlier four-case report](../evals/results/process-recovery-2026-11-14.json) remains historical evidence. The memory case recovered two pending source rows; it does not claim completed extraction. `just smoke-recovery` reproduces the current script.
+
+## Live-model evidence and costs
+
+The authorized existing profile was **ds / DeepSeek / deepseek-flash**. This is a requested alias, not proof of a pinned internal backend revision.
+
+Eight invocations made 72 logical model requests: 105,485 reported input tokens and 16,688 output tokens. The historical peak-price estimate is **CNY 0.344474**; cumulative conservative reservations were **CNY 6.274340**, within the authorized **CNY 10**. Reservations are not actual spend, and the estimate is not invoice reconciliation.
+
+Small synthetic samples covered continuity, Chinese continuity, file delivery, uncertainty stops, expired memory, and waiting/input/chat/delivery. Retained failures include an incorrect status assertion, an insufficient step limit, and a draft counted as duplicate final delivery. The last issue was resolved by an offline review of retained receipts, not an additional successful model run.
+
+One new live structural extraction sample passed nickname-only durable retention and source-bound temporary fatigue. It does not score emotional support; quick preferences and extraction recovery have no new live quality score. Emotional support quality, long research quality and real cross-day unattended reliability remain unmeasured. See [raw evidence, review provenance and rates](live-reliability.md).
+
+
+Three new research invocations are retained. The first positive run passed. An unavailable-source run using generic file writes failed: task acceptance kept `needs_attention`, but the model still created a partial final file. A constrained publication adapter then passed both cases: independent reads, exact citations and typed facts gate the final write; a missing source leaves no final artifact. The original failure remains. This MCP domain adapter lives in the evaluator, not the production generic file-tool contract; missing-source explanation quality was not scored. See the [research report](public-source-research-2026-11-14.md) and [guarded raw cases](../evals/results/deepseek-flash-2026-11-14-research-guarded.json).
+
+## Remaining work
+
+| Priority | Outstanding work | Exit condition |
+|---|---|---|
+| P0 | Reviewable change/release packaging | Separate pre-existing working-tree changes, prepare independently reviewable commits/PR and migration/recovery guidance. This turn did not commit, merge or publish. |
+| P1 | Domain evidence and remote read-back | Define and validate one concrete transaction's authentication, source, acceptance, read-back and reconciliation contract. |
+| P1 | Service idempotency/event adapters | Integrate supported idempotency keys and authenticated events/receipts for concrete services; no universal exactly-once claim. |
+| P1 | Real long-running delivery workflows | Measure research/citation quality, long waits, shutdowns, cross-day recovery, authorization changes and notification failures. Current coverage is mainly synthetic/offline. |
+| P1 | Relationship/support quality | Three single-turn Chinese support criteria are present in the existing judge fixtures; live scoring, multi-turn samples and human review remain outstanding. Routing instructions are not quality evidence. |
+| P1 | Memory quality/history governance | Validate classification, address paraphrase resurrection, historical unbounded emotions, pre-migration deletions/claims, and episode/backup redaction. Confidence is not calibrated. |
+| P2 | Resource scopes | Add concrete path/resource conflict handling; separate homes, human edits and remote concurrency need their own contracts. |
+| P2 | Models and external harnesses | Broaden live compatibility/probing and API capabilities; no same-tool/same-budget comparison with Codex, Claude Code, pi or another external harness has been performed. |
+| P2 | Repeatable improvement evidence | Repeat a stable real task set and compare completion, false completion, duplicate effects, recovery and cost. Existing samples cannot establish general improvement. |
+
+Against the original phases: **A implementation and final regression are closed, with release review still pending; B has synthetic delivery and a completed fixed-source live research pilot, but lacks long research and external transaction validation; C has adaptation/memory foundations but lacks quality validation and external-backend comparison.**
+
+Final validation, the fixed-source research pilot and archival are complete. A [review/recovery guide](harness-release-review.md) is available; the mixed working tree has not been split into commits. Chinese support quality, long research and concrete transaction read-back remain outstanding. External harness comparison should use a stable common task/tool contract. Rust, SQLite, local-first state and the single protocol were retained. Distributed scheduling, large multi-agent systems and wholesale pluginization were intentionally deferred in the original report.
+
+## Tool and attribution limits
+
+This report uses implementation records, retained evaluation files and observed tool results. Other working-tree changes are not automatically attributed to this work.
+
+A CodeGraph query did not execute because automatic approval review hit an account usage limit; the tool explicitly stated this was not a safety determination. The tool subsequently became unavailable. This is separate from the DeepSeek evaluation cost allowance.

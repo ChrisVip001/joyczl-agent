@@ -4,9 +4,9 @@ import { DiscordAdapter } from "./discord.ts";
 const token = process.env["DISCORD_BOT_TOKEN"]?.trim();
 if (token === undefined || token === "") {
   console.error(
-    "没给 DISCORD_BOT_TOKEN。\n" +
-      "去 https://discord.com/developers/applications 建一个应用 → Bot → Reset Token，然后：\n" +
-      "  DISCORD_BOT_TOKEN=… DISCORD_ALLOW=@你的登录名 npm run start:discord",
+    "DISCORD_BOT_TOKEN was not given.\n" +
+      "Make an app at https://discord.com/developers/applications → Bot → Reset Token, then:\n" +
+      "  DISCORD_BOT_TOKEN=… DISCORD_ALLOW=@your-login npm run start:discord",
   );
   process.exit(1);
 }
@@ -20,16 +20,17 @@ if (allow.length === 0) {
   // Usable without an allowlist, but that means "open this bot to everyone" — and it spends
   // your model quota. Such a default must announce itself, not wait for an incident.
   console.error(
-    "注意：没设 DISCORD_ALLOW，这个 bot 谁都能用，消耗的是你的模型额度。\n" +
-      "      只给自己用的话，填你的数字 id 或 @登录名。",
+    "Note: DISCORD_ALLOW is unset, so anyone can use this bot and spend your model quota.\n" +
+      "      To keep it to yourself, put your numeric id or @login here.",
   );
 }
 
 // Without this notice, almost everyone gets stuck here on first run, and the error
 // ("connection closed, code 4013") points nowhere near the real cause.
 console.error(
-  "提醒：Discord 默认不给 bot 消息正文。要去开发者门户 → Bot → Privileged Gateway Intents\n" +
-    "      把 Message Content Intent 打开，否则这条连接会被直接掐掉（4013）。",
+  "Reminder: Discord withholds message bodies from bots by default. Go to the developer portal\n" +
+    "      → Bot → Privileged Gateway Intents\n" +
+    "      and turn Message Content Intent on, or the connection is closed outright (4013).",
 );
 
 const bridge = new JoyBridge();
@@ -48,6 +49,7 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 console.error(
-  "Joy 网关上来了。私聊里说句话，或者在频道里 @ 它 —— 频道里不 @ 是不会接话的。",
+  "The Joy gateway is up. Say something in a DM, or @ it in a channel — it will not answer in a "
+  + "channel without an @.",
 );
 await adapter.run();

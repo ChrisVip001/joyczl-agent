@@ -5,22 +5,27 @@ use joyczl_provider::{ContentBlock, Message, Role};
 
 use super::budget::{should_wrap_up, trim_tool_results, ToolResultBudget};
 
-/// 关掉的两个写法都得真的关掉：`None`（没配）和 0（配成 0）是同一个意思。
+/// Both ways of switching it off have to really switch it off: `None` (unset) and 0 (set to
+/// zero) mean the same thing.
 #[test]
 fn no_budget_never_wraps_up() {
     assert!(!should_wrap_up(None, 1_000_000, 1_000_000));
     assert!(!should_wrap_up(Some(0), 1_000_000, 1_000_000));
 }
 
-/// 阈值是 80%，而且要把「下一轮大概还要花多少」算进去 —— 否则「80%」实际会在 95% 才停。
+/// The threshold is 80%, and "what the next round will probably cost" is part of it — without
+/// that, "80%" does not stop until 95%.
 #[test]
 fn the_horizon_is_eighty_percent_of_the_budget() {
-    assert!(!should_wrap_up(Some(1000), 700, 99), "79.9% 还继续");
-    assert!(should_wrap_up(Some(1000), 700, 100), "800 = 80%，收尾");
-    assert!(should_wrap_up(Some(1000), 900, 0), "已经过线");
+    assert!(
+        !should_wrap_up(Some(1000), 700, 99),
+        "at 79.9% it carries on"
+    );
+    assert!(should_wrap_up(Some(1000), 700, 100), "800 = 80%, wrap up");
+    assert!(should_wrap_up(Some(1000), 900, 0), "already over the line");
     assert!(
         should_wrap_up(Some(1000), 0, 800),
-        "一轮都没花但下一轮就要 800：预判也要算"
+        "nothing spent yet, but the next round needs 800: the forecast counts too"
     );
 }
 
@@ -58,7 +63,7 @@ fn budget(total: usize, per_result: usize) -> ToolResultBudget {
 fn result_text(messages: &[Message], index: usize) -> &str {
     match &messages[index].content[0] {
         ContentBlock::ToolResult { content, .. } => content,
-        _ => panic!("不是工具结果"),
+        _ => panic!("not a tool result"),
     }
 }
 
@@ -82,25 +87,25 @@ fn the_newest_results_survive_and_the_oldest_go_first() {
 
     let report = trim_tool_results(&mut messages, None, &budget, "s");
 
-    assert_eq!(report.trimmed, 1, "只该换最旧的一条");
+    assert_eq!(report.trimmed, 1, "only the oldest one should be swapped");
     assert!(
         result_text(&messages, 1).chars().count() < 400,
-        "最旧的一条该换桩：{}",
+        "the oldest one should become a stub: {}",
         result_text(&messages, 1)
     );
     assert_eq!(
         result_text(&messages, 3).chars().count(),
         400,
-        "次新的一条不动"
+        "the next oldest stays as it is"
     );
     assert_eq!(
         result_text(&messages, 5).chars().count(),
         400,
-        "最新的一条不动"
+        "the newest stays as it is"
     );
     assert!(
         report.still_over_budget,
-        "保留最新导致仍超预算时要如实说出来"
+        "when keeping the newest still leaves it over budget, it has to be said plainly"
     );
 }
 
@@ -138,15 +143,18 @@ fn the_largest_results_are_stubbed_until_it_fits() {
     // Budget 10k: stubbing the largest still leaves us over, so the second goes too — until it fits.
     let report = trim_tool_results(&mut messages, None, &budget(10_000, 30_000), "s");
 
-    assert_eq!(report.trimmed, 2, "两条都得换成桩才装得下：{report:?}");
+    assert_eq!(
+        report.trimmed, 2,
+        "both have to become stubs for it to fit: {report:?}"
+    );
     assert!(!report.still_over_budget);
     assert!(
         result_text(&messages, 1).contains("truncated"),
-        "第一条该换掉"
+        "the first one should be swapped"
     );
     assert!(
         result_text(&messages, 3).contains("truncated"),
-        "第二条该换掉"
+        "the second one should be swapped"
     );
     // The small one is kept as-is — a file for a thousand chars is not worth it (below the threshold).
     assert_eq!(result_text(&messages, 5), "x".repeat(1_000));
@@ -166,7 +174,10 @@ fn it_stops_as_soon_as_the_batch_fits() {
 
     let report = trim_tool_results(&mut messages, None, &budget(60_000, 30_000), "s");
 
-    assert_eq!(report.trimmed, 1, "换掉最大的就够 6 万了：{report:?}");
+    assert_eq!(
+        report.trimmed, 1,
+        "swapping the biggest one is enough for 60k: {report:?}"
+    );
     assert!(!report.still_over_budget);
     assert_eq!(result_text(&messages, 3).chars().count(), 50_000);
 }
@@ -182,8 +193,14 @@ fn small_results_are_never_stubbed_even_when_the_total_is_over() {
 
     let report = trim_tool_results(&mut messages, None, &budget(50_000, 30_000), "s");
 
-    assert_eq!(report.trimmed, 0, "给一百条小结果各建一个文件更贵");
-    assert!(report.still_over_budget, "要如实承认没达标，不假装处理过了");
+    assert_eq!(
+        report.trimmed, 0,
+        "one file per small result, a hundred of them, would cost more"
+    );
+    assert!(
+        report.still_over_budget,
+        "it has to admit it fell short rather than pretend it dealt with it"
+    );
     assert!(!result_text(&messages, 1).contains("truncated"));
 }
 
@@ -199,21 +216,24 @@ fn a_self_budgeted_tool_is_left_to_the_tool_itself() {
 #[test]
 fn trimming_is_idempotent() {
     let mut messages = vec![call("1", "mcp__x__huge"), result("1", 100_000)];
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
 
     let first = trim_tool_results(&mut messages, Some(dir.path()), &budget(10_000, 5_000), "s");
     assert_eq!(first.trimmed, 1);
     let after_first = result_text(&messages, 1).to_string();
 
     let second = trim_tool_results(&mut messages, Some(dir.path()), &budget(10_000, 5_000), "s");
-    assert_eq!(second.trimmed, 0, "已经是桩了就不该再动它");
+    assert_eq!(
+        second.trimmed, 0,
+        "already a stub, so it must not be touched again"
+    );
     assert_eq!(result_text(&messages, 1), after_first);
 }
 
 #[test]
 fn the_stub_points_at_the_spilled_file() {
     let mut messages = vec![call("1", "mcp__x__huge"), result("1", 100_000)];
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let spill = home.path().join("spill");
 
     let report = trim_tool_results(&mut messages, Some(&spill), &budget(10_000, 5_000), "s");
@@ -222,13 +242,18 @@ fn the_stub_points_at_the_spilled_file() {
     let text = result_text(&messages, 1);
     assert!(
         text.contains("full output at spill/"),
-        "要指出回查路径：{text}"
+        "it has to point at the way back: {text}"
     );
     let relative = text
         .split("full output at ")
         .nth(1)
         .and_then(|rest| rest.split(')').next())
-        .expect("路径");
-    let saved = std::fs::read_to_string(home.path().join(relative)).expect("读回落盘文件");
-    assert_eq!(saved.chars().count(), 100_000, "落盘的必须是完整原文");
+        .expect("the path");
+    let saved =
+        std::fs::read_to_string(home.path().join(relative)).expect("read the spilled file back");
+    assert_eq!(
+        saved.chars().count(),
+        100_000,
+        "what reaches the disk has to be the complete original text"
+    );
 }

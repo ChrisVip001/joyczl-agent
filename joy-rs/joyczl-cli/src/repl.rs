@@ -235,6 +235,7 @@ fn models(server: &Server, input: &str) {
                 key_env: None,
                 // Switching must not rewrite what this profile can see.
                 vision: None,
+        capabilities: None,
                 make_active: Some(true),
             }) {
                 Ok(response) => println!(
@@ -311,6 +312,7 @@ fn models(server: &Server, input: &str) {
                 api_key,
                 key_env,
                 vision,
+                capabilities: None,
                 make_active: Some(true),
             }) {
                 Ok(response) => println!(

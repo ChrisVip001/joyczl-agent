@@ -62,7 +62,7 @@ pub fn delegate_task(runner: Arc<dyn SubagentRunner>) -> Tool {
                 .to_string(),
         input_schema: json!({
             "type": "object",
-            // 要么一件事，要么一并发出去的一组（各自独立、顺序回填）。
+            // Either one thing, or a batch sent out together (each independent, merged back in order).
             "anyOf": [{"required": ["task"]}, {"required": ["tasks"]}],
             "properties": {
                 "task": {

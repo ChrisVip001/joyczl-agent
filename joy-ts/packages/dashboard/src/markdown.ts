@@ -1,13 +1,15 @@
-// 把模型的 Markdown 画成人能一眼看懂的样子。
+// Renders the model's Markdown so a human can read it at a glance.
 //
-// 为什么手写：页面本身没有任何运行时依赖，为了渲染一段回复去引一个 parser + sanitizer，
-// 会成为这一页最大的依赖。这里的做法是 **直接建 DOM 节点** —— `innerHTML` 依然一次都不用
-// （见 render.ts 的 `el`），所以模型输出永远只能是文本：文字是文字，只有下面这些结构才会
-// 变成元素。
+// Why hand-written: the page has no runtime dependencies, and pulling in a parser plus a
+// sanitiser just to render one reply would become this page's biggest dependency. The
+// approach here is to **build DOM nodes directly** — `innerHTML` is never used (see `el` in
+// render.ts) — so model output can only ever be text: words stay words, and only the
+// structures below become elements.
 //
-// 支持：ATX 标题、段落、围栏代码、引用、有序/无序列表（可嵌套）、GFM 表格、分隔线；
-// 行内：代码、粗体、斜体、删除线、链接。
-// 故意不支持：原始 HTML（按文本显示）、图片（回复不该自己发起远程请求）、引用式链接、脚注。
+// Supported: ATX headings, paragraphs, fenced code, blockquotes, ordered and unordered lists
+// (nestable), GFM tables, horizontal rules; inline: code, bold, italic, strikethrough, links.
+// Deliberately unsupported: raw HTML (shown as text), images (a reply must not trigger remote
+// requests on its own), reference links, footnotes.
 
 export type Inline =
   | { kind: "text"; text: string }
@@ -35,12 +37,13 @@ const QUOTE = /^\s{0,3}>\s?/;
 const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 const ALIGN_ROW = /^\s{0,3}\|?\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)*\|?\s*$/;
 
-/** Markdown 源文 → 块序列。纯函数，不碰 DOM（测试只测这一层）。 */
+/** Markdown source → a block sequence. A pure function that never touches the DOM (the tests
+ *  only cover this layer). */
 export function parseMarkdown(source: string): Block[] {
   return parseBlocks(source.replace(/\r\n?/g, "\n").split("\n"));
 }
 
-/** Markdown 源文 → 可直接 append 的节点。 */
+/** Markdown source → nodes that can be appended as they are. */
 export function renderMarkdown(source: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
   for (const block of parseMarkdown(source)) fragment.append(renderBlock(block));
@@ -66,7 +69,7 @@ function parseBlocks(lines: string[]): Block[] {
       at += 1;
       while (at < lines.length) {
         const current = lines[at] ?? "";
-        // 开头是同样长度的围栏就算收尾；没写收尾时，整段剩余内容都是代码。
+        // A closing fence of the same length ends it; with no closing fence, everything left is code.
         if (current.trimStart().startsWith(marker)) {
           at += 1;
           break;
@@ -144,7 +147,8 @@ function parseBlocks(lines: string[]): Block[] {
   return blocks;
 }
 
-/** 同级列表项收集成一个块；更深缩进的行归到当前项里，递归时自然成为子列表。 */
+/** Sibling list items collect into one block; deeper-indented lines join the current item and
+ *  become a sublist once the recursion gets there. */
 function parseList(lines: string[], from: number): { block: Block; next: number } {
   const first = LIST_ITEM.exec(lines[from] ?? "");
   const indent = indentOf(lines[from] ?? "");
@@ -170,7 +174,7 @@ function parseList(lines: string[], from: number): { block: Block; next: number 
     }
     items.push(parseBlocks(body));
 
-    // 项与项之间允许一个空行，但只有下一行仍是同级项时才继续。
+    // One blank line between items is allowed, but only when the next line is still a sibling item.
     let skipped = false;
     while (at < lines.length && isBlank(lines[at] ?? "")) {
       const peek = lines[at + 1] ?? "";
@@ -192,7 +196,7 @@ function parseList(lines: string[], from: number): { block: Block; next: number 
   return { block: { kind: "list", ordered, start, items }, next: at };
 }
 
-/** 行内标记 → 片段序列。 */
+/** Inline markup → a sequence of fragments. */
 export function parseInline(text: string): Inline[] {
   const out: Inline[] = [];
   let buffer = "";
@@ -232,14 +236,16 @@ export function parseInline(text: string): Inline[] {
       continue;
     }
 
-    // 地址里可能带一层括号（`…/A_(b)`、`alert(1)`），所以允许 `(...)` 夹在中间。
+    // An address may carry one level of parentheses (`…/A_(b)`, `alert(1)`), so `(...)` is
+            // allowed in the middle.
     const link = /^\[([^\]]*)\]\(((?:[^()\s]+|\([^()\s]*\))+)(?:\s+"[^"]*")?\)/.exec(rest);
     if (link !== null) {
       flush();
       const href = safeHref(link[2] ?? "");
       const label = link[1] ?? "";
       if (href === null) {
-        // 不可信的 scheme 降级成原文：链接文字照常显示，但不再是可点的地址。
+        // An untrusted scheme degrades to plain text: the link text still shows, but it is no
+                // longer a clickable address.
         out.push({ kind: "text", text: link[0] });
       } else {
         out.push({
@@ -269,8 +275,9 @@ export function parseInline(text: string): Inline[] {
 }
 
 /**
- * `2*3*4`、`file_name_here` 里的星号/下划线是符号，不是强调。
- * 判断依据：一对标记的外侧都是 ASCII 字母数字 → 不当作强调（中文两侧没有空格也照常生效）。
+  * The asterisk or underscore in `2*3*4` or `file_name_here` is a symbol, not emphasis.
+  * The rule: when both sides of a marker pair are ASCII alphanumerics, it is not emphasis
+  * (Chinese text with no spaces on either side still works).
  */
 function emphasisAllowed(text: string, at: number, matched: string): boolean {
   const before = at === 0 ? " " : text[at - 1] ?? " ";
@@ -278,7 +285,8 @@ function emphasisAllowed(text: string, at: number, matched: string): boolean {
   return !(/[0-9A-Za-z]/.test(before) && /[0-9A-Za-z]/.test(after));
 }
 
-/** 只放行能安全跳转的地址；`javascript:` 之类连锚点都不生成。 */
+/** Only addresses that are safe to navigate to are let through; something like `javascript:`
+ *  does not even produce an anchor. */
 function safeHref(raw: string): string | null {
   const href = raw.trim();
   if (/^(?:https?:|mailto:)/i.test(href)) return href;
@@ -304,7 +312,7 @@ function alignOf(line: string): Align[] {
   });
 }
 
-/** 表格一行 → 单元格。首尾的竖线不算列。 */
+/** One table row → its cells. The leading and trailing pipes are not columns. */
 function splitRow(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
   return trimmed.split("|").map((cell) => cell.trim());
@@ -382,7 +390,8 @@ function renderBlock(block: Block): HTMLElement {
       if (block.ordered && block.start !== 1) element.setAttribute("start", String(block.start));
       for (const item of block.items) {
         const li = node("li");
-        // 项里只有一个段落时不再套 <p> —— 列表要紧凑，段落间距留给正文。
+        // A single paragraph inside an item does not get another <p> — lists stay tight, and the
+                // paragraph spacing is left to body text.
         const only = item.length === 1 ? item[0] : undefined;
         if (only !== undefined && only.kind === "paragraph") {
           appendLines(li, only.lines);
@@ -432,17 +441,29 @@ function renderBlock(block: Block): HTMLElement {
 }
 
 /**
- * 剥掉落库助手消息里模型专用的工具折叠尾巴。
+  * Strips the model-only tool-fold tail from a stored assistant message.
+  *
+  * The history (chat_log) is written for two readers. **The model** needs the `\n[tools used: …]`
+  * that `fold_tool_activity` (app-server's turn.rs) appends — without it the next round forgets
+  * what it did; **a human** does not: the trace capsule above the bubble already says which
+  * tools ran, and the raw tool output in the conversation is just noise ("why is my home
+  * directory listing in the chat?"). So the display layer takes it out — one stored text, two
+  * renderings, the fold stays in the database.
+  *
+  * The marker is appended at the **very end**, so: take the **last** occurrence (tool output may
+  * quote the marker), and only strip when the text really ends with the folded closing bracket —
+  * a reply that merely mentions the marker is left alone.
  *
- * 历史（chat_log）写给两个读者。**模型**需要 `fold_tool_activity`（app-server 的
- * turn.rs）追加的 `\n[tools used: …]` —— 没有它下一轮就忘了自己做过什么；
- * **人**不需要：气泡上方的 trace 胶囊已经说了用过哪些工具，原始工具输出在对话里
- * 只是噪音（「我的家目录列表怎么跑到聊天里了？」）。所以展示层把它摘掉 —— 一份
- * 存储文本，两种画法，折叠留在数据库里。
+  * The history (chat_log) is written for two readers. **The model** needs the `\n[tools used: …]`
+  * that `fold_tool_activity` (app-server's turn.rs) appends — without it the next round forgets
+  * what it did; **a human** does not: the trace capsule above the bubble already says which
+  * tools ran, and the raw tool output in the conversation is just noise ("why is my home
+  * directory listing in the chat?"). So the display layer takes it out — one stored text, two
+  * renderings, the fold stays in the database.
  *
- * 标记是机器追加在**最末尾**的，所以：取**最后一次**出现（工具输出可能引用这个
- * 标记），并且只在文本真的以折叠的收尾括号结束时才剥 —— 回复里只是提到标记的
- * 原样保留。
+  * The marker is appended at the **very end**, so: take the **last** occurrence (tool output may
+  * quote the marker), and only strip when the text really ends with the folded closing bracket —
+  * a reply that merely mentions the marker is left alone.
  */
 export function stripToolFold(content: string): string {
   const at = content.lastIndexOf("\n[tools used:");
@@ -451,27 +472,34 @@ export function stripToolFold(content: string): string {
 }
 
 /**
- * 流式渲染：回复一边到一边就画成 Markdown，不再等传输完。
+ * Streaming: the reply is drawn as Markdown as it arrives, instead of waiting for the whole
+ * transfer.
  *
- * 增量的粒度是**块**：解析用同一个 `parseMarkdown`，但每个动画帧只画有变化的部分
- * —— 落定的块各留一个节点，每帧只重画仍在生长的最后一块，几千 token 的回复也
- * 不会每个 delta 都整体重排。断在半截的行内标记（`**`、`` ` ``）下一帧自然长好。
+ * The increment is the **block**: parsing goes through the same `parseMarkdown`, but each
+ * animation frame only draws what changed — every settled block keeps its node, and each frame
+ * redraws only the last block that is still growing, so a reply of thousands of tokens does not
+ * get fully re-laid-out per delta. Inline markers cut in half (`**`, `` ` ``) grow back the next
+ * frame.
  *
- * 解析器对「半行」前缀没有严格的前缀稳定性：流断在 `- ` 标记中间时，孤立的 `-`
- * 先被解析成段落，下一帧才并回列表。所以每次重画都拿落定块和最新解析**对账**
- * （缓存的序列化签名），从第一处不一致的块起作废重画 —— 正常情况下全等，代价
- * 是每帧一次 O(回复长度) 的比较，和解析同阶。
+ * The parser has no strict prefix stability for half-lines: when the stream breaks in the middle
+ * of a `- ` marker, the lone `-` parses as a paragraph first and only joins the list the next
+ * frame. So every redraw **reconciles** the settled blocks against a fresh parse (cached
+ * serialised signatures) and invalidates from the first block that differs — normally all equal,
+ * at the cost of one O(reply length) comparison per frame, the same order as parsing.
  *
- * 节点直接画进宿主元素（不套中间层），`.md > :first-child` 这类子选择器照常生效。
- * 流结束时调一次 `finish()`，把仍在生长的最后一块画完。
+ * Nodes are drawn straight into the host element (no intermediate layer), so child selectors like
+ * `.md > :first-child` keep working. At the end of the stream `finish()` is called once to finish
+ * the last block that is still growing.
  */
 export class StreamMarkdown {
   private source = "";
-  /** 落定块下标 → 节点。画过就不再碰——除非对账发现它变了。 */
+  /** Settled block index → node. Once drawn it is not touched again — unless reconciliation
+   *  finds that it changed. */
   private settled: HTMLElement[] = [];
-  /** 落定块的序列化签名，对账用。与 `settled` 一一对应。 */
+  /** Serialised signature of the settled blocks, used for reconciliation. One-to-one with
+   *  `settled`. */
   private signatures: string[] = [];
-  /** 仍在生长的最后一块；每个动画帧换一个新节点。 */
+  /** The last block that is still growing; every animation frame gets a new node. */
   private tail: HTMLElement | null = null;
   private frame: number | null = null;
   private readonly host: HTMLElement;
@@ -485,7 +513,8 @@ export class StreamMarkdown {
     this.schedule();
   }
 
-  /** 流结束：取消排队的帧，把剩余内容一次画完。之后这个实例不再接收 push。 */
+  /** End of stream: cancel the queued frame and draw what is left in one go. After this the
+   *  instance takes no more pushes. */
   finish(): void {
     if (this.frame !== null) {
       cancelAnimationFrame(this.frame);
@@ -504,12 +533,14 @@ export class StreamMarkdown {
 
   private repaint(final: boolean): void {
     const blocks = parseMarkdown(this.source);
-    // 流式时最后一块还在长（live）；final 时没有活块，全部按落定处理。
+        // While streaming the last block is still growing (live); at the end there is no live
+        // block and everything is treated as settled.
     const live = final ? -1 : blocks.length - 1;
     this.tail?.remove();
     this.tail = null;
 
-    // 对账：找到第一处与缓存不一致的落定块（正常情况全部一致，at = settled.length）。
+        // Reconcile: find the first settled block that differs from the cache (normally all of them
+        // match, at = settled.length).
     let at = 0;
     while (
       at < this.settled.length &&
@@ -519,7 +550,8 @@ export class StreamMarkdown {
       at += 1;
     }
     if (at < this.settled.length) {
-      // 解析器 reinterpret 了早先的尾部（半行的 `- ` 并回列表等）：作废重画。
+            // The parser reinterpreted the earlier tail (a half-line `- ` joining a list, and so on):
+            // invalidate and redraw.
       for (const stale of this.settled.slice(at)) stale.remove();
       this.settled.length = at;
       this.signatures.length = at;
@@ -538,7 +570,8 @@ export class StreamMarkdown {
   }
 }
 
-/** 段落内的单换行渲染成 <br>：聊天里换行就是换行，不并成一行。 */
+/** A single newline inside a paragraph renders as <br>: in a chat, a line break is a line
+ *  break, not a space. */
 function appendLines(parent: Node, lines: Inline[][]): void {
   lines.forEach((line, index) => {
     if (index > 0) parent.appendChild(document.createElement("br"));
@@ -584,7 +617,7 @@ function appendInline(parent: Node, inlines: Inline[]): void {
       case "link": {
         const link = document.createElement("a");
         link.href = inline.href;
-        // 外部地址另开一页：点一下不该把对话顶掉。
+                // An external address opens a new page: one click must not displace the conversation.
         link.target = "_blank";
         link.rel = "noopener noreferrer";
         appendInline(link, inline.children);

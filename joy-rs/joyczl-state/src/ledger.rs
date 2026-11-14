@@ -1,7 +1,7 @@
 //! The append-only conversation ledger: what actually happened in a turn, structured.
 //!
 //! `chat_log` is the **view** — one line per speaker, tool activity folded into
-//! `[tools used: name(前200字符)]` before it ever lands. The ledger is the **record**:
+//! `[tools used: name(first 200 chars)]` before it ever lands. The ledger is the **record**:
 //! every user message, every assistant text block, every tool call with its arguments,
 //! every tool result, every image. Rebuilding a turn from these rows is the point; the
 //! view can be regenerated from the record, never the other way round.

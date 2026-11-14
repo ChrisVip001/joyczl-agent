@@ -4,8 +4,15 @@
     "AcceptanceView": {
       "description": "One acceptance condition — what must be measurably true for the task to count as done.\n\nThe same shape is both the **input** (`task/create`) and the **view** (what is required), so the card can never show a condition the verifier does not check.",
       "properties": {
+        "expectedJson": {
+          "description": "JSON-encoded expected value. A string preserves the difference between absent and JSON null.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
-          "description": "`fileExists` / `fileContains` / `toolsOk`.",
+          "description": "`fileExists` / `fileContains` / `jsonEquals` / `toolsOk`.",
           "type": "string"
         },
         "label": {
@@ -32,6 +39,13 @@
         },
         "pattern": {
           "description": "Plain substring for `fileContains` — **not** a regex: a badly written pattern must not be able to stall a whole round.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pointer": {
+          "description": "RFC6901 pointer for jsonEquals; empty selects the complete document.",
           "type": [
             "string",
             "null"
@@ -96,6 +110,20 @@
             "null"
           ]
         },
+        "dispatchState": {
+          "description": "pending / claimed / finished / interrupted; absent for conversational tasks.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executionSessionId": {
+          "description": "Separate task transcript, when explicitly started through task/start.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "finishedAt": {
           "type": [
             "string",
@@ -111,6 +139,17 @@
         },
         "id": {
           "type": "string"
+        },
+        "inputCondition": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TaskInputView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Human-declared input obligation; it never grants tool permissions."
         },
         "lastStopReason": {
           "description": "Why it stopped last time — the card's footnote, never guessed from the status.",
@@ -129,7 +168,7 @@
         },
         "runCount": {
           "default": 0,
-          "description": "How many times this task has been executed (\"执行 3 次\").",
+          "description": "How many times this task has been executed (\"run 3 times\").",
           "format": "int32",
           "type": "integer"
         },
@@ -366,12 +405,19 @@
     "CheckView": {
       "description": "One condition's latest measured verdict. Same order as `AgentTaskView.acceptance`.",
       "properties": {
+        "artifactSha256": {
+          "description": "SHA-256 of the exact file bytes read for this measurement, when applicable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "detail": {
-          "description": "Passed: the evidence (\"report.md 12.4 KB\"). Failed: the measurement (\"report.md 不存在\").",
+          "description": "Passed: the evidence (\"report.md 12.4 KB\"). Failed: the measurement (\"report.md does not exist\").",
           "type": "string"
         },
         "label": {
-          "description": "The condition in the human's words (\"report.md 里至少有 3 处结论\").",
+          "description": "The condition in the human's words (\"report.md contains at least 3 conclusions\").",
           "type": "string"
         },
         "passed": {
@@ -1439,6 +1485,37 @@
       "title": "MemoryListResponse",
       "type": "object"
     },
+    "MemoryObservation": {
+      "description": "References describe extraction context, not independent evidence of truth.",
+      "properties": {
+        "assessmentJson": {
+          "description": "JSON assessment for a source-bound temporary claim. Confidence is model-reported, not calibrated or independent verification; includes quotation and source-time expiry.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextDigest": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "sourceRefs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "contextDigest",
+        "observedAt",
+        "sourceRefs"
+      ],
+      "title": "MemoryObservation",
+      "type": "object"
+    },
     "MemoryPageParams": {
       "properties": {
         "page": {
@@ -1538,6 +1615,58 @@
       "title": "MemoryPageView",
       "type": "object"
     },
+    "MemoryProvenanceParams": {
+      "properties": {
+        "factId": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "factId"
+      ],
+      "title": "MemoryProvenanceParams",
+      "type": "object"
+    },
+    "MemoryProvenanceResponse": {
+      "properties": {
+        "factId": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/definitions/MemoryObservation"
+          },
+          "type": "array"
+        },
+        "validFrom": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validUntil": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validityOrigin": {
+          "description": "`human` or `consolidation`; absent for an unbounded legacy claim.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "factId",
+        "observations"
+      ],
+      "title": "MemoryProvenanceResponse",
+      "type": "object"
+    },
     "MemoryRememberParams": {
       "properties": {
         "content": {
@@ -1620,6 +1749,44 @@
       "title": "MemorySearchResponse",
       "type": "object"
     },
+    "MemoryValidityParams": {
+      "description": "Human-only replacement of a fact's validity window. Null removes a bound.",
+      "properties": {
+        "factId": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "validFrom": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "validUntil": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "factId"
+      ],
+      "title": "MemoryValidityParams",
+      "type": "object"
+    },
+    "MemoryValidityResponse": {
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "changed"
+      ],
+      "title": "MemoryValidityResponse",
+      "type": "object"
+    },
     "Message": {
       "description": "One message in session history: a row of `chat_log`.\n\nSame conversation, second viewpoint alongside the live stream (`turnStarted` / `textDelta` / `turnCompleted`): the live stream lives only for **this connection** (gone on refresh); this one makes \"refresh, switch devices, look back later\" possible.",
       "properties": {
@@ -1667,6 +1834,33 @@
       ],
       "title": "MessageRole",
       "type": "string"
+    },
+    "ModelCapabilities": {
+      "additionalProperties": false,
+      "description": "Explicit declarations for the profile's main model; absent fields retain defaults.",
+      "properties": {
+        "contextWindow": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reasoningEffort": {
+          "description": "Responses only. Supported efforts depend on the selected model.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "ModelInfo": {
       "properties": {
@@ -1746,6 +1940,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelCapabilities"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "id": {
@@ -1902,6 +2106,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelCapabilities"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "id": {
@@ -3168,7 +3382,7 @@
     "SessionSummary": {
       "properties": {
         "cwd": {
-          "description": "The session's working directory: the **root of everything it may write** (tools refuse writes outside it). Absent = not chosen; the dashboard shows \"选择工作目录\".",
+          "description": "The session's working directory: the **root of everything it may write** (tools refuse writes outside it). Absent = not chosen; the dashboard shows \"choose a working directory\".",
           "type": [
             "string",
             "null"
@@ -3582,6 +3796,53 @@
       "title": "TaskGetParams",
       "type": "object"
     },
+    "TaskInputView": {
+      "properties": {
+        "conditionId": {
+          "type": "string"
+        },
+        "data": true,
+        "description": {
+          "type": "string"
+        },
+        "eventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "eventKey": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "description": "pending / received / consumed.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "conditionId",
+        "description",
+        "eventKey",
+        "source",
+        "state"
+      ],
+      "type": "object"
+    },
     "TaskListParams": {
       "title": "TaskListParams",
       "type": "null"
@@ -3602,6 +3863,58 @@
       "title": "TaskListResponse",
       "type": "object"
     },
+    "TaskOperationsResponse": {
+      "description": "Human-only inspection of persisted tool operations and uncertainty.",
+      "properties": {
+        "checkpointDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/definitions/ToolOperationView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operations"
+      ],
+      "title": "TaskOperationsResponse",
+      "type": "object"
+    },
+    "TaskReconcileParams": {
+      "description": "Evidence records a human observation and never executes or resumes the operation.",
+      "properties": {
+        "checkpointDigest": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "resolution": {
+          "description": "reconciled_success / reconciled_failure / not_executed.",
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "checkpointDigest",
+        "evidence",
+        "operationId",
+        "resolution",
+        "taskId"
+      ],
+      "title": "TaskReconcileParams",
+      "type": "object"
+    },
     "TaskRunsResponse": {
       "description": "`task/runs`: every attempt of one task, newest first.",
       "properties": {
@@ -3616,6 +3929,70 @@
         "runs"
       ],
       "title": "TaskRunsResponse",
+      "type": "object"
+    },
+    "TaskSignalParams": {
+      "description": "Authorized host input, correlated to an existing human-declared condition.",
+      "properties": {
+        "conditionId": {
+          "type": "string"
+        },
+        "data": true,
+        "eventId": {
+          "type": "string"
+        },
+        "eventKey": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "conditionId",
+        "data",
+        "eventId",
+        "eventKey",
+        "source"
+      ],
+      "title": "TaskSignalParams",
+      "type": "object"
+    },
+    "TaskSignalResponse": {
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "duplicate": {
+          "type": "boolean"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accepted",
+        "duplicate",
+        "taskId"
+      ],
+      "title": "TaskSignalResponse",
+      "type": "object"
+    },
+    "TaskStartParams": {
+      "description": "Start a pending task in its own durable execution context. Human-only.",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "taskId"
+      ],
+      "title": "TaskStartParams",
       "type": "object"
     },
     "TaskUpdatedNotification": {
@@ -3668,6 +4045,38 @@
         }
       },
       "title": "TaskViewResponse",
+      "type": "object"
+    },
+    "TaskWaitParams": {
+      "description": "Human-only input declaration before a task starts.",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "eventKey": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "description": "Latest input arrival time; accepted data remains available after this deadline.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "description",
+        "eventKey",
+        "source",
+        "taskId"
+      ],
+      "title": "TaskWaitParams",
       "type": "object"
     },
     "TextDeltaNotification": {
@@ -3843,6 +4252,88 @@
         "turnId"
       ],
       "title": "ToolDeltaNotification",
+      "type": "object"
+    },
+    "ToolOperationView": {
+      "properties": {
+        "arguments": true,
+        "checkpointDigest": {
+          "description": "Per-turn snapshot for multi-turn ordinary-chat inspection.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "inputDigest": {
+          "type": "string"
+        },
+        "origin": {
+          "description": "checkpoint / recovered_checkpoint; neither proves network transmission.",
+          "type": "string"
+        },
+        "outputDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replayPolicy": {
+          "description": "Automatic replay policy; this journal grants no provider idempotency guarantees.",
+          "type": "string"
+        },
+        "roundId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "toolUseId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "arguments",
+        "id",
+        "inputDigest",
+        "origin",
+        "replayPolicy",
+        "roundId",
+        "startedAt",
+        "status",
+        "tool",
+        "toolUseId",
+        "turnId"
+      ],
       "type": "object"
     },
     "ToolStartedNotification": {
@@ -4156,6 +4647,57 @@
         "tools"
       ],
       "title": "TurnMeta",
+      "type": "object"
+    },
+    "TurnOperationsParams": {
+      "description": "Human-only inspection of stopped ordinary-chat operations; task operations use task/operations.",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "sessionId"
+      ],
+      "title": "TurnOperationsParams",
+      "type": "object"
+    },
+    "TurnReconcileParams": {
+      "properties": {
+        "checkpointDigest": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "resolution": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "checkpointDigest",
+        "evidence",
+        "operationId",
+        "resolution",
+        "sessionId",
+        "turnId"
+      ],
+      "title": "TurnReconcileParams",
       "type": "object"
     },
     "TurnResumedNotification": {

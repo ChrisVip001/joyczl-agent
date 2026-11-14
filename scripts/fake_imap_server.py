@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""假的 IMAP 服务器，只给 smoke-connector.sh 的入站一段用。
+"""A fake IMAP server, only for smoke-connector.sh's inbound leg.
 
-起在 127.0.0.1:0，端口打印到 stdout 一行；剧本覆盖 Joy 客户端真正会说的四句话：
+Listens on 127.0.0.1:0 and prints the port as one line on stdout; the script covers the four
+things the Joy client actually says:
   LOGIN / SELECT / UID SEARCH / UID FETCH + LOGOUT。
-邮箱里预置两封信；UID 从参数给（默认 101、102）。服务一个会话后退出。
+Two messages are preloaded; the UIDs come from the arguments (101, 102 by default). It
+serves one session and exits.
 
-不验签、不连网：冒烟测的是「轮询器 → 协议 → 收件箱表」之间那一段全是真的。
+No signature check, no network: the smoke test covers the stretch from the poller through the
+protocol to the inbox table, which is all real.
 """
 
 import sys
@@ -15,25 +18,25 @@ UID_B = int(sys.argv[2]) if len(sys.argv) > 2 else 102
 
 MESSAGES = {
     UID_A: (
-        "From: =?UTF-8?B?5byg5LiJ?= <zhangsan@corp.com>\r\n"
+        "From: =?UTF-8?B?WmhhbmcgU2Fu?= <zhangsan@corp.com>\r\n"
         "To: joy@corp.com\r\n"
-        "Subject: =?UTF-8?B?5pyN5Yqh5Zmo5ZGo5oql?=\r\n"
+        "Subject: =?UTF-8?B?U2VydmVyIHdlZWtseSByZXBvcnQ=?=\r\n"
         "Date: Wed, 5 Nov 2026 09:00:00 +0800\r\n"
         "Message-ID: <smoke-101@corp.com>\r\n"
         "Content-Type: text/plain; charset=utf-8\r\n"
         "\r\n"
-        "这周 CPU 一直低于 40%。\r\n"
+        "CPU has stayed under 40% all week.\r\n"
     ),
     UID_B: (
         "From: alice@corp.com\r\n"
         "To: joy@corp.com\r\n"
-        "Subject: 发票\r\n"
+        "Subject: invoice\r\n"
         "Date: Wed, 5 Nov 2026 10:00:00 +0800\r\n"
         "Message-ID: <smoke-102@corp.com>\r\n"
         "Content-Type: text/plain; charset=utf-8\r\n"
         "Content-Transfer-Encoding: base64\r\n"
         "\r\n"
-        "5pys5pyI5Y+R56Wo5Zyo6ZmE5Lu26YeM44CC\r\n"  # 本月发票在附件里。
+        "VGhlIGludm9pY2UgZm9yIHRoaXMgbW9udGggaXMgaW4gdGhlIGF0dGFjaG1lbnQu\r\n"  # "The invoice for this month is in the attachment."
     ),
 }
 

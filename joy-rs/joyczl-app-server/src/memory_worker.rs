@@ -16,8 +16,8 @@
 //!   atomic UPDATE…RETURNING; two hubs sharing state.db cannot both distill the same rows.
 //! * **Never silent**: every run that changes something says so on stderr, and the count
 //!   is carried to the next turn so the client still gets `consolidationCompleted`.
-//! * **Nothing is lost on shutdown**: a claim taken but not finished is handed back with
-//!   the existing backoff, and a turn's ledger row is already committed before the nudge.
+//! * **Interrupted batches remain durable**: exclusive startup recovers unfinished claims;
+//!   retry keeps its source set and cannot duplicate its committed episode summary.
 
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
@@ -34,8 +34,7 @@ use tokio::task::JoinHandle;
 const HEARTBEAT: Duration = Duration::from_secs(60);
 
 /// How long `stop()` waits for a run in flight. A claim that outlives it stays `claimed`
-/// and the next process picks it up after the backoff — losing an in-flight distillation
-/// is recoverable; blocking shutdown is not.
+/// and exclusive startup recovers it. Cancellation must be joined before shutdown returns.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// Everything the worker touches. Handles only — no `Server`, so the worker cannot drift
@@ -46,6 +45,7 @@ pub struct Deps {
     pub episodes: Episodes,
     pub settings: Arc<std::sync::RwLock<Settings>>,
     pub resolved: Arc<std::sync::RwLock<Option<Resolved>>>,
+    pub(crate) _execution_owner: Option<Arc<crate::lock::DaemonLock>>,
 }
 
 pub struct MemoryWorker {
@@ -70,9 +70,8 @@ impl MemoryWorker {
         });
 
         let handle = tokio::spawn(async move {
-            // `last_facts` avoids rewriting every page and MEMORY.md on a heartbeat where
-            // nothing changed: the mirror is cheap, but file mtimes are not free.
-            let mut last_facts = -1i64;
+            // Cache rendered source content, not row counts or mirror-owned metadata.
+            let mut last_projection = None;
             loop {
                 tokio::select! {
                     _ = wake.notified() => {}
@@ -81,8 +80,8 @@ impl MemoryWorker {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
-                if let Err(error) = run_once(&deps, &pending, &mut last_facts).await {
-                    eprintln!("(joy) memory consolidation did not get done this round (trying again next round): {error}");
+                if let Err(error) = run_once(&deps, &pending, &mut last_projection).await {
+                    eprintln!("(joy) memory work failed; persistent state retained for retry or restart: {error:#}");
                 }
             }
         });
@@ -114,27 +113,44 @@ impl MemoryWorker {
             .lock()
             .expect("the worker-handle lock should not be poisoned")
             .take();
-        if let Some(handle) = handle {
-            if tokio::time::timeout(SHUTDOWN_GRACE, handle).await.is_err() {
-                eprintln!("(joy) memory consolidation was still running; shutting it down — the unfinished batch will be claimed again at the next start");
+        if let Some(mut handle) = handle {
+            if tokio::time::timeout(SHUTDOWN_GRACE, &mut handle)
+                .await
+                .is_err()
+            {
+                handle.abort();
+                let _ = handle.await;
+                eprintln!("(joy) stalled memory extraction cancelled and joined; its unfinished source batch remains recoverable");
             }
         }
     }
 }
 
+impl Drop for MemoryWorker {
+    fn drop(&mut self) {
+        if let Some(handle) = self
+            .handle
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            handle.abort();
+        }
+    }
+}
+
 /// One pass: distill if due, then mirror if anything changed.
-async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> anyhow::Result<()> {
+async fn run_once(
+    deps: &Deps,
+    pending: &AtomicI32,
+    last_projection: &mut Option<String>,
+) -> anyhow::Result<()> {
     let resolved = {
         let guard = deps
             .resolved
             .read()
             .expect("the resolved lock should not be poisoned");
         guard.clone()
-    };
-    // No model configured (yet): nothing can be distilled, and saying so every minute
-    // would be noise — the CLI already reported "模型还没配好" at startup.
-    let Some(resolved) = resolved else {
-        return Ok(());
     };
     let settings = {
         let guard = deps
@@ -144,17 +160,20 @@ async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> any
         guard.clone()
     };
 
-    // Same rule as before, just off the turn's clock: enough new rows, then a small-model
-    // call. The claim inside is what keeps two processes from doing it twice.
-    let new_facts = joyczl_memory::consolidation::consolidate_if_due(
-        &deps.chat,
-        &deps.facts,
-        &deps.episodes,
-        resolved.client.as_ref(),
-        &resolved.small_model,
-        settings.consolidate_every,
-    )
-    .await?;
+    // Existing memory projects locally even before a model has been configured.
+    let new_facts = if let Some(resolved) = resolved {
+        joyczl_memory::consolidation::consolidate_if_due(
+            &deps.chat,
+            &deps.facts,
+            &deps.episodes,
+            resolved.client.as_ref(),
+            &resolved.small_model,
+            settings.consolidate_every,
+        )
+        .await?
+    } else {
+        0
+    };
     if new_facts > 0 {
         pending.fetch_add(new_facts as i32, Ordering::SeqCst);
         eprintln!(
@@ -162,13 +181,11 @@ async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> any
         );
     }
 
-    // Mirror only when the store changed: rewriting identical pages every minute would
-    // churn mtimes and make `git status` on a memory folder useless.
-    let total = deps.facts.count().await.unwrap_or(-1);
-    if total == *last_facts && new_facts == 0 {
+    let projection = projection_digest(deps).await?;
+    if last_projection.as_deref() == Some(projection.as_str()) {
         return Ok(());
     }
-    *last_facts = total;
+    let mut projection_ok = true;
 
     let bundle = joyczl_memory::bundle::Bundle::new(&settings.home);
     match joyczl_memory::mirror::mirror_facts(&deps.facts, &bundle).await {
@@ -186,15 +203,46 @@ async fn run_once(deps: &Deps, pending: &AtomicI32, last_facts: &mut i64) -> any
         ),
         Ok(_) => {}
         Err(error) => {
+            projection_ok = false;
             eprintln!("(joy) memory-library mirror failed (the facts themselves are fine): {error}")
         }
     }
     if let Err(error) =
         joyczl_memory::export_markdown(&deps.facts, &deps.episodes, &settings.home).await
     {
+        projection_ok = false;
         eprintln!("(joy) MEMORY.md mirror failed (the memory itself is unaffected): {error}");
     }
+    if projection_ok {
+        *last_projection = Some(projection);
+    }
     Ok(())
+}
+
+/// Mirror metadata changes during projection and must not invalidate its own cache.
+async fn projection_digest(deps: &Deps) -> anyhow::Result<String> {
+    let facts = deps.facts.all_by_subject(u32::MAX).await?;
+    let episodes = deps.episodes.recent(u32::MAX).await?;
+    let facts: Vec<_> = facts
+        .iter()
+        .map(|row| {
+            (
+                row.id,
+                &row.subject,
+                &row.content,
+                &row.source,
+                &row.kind,
+                &row.created_at,
+            )
+        })
+        .collect();
+    let episodes: Vec<_> = episodes
+        .iter()
+        .map(|row| (row.id, &row.happened_at, &row.summary, &row.created_at))
+        .collect();
+    Ok(joyczl_state::ledger::digest_of(&serde_json::to_vec(&(
+        facts, episodes,
+    ))?))
 }
 
 #[cfg(test)]

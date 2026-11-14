@@ -88,10 +88,10 @@ mod tests {
     use super::*;
 
     async fn db() -> (Usage, tempfile::TempDir) {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let pool = crate::open(&dir.path().join("state.db"))
             .await
-            .expect("打开库");
+            .expect("open the store");
         (Usage::new(pool), dir)
     }
 
@@ -99,23 +99,23 @@ mod tests {
     #[tokio::test]
     async fn records_and_aggregates_by_model() {
         let (usage, _dir) = db().await;
-        let empty = usage.summary().await.expect("空汇总");
+        let empty = usage.summary().await.expect("empty summary");
         assert_eq!(empty.turns, 0);
 
         usage
-            .record("s1", "deepseek", "deepseek-chat", 100, 50)
+            .record("s1", "deepseek", "deepseek-flash", 100, 50)
             .await
-            .expect("记一行");
+            .expect("record one row");
         usage
-            .record("s1", "deepseek", "deepseek-chat", 200, 80)
+            .record("s1", "deepseek", "deepseek-flash", 200, 80)
             .await
-            .expect("再记一行");
+            .expect("record another row");
         usage
             .record("s2", "openai", "gpt-5.2", 1000, 10)
             .await
-            .expect("另一家");
+            .expect("another vendor");
 
-        let summary = usage.summary().await.expect("汇总");
+        let summary = usage.summary().await.expect("summary");
         assert_eq!(summary.turns, 3);
         assert_eq!(summary.input_tokens, 1300);
         assert_eq!(summary.output_tokens, 140);
@@ -123,7 +123,7 @@ mod tests {
         // Sorted by total input desc: gpt-5.2 (1000) first.
         assert_eq!(summary.by_model[0].model, "gpt-5.2");
         assert_eq!(summary.by_model[0].turns, 1);
-        assert_eq!(summary.by_model[1].model, "deepseek-chat");
+        assert_eq!(summary.by_model[1].model, "deepseek-flash");
         assert_eq!(summary.by_model[1].turns, 2);
         assert_eq!(summary.by_model[1].input_tokens, 300);
     }

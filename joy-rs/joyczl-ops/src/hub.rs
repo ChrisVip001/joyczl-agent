@@ -3,11 +3,11 @@
 //! Two ready-made answers: **per-tenant profile** (each tenant gets a HOME — config,
 //! memory and credentials are isolated by nature; `JOY_HOME` is already the root of all
 //! state) and **per-session locks** (concurrency split by key). Admission is an account:
-//! register/login on the web issues a **device token** (登录即配对 — logging in from a
+//! register/login on the web issues a **device token** (signing in pairs the device — logging in from a
 //! device pairs it); the CLI `joy hub adduser` path keeps working unchanged.
 //!
 //! ```text
-//!   <root>/users.json          v2 账目：user → { password credential, devices: {name → token} }
+//!   <root>/users.json          v2 ledger: user → { password credential, devices: {name → token} }
 //!   <root>/<user>/             one home per user (state.db, models.json, the full jobs set)
 //!   <root>/<user>/app-server.lock   the guard lock is already per-home; holds by nature
 //! ```
@@ -39,7 +39,7 @@ pub fn valid_user(name: &str) -> bool {
 }
 
 /// Device-name rules: visible characters only, ≤ 32 chars. The name is a JSON key and a
-/// label — it never touches the filesystem, so Unicode ("我的手机") is fine.
+/// label — it never touches the filesystem, so Unicode ("my phone") is fine.
 pub fn valid_device(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && trimmed.chars().count() <= 32 && trimmed.chars().all(|c| !c.is_control())

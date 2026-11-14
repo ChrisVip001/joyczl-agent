@@ -9,9 +9,8 @@
 //!                    ──► fire() runs it
 //!                    ──► confirm(name, minute) ← settled: last_fired = minute
 //!
-//! On restart, a non-empty claimed_minute = the process died mid-run:
-//!   catch_up=1 → rerun once (at-least-once; morning reports prefer repeat over miss)
-//!   catch_up=0 → confirm and give up (at-most-once; notifications prefer miss over repeat)
+//! On restart, an unsettled claim requires human review; it is never overwritten or replayed.
+//! Catch-up only applies to missed, unclaimed trigger times.
 //! ```
 
 use sqlx::SqlitePool;
@@ -81,19 +80,24 @@ impl Schedules {
     /// Claim: persist "I'm running this minute" before dispatch. A crash here leaves
     /// pending_claim non-empty — the replay is explicitly taken over, not left to luck.
     pub async fn claim(&self, name: &str, minute: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE schedule_state SET claimed_minute = ?, \
-             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE name = ?",
-        )
-        .bind(minute)
-        .bind(name)
-        .execute(&self.pool)
-        .await
-        .map(|_| ())
+        if self.claim_once(name, minute).await? {
+            Ok(())
+        } else {
+            Err(sqlx::Error::Protocol(
+                "Schedule already claimed or handled; review before retrying".into(),
+            ))
+        }
+    }
+    pub async fn claim_once(&self, name: &str, minute: &str) -> Result<bool, sqlx::Error> {
+        let changed=sqlx::query("UPDATE schedule_state SET claimed_minute=?,updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+            WHERE name=? AND claimed_minute IS NULL AND (last_fired_minute IS NULL OR last_fired_minute<>?)
+            AND NOT EXISTS(SELECT 1 FROM schedule_completions c WHERE c.name=schedule_state.name AND c.minute=?)")
+            .bind(minute).bind(name).bind(minute).bind(minute).execute(&self.pool).await?.rows_affected();
+        Ok(changed == 1)
     }
 
-    /// Settle: last_fired = minute, claim cleared. Success and failure both come here —
-    /// a failed job also counts as "this minute handled"; no retry every 20s without backoff.
+    /// Legacy administrative settlement. Executions use ScheduleCompletions::settle so the
+    /// outcome and production receipt commit with the trigger state.
     pub async fn confirm(&self, name: &str, minute: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE schedule_state SET last_fired_minute = ?, claimed_minute = NULL, \
@@ -135,10 +139,10 @@ mod tests {
     use super::*;
 
     async fn db() -> (Schedules, tempfile::TempDir) {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let pool = crate::open(&dir.path().join("state.db"))
             .await
-            .expect("打开库");
+            .expect("open the store");
         (Schedules::new(pool), dir)
     }
 
@@ -146,38 +150,42 @@ mod tests {
     #[tokio::test]
     async fn ensure_claim_confirm_round_trip() {
         let (schedules, _dir) = db().await;
-        assert!(schedules.last_fired("morning").await.expect("空").is_none());
+        assert!(schedules
+            .last_fired("morning")
+            .await
+            .expect("empty")
+            .is_none());
 
         schedules
             .ensure("morning", true, "outbox")
             .await
-            .expect("登记");
+            .expect("record");
         schedules
             .claim("morning", "2026-10-30T08:00")
             .await
-            .expect("占坑");
+            .expect("claim the slot");
         assert_eq!(
             schedules
                 .pending_claim("morning")
                 .await
-                .expect("读坑")
+                .expect("read the slot")
                 .as_deref(),
             Some("2026-10-30T08:00")
         );
         schedules
             .confirm("morning", "2026-10-30T08:00")
             .await
-            .expect("落定");
+            .expect("settle");
         assert!(schedules
             .pending_claim("morning")
             .await
-            .expect("坑清了")
+            .expect("the slot is clear")
             .is_none());
         assert_eq!(
             schedules
                 .last_fired("morning")
                 .await
-                .expect("读回")
+                .expect("read back")
                 .as_deref(),
             Some("2026-10-30T08:00")
         );
@@ -186,46 +194,49 @@ mod tests {
         schedules
             .ensure("morning", false, "notify")
             .await
-            .expect("再登记");
+            .expect("record again");
         let raw: (bool, String, Option<String>) = sqlx::query_as(
             "SELECT catch_up, delivery, last_fired_minute FROM schedule_state WHERE name = 'morning'",
         )
         .fetch_one(&schedules.pool)
         .await
-        .expect("读行");
-        assert!(!raw.0, "策略按最新声明");
+        .expect("read the row");
+        assert!(!raw.0, "policy follows the latest declaration");
         assert_eq!(raw.1, "notify");
-        assert_eq!(raw.2.as_deref(), Some("2026-10-30T08:00"), "历史不丢");
+        assert_eq!(
+            raw.2.as_deref(),
+            Some("2026-10-30T08:00"),
+            "the history is not lost"
+        );
     }
 
-    /// confirm doubles as the "abandon" exit: a catch_up=0 job claimed the slot, then the
-    /// process died; on restart confirm it — at-most-once.
+    /// Administrative confirmation can abandon a slot after human review without replay.
     #[tokio::test]
     async fn confirm_doubles_as_the_abandon_exit() {
         let (schedules, _dir) = db().await;
         schedules
             .ensure("notify-job", false, "notify")
             .await
-            .expect("登记");
+            .expect("record");
         schedules
             .claim("notify-job", "2026-10-30T09:00")
             .await
-            .expect("占坑");
-        // The process died. On restart: catch_up=0 → confirm it away, no rerun.
+            .expect("claim the slot");
+        // The operator explicitly discards a reviewed slot; no work is rerun.
         schedules
             .confirm("notify-job", "2026-10-30T09:00")
             .await
-            .expect("放弃");
+            .expect("give up");
         assert!(schedules
             .pending_claim("notify-job")
             .await
-            .expect("读")
+            .expect("read")
             .is_none());
         assert_eq!(
             schedules
                 .last_fired("notify-job")
                 .await
-                .expect("读")
+                .expect("read")
                 .as_deref(),
             Some("2026-10-30T09:00")
         );
@@ -236,9 +247,9 @@ mod tests {
     async fn list_returns_every_row_sorted() {
         let (schedules, _dir) = db().await;
         for (name, cu, dl) in [("b", true, "outbox"), ("a", false, "notify")] {
-            schedules.ensure(name, cu, dl).await.expect("登记");
+            schedules.ensure(name, cu, dl).await.expect("record");
         }
-        let rows = schedules.list().await.expect("读回");
+        let rows = schedules.list().await.expect("read back");
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "a");
         assert!(!rows[0].catch_up);
@@ -250,14 +261,28 @@ mod tests {
     #[tokio::test]
     async fn legacy_import_moves_only_history() {
         let (schedules, _dir) = db().await;
-        schedules.ensure("old", true, "outbox").await.expect("登记");
+        schedules
+            .ensure("old", true, "outbox")
+            .await
+            .expect("record");
         schedules
             .import_legacy("old", "2026-10-29T08:00")
             .await
-            .expect("导入");
+            .expect("import");
         assert_eq!(
-            schedules.last_fired("old").await.expect("读").as_deref(),
+            schedules.last_fired("old").await.expect("read").as_deref(),
             Some("2026-10-29T08:00")
+        );
+    }
+    #[tokio::test]
+    async fn an_unsettled_claim_cannot_be_overwritten_by_another_trigger() {
+        let (schedules, _dir) = db().await;
+        schedules.ensure("job", true, "outbox").await.unwrap();
+        schedules.claim("job", "2026-11-13T08:00").await.unwrap();
+        assert!(schedules.claim("job", "2026-11-13T08:01").await.is_err());
+        assert_eq!(
+            schedules.pending_claim("job").await.unwrap().as_deref(),
+            Some("2026-11-13T08:00")
         );
     }
 }

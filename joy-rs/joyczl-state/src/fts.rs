@@ -77,7 +77,7 @@ mod fts_tests {
                     for dangerous in ['(', ')', ':', '*', '"', '/', '-'] {
                         assert!(
                             !inside.contains(dangerous),
-                            "{bad:?} 生成的 {expr} 里 {token} 仍含 {dangerous}"
+                            "{token} in the {expr} generated from {bad:?} still contains {dangerous}"
                         );
                     }
                 }
@@ -100,6 +100,7 @@ mod fts_tests {
 
     #[test]
     fn like_pattern_keeps_chinese_and_drops_wildcards() {
+        // A CJK fixture: the point is that a multi-byte token survives the LIKE pattern intact.
         assert_eq!(like_pattern("早上").as_deref(), Some("%早上%"));
         // A user-supplied % must not become a wildcard.
         assert_eq!(like_pattern("a%b").as_deref(), Some("%ab%"));

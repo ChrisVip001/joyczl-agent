@@ -148,7 +148,7 @@ impl Connection {
     /// Rebuild from the spec and handshake again (`initialize` + `notifications/initialized`).
     async fn reconnect(&self) -> Result<(), String> {
         let Some(spec) = &self.spec else {
-            return Err("这条连接没留下配置，重建不了（重启 Joy 会重新连）".to_string());
+            return Err("this connection kept no configuration, so it cannot be rebuilt (restarting Joy reconnects)".to_string());
         };
         let mut fresh = Transport::connect(spec).await?;
         fresh.initialize().await?;
@@ -173,8 +173,9 @@ impl Connection {
         let now = std::time::Instant::now();
         if let Some(remaining) = self.breaker.lock().await.blocked_for(now) {
             return format!(
-                "Error: MCP {}_{tool} 被跳过了：这台服务器连续失败过 {} 次，断路器还开着（还有 {} 秒）—— \
-                 等它凉下来会自动放一次探针。",
+                "Error: the MCP tool {}_{tool} was skipped: this server failed {} times in a row and \
+                 the circuit breaker is still open ({} seconds left) — once it cools down one probe \
+                 goes through by itself.",
                 self.name,
                 self.policy.failures,
                 remaining.as_secs().max(1)
@@ -195,7 +196,7 @@ impl Connection {
                     outcome = Err(Failure::Transport(format!("outcome unknown; connection restored but call was not replayed. Reconcile remote state before retrying: {first}")));
                 }
                 Err(why) => {
-                    outcome = Err(Failure::Transport(format!("outcome unknown; reconcile remote state before retrying: {first}；重连也没成：{why}")));
+                    outcome = Err(Failure::Transport(format!("outcome unknown; reconcile remote state before retrying: {first}; the reconnect failed too: {why}")));
                 }
             }
         }
@@ -205,12 +206,12 @@ impl Connection {
             Ok(text) => (true, text),
             Err(Failure::Transport(error)) => (
                 false,
-                format!("Error: MCP 调用 {}_{tool} 失败：{error}", self.name),
+                format!("Error: the MCP call {}_{tool} failed: {error}", self.name),
             ),
             Err(Failure::Timeout) => (
                 false,
                 format!(
-                    "Error: MCP 调用 {}_{tool} 失败：超过 {} 秒没有回话；outcome unknown — reconcile remote state before retrying",
+                    "Error: the MCP call {}_{tool} failed: no reply in over {} seconds; outcome unknown — reconcile remote state before retrying",
                     self.name,
                     TIMEOUT.as_secs()
                 ),
@@ -222,7 +223,7 @@ impl Connection {
         drop(breaker);
         if opened {
             eprintln!(
-                "(joy) MCP 服务器 '{}' 连续失败 {} 次，断路器打开 {} 秒",
+                "(joy) MCP server '{}' failed {} times in a row; circuit breaker open for {} seconds",
                 self.name,
                 self.policy.failures,
                 self.policy.cooldown.as_secs()
@@ -311,7 +312,7 @@ impl McpClient {
     async fn connect_one(&mut self, auth_root: &Path, spec: &ServerSpec) {
         if spec.name.is_empty() {
             self.warnings
-                .push("有一条服务器没写 'name'，跳过".to_string());
+                .push("one server has no 'name'; skipped".to_string());
             return;
         }
         let name = spec.name.clone();
@@ -322,7 +323,7 @@ impl McpClient {
             Ok(target) => target,
             Err(message) => {
                 self.warnings
-                    .push(format!("MCP 服务器 '{name}' 跳过：{message}"));
+                    .push(format!("MCP server '{name}' skipped: {message}"));
                 return;
             }
         };
@@ -339,7 +340,7 @@ impl McpClient {
                 }
                 Err(error) => {
                     self.warnings
-                        .push(format!("MCP 服务器 '{name}' 需要登录：{error}"));
+                        .push(format!("MCP server '{name}' needs a sign-in: {error}"));
                     return;
                 }
             }
@@ -355,7 +356,7 @@ impl McpClient {
             }
             Err(error) => {
                 self.warnings
-                    .push(format!("MCP 服务器 '{name}' 连不上：{error}"));
+                    .push(format!("MCP server '{name}' cannot be reached: {error}"));
                 if let Some(hint) = config::auth_hint(&target) {
                     self.warnings.push(hint);
                 }
@@ -369,11 +370,11 @@ impl McpClient {
         name: &str,
         target: &TransportSpec,
     ) -> Result<(Arc<Connection>, Vec<ToolMeta>), String> {
-        let mut transport = with_timeout("连接超时", Transport::connect(target)).await?;
-        with_timeout("握手超时", transport.initialize()).await?;
-        let tools = with_timeout("列工具超时", transport.list_tools()).await?;
+        let mut transport = with_timeout("connect timed out", Transport::connect(target)).await?;
+        with_timeout("handshake timed out", transport.initialize()).await?;
+        let tools = with_timeout("listing tools timed out", transport.list_tools()).await?;
         if tools.is_empty() {
-            return Err("一个工具都没报上来".to_string());
+            return Err("the server reported no tools at all".to_string());
         }
         Ok((
             Arc::new(
@@ -409,7 +410,7 @@ impl McpClient {
                     config::model_safe_name_unique(&server.name, &meta.name, &mut taken);
                 if renamed {
                     eprintln!(
-                        "(joy) MCP 工具名冲突：{} 的 '{}' 改叫 '{}'（原名是模型可见的名字，改了要说出来）",
+                        "(joy) MCP tool name collision: '{}' from {} is now called '{}' (the original is a model-visible name, so the change is said out loud)",
                         server.name, meta.name, name
                     );
                 }
@@ -440,7 +441,7 @@ impl McpClient {
     pub async fn call(&self, server: &str, tool: &str, args: Value) -> String {
         match self.servers.iter().find(|s| s.name == server) {
             Some(found) => found.connection.call(tool, args).await,
-            None => format!("MCP 服务器 '{server}' 没有连上。"),
+            None => format!("MCP server '{server}' is not connected."),
         }
     }
 }
@@ -451,6 +452,6 @@ async fn with_timeout<T>(
 ) -> Result<T, String> {
     match tokio::time::timeout(TIMEOUT, future).await {
         Ok(result) => result,
-        Err(_) => Err(format!("{what}（超过 {} 秒）", TIMEOUT.as_secs())),
+        Err(_) => Err(format!("{what} (over {} seconds)", TIMEOUT.as_secs())),
     }
 }

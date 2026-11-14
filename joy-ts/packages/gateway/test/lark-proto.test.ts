@@ -41,7 +41,7 @@ const PING_BYTES = [
   0x12, 0x04, 0x70, 0x69, 0x6e, 0x67,
 ];
 
-test("编码：一帧 ping 的字节是手算的那一串", () => {
+test("encode: the bytes of one ping frame are the hand-computed ones", () => {
   const frame = frameWith({
     seqId: 1n,
     service: 1,
@@ -51,7 +51,7 @@ test("编码：一帧 ping 的字节是手算的那一串", () => {
   assert.deepEqual([...encodeFrame(frame)], PING_BYTES);
 });
 
-test("解码：手算的那一串读回来是一样的", () => {
+test("decode: the hand-computed bytes read back the same", () => {
   const frame = decodeFrame(Uint8Array.from(PING_BYTES));
   assert.ok(frame !== null);
   assert.equal(frame.seqId, 1n);
@@ -62,8 +62,8 @@ test("解码：手算的那一串读回来是一样的", () => {
   assert.equal(frame.payload, undefined);
 });
 
-test("往返：数据帧该带的全带回来", () => {
-  const payload = new TextEncoder().encode('{"hello":"世界"}');
+test("round trip: a data frame brings back everything it should", () => {
+  const payload = new TextEncoder().encode('{"hello":"world"}');
   const frame = frameWith({
     seqId: 42n,
     logId: 7n,
@@ -88,7 +88,7 @@ test("往返：数据帧该带的全带回来", () => {
   assert.deepEqual(back.payload, payload);
 });
 
-test("往返：headers 的顺序留着", () => {
+test("round trip: the header order is kept", () => {
   // The ACK echoes the original frame whole, so a wrong order still "matches" — but sorted
   // headers would make one suspect a dropped entry. Order is preserved; this nails it down.
   const headers = [
@@ -101,7 +101,7 @@ test("往返：headers 的顺序留着", () => {
   assert.deepEqual(back.headers, headers);
 });
 
-test("往返：字段乱序发过来也认", () => {
+test("round trip: fields arriving out of order are still recognised", () => {
   // protobuf doesn't require fields in numeric order. Whatever the server's order, we must read it.
   const shuffled = Uint8Array.from([
     0x20, 0x01, // method = 1
@@ -115,7 +115,7 @@ test("往返：字段乱序发过来也认", () => {
   assert.equal(frame.seqId, 5n);
 });
 
-test("往返：logId 超过 2^53 也不丢精度", () => {
+test("round trip: a logId past 2^53 keeps its precision", () => {
   // This is the field the ACK must backfill verbatim. Held in a `number`, it would already have
   // silently changed here — backfilling an altered id is invisible daily and untraceable in incidents.
   const big = 18_446_744_073_709_551_615n; // 2^64 - 1
@@ -127,7 +127,7 @@ test("往返：logId 超过 2^53 也不丢精度", () => {
   assert.equal(back.logId, big);
 });
 
-test("varint：几个边界值都对", () => {
+test("varint: the boundary values all come out right", () => {
   for (const seqId of [0n, 1n, 127n, 128n, 300n, 16_383n, 16_384n]) {
     const back = decodeFrame(encodeFrame(frameWith({ seqId })));
     assert.ok(back !== null);
@@ -135,7 +135,7 @@ test("varint：几个边界值都对", () => {
   }
 });
 
-test("service 是负数时按 int32 截回来", () => {
+test("a negative service is truncated back as int32", () => {
   // The protocol's service is positive, but the encoding of negatives (10 bytes, sign-extended
   // to 64 bits) must be recognized — otherwise malformed/misaligned input decodes to a huge positive.
   const back = decodeFrame(encodeFrame(frameWith({ service: -1 })));
@@ -146,13 +146,13 @@ test("service 是负数时按 int32 截回来", () => {
   assert.equal(encodeFrame(frameWith({ service: -1 })).length, 17);
 });
 
-test("认不出的字段：跳过它，别的照读", () => {
+test("an unrecognised field: skip it and read the rest", () => {
   // The day Lark adds a field must not look like "connected, then suddenly nothing". Protobuf's
   // own rule is to skip. Three wire types of unknown fields are stuffed in here.
   const extra = Uint8Array.from([
-    0x50, 0x2a, // 字段 10，varint
-    0x59, 1, 2, 3, 4, 5, 6, 7, 8, // 字段 11，fixed64
-    0x65, 1, 2, 3, 4, // 字段 12，fixed32
+    0x50, 0x2a, // field 10, varint
+    0x59, 1, 2, 3, 4, 5, 6, 7, 8, // field 11, fixed64
+    0x65, 1, 2, 3, 4, // field 12, fixed32
   ]);
   const frame = decodeFrame(
     Uint8Array.from([...PING_BYTES, ...extra, 0x08, 0x02]),
@@ -164,15 +164,15 @@ test("认不出的字段：跳过它，别的照读", () => {
   assert.equal(frame.seqId, 2n);
 });
 
-test("畸形帧一律返回 null，不抛", () => {
+test("a malformed frame returns null instead of throwing", () => {
   // One bad frame must not take the whole connection down — the caller logs, drops, reads on.
   const cases: Array<[string, number[]]> = [
-    ["只剩一个 tag", [0x08]],
-    ["varint 没写完", [0x08, 0x80]],
-    ["varint 超过 10 字节", [0x08, ...Array<number>(11).fill(0x80), 0x01]],
-    ["长度前缀指着数组外面", [0x2a, 0x7f, 0x01, 0x02]],
-    ["header 里长度说谎", [0x2a, 0x03, 0x0a, 0x09, 0x41]],
-    ["wire type 认不出", [0x0f, 0x01]],
+    ["only a tag left", [0x08]],
+    ["a varint cut short", [0x08, 0x80]],
+    ["a varint past 10 bytes", [0x08, ...Array<number>(11).fill(0x80), 0x01]],
+    ["a length prefix pointing past the array", [0x2a, 0x7f, 0x01, 0x02]],
+    ["a header whose length lies", [0x2a, 0x03, 0x0a, 0x09, 0x41]],
+    ["an unrecognised wire type", [0x0f, 0x01]],
   ];
 
   for (const [what, bytes] of cases) {
@@ -180,7 +180,7 @@ test("畸形帧一律返回 null，不抛", () => {
   }
 });
 
-test("零字节读出来是「全默认」，不是 null", () => {
+test("zero bytes read as «all defaults», not null", () => {
   // Not malformed — in protobuf an empty message is the legal encoding of "every field default".
   // The adapter needs no special case: `method` is 0 and there's no `type`, so it's ignored on the way through.
   const frame = decodeFrame(new Uint8Array(0));
@@ -188,7 +188,7 @@ test("零字节读出来是「全默认」，不是 null", () => {
   assert.deepEqual(frame, emptyFrame());
 });
 
-test("长度前缀说谎时，一帧都别给我", () => {
+test("when the length prefix lies, do not give me a frame at all", () => {
   // Deliberate design: half a frame would be used to ACK the wrong thing — worse than dropping.
   const good = encodeFrame(
     frameWith({ headers: [{ key: "type", value: "event" }] }),
@@ -200,7 +200,7 @@ test("长度前缀说谎时，一帧都别给我", () => {
   assert.equal(decodeFrame(good.subarray(0, good.length - 1)), null);
 });
 
-test("payload 是空的意思就是没有 payload", () => {
+test("an empty payload really means there is none", () => {
   // In proto3 empty bytes don't go on the wire; it reads back as undefined, not an empty array —
   // the adapter's `payload === undefined` check depends on exactly this.
   const back = decodeFrame(
@@ -210,7 +210,7 @@ test("payload 是空的意思就是没有 payload", () => {
   assert.equal(back.payload, undefined);
 });
 
-test("headerValue：取第一个，没有就是空串", () => {
+test("headerValue: the first one, or an empty string when absent", () => {
   const frame = frameWith({
     headers: [
       { key: "type", value: "event" },
@@ -221,7 +221,7 @@ test("headerValue：取第一个，没有就是空串", () => {
   assert.equal(headerValue(frame, "message_id"), "");
 });
 
-test("坏字节不炸：文本字段按有损解码", () => {
+test("bad bytes do not blow up: text fields decode lossily", () => {
   // Same attitude as the official SDK — one bad byte becomes a replacement character instead of
   // taking the connection down. These bytes are invalid UTF-8 in a header (field 5) key's start.
   const frame = decodeFrame(

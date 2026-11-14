@@ -1,0 +1,15 @@
+{
+  "capturedOn": "2026-11-14",
+  "exampleTestsPassed": 7,
+  "clippyExitCode": 0,
+  "productionSourceDigestsStillMatch": "harness-validation-2026-11-14-projection.json",
+  "sourceSha256": {
+    "joy-rs/joyczl-eval/examples/live_reliability.rs": "9a13c0bbfd3cf8973ae6f86fcf811d094021594c8a2e3a2c693df6efb391138b",
+    "joy-rs/joyczl-eval/examples/live_reliability/research_case.rs": "1f0330bc0c244e6f5e7ce8321fb8cf3b46bb91e3552fef9369e70316ffe64889",
+    "scripts/test-research-publication.py": "c3e059498b14f24ddcd852c90f434d20652818a5dabdebd8deefbd55809330fc",
+    "evals/results/deepseek-flash-2026-11-14-research.json": "21641737be8db77b4b5e2ee3e7ebbbba957310f361abcd3b4b37963415c1e940",
+    "evals/results/deepseek-flash-2026-11-14-research-unavailable.json": "9a7b3f96e20c5af356ac066c91fb40cb97d132390f463fc2053ddb9c1bbb203b",
+    "evals/results/deepseek-flash-2026-11-14-research-guarded.json": "5ff8930237df2cdaee2af392ad37e91deb5a955ead1977eda7f2bfd8307c860b"
+  },
+  "scope": "Evaluator-only fixed-source publication adapter. Original generic-write failure retained; guarded positive and negative passed. Not general research quality or runtime file-tool enforcement."
+}

@@ -4,14 +4,14 @@
 **工具永远不返回 `Err`，失败是一段给模型读的文本。**
 
 目录：`joy-rs/joyczl-tools/src/`（`lib.rs`、`handlers.rs`、`memory_admin.rs`、
-`schedules.rs`、`calendar.rs`、`messages.rs`、`fs.rs`、`fs_write.rs`、`web.rs`、
-`exec.rs`、`jobs.rs`、`todo.rs`、`subagent.rs`）。
+`schedules.rs`、`calendar.rs`、`messages.rs`、`fs.rs`、`search.rs`、`fs_write.rs`、
+`fs_manage.rs`、`declarative.rs`、`web.rs`、`exec.rs`、`jobs.rs`、`todo.rs`、`subagent.rs`）。
 
-## 6.0 清单：21 个常驻 + 8 个门控
+## 6.0 清单：23 个常驻 + 11 个门控
 
 先给数字，因为这一层最容易「文档说 22 个，代码里其实是 28 个」。
 
-**常驻（21，没配搜索后端时 20）** —— `handlers::build_default()` 装 20 个，`app-server`
+**常驻（23，没配搜索后端时 22）** —— `handlers::build_default()` 装 22 个，`app-server`
 再补 `todo_write`：
 
 | 组 | 工具 | 一句 |
@@ -21,6 +21,7 @@
 | 记忆管理 | `manage_memory` `create_skill` | 按编号改/删；把工作流固化 |
 | 日程 | `create_event` `list_events` | 幂等写入 + ICS |
 | 文件（只读） | `read_file` `list_dir` | 无副作用，所以默认开 |
+| 查找 | `glob` `grep` | 自己走目录树，不依赖 shell 与 `rg`；跳过 `node_modules`、`target` 等 |
 | 网络 | `fetch_url` `search_web`※ | ※ 没配后端时**不进表** —— 能调必失败的工具不该被看见 |
 | 时间 / 发现 | `current_time` `find_tools` | `find_tools` 在延迟加载模式下是唯一的门 |
 | 消息 | `send_message` | 只写草稿，从不发送 |
@@ -32,11 +33,13 @@
 | 工具 | 开关 | 缺了它意味着什么 |
 |---|---|---|
 | `write_file` `edit` `apply_patch` | `JOY_WRITE=1` | 改不了任何文件（`apply_patch` 是「一次改多处、全中才落盘」的那个） |
+| `delete_file` `move_file` | `JOY_WRITE=1` | 建得出来却删不掉、挪不动（`move_file` 两端都过边界，目标已存在就拒绝） |
+| `define_tool` | `JOY_EXEC=1` | 造不出自己的工具（写一份 JSON 定义，下一轮即可调用；执行仍走 `run_command` 同一道闸门） |
 | `run_command` | `JOY_EXEC=1` | 跑不了任何命令（包括 `df`、`sqlite3`） |
 | `job_output` `job_list` `job_kill` | `JOY_EXEC=1` | 后台作业无从查看 |
 | `delegate_task` | `JOY_DELEGATE=1` | 不能派子代理（派了也不能再派；`tasks` 一次最多 4 件并发，**批量的子代理只读**） |
 
-全开 **29**。另有连接器工具（`feishu_send`、`email_send`）由 `joyczl-connector` 在配好凭据后
+全开 **34**。另有连接器工具（`feishu_send`、`email_send`）由 `joyczl-connector` 在配好凭据后
 追加 —— 它们是外挂，不算内置。
 
 数字本身不重要，**边界**才重要：模型能做什么，取决于这台机器被允许做什么。关掉 `JOY_EXEC`
@@ -173,7 +176,7 @@ handler 里那条兜底分支只在 schema 编译失败时才会走到）。
 子代理的 session 名是 `subagent:{毫秒}-{序号}`：批量的四个可能在同毫秒 spawn，
 不加序号时 hook 事件与 spill 归属就分不清谁是谁 —— 恰恰是需要分辨的时候。
 
-### 只读文件工具为什么**默认开**（`fs.rs`）
+### 只读文件工具为什么**默认开**（`fs.rs` / `search.rs`）
 
 `read_file` / `list_dir` 在这两个工具出现之前没有替代品：读文件得先
 `JOY_EXEC=1` 再 `run_command cat`，把「看一眼」绑在「执行」的闸门上。读取没有
@@ -184,7 +187,7 @@ handler 里那条兜底分支只在 schema 编译失败时才会走到）。
 同一段返回占位符，二轮起的读取成本归零。二进制 / 非 UTF-8 明确拒绝并指路；
 错误全走 `Error:` 文本契约。
 
-### 写入工具为什么**没有沙箱却照样有硬闸**（`fs_write.rs`）
+### 写入工具为什么**没有沙箱却照样有硬闸**（`fs_write.rs` / `fs_manage.rs`）
 
 `write_file` / `edit`（`JOY_WRITE=1`）的写发生在进程内，套不上 seatbelt /
 bwrap —— 所以硬闸换成**可写范围**：工作目录 + Joy home +
@@ -575,3 +578,106 @@ ALWAYS_ON（`joyczl-tools/src/lib.rs` 的常量，改它等于改策略）：
   一条任务看起来像已经生效了。
 - **技能自带的 `schedule:` 行只读**：`cancel_schedule` 会拒绝并说明「删掉那个技能，或把
   `SKILL.md` 里的 schedule 行去掉」。
+
+## 6.13 找东西与收拾：`glob` / `grep` / `delete_file` / `move_file`
+
+这一组是「补缺」补出来的，缺口的形状值得记下来：模型当时能**读**一个文件（`read_file`）、
+能**列**一层目录（`list_dir`）、能**写**（`write_file`），但
+
+- 找不到「叫这个名字的文件在哪儿」—— 只能一层层 `list_dir`，八个来回才摸到 `src/a/b/c.ts`；
+- 搜不了「这个词写在哪个文件里」—— 唯一的办法是 `run_command rg`，而那要 `JOY_EXEC=1`。
+  于是在大多数人的配置里，模型对「帮我搜一下」的诚实回答是**「我没有搜索工具」**，
+  这是它对自己的工作目录说的最没道理的一句话；
+- 建得出来却删不掉：`write_file` 是单向的，清理临时文件也得靠 shell。
+
+四个工具的分工：
+
+| 工具 | 缺了它意味着 | 边界 |
+|---|---|---|
+| `glob` | 只能靠 `list_dir` 一层层走 | 只读，无门控 |
+| `grep` | 搜不了内容（等于把「搜索」绑在 shell 开关上） | 只读，无门控 |
+| `delete_file` | 临时文件删不掉 | `JOY_WRITE=1`，同一套 roots + 审批 |
+| `move_file` | 改不了文件名、挪不了位置 | `JOY_WRITE=1`，**两端**都过边界 |
+
+**自己走目录树，不调用 `rg` / `find`**：那两个是外部二进制，有没有、版本差多少都不确定，
+而「工具在不在」这件事已经有一整套开关在管，不该再引入第二个变量。
+
+**跳过什么**：`.git`、`node_modules`、`target`、`dist`、`build`、`.venv`、`vendor`、`.next`、
+`.turbo`、`.cache`、`.joy`。理由不是洁癖 —— 一个真实项目里依赖树比源码大两个数量级，
+不跳过的 `grep` 会返回四万条命中，比没有更糟。这个清单是**写死**的：多一个开关就多一处
+能配错的地方，而两个工具的说明里都写了自己跳过什么，真要翻 `target/` 还有 `list_dir` +
+`read_file`（或 `run_command`）。
+
+**上限与格式**：
+
+- 200 条命中 / 20 000 个目录项就走完，超了会明说 `[Stopped at 200 — narrow the …]`；
+- `glob` 输出相对路径 + `[N file(s)]`；
+- `grep` 输出 `path:line: text`，行内超 240 字符截断，二进制（前 8KB 有 NUL）与
+  超过 2 MB 的文件直接跳过；
+- 匹配用**纯文本**，不是正则：为四十行匹配引入一个正则引擎不值，而 `run_command` 那条路
+  本来就有真的 `rg`。
+
+**`move_file` 的两处保守**，都是踩过之后写下来的：
+
+- **两端都要过 `pass_write_gate`**。移动 = 删除 + 写入；只查目标端等于给「把文件从控制面里
+  搬出来」留了一扇门。
+- **目标已存在就拒绝**，不学 `mv` 覆盖。悄悄替换一个模型没读过的文件，是那种要到内容没了
+  才被发现的「成功」。
+
+`delete_file` 拒绝删目录：`rm -r` 正是边界要防的那种一次调用全没了，目录树交给
+`run_command`（它有自己的审批）。
+
+钉住这些行为的测试在 `fs_tests.rs`（`glob_*`、`grep_*`）与 `fs_write_tests.rs`
+（`delete_file_*`、`move_file_*`），包括「越界不删」「两端都查」「目标存在拒绝」这三条。
+
+## 6.14 声明式工具：`define_tool`（即写即用）
+
+工具表原来在**启动时**装配完：内置的写在代码里，MCP 的读 `mcp.json`。于是「这个任务需要一个谁都没写过的工具」只有一个诚实答案——「我没有这个工具」，
+出路要么是每轮重新手打 `run_command`，要么请人写个 Rust 工具再重编。
+
+`define_tool` 把「工具」变成**数据**，而数据每轮重读：
+
+```json
+{
+  "name": "pdf_extract",
+  "description": "把 PDF 里的文字抽出来",
+  "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+  "command": "pdftotext {path} -",
+  "timeout_secs": 30
+}
+```
+
+写进 `<home>/tools/<name>.json`（或 `<home>/skills/<skill>/tools/`），**下一轮**就在表里 —— 不用重启、不用重编。
+模型看到的还是普通工具：名字、说明、参数 schema，和内置的没有区别。
+
+三条性质是**构造上成立**的，也是这件事的全部安全故事：
+
+1. **命令仍然走 `exec::execute`**：白名单、审批、沙箱、输出溢出，与 `run_command` 是同一套。
+   声明式工具做不到任何 `run_command` 做不到的事，它只是把命令记住了、把参数描述出来。
+2. **参数在代入时就被 shell 引号包住**：`{path}` 变成 `'…'`（`'` 转成 `'\''`）。值逃不出自己那个词，
+   「抽这个文件」不会被拼成「抽这个文件；再干点别的」。模板定形状，模型只填洞。
+3. **定义在 `<home>/tools/`，不在控制面**：`settings.json` / `hooks.json` / 记忆文件仍然对 `write_file` 不可见，
+   于是被注入的网页没法靠自己改配置来给自己发权限。而且**没有 `JOY_EXEC=1` 时这些工具根本不存在**。
+
+**为什么写定义本身不再单独加一道审批**：审批卡问的问题得是对的。「允许 `pdf_extract` 吗？」问错了对象 ——
+真正要回答的是「允许 `pdftotext` 跑吗？」，而那个问题由第一次调用的闸门来问。所以这里的口径是：
+模型能**定义**的比它能**运行**的宽，天花板恰好是 `JOY_EXEC_ALLOW`。
+
+其余口径：
+
+- **每轮重读**（`turn.rs` 里 `declarative::attach`）：这是「即写即用」的全部实现；`JOY_TOOL_POLICY=deferred`
+  也照常作用于它们（先挂载再 defer）。
+- **重名不覆盖**：`register` 拒绝重名，内置工具永远赢；两份定义重名时 `<home>/tools/` 赢过技能包，并打一行日志。
+- **上限**：每目录 64 份定义、单条 `timeout_secs` ≤ 300（`JOY_EXEC_TIMEOUT` 更低时取低）、名字 ≤ 40 字符、
+  说明 ≤ 1024、命令 ≤ 2000。超了就说清楚，不截断。
+- **不能做的事**：定义里没有代码、没有 `env`、没有解释器；命令里不能用数组/对象当参数（要自己先 join）；
+  工作目录永远是本轮的工作目录，不能由参数挑 —— 否则它就能挑自己的可写根。
+- **占位符必须先用 schema 声明**：`{pth}` 这种笔误会在解析期被拒。否则它会把字面量 `{pth}` 渲染进命令行，
+  要么跑成垃圾，要么看起来像成功了。
+
+技能那一半（C）：`<home>/skills/<skill>/tools/*.json` 与上面同一套加载器，所以一个技能可以同时带
+「怎么做」和「用什么做」。`define_tool { skill: "reports" }` 会把定义写进那个技能目录，
+而技能名不存在时直接拒绝（不会凭空建一个技能目录）。
+
+钉住这些行为的测试在 `declarative_tests.rs`：解析期五类拒绝、`render` 的引号与非法值、
+坏文件不拖垮好文件、重名不夺内置、以及一条**真跑**的往返（`define_tool` 写盘 → 下一轮 `attach` 读到 → 调用它）。

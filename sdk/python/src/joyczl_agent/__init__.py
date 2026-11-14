@@ -1,7 +1,7 @@
-"""Joy 的 Python 客户端。
+"""The Python client for Joy.
 
-把 `joy app-server` 拉起来，用它的 stdin/stdout 说 JSON-RPC —— 没有网络、没有
-端口、没有常驻服务要管。
+Pull up `joy app-server` and speak JSON-RPC over its stdin/stdout — no network, no port, no
+long-running service to manage.
 
 ```python
 import asyncio
@@ -13,33 +13,36 @@ async def main() -> None:
     async with await JoyClient.connect() as client:
 
         def on_notification(n) -> None:
-            # 判别式是 `type` 这个字段，跟 TS 侧 `n.type === "textDelta"` 一个写法。
+            # The discriminant is the `type` field, spelled the same as
+            # `n.type === "textDelta"` on the TS side.
             if n.type == "textDelta":
                 print(n.delta, end="", flush=True)
             elif n.type == "turnCompleted":
                 print("\n" + n.reply)
 
         client.on_notification(on_notification)
-        # 这条的应答里只有 turnId —— 正文是上面那条通知给的。
+        # The response to this one carries only turnId — the text came from the notification
+        # above.
         await client.request(
             Methods.TURN_START,
-            TurnStartParams(sessionId="python:demo", message="你好", stream=True),
+            TurnStartParams(sessionId="python:demo", message="hello", stream=True),
         )
 
 
 asyncio.run(main())
 ```
 
-类型不是手写的：`generated/v2.py` 和 `generated/consts.py` 都由 Rust 的
-`joyczl-protocol` 生成（`just write-app-server-schema --python`）。所以
-`Methods.MEMORY_REMEMBER` 背后的 `"memory/remember"` 这个字符串，在 Rust、
-TypeScript、Python 里是同一处定义的。
+The types are not hand-written: `generated/v2.py` and `generated/consts.py` are both
+generated from Rust's `joyczl-protocol` (`just write-app-server-schema --python`). So the
+string `"memory/remember"` behind `Methods.MEMORY_REMEMBER` is defined in one place, across
+Rust, TypeScript and Python.
 """
 
 from __future__ import annotations
 
 from .client import JoyClient, JoyError
-from .protocol import *  # noqa: F403  ← `protocol` 自己定义了 `__all__`，出不了圈
+from .protocol import *  # noqa: F403  ← `protocol` defines its own `__all__`, nothing
+                          # escapes
 from .protocol import __all__ as _protocol_exports
 from .transport import StdioTransport, Transport, find_joy_binary
 

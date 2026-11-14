@@ -51,14 +51,38 @@ fn budget_of(row: &TaskRow) -> Option<BudgetView> {
 ///
 /// `async` because the run count is a second read: the card says "executed N times", and that
 /// number has to come from the run ledger, not from a guess.
-async fn view(server: &Server, row: &TaskRow) -> AgentTaskView {
+pub(crate) async fn view(server: &Server, row: &TaskRow) -> AgentTaskView {
     let run_count = server
         .runs
         .count_by_task(&row.id)
         .await
         .map(narrow)
         .unwrap_or(0);
+    let dispatch = match joyczl_state::dispatch::TaskDispatch::new(server.pool.clone())
+        .get(&row.id)
+        .await
+    {
+        Ok(dispatch) => dispatch,
+        Err(error) => {
+            eprintln!("(joy) task dispatch view unavailable: {error}");
+            None
+        }
+    };
+    let input_condition =
+        match joyczl_state::external_waits::ExternalWaits::new(server.pool.clone())
+            .get(&row.id)
+            .await
+        {
+            Ok(condition) => condition.map(crate::task_inputs::view),
+            Err(error) => {
+                eprintln!("(joy) task input view unavailable: {error}");
+                None
+            }
+        };
     AgentTaskView {
+        input_condition,
+        execution_session_id: dispatch.as_ref().map(|d| d.session_id.clone()),
+        dispatch_state: dispatch.map(|d| d.state),
         id: row.id.clone(),
         session_id: row.session_id.clone(),
         title: row.title.clone(),
@@ -226,6 +250,29 @@ pub(crate) async fn create(
     })
 }
 
+/// Explicit human authorization for one durable initial execution.
+pub(crate) async fn start(
+    server: &Server,
+    sink: &EventSink,
+    params: joyczl_protocol::TaskStartParams,
+) -> Result<TaskEnvelope, ErrorObject> {
+    if server.resolved().is_none() {
+        return Err(invalid("Configure a model before starting a task"));
+    }
+    let lock = server.session_write_lock(&format!("task-control:{}", params.task_id));
+    let _guard = lock.lock().await;
+    let row = reload(server, &params.task_id).await?;
+    joyczl_state::dispatch::TaskDispatch::new(server.pool.clone())
+        .enqueue(&row.id, &params.message)
+        .await
+        .map_err(|e| invalid(format!("Task was not queued: {e}")))?;
+    notify(sink, &row, Some("queued for independent execution"));
+    crate::task_dispatch::kick(server.clone(), sink.clone());
+    Ok(TaskEnvelope {
+        task: view(server, &row).await,
+    })
+}
+
 pub(crate) async fn list(server: &Server) -> TaskListResponse {
     let rows = server.tasks.list(100).await.unwrap_or_default();
     let mut tasks = Vec::with_capacity(rows.len());
@@ -319,7 +366,13 @@ pub(crate) async fn suspend(
         .ok()
         .flatten()
         .filter(|wait| wait.state == "waiting");
-    if row.status == TaskStatus::Suspended && job_wait.is_none() {
+    let inputs = joyczl_state::external_waits::ExternalWaits::new(server.pool.clone());
+    let input_wait = inputs
+        .waiting(&row.id)
+        .await
+        .map_err(|error| invalid(format!("Cannot read input wait: {error}")))?
+        .filter(|wait| wait.state == "waiting");
+    if row.status == TaskStatus::Suspended && job_wait.is_none() && input_wait.is_none() {
         return Ok(TaskEnvelope {
             task: view(server, &row).await,
         });
@@ -347,10 +400,6 @@ pub(crate) async fn suspend(
             eprintln!("(joy) task {turn_id} is no longer running; marking it suspended");
         }
     }
-    if let Some(wait) = job_wait {
-        let _ = waits.cancel(&row.id).await;
-        let _ = server.checkpoints.finish(&wait.turn_id, "suspended").await;
-    }
     server
         .tasks
         .suspend(&row.id, Some(&reason))
@@ -371,13 +420,58 @@ pub(crate) async fn resume(
     sink: &EventSink,
     params: TaskActionParams,
 ) -> Result<TaskEnvelope, ErrorObject> {
+    // Keep the durable pause until the previous actor has finished its finalizer.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let row = reload(server, &params.task_id).await?;
+        if !matches!(
+            row.status,
+            TaskStatus::Suspended | TaskStatus::NeedsAttention
+        ) {
+            break;
+        }
+        let checkpoint = crate::task_recovery::checkpoint(server, &row).await?;
+        let turn_id = checkpoint
+            .as_ref()
+            .map(|cp| cp.turn_id.as_str())
+            .or(row.current_turn_id.as_deref());
+        let active = turn_id.is_some_and(|id| {
+            server
+                .active_turns(None)
+                .iter()
+                .any(|(active, _, _)| active == id)
+        });
+        if !active {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(invalid(
+                "Previous execution is still stopping; continue again after it stops",
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    resume_ready(server, sink, params).await
+}
+
+async fn resume_ready(
+    server: &Server,
+    sink: &EventSink,
+    params: TaskActionParams,
+) -> Result<TaskEnvelope, ErrorObject> {
     let row = reload(server, &params.task_id).await?;
     let control = server.session_write_lock(&format!("task-control:{}", row.id));
     let _control = control.lock().await;
     let row = reload(server, &params.task_id).await?;
     let waits = joyczl_state::waits::JobWaits::new(server.pool.clone());
+    let pauses = joyczl_state::human_pauses::HumanPauses::new(server.pool.clone());
+    let human_paused = pauses
+        .is_paused(&row.id)
+        .await
+        .map_err(|error| invalid(format!("Cannot verify human pause: {error}")))?;
 
-    if row.status == TaskStatus::Suspended
+    if !human_paused
+        && row.status == TaskStatus::Suspended
         && row.suspend_reason.as_deref() == Some(joyczl_state::waits::JOB_WAIT_REASON)
     {
         if let Ok(Some(wait)) = waits.get(&row.id).await {
@@ -388,6 +482,21 @@ pub(crate) async fn resume(
                 });
             }
         }
+    }
+    if !human_paused
+        && row.status == TaskStatus::Suspended
+        && row.suspend_reason.as_deref() == Some(joyczl_state::external_waits::INPUT_WAIT_REASON)
+    {
+        let wait = joyczl_state::external_waits::ExternalWaits::new(server.pool.clone())
+            .waiting(&row.id)
+            .await
+            .map_err(|error| invalid(format!("Cannot read input wait: {error}")))?
+            .filter(|wait| wait.state == "waiting")
+            .ok_or_else(|| invalid("Input wait is unavailable; reconcile before continuing"))?;
+        crate::input_wake::arm(server.clone(), sink.clone(), wait);
+        return Ok(TaskEnvelope {
+            task: view(server, &row).await,
+        });
     }
     if row.status == TaskStatus::Running {
         return Ok(TaskEnvelope {
@@ -405,17 +514,48 @@ pub(crate) async fn resume(
             row.status
         )));
     }
-    server
-        .tasks
-        .resume(&row.id)
+    let unstarted = joyczl_state::dispatch::TaskDispatch::new(server.pool.clone())
+        .resume_unstarted(&row.id)
         .await
-        .map_err(|e| invalid(format!("the resume was not recorded: {e}")))?;
+        .map_err(|e| invalid(format!("Cannot resume queued task: {e}")))?;
+    if unstarted {
+        let row = reload(server, &row.id).await?;
+        notify(sink, &row, Some("queued task resumed by the user"));
+        crate::task_dispatch::kick(server.clone(), sink.clone());
+        return Ok(TaskEnvelope {
+            task: view(server, &row).await,
+        });
+    }
+    let mut checkpoint = crate::task_recovery::checkpoint(server, &row).await?;
+    if let Some(checkpoint) = &mut checkpoint {
+        crate::task_recovery::require_known(checkpoint)?;
+        crate::task_inputs::prepare_manual_resume(server, checkpoint)
+            .await
+            .map_err(|error| invalid(format!("Cannot prepare continuation: {error}")))?;
+        pauses
+            .resume_checkpoint(&row.id, &checkpoint.turn_id, &checkpoint.messages_json)
+            .await
+            .map_err(|error| invalid(format!("Cannot commit human continuation: {error}")))?;
+    } else {
+        if joyczl_state::dispatch::TaskDispatch::new(server.pool.clone())
+            .get(&row.id)
+            .await
+            .map_err(|e| invalid(format!("Cannot read task dispatch: {e}")))?
+            .is_some()
+        {
+            return Err(invalid("Task has no safe resumable checkpoint; reconcile the execution before starting another attempt"));
+        }
+        server
+            .tasks
+            .resume(&row.id)
+            .await
+            .map_err(|e| invalid(format!("The resume was not recorded: {e}")))?;
+    }
     let row = reload(server, &row.id).await?;
     notify(sink, &row, Some("resumed by the user"));
-
-    // The paused turn's checkpoint is the resumable half: continue it in the background.
-    if let Some(turn_id) = &row.current_turn_id {
-        crate::resume::resume_suspended(server, sink, turn_id).await;
+    crate::task_dispatch::kick(server.clone(), sink.clone());
+    if let Some(checkpoint) = checkpoint {
+        crate::resume::resume_authorized(server, sink, checkpoint);
     }
     Ok(TaskEnvelope {
         task: view(server, &row).await,
@@ -453,6 +593,13 @@ pub(crate) async fn cancel(
         .await
         .map_err(|e| invalid(format!("the cancellation was not recorded: {e}")))?;
     let _ = waits.cancel(&row.id).await;
+    if let Err(error) = joyczl_state::external_waits::ExternalWaits::new(server.pool.clone())
+        .cancel(&row.id)
+        .await
+    {
+        eprintln!("(joy) cancelled task input wait could not be closed: {error}");
+    }
+
     if let (Some(host), Ok(jobs)) = (
         &server.jobs,
         joyczl_state::Jobs::new(server.pool.clone())

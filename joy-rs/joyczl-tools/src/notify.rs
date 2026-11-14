@@ -37,6 +37,12 @@ pub enum NotifyEvent {
         status: String,
         preview: String,
     },
+    TaskFinished {
+        id: String,
+        title: String,
+        status: String,
+        reason: String,
+    },
     GoalFinished {
         session_id: String,
         status: String,
@@ -72,6 +78,7 @@ impl NotifyEvent {
                 status,
                 preview,
             } => format!("⏰ Joy scheduled job '{name}' {status}: {preview}"),
+            NotifyEvent::TaskFinished {title,status,reason,..}=>format!("Joy task '{title}' stopped ({status}): {reason}"),
             NotifyEvent::GoalFinished { status, reason, .. } => {
                 format!("🎯 Joy's goal stopped ({status}): {reason}")
             }

@@ -15,11 +15,11 @@ use axum::Router;
 use tower::ServiceExt;
 
 fn temp() -> tempfile::TempDir {
-    tempfile::tempdir().expect("临时目录")
+    tempfile::tempdir().expect("temp dir")
 }
 
 fn hub_in(dir: &tempfile::TempDir, max_open: usize) -> Hub {
-    Hub::open_with(dir.path(), max_open, 0).expect("开 hub")
+    Hub::open_with(dir.path(), max_open, 0).expect("open the hub")
 }
 
 /// POST one JSON body, return (status, parsed body).
@@ -31,14 +31,14 @@ async fn post_json(router: Router, path: &str, body: &str) -> (StatusCode, serde
                 .uri(path)
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
-                .expect("请求体"),
+                .expect("the request body"),
         )
         .await
-        .expect("路由响应");
+        .expect("the routed response");
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
-        .expect("响应体");
+        .expect("the response body");
     let parsed = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
     (status, parsed)
 }
@@ -49,48 +49,55 @@ async fn post_json(router: Router, path: &str, body: &str) -> (StatusCode, serde
 fn the_v1_table_migrates_and_survives() {
     let dir = temp();
     let path = dir.path().join("users.json");
-    std::fs::write(&path, r#"{"alice":"t-a"}"#).expect("写 v1 格式");
+    std::fs::write(&path, r#"{"alice":"t-a"}"#).expect("write the v1 format");
 
-    let users = Users::load(&path).expect("v1 读进来");
+    let users = Users::load(&path).expect("v1 reads in");
     assert_eq!(
         users.verify("t-a").as_deref(),
         Some("alice"),
-        "旧 token 继续有效"
+        "the old token still works"
     );
-    users.save(&path).expect("回存");
-    let text = std::fs::read_to_string(&path).expect("读文件");
-    assert!(text.contains("\"users\""), "存盘后应是 v2 形状");
-    let loaded = Users::load(&path).expect("v2 读回");
+    users.save(&path).expect("save it back");
+    let text = std::fs::read_to_string(&path).expect("read the file");
+    assert!(
+        text.contains("\"users\""),
+        "after saving it should be the v2 shape"
+    );
+    let loaded = Users::load(&path).expect("v2 reads back");
     assert_eq!(loaded.verify("t-a").as_deref(), Some("alice"));
 }
 
 /// Register → the token verifies immediately, the device pairs; same device on login
-/// returns the same token (登录即配对), a second device gets its own.
+/// returns the same token (signing in pairs the device), a second device gets its own.
 #[test]
 fn register_then_login_round_trips() {
     let dir = temp();
     let hub = hub_in(&dir, 8);
 
     let token = hub
-        .register("alice", "hunter2-secret", "我的手机")
-        .expect("注册成功");
+        .register("alice", "hunter2-secret", "my phone")
+        .expect("registration succeeds");
     assert_eq!(hub.user_count(), 1);
     assert_eq!(
         hub.resolve(Some(&format!("Bearer {token}"))).as_deref(),
         Some("alice"),
-        "注册发的 token 立即可用"
+        "the token registration hands out works at once"
     );
 
     let again = hub
-        .login("alice", "hunter2-secret", "我的手机")
-        .expect("同设备登录");
-    assert_eq!(again, token, "同设备同 token");
+        .login("alice", "hunter2-secret", "my phone")
+        .expect("the same device signs in");
+    assert_eq!(again, token, "same device, same token");
 
     let other = hub
         .login("alice", "hunter2-secret", "work-laptop")
-        .expect("新设备");
-    assert_ne!(other, token, "新设备拿新 token");
-    assert_eq!(hub.user_count(), 1, "登录不加座位，只添设备");
+        .expect("a new device");
+    assert_ne!(other, token, "a new device gets a new token");
+    assert_eq!(
+        hub.user_count(),
+        1,
+        "signing in adds no seat, only a device"
+    );
 }
 
 /// Wrong password, unknown user (same verdict — no user enumeration), duplicate
@@ -100,7 +107,7 @@ fn bad_credentials_and_bad_input_refuse() {
     let dir = temp();
     let hub = hub_in(&dir, 8);
     hub.register("alice", "hunter2-secret", "phone")
-        .expect("先注册");
+        .expect("register first");
 
     assert!(matches!(
         hub.login("alice", "wrong-password", "phone"),
@@ -111,7 +118,7 @@ fn bad_credentials_and_bad_input_refuse() {
             hub.login("nobody", "hunter2-secret", "phone"),
             Err(AuthError::Invalid(_))
         ),
-        "未知用户与错密码同词同响应"
+        "an unknown user and a wrong password get the same words and the same answer"
     );
     assert!(matches!(
         hub.register("alice", "hunter2-secret", "phone"),
@@ -133,7 +140,7 @@ fn the_seat_cap_closes_registration() {
     let dir = temp();
     let hub = hub_in(&dir, 1);
     hub.register("alice", "hunter2-secret", "phone")
-        .expect("占最后一个座位");
+        .expect("claim the last seat");
     assert!(matches!(
         hub.register("bob", "hunter2-secret", "phone"),
         Err(AuthError::Full)
@@ -152,14 +159,15 @@ fn the_first_user_gate_closes_public_hubs() {
         Err(AuthError::Closed)
     ));
 
-    // CLI 路径不受门控管：adduser 建出主人后，后续注册按座位走。
-    let mut users = Users::load(&dir.path().join("users.json")).expect("空表");
+    // The CLI path is not gated: once adduser has made the owner, later registrations follow the
+    // seat rule.
+    let mut users = Users::load(&dir.path().join("users.json")).expect("an empty ledger");
     users.add("owner", "t-owner");
-    users.save(&dir.path().join("users.json")).expect("存盘");
-    let hub = Hub::open_with(dir.path(), 8, 0).expect("重开");
+    users.save(&dir.path().join("users.json")).expect("save it");
+    let hub = Hub::open_with(dir.path(), 8, 0).expect("reopen");
     hub.permit_first_registration(false);
     hub.register("alice", "hunter2-secret", "phone")
-        .expect("有主人后注册照常");
+        .expect("with an owner in place, registering works as usual");
 }
 
 /// The HTTP face. Register needs no Authorization header; wrong password is 401;
@@ -179,14 +187,18 @@ async fn the_http_face_answers_without_a_token() {
         r#"{"username":"alice","password":"hunter2-secret","device":"phone"}"#,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "注册免鉴权可达");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "registration is reachable without auth"
+    );
     assert_eq!(body["user"], "alice");
     assert!(body["token"].is_string());
     let token = body["token"].as_str().expect("token").to_string();
     assert_eq!(
         hub.resolve(Some(&format!("Bearer {token}"))).as_deref(),
         Some("alice"),
-        "HTTP 注册的 token 直接可解析"
+        "a token from HTTP registration parses directly"
     );
 
     let (status, body) = post_json(
@@ -196,7 +208,10 @@ async fn the_http_face_answers_without_a_token() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert!(body["message"].is_string(), "错误走 code/message 形状");
+    assert!(
+        body["message"].is_string(),
+        "an error takes the code/message shape"
+    );
 
     let (status, _) = post_json(
         router.clone(),
@@ -204,7 +219,11 @@ async fn the_http_face_answers_without_a_token() {
         r#"{"username":"alice","password":"hunter2-secret","device":"phone"}"#,
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "重名注册 409");
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "registering a taken name is 409"
+    );
 }
 
 /// Single-user mode: the auth endpoints exist but answer 400 — nothing to log into.

@@ -327,7 +327,7 @@ pub fn entries_for_turn(
 ///
 /// A missing spill file is reported, never silently rendered as the pointer JSON — the
 /// caller (rebuild or the memory center) needs to know the record is incomplete.
-#[allow(dead_code)] // 读路径（worker / 结构化历史）落地时去掉
+#[allow(dead_code)] // drop this once the read path (worker / structured history) lands
 pub fn payload_text(home: &Path, payload: &str) -> Result<String> {
     let parsed: serde_json::Value = match serde_json::from_str(payload) {
         Ok(value) => value,
@@ -361,7 +361,7 @@ pub fn payload_text(home: &Path, payload: &str) -> Result<String> {
 /// Text and tool rows are restored as they were; a spilled payload is read back (and
 /// verified) on demand. `notice` rows and unknown kinds are skipped: they are commentary
 /// about the turn, not part of the conversation.
-#[allow(dead_code)] // 同上：阶段三把 load_history 切到账本时去掉
+#[allow(dead_code)] // same: goes away when phase three moves load_history onto the ledger
 pub fn rebuild_turn(home: &Path, rows: &[joyczl_state::EntryRow]) -> Result<Vec<Message>> {
     let mut messages: Vec<Message> = Vec::new();
     for row in rows {
@@ -420,7 +420,7 @@ pub fn rebuild_turn(home: &Path, rows: &[joyczl_state::EntryRow]) -> Result<Vec<
 
 /// Append a block, merging into the previous message when the role matches — the wires
 /// expect `assistant[tool_use…]` in one message, not one message per block.
-#[allow(dead_code)] // rebuild_turn 的帮手
+#[allow(dead_code)] // a helper for rebuild_turn
 fn push_block(messages: &mut Vec<Message>, role: Role, block: ContentBlock) {
     match messages.last_mut() {
         Some(last) if last.role == role => last.content.push(block),

@@ -24,22 +24,32 @@ fn a_bad_entry_is_skipped_not_fatal() {
             {"name":"c","version":"1.0.0"}
         ]}"#,
     )
-    .expect("解析");
+    .expect("parse");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].name, "a");
-    assert_eq!(warnings.len(), 2, "坏条目要逐条说明：{warnings:?}");
+    assert_eq!(
+        warnings.len(),
+        2,
+        "each bad entry has to be named: {warnings:?}"
+    );
 
-    assert!(parse_index("这不是 JSON").is_err());
+    assert!(parse_index("this is not JSON").is_err(), "this is not JSON");
     assert!(parse_index(r#"{"nope":[]}"#).is_err());
 }
 
 #[test]
 fn version_comparison_never_downgrades() {
-    assert!(needs_update(None, "1.0.0"), "没装过就装");
+    assert!(
+        needs_update(None, "1.0.0"),
+        "never installed means install it"
+    );
     assert!(needs_update(Some("1.0.0"), "1.1.0"));
-    assert!(needs_update(Some("1.9.0"), "1.10.0"), "按段比大小");
+    assert!(
+        needs_update(Some("1.9.0"), "1.10.0"),
+        "compare sizes segment by segment"
+    );
     assert!(!needs_update(Some("1.1.0"), "1.1.0"));
-    assert!(!needs_update(Some("2.0.0"), "1.9.0"), "不降级");
+    assert!(!needs_update(Some("2.0.0"), "1.9.0"), "no downgrade");
     // Uncomparable (non-numeric) versions stay untouched.
     assert!(!needs_update(Some("2024-05"), "2024-06"));
 }
@@ -55,26 +65,29 @@ fn every_writer_agrees_on_what_a_valid_name_is() {
     assert!(is_slug("weekly-review"));
     assert!(is_slug("v2"));
     assert!(!is_slug(""));
-    assert!(!is_slug("-evil-"), "首尾连字符是目录名的坏习惯");
+    assert!(
+        !is_slug("-evil-"),
+        "a leading or trailing hyphen is a bad directory name"
+    );
     assert!(!is_slug("Weekly Review"));
     assert!(!is_slug("../evil"));
 
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path();
     let text = "---\nname: -evil-\ndescription: x\n---\nb";
     assert!(
         install_from_text(home, text).is_err(),
-        "install 这条路要拒绝"
+        "the install path has to refuse"
     );
     assert!(
         install(home, "-evil-", text).is_err(),
-        "update 这条路也要拒绝"
+        "the update path has to refuse too"
     );
 }
 
 #[test]
 fn install_validates_before_touching_the_disk() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path();
 
     // Name mismatch.
@@ -83,9 +96,15 @@ fn install_validates_before_touching_the_disk() {
         "weekly-review",
         "---\nname: other\ndescription: x\n---\nb",
     );
-    assert!(wrong.is_err(), "名不对版要拒绝");
+    assert!(
+        wrong.is_err(),
+        "a name that does not match its content is refused"
+    );
     // Invalid content.
-    assert!(install(home, "weekly-review", "没有 frontmatter").is_err());
+    assert!(
+        install(home, "weekly-review", "no frontmatter").is_err(),
+        "no frontmatter, no install"
+    );
     // Path traversal.
     assert!(install(home, "../evil", GOOD).is_err());
     assert!(!home.join("skills").join("evil").exists());
@@ -93,7 +112,7 @@ fn install_validates_before_touching_the_disk() {
     assert!(installed_version(home, "weekly-review").is_none());
 
     // Only the valid one lands on disk.
-    let path = install(home, "weekly-review", GOOD).expect("装上");
+    let path = install(home, "weekly-review", GOOD).expect("install it");
     assert!(path.exists());
     assert_eq!(
         installed_version(home, "weekly-review").as_deref(),
@@ -103,14 +122,14 @@ fn install_validates_before_touching_the_disk() {
 
 #[test]
 fn a_reinstall_backs_up_the_previous_version() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path();
-    install(home, "weekly-review", GOOD).expect("第一版");
+    install(home, "weekly-review", GOOD).expect("the first version");
 
     let second = GOOD
         .replace("version: 1.1.0", "version: 1.2.0")
         .replace("pull episodes", "pull episodes and summarize");
-    install(home, "weekly-review", &second).expect("第二版");
+    install(home, "weekly-review", &second).expect("the second version");
 
     assert_eq!(
         installed_version(home, "weekly-review").as_deref(),
@@ -118,22 +137,22 @@ fn a_reinstall_backs_up_the_previous_version() {
     );
     // The old version rests in .backup, rollback possible.
     let backups = std::fs::read_dir(home.join("skills").join(".backup"))
-        .expect("备份目录")
+        .expect("the backup directory")
         .count();
-    assert_eq!(backups, 1, "替换前要备份");
+    assert_eq!(backups, 1, "the old one is backed up before the swap");
     // The staging dir leaves no junk.
     let staged = std::fs::read_dir(home.join("skills").join(".staging"))
         .map(|d| d.count())
         .unwrap_or(0);
-    assert_eq!(staged, 0, "暂存目录该被搬空");
+    assert_eq!(staged, 0, "the staging directory should be empty again");
 }
 
 #[tokio::test]
 async fn update_all_installs_skips_and_reports_failures() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path();
     // Installed 1.1.0; the index holds one same version, one newer, one bad content, one unfetchable.
-    install(home, "weekly-review", GOOD).expect("先装一版");
+    install(home, "weekly-review", GOOD).expect("install one version first");
 
     let entries = vec![
         entry("weekly-review", "1.1.0", "same"),
@@ -148,7 +167,7 @@ async fn update_all_installs_skips_and_reports_failures() {
                 "---\nname: roadmap\ndescription: plan quarters\nversion: 2.0.0\n---\nsteps"
                     .to_string(),
             ),
-            "bad-content" => Ok("这不是 SKILL.md".to_string()),
+            "bad-content" => Ok("this is not a SKILL.md".to_string()),
             _ => Err("404".to_string()),
         }
     })
@@ -162,11 +181,11 @@ async fn update_all_installs_skips_and_reports_failures() {
     assert!(matches!(outcomes[1], Outcome::Installed { .. }));
     assert!(
         matches!(outcomes[2], Outcome::Failed { .. }),
-        "坏内容要报告"
+        "bad content has to be reported"
     );
     assert!(
         matches!(outcomes[3], Outcome::Failed { .. }),
-        "取不回要报告"
+        "failing to fetch has to be reported"
     );
 
     // The reported failures never touched disk.
@@ -177,6 +196,6 @@ async fn update_all_installs_skips_and_reports_failures() {
     assert_eq!(outcomes.iter().filter(|o| o.ok()).count(), 2);
     assert!(
         outcomes.iter().all(|o| !o.line().is_empty()),
-        "每条都要有一句能打印给人看的话"
+        "each one needs a sentence fit to show a human"
     );
 }

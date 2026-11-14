@@ -9,34 +9,36 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Layer | Location | Shape | Latest full run |
 |---|---|---|---|
-| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 603 passed / 0 failed |
+| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 935 passed / 0 failed |
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
-| Frontend | joy-ts (node --test + tsc) | 110 passed / 0 failed | |
-| Python SDK | sdk/python (pytest + mypy) | 13 passed / 0 failed; mypy clean on 8 files | |
+| Frontend | joy-ts (node --test + tsc) | 113 passed / 0 failed | |
+| Python SDK | sdk/python (pytest + mypy) | 14 passed / 0 failed; mypy clean on 8 files | |
 | End-to-end smokes | scripts/smoke*.sh | real app-server / gateways / dashboard / SDK | 4/4 pass |
-| Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 66/66 pass, gate exit 0 |
+| Deterministic evals | evals/deterministic/*.jsonl | scripted model driving the same run_turn | 70/70 pass, gate exit 0 |
 | Replay evals | evals/replay/*.jsonl | recorded dialogue + **expected event sequence** (compaction / approval timeout / streamed output / MCP reconnect / step-budget continuation) | 5/5 pass, also in the gate |
 | Long-task benchmarks | evals/long/*.jsonl | same harness, asks "did autonomous work get better" | 11/11 reached (one with the planner on), interrupt recovery 3/3; **never blocks** |
-| Judge | evals/judge/*.jsonl | real model answers, referee grades (0-10) | 10 cases; scores reported, not blocking |
+| Judge | evals/judge/*.jsonl | real model answers, referee grades (0-10) | 13 cases; scores reported, not blocking |
+
+Judge scores must be integers from 0 through 10; an invalid score fails judging instead of entering the average. Three Chinese support fixtures cover listening without unsolicited plans, relationship boundaries and honest uncertainty about personal history. These are single-turn criteria, not evidence of improved support quality; multi-turn human review remains outstanding. The 2026-11-14 score-boundary update passed all six evaluator library tests and all-target evaluator Clippy with zero warnings; the full-run counts above describe the earlier workspace baseline.
 
 ## Unit test distribution (per crate)
 
 | Crate | Cases | Covers |
 |---|---|---|
-| joyczl-state | 24 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff, and the concurrent claim (two turns both due distill once) |
-| joyczl-tools | 96 | tool behavior and output wording (honest destinations), create_event idempotence, SKILL.md validation, argument schema validation, the three execution gates and approval (including that the sandbox really blocks a write outside the allowed roots), output spilling, and a subagent's tool table lacking delegate_task; and this round's additions: the twelve hook events' blocking/rewriting/timeout split plus trust hashes, the todo list's three hard limits, the background job ring overflow and owner fence, read_file/list_dir pagination and re-read short-circuit, and fetch_url's SSRF refusals plus HTML-to-text |
-| joyczl-provider | 24 | both wire formats, SSE parsing, 429 backoff retry against real HTTP, token estimation, local inference (a provider that needs no key) |
-| joyczl-loop | 25 | both guard exits, tool round-trip, streaming delta order, interrupt shutdown |
-| joyczl-graph | 24 | wave execution, routing, collision detection, on_error draining, full triage/gather paths |
-| joyczl-mcp | 33 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
-| joyczl-memory | 41 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
-| joyczl-agent | 13 | the deterministic core: the three acceptance checks (exists / substring / successful-call count), tool claims versus filesystem facts (contradictions included), plan storage and its failure fallback, path containment (outside the workspace or no workspace at all = refuse) |
-| joyczl-app-server | 104 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths; and the task engine: tasks with no session, a false done needing a human, acceptance passing only on a real file, over-budget stopping before the spend, one run per attempt, restart reconciliation without replay, unique step keys across rounds, and interrupt ending the task loop immediately; plus the session gate: a second turn in the same session is refused with `SESSION_BUSY` before any side effect, `steer` lands at a round boundary, `follow-up` survives a restart, and an idle call says there is nothing to wait for |
-| joyczl-config | 27 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear (**no model or key fields left**); multi-profile storage, secret backends (memory/file — never the real keychain), switching and removal |
-| joyczl-cli | 7 | cron semantics, once-per-minute firing, job loading from both sources, and one firing that lands in the outbox |
+| joyczl-state | 89 | SQL contract, FTS5 search (CJK and junk input), calendar idempotence, memory-backend conformance, fact-kind normalisation, consolidation backoff, and the concurrent claim (two turns both due distill once) |
+| joyczl-tools | 200 | tool behavior and output wording (honest destinations), create_event idempotence, SKILL.md validation, argument schema validation, the three execution gates and approval (including that the sandbox really blocks a write outside the allowed roots), output spilling, and a subagent's tool table lacking delegate_task; and this round's additions: the twelve hook events' blocking/rewriting/timeout split plus trust hashes, the todo list's three hard limits, the background job ring overflow and owner fence, read_file/list_dir pagination and re-read short-circuit, and fetch_url's SSRF refusals plus HTML-to-text |
+| joyczl-provider | 42 | both wire formats, SSE parsing, 429 backoff retry against real HTTP, token estimation, local inference (a provider that needs no key) |
+| joyczl-loop | 38 | both guard exits, tool round-trip, streaming delta order, interrupt shutdown |
+| joyczl-graph | 31 | wave execution, routing, collision detection, on_error draining, full triage/gather paths |
+| joyczl-mcp | 37 | transport frames, handshake, tool registration, full OAuth flow against a local fake authorization server, token storage 0600, and the memory server it exposes (`joy mcp serve`) |
+| joyczl-memory | 70 | gate fail-open, consolidation (temporary-statement filter, kinds, failure backoff), Skills triggering/rescan, explicit `$skill` and missing dependencies, MEMORY.md mirror, compaction waterline and fallback, RRF fusion, skill install/update |
+| joyczl-agent | 20 | the deterministic core: the three acceptance checks (exists / substring / successful-call count), tool claims versus filesystem facts (contradictions included), plan storage and its failure fallback, path containment (outside the workspace or no workspace at all = refuse) |
+| joyczl-app-server | 226 | protocol dispatch, interrupt, config/write persistence, model/list, trace/usage persistence, the approval waiting table (including the 'asked before running' causality) and subagents; the tool-result budget and observed-prefill calibration, subagent report scanning and the two-stage `result_schema` acceptance, lifecycle hooks, todo injection, real-process background jobs (skipped without a sandbox) and the goal loop's continue/round-limit/judge-failure paths; and the task engine: tasks with no session, a false done needing a human, acceptance passing only on a real file, over-budget stopping before the spend, one run per attempt, restart reconciliation without replay, unique step keys across rounds, and interrupt ending the task loop immediately; plus the session gate: a second turn in the same session is refused with `SESSION_BUSY` before any side effect, `steer` lands at a round boundary, `follow-up` survives a restart, and an idle call says there is nothing to wait for |
+| joyczl-config | 35 | env-var semantics, startup validation (out of range = exit), patch merge/save/clear (**no model or key fields left**); multi-profile storage, secret backends (memory/file — never the real keychain), switching and removal |
+| joyczl-cli | 15 | cron semantics, once-per-minute firing, job loading from both sources, and one firing that lands in the outbox |
 | joyczl-protocol | 7 | RPC envelope serialization (the export test runs on demand) |
-| joyczl-ops | 8 | the HTTP translation layer |
+| joyczl-ops | 72 | the HTTP translation layer |
 
 ## Test report (full run, 2026-09-23)
 
@@ -151,3 +153,15 @@ just smoke-gateway / smoke-dashboard / smoke-sdk-python
 
 Failure policy: unit test and deterministic eval failures **block merging**;
 long-task benchmarks and judge scores only record trends; smoke failures block releases.
+
+TypeScript unit tests use a 30-second test timeout. A stalled local HTTP adapter fails the check instead of holding the full gate indefinitely.
+
+## Real-process crash recovery
+
+`just smoke-recovery` starts isolated app-server processes with local scripted provider and MCP fixtures. It uses SIGKILL before tool dispatch, after an external fixture commit but before its reply, and after a durable tool-result checkpoint. Assertions cover dispatch/effect counts, exact run identity, round accounting and known checkpoint token usage against an uninterrupted baseline. Unknown outcomes stop for human review; known results resume without replay. The suite requires POSIX process groups and does not contact configured services.
+
+Focused regression tests also cover repeated recovery, missing model configuration, charging failures, foreign run identities and persistent human pause. Known checkpoint usage is charged even when recovery stops. Provider usage never received or checkpointed, and active wall time before a crash, remain unmeasured.
+
+Retained local result: [2026-11-14 process recovery](../evals/results/process-recovery-2026-11-14.json), four cases passed. Both uncertainty stops retained 15 known tokens; uninterrupted and known-result recovery each retained 30 tokens with one run and one committed effect. CI runs this suite in its Linux release gate.
+
+Memory recovery regressions exercise interruption before completion, retained claims after startup recovery failure, source-set isolation from new chats, atomic backoff failure, and a failure after facts/episode commit but before source completion. The same source batch cannot inflate confirmations or duplicate its episode; a human-deleted episode is not resurrected. Worker tests also verify execution ownership and cancellation/join of a stalled model future. The process crash smoke includes a memory-admission SIGKILL case; its result distinguishes resumable source rows from completed extraction.

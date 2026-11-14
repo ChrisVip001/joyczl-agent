@@ -26,18 +26,18 @@ if [[ -n "${PYTHON:-}" ]]; then
   # PYTHON points at that venv, so asking it is most accurate — no guessing site-packages layout.
   SMOKE_EXPECT_BIN="$("$PYTHON" -c 'import joyczl_agent_bin; print(joyczl_agent_bin.binary())')"
   if [[ ! -f "$SMOKE_EXPECT_BIN" ]]; then
-    echo "✗ 那个解释器里没有装好的 joy：$SMOKE_EXPECT_BIN" >&2
+    echo "✗ that interpreter has no installed joy: $SMOKE_EXPECT_BIN" >&2
     exit 1
   fi
   export SMOKE_EXPECT_BIN
 else
   if ! command -v uv >/dev/null 2>&1; then
-    echo "✗ 找不到 uv —— Python SDK 用它管环境" >&2
+    echo "✗ cannot find uv — the Python SDK uses it to manage the environment" >&2
     exit 1
   fi
   RUN=(uv run --quiet --project "$REPO/sdk/python" python)
   if [[ ! -x "$BIN" ]]; then
-    echo "✗ 找不到 $BIN，先跑：cd joy-rs && cargo build" >&2
+    echo "✗ cannot find $BIN; run: cd joy-rs && cargo build" >&2
     exit 1
   fi
   # JOY_BIN is for find_joy_binary (it reads the environment inside the Python process).
@@ -55,7 +55,7 @@ for _ in $(seq 1 50); do
 done
 FAKE_SSE_PORT="$(head -n1 "$WORK/port" 2>/dev/null || true)"
 if [[ -z "$FAKE_SSE_PORT" ]]; then
-  echo "✗ 假 SSE 端点没起来" >&2
+  echo "✗ the fake SSE endpoint did not come up" >&2
   exit 1
 fi
 
@@ -65,7 +65,7 @@ export FAKE_SSE_PORT
 export SMOKE_WORK="$WORK"
 
 "${RUN[@]}" - <<'PY'
-"""拿真的 app-server 走一遍，逐条断言。"""
+"""Walk a real app-server through it, asserting one thing at a time."""
 
 import asyncio
 import json
@@ -84,6 +84,7 @@ from joyczl_agent import (
     ModelListParams,
     SettingsView,
     TurnStartParams,
+    TurnOperationsParams,
     find_joy_binary,
 )
 
@@ -98,30 +99,30 @@ def check(ok: bool, what: str) -> None:
         sys.exit(1)
 
 async def without_a_key() -> None:
-    """没配 key 的那条路：turn/start 该报 PROVIDER_ERROR，别的照常工作。"""
+    """The no-key path: turn/start should report PROVIDER_ERROR, everything else works."""
     client = await JoyClient.connect(env={**BASE_ENV, "JOY_HOME": f"{WORK}/plain"})
     async with client:
         remembered = await client.request(
             Methods.MEMORY_REMEMBER,
-            MemoryRememberParams(subject="阿明", content="阿明喜欢早上的会议"),
+            MemoryRememberParams(subject="Alex", content="Alex likes morning meetings"),
         )
-        check(remembered.fact.content == "阿明喜欢早上的会议", "memory/remember 写进去了")
+        check(remembered.fact.content == "Alex likes morning meetings", "memory/remember wrote it")
 
-        found = await client.request(Methods.MEMORY_SEARCH, MemorySearchParams(query="早上"))
+        found = await client.request(Methods.MEMORY_SEARCH, MemorySearchParams(query="morning"))
         check(
-            [fact.content for fact in found.facts] == ["阿明喜欢早上的会议"],
-            "中文检索命中了刚写的那条",
+            [fact.content for fact in found.facts] == ["Alex likes morning meetings"],
+            "the search found the row just written",
         )
 
         forgotten = await client.request(
-            Methods.MEMORY_FORGET, MemoryForgetParams(subject="阿明")
+            Methods.MEMORY_FORGET, MemoryForgetParams(subject="Alex")
         )
-        check(forgotten.removed == 1, "memory/forget 删掉了")
+        check(forgotten.removed == 1, "memory/forget deleted it")
 
         config = await client.request(Methods.CONFIG_READ, ConfigReadParams())
         # Assert on the **inner model**: this only holds if pydantic validation really ran —
         # unpacking a dict by hand would make `config.config` a dict and isinstance a lie.
-        check(isinstance(config.config, SettingsView), "config/read 还原成了 SettingsView")
+        check(isinstance(config.config, SettingsView), "config/read came back as a SettingsView")
 
         # `model/list` isn't implemented yet — exactly what NOT_IMPLEMENTED is for: "in the
         # protocol but not built" and "you called it wrong" are two things, not one error.
@@ -131,18 +132,21 @@ async def without_a_key() -> None:
         except JoyError as error:
             check(
                 error.is_not_implemented,
-                f"model/list 要么给数据、要么明说没做：{error}",
+                f"model/list either gives data or says it is not built: {error}",
             )
         else:
-            check(isinstance(models.data, list), f"model/list 走通了（{len(models.data)} 个）")
+            check(isinstance(models.data, list), f"model/list works ({len(models.data)} rows)")
+
+        operations = await client.request(Methods.TURN_OPERATIONS, TurnOperationsParams(sessionId="default"))
+        check(operations.operations == [], "ordinary-chat operation inspection works without a model key")
 
         try:
             await client.request(Methods.TURN_START, TurnStartParams(message="hi"))
-            check(False, "没配 key 时 turn/start 居然成功了")
+            check(False, "with no key, turn/start succeeded — that should not happen")
         except JoyError as error:
             # This is the whole reason JoyError exists: callers branch on code,
             # -32000 should tell the user to configure a key, not look like a bad call.
-            check(error.is_provider, f"PROVIDER_ERROR 能按 code 分流：{error}")
+            check(error.is_provider, f"PROVIDER_ERROR can be branched on by code: {error}")
 
     # After stdin closes, the server should finish writing queued frames and exit. If close()
     # hangs, that's the hardest bug to spot here (the unit tests' fake transport always closes).
@@ -151,17 +155,17 @@ async def without_a_key() -> None:
         closed = True
     except asyncio.TimeoutError:
         closed = False
-    check(closed, "close() 之后 app-server 自己退了（没挂住）")
-    check(client.closed_reason == "客户端主动关闭", "close() 之后进到关闭态")
+    check(closed, "after close() the app-server exits on its own (nothing hangs)")
+    check(client.closed_reason == "the client closed it", "after close() it is in the closed state")
 
     try:
         await client.request(Methods.MODEL_LIST, ModelListParams())
-        check(False, "关掉之后的请求居然还发得出去")
+        check(False, "a request after close still went out")
     except RuntimeError:
-        check(True, "关掉之后再发请求当场失败，不会挂住")
+        check(True, "after close a request fails on the spot instead of hanging")
 
 async def streaming() -> None:
-    """模型流 → textDelta → 完整应答。对端是假的，所以不要真 key。"""
+    """Model stream → textDelta → the full reply. The far end is fake, so no real key."""
     home = pathlib.Path(WORK) / "stream"
     # Models and keys no longer travel via env vars (see 0.7.0): seed a models.json whose
     # key_source reads JOY_API_KEY from the environment and whose base_url is the fake
@@ -208,12 +212,12 @@ async def streaming() -> None:
 
     async with client:
         await client.request(
-            Methods.TURN_START, TurnStartParams(message="你好", stream=True)
+            Methods.TURN_START, TurnStartParams(message="hello", stream=True)
         )
 
-    check("textDelta" in kinds, f"通知到得了订阅者：{kinds}")
-    check("".join(deltas) == "你好，世界", f"增量拼得起来：{deltas}")
-    check(replies == ["你好，世界"], f"turnCompleted 里是完整答复：{replies}")
+    check("textDelta" in kinds, f"notifications reach the subscriber: {kinds}")
+    check("".join(deltas) == "hello, world", f"the deltas join up: {deltas}")
+    check(replies == ["hello, world"], f"turnCompleted carries the full reply: {replies}")
 
 async def main() -> None:
     # When verifying the published wheel, first pin "the binary comes from the installed package".
@@ -222,14 +226,14 @@ async def main() -> None:
     expected = os.environ.get("SMOKE_EXPECT_BIN")
     if expected:
         resolved = str(find_joy_binary())
-        check(resolved == expected, f"二进制来自装进来的包：{resolved}")
+        check(resolved == expected, f"the binary comes from the installed package: {resolved}")
 
-    print("[没配 key]")
+    print("[no key]")
     await without_a_key()
-    print("[流式]")
+    print("[streaming]")
     await streaming()
 
 asyncio.run(main())
 PY
 
-echo "✓ Python SDK 冒烟测试通过"
+echo "✓ Python SDK smoke test passed"

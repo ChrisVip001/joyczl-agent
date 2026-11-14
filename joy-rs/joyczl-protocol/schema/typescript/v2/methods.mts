@@ -2,11 +2,18 @@
 // Generation logic: write_consts in joyczl-protocol/src/export.rs.
 // Inventory at `protocol::v2::methods`.the values are the method names that travel on the wire.
 export const METHODS = {
+  TURN_OPERATIONS: "turn/operations",
+  TURN_RECONCILE: "turn/reconcile",
   TURN_START: "turn/start",
   TURN_INTERRUPT: "turn/interrupt",
   APPROVAL_RESPOND: "approval/respond",
   TODO_VIEW: "todo/view",
   TASK_CREATE: "task/create",
+  TASK_START: "task/start",
+  TASK_OPERATIONS: "task/operations",
+  TASK_RECONCILE: "task/reconcile",
+  TASK_WAIT: "task/wait",
+  TASK_SIGNAL: "task/signal",
   TASK_LIST: "task/list",
   TASK_VIEW: "task/view",
   TASK_GET: "task/get",
@@ -28,6 +35,8 @@ export const METHODS = {
   MEMORY_SEARCH: "memory/search",
   MEMORY_LIST: "memory/list",
   MEMORY_LIST_EPISODES: "memory/list-episodes",
+  MEMORY_VALIDITY: "memory/setValidity",
+  MEMORY_PROVENANCE: "memory/provenance",
   MEMORY_REMEMBER: "memory/remember",
   MEMORY_FORGET: "memory/forget",
   CONFIG_READ: "config/read",

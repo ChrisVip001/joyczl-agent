@@ -55,7 +55,21 @@ pub async fn retrieve_context(
 
     let mut lines = Vec::new();
     for fact in &found {
-        lines.push(format!("- **{}**: {}", fact.subject, fact.content));
+        let (_, until) = facts.validity(fact.id).await?;
+        let temporal = until
+            .map(|time| {
+                format!(" (temporary claim, valid until {time}; not proof of current mood)")
+            })
+            .unwrap_or_default();
+        lines.push(format!(
+            "- **{}**: {}{}",
+            fact.subject, fact.content, temporal
+        ));
+    }
+    if !episodes.is_empty() {
+        lines.push(
+            "Historical episode summaries (summary date, not proof of current state):".into(),
+        );
     }
     for episode in &episodes {
         lines.push(format!("- ({}) {}", episode.happened_at, episode.summary));
@@ -77,26 +91,29 @@ pub async fn export_markdown(
     let mut lines = vec![
         "# Joy memory".to_string(),
         String::new(),
-        "_这是 Joy 记住的东西的人类可读镜像。事实来源是 `state.db`\
-         （`facts` 与 `episodes` 两张表，FTS5 关键词可检索）；\
-         本文件每轮之后重新生成。_"
+        "_A human-readable mirror of what Joy remembers. The facts live in `state.db`\
+         (`facts` and `episodes`, keyword-searchable through FTS5);\
+         this file is regenerated after every turn._"
             .to_string(),
         String::new(),
-        format!("## Facts —— 语义记忆（{}）", facts.len()),
+        format!("## Facts — semantic memory ({})", facts.len()),
         String::new(),
     ];
     if facts.is_empty() {
-        lines.push("_还没有_".to_string());
+        lines.push("_nothing yet_".to_string());
     } else {
         for fact in &facts {
             lines.push(format!("- **{}** — {}", fact.subject, fact.content));
         }
     }
     lines.push(String::new());
-    lines.push(format!("## Episodes —— 情景记忆（{}）", episodes.len()));
+    lines.push(format!(
+        "## Episodes — episodic memory ({})",
+        episodes.len()
+    ));
     lines.push(String::new());
     if episodes.is_empty() {
-        lines.push("_还没有_".to_string());
+        lines.push("_nothing yet_".to_string());
     } else {
         for episode in &episodes {
             lines.push(format!(
@@ -108,3 +125,6 @@ pub async fn export_markdown(
     std::fs::write(home.join("MEMORY.md"), lines.join("\n") + "\n")?;
     Ok(())
 }
+
+#[cfg(test)]
+mod consolidation_recovery_tests;

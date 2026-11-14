@@ -541,6 +541,7 @@ body.resizing {
 
 .bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 4px 0;
@@ -2898,3 +2899,24 @@ body.resizing {
   padding: 6px 8px;
   width: 100%;
 }
+
+.task-input-data {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+.task-actions { flex-wrap: wrap; }
+
+/* Operation evidence stays readable when a dialog narrows to a phone viewport. */
+.operation-fields { display: grid; gap: 8px; }
+.operation-fields[hidden] { display: none; }
+.operation-fields > label { display: block; }
+.operation-fields > select,
+.operation-fields > textarea { width: 100%; min-width: 0; }
+.operation-fields > p,
+.operation-fields > pre { margin: 0; }
+
+.operation-dialog { max-height: calc(100dvh - 24px); overflow: hidden; }
+.operation-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+.operation-actions { flex: 0 0 auto; padding-top: 4px; }

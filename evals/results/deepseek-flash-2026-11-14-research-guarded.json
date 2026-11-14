@@ -1,0 +1,126 @@
+{
+  "budgetCny": 2.0,
+  "cases": [
+    {
+      "artifact": {
+        "facts": {
+          "sdkMinimalFilesystemRestricted": false,
+          "webNeedsWorkspaceSelection": true
+        },
+        "sources": [
+          {
+            "id": "web-ui",
+            "quote": "输入框不可用",
+            "url": "https://deepseek-harness.github.io/deepseek-harness/guide/quickstart"
+          },
+          {
+            "id": "python-sdk",
+            "quote": "danger-full-access",
+            "url": "https://deepseek-harness.github.io/deepseek-harness/guide/python-sdk"
+          }
+        ],
+        "summary": "Web UI needs a selected workspace; the Python SDK's minimal profile runs with full access."
+      },
+      "artifactExists": true,
+      "artifactSha256": "528abb76f1467c8ebffce176f38ea579bf3e44d9cbed0eab03603a79f83f1f60",
+      "expectedSourceUnavailable": false,
+      "guardedPublish": true,
+      "id": "source-report",
+      "latencyMs": 7834,
+      "passed": true,
+      "replyIncludedPath": true,
+      "scope": "Two fixed official HTTPS sources, observed reads, literal citations and predefined typed facts. Not autonomous discovery, broad research quality, external execution or another harness benchmark.",
+      "sourceFailureObserved": false,
+      "sourceReceipts": [
+        {
+          "capturedAt": "2026-11-14T06:42:10.301739+00:00",
+          "id": "web-ui",
+          "quote": "输入框不可用",
+          "sha256": "55d6754733d53cd00ff8741ba67b14a6e2812ddb4ae4b87f1b5d44cb46b77c78",
+          "url": "https://deepseek-harness.github.io/deepseek-harness/guide/quickstart"
+        },
+        {
+          "capturedAt": "2026-11-14T06:42:11.008575+00:00",
+          "id": "python-sdk",
+          "quote": "danger-full-access",
+          "sha256": "2d19617cef3972e0c814d9fc4bc32d40ffd9c3bb2776919bf79a59a4738f0233",
+          "url": "https://deepseek-harness.github.io/deepseek-harness/guide/python-sdk"
+        }
+      ],
+      "taskStatus": "done",
+      "tools": [
+        {
+          "status": "ok",
+          "tool": "sources_web_ui"
+        },
+        {
+          "status": "ok",
+          "tool": "sources_python_sdk"
+        },
+        {
+          "status": "ok",
+          "tool": "sources_publish"
+        }
+      ]
+    },
+    {
+      "artifact": {
+        "facts": {
+          "sdkMinimalFilesystemRestricted": null,
+          "webNeedsWorkspaceSelection": null
+        },
+        "sources": null,
+        "summary": null
+      },
+      "artifactExists": false,
+      "artifactSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expectedSourceUnavailable": true,
+      "guardedPublish": true,
+      "id": "source-unavailable",
+      "latencyMs": 19872,
+      "passed": true,
+      "replyIncludedPath": true,
+      "scope": "Two fixed official HTTPS sources, observed reads, literal citations and predefined typed facts. Not autonomous discovery, broad research quality, external execution or another harness benchmark.",
+      "sourceFailureObserved": true,
+      "sourceReceipts": [
+        {
+          "capturedAt": "2026-11-14T06:42:17.892347+00:00",
+          "id": "web-ui",
+          "quote": "输入框不可用",
+          "sha256": "55d6754733d53cd00ff8741ba67b14a6e2812ddb4ae4b87f1b5d44cb46b77c78",
+          "url": "https://deepseek-harness.github.io/deepseek-harness/guide/quickstart"
+        }
+      ],
+      "taskStatus": "needs_attention",
+      "tools": [
+        {
+          "status": "error",
+          "tool": "sources_python_sdk"
+        },
+        {
+          "status": "error",
+          "tool": "sources_python_sdk"
+        },
+        {
+          "status": "ok",
+          "tool": "sources_web_ui"
+        },
+        {
+          "status": "error",
+          "tool": "sources_python_sdk"
+        }
+      ]
+    }
+  ],
+  "model": "deepseek-flash",
+  "peakRateEstimateCny": 0.060898,
+  "pricingSource": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "profile": "ds",
+  "provider": "deepseek",
+  "reportedInputTokens": 19389,
+  "reportedOutputTokens": 2765,
+  "requests": 12,
+  "requestsWithoutUsage": 0,
+  "reservedUpperCny": 1.067896,
+  "suite": "research-guarded"
+}

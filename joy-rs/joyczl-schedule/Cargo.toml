@@ -3,7 +3,7 @@ name = "joyczl-schedule"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "定时任务的全部语义：五段 cron、`schedules.json` 的读写，三处调用共用一份。"
+description = "All the semantics of a scheduled job: five-field cron, reading and writing `schedules.json`, shared by three call sites."
 
 [lib]
 name = "joyczl_schedule"

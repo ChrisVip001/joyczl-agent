@@ -16,9 +16,10 @@ structure that makes that possible; running and configuring it live in
    source of truth for the cross-language contract: `#[derive(TS)]` emits
    TypeScript, `#[derive(JsonSchema)]` emits JSON Schema which then drives
    Python pydantic models, and the artifacts are checked in.
-3. **Clients only translate.** The CLI, dashboard, chat gateways, and Python
-   SDK are all clients of `joy app-server` (JSON-RPC over stdio). state.db is
-   opened by exactly one process.
+3. **The Rust runtime owns execution.** The dashboard, chat gateways and Python
+   SDK use JSON-RPC over stdio; native CLI commands embed the same app-server runtime.
+   Production `open()` holds canonical-database execution ownership before recovery.
+   Memory-only SQLite access can coexist; database locking alone does not own live turns.
 
 ## Crate dependency graph
 
@@ -42,7 +43,7 @@ structure that makes that possible; running and configuring it live in
         joyczl-agent ────────── the deterministic core: acceptance checks, tool observation,
                 │               execution plans, the one path-containment rule
                 │
-        joyczl-app-server ──── JSON-RPC over stdio, the only holder of state.db
+        joyczl-app-server ──── JSON-RPC over stdio, execution and recovery owner
           │         │
      joyczl-cli  joyczl-ops (dashboard: axum + SSE)
           │
@@ -257,3 +258,27 @@ The prompt carries the **catalog** of the first two layers — not the encyclope
 session starts with a directory and pulls pages on demand (`read_memory_page`), which is the
 same progressive-disclosure move as the skill catalog and the deferred tool table: the model
 sees a table of contents and decides, instead of being handed everything every turn.
+
+
+### Mutation admission
+
+Production tool registries share one host-injected mutation coordinator across sessions.
+File mutations, commands, declarative commands and conservatively classified MCP calls
+hold a single runtime permit. Background commands retain it through process/output/ledger
+settlement. Reads and job inspection/cancellation remain available. Admission waits at most
+two seconds and returns a visible tool error when busy; it never bypasses the permit.
+Delegation acquires permits through child operations, avoiding a parent/child deadlock.
+
+This is conservative single-writer coordination, not filesystem isolation or a distributed
+resource lease. Separate `JOY_HOME` runtimes, human editors and external processes can still
+conflict. Unknown external effects remain subject to operation reconciliation. Custom job
+hosts must retain passed permits or refuse guarded spawn. Isolated embedding registries
+only coordinate when their host installs a coordinator.
+
+### Quick-chat personal continuity
+
+Tool-free quick replies retain the session's recent exchanges and at most six unbounded `user`/`feedback` facts with recorded source `user`, ordered by last confirmation. Entries are truncated, serialized as data and capped at 6,000 encoded bytes; the prompt marks them as historical claims rather than authorization or verified current mood. Consolidated inferences, bounded/expired claims, deleted facts and project/reference records are excluded. This local read adds no provider request and fails visibly to recent context if unavailable. Historical `source=user` entries may have been tool-written; that label does not prove human review. Triage instructions prefer the full main-model path for emotional distress and relationship support; classifier quality is not guaranteed by the prompt.
+
+### Generated memory projections
+
+The background worker compares the rendered source fields of durable facts and historical episodes, rather than fact counts. Corrections and episode-only changes refresh generated views on the next worker check. Mirror-owned metadata is excluded from the comparison, and failed writes do not advance the cache. Existing memory projects without a configured model; only extraction needs one. Human-edited bundle pages retain their existing protection. The comparison reads the source rows; large-store performance has not been benchmarked.

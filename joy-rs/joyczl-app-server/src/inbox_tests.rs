@@ -22,7 +22,7 @@ async fn boot(mock: Option<Arc<Mock>>) -> Server {
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep();
     let server = Server::boot(
         pool,
@@ -65,7 +65,7 @@ async fn call(
             response = Some(message);
         }
     }
-    match response.expect("每个请求必有应答") {
+    match response.expect("every request has a reply") {
         JsonRpcMessage::Response(response) => Ok(response.result),
         JsonRpcMessage::Error(error) => Err(error.error.message),
     }
@@ -85,7 +85,7 @@ async fn record(server: &Server, uid: i64, subject: &str, body: &str) {
             body,
         )
         .await
-        .expect("记一封");
+        .expect("record one message");
 }
 
 #[tokio::test]
@@ -94,40 +94,49 @@ async fn an_empty_inbox_answers_zero_and_starts_nothing() {
     let response: InboxSummarizeResponse = serde_json::from_value(
         call(&server, methods::INBOX_SUMMARIZE, json!({}))
             .await
-            .expect("空收件箱不是错误"),
+            .expect("an empty inbox is not an error"),
     )
-    .expect("形态");
+    .expect("its shape");
     assert_eq!(response.count, 0);
     assert!(response.message.contains("waiting"), "{}", response.message);
-    assert_eq!(response.session_id, "inbox", "默认进收件箱会话");
+    assert_eq!(
+        response.session_id, "inbox",
+        "the default is the inbox session"
+    );
 }
 
 #[tokio::test]
 async fn handling_mail_runs_a_turn_and_marks_it_seen() {
     let mock = Arc::new(Mock::new(vec![
-        Mock::text("两封邮件都不需要回复。"),
-        Mock::text("两封邮件都不需要回复。"),
-        Mock::text("两封邮件都不需要回复。"),
+        Mock::text("neither message needs a reply."),
+        Mock::text("neither message needs a reply."),
+        Mock::text("neither message needs a reply."),
     ]));
     let server = boot(Some(mock.clone())).await;
-    record(&server, 1, "服务器周报", "CPU 一切正常").await;
-    record(&server, 2, "发票", "附件是本月发票").await;
+    record(&server, 1, "server weekly report", "CPU all normal").await;
+    record(
+        &server,
+        2,
+        "invoice",
+        "the attachment is this month's invoice",
+    )
+    .await;
 
     let list: InboxListView = serde_json::from_value(
         call(&server, methods::INBOX_LIST, json!({}))
             .await
-            .expect("读列表"),
+            .expect("read the list"),
     )
-    .expect("形态");
+    .expect("its shape");
     assert_eq!(list.unseen, 2);
     assert_eq!(list.items.len(), 2);
 
     let response: InboxSummarizeResponse = serde_json::from_value(
         call(&server, methods::INBOX_SUMMARIZE, json!({}))
             .await
-            .expect("交给回合"),
+            .expect("hand it to the turn"),
     )
-    .expect("形态");
+    .expect("its shape");
     assert_eq!(response.count, 2);
 
     // The turn runs in the background: drain until the reply lands in the chat log.
@@ -137,57 +146,69 @@ async fn handling_mail_runs_a_turn_and_marks_it_seen() {
             .chat
             .session_history("inbox")
             .await
-            .expect("读对话日志");
+            .expect("read the conversation log");
         if !history.is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(!history.is_empty(), "回合该跑完并落账");
+    assert!(
+        !history.is_empty(),
+        "the turn should finish and reach the ledger"
+    );
     // `session_history` pairs (user message, assistant reply) — the prompt is the first half.
     let prompt = &history[0].0;
-    assert!(prompt.contains("服务器周报"), "邮件主题要进回合：{prompt}");
-    assert!(prompt.contains("发票"), "两封都要进去：{prompt}");
+    assert!(
+        prompt.contains("server weekly report"),
+        "the subject has to reach the turn: {prompt}"
+    );
+    assert!(
+        prompt.contains("invoice"),
+        "both messages have to go in: {prompt}"
+    );
     assert!(
         prompt.contains("do not send anything on my behalf"),
-        "边界要写进指令：{prompt}"
+        "the boundary has to be in the instruction: {prompt}"
     );
 
     // And the model saw the mail body, not just subjects.
-    let received = mock.received.lock().expect("锁").clone();
-    let last = received.last().expect("至少一次模型调用");
+    let received = mock.received.lock().expect("lock").clone();
+    let last = received.last().expect("at least one model call");
     let prompt_text = serde_json::to_string(&last.messages).expect("serialize");
-    assert!(prompt_text.contains("CPU 一切正常"), "正文要带上");
+    assert!(
+        prompt_text.contains("CPU all normal"),
+        "the body has to come along"
+    );
 
     assert_eq!(
-        server.inbox.unseen_count("email").await.expect("数"),
+        server.inbox.unseen_count("email").await.expect("count"),
         0,
-        "处理过的邮件退出等待队列"
+        "a handled message leaves the waiting queue"
     );
 }
 
 #[tokio::test]
 async fn without_a_model_the_mail_keeps_waiting() {
     let server = boot(None).await;
-    record(&server, 1, "周报", "正文").await;
+    record(&server, 1, "weekly report", "the body").await;
 
     let error = call(&server, methods::INBOX_SUMMARIZE, json!({}))
         .await
-        .expect_err("没模型就该失败");
+        .expect_err("no model means failure");
     assert!(error.contains("No model is configured"), "{error}");
     assert_eq!(
-        server.inbox.unseen_count("email").await.expect("数"),
+        server.inbox.unseen_count("email").await.expect("count"),
         1,
-        "失败不能把邮件标成处理过"
+        "a failure must not mark the message handled"
     );
     assert!(
         server
             .chat
             .session_history("inbox")
             .await
-            .expect("读")
+            .expect("read")
             .is_empty(),
-        "也不该留下半个回合"
+        "nor leave half a turn behind"
     );
 }
 

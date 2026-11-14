@@ -222,21 +222,7 @@ impl Chat {
     /// cost is "mark first, process after", so every failure path must
     /// `mark_consolidation_failed` to hand the claim back.
     pub async fn claim_unconsolidated(&self) -> Result<Vec<(i64, String, String)>> {
-        // Same WHERE as `unconsolidated` (only due rows), just SELECT swapped for
-        // UPDATE … RETURNING: no gap between marking and taking.
-        let rows = sqlx::query_as::<_, (i64, String, String)>(
-            "UPDATE chat_log SET consolidated = 1
-             WHERE id IN (
-                 SELECT id FROM chat_log
-                 WHERE consolidated = 0
-                   AND (consolidation_next_at IS NULL OR consolidation_next_at <= datetime('now'))
-                 ORDER BY id
-             )
-             RETURNING id, role, content",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
+        self.claim_consolidation(1).await
     }
 
     /// Distillation failed: **hand the claim back** and schedule into the future with exponential backoff.
@@ -246,11 +232,19 @@ impl Chat {
     /// data loss. 1 min start, doubling, 1 hour cap: a never-distillable record must not be
     /// retried every turn, nor abandoned (the model may just be flaky right now).
     pub async fn mark_consolidation_failed(&self, ids: &[i64]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(id) = ids.first() {
+            // Acquire the writer lock before reading counters; avoid a snapshot-upgrade race.
+            sqlx::query("UPDATE chat_log SET id=id WHERE id=?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         for id in ids {
             let tries: i64 =
                 sqlx::query_scalar("SELECT consolidation_tries FROM chat_log WHERE id = ?")
                     .bind(id)
-                    .fetch_optional(&self.pool)
+                    .fetch_optional(&mut *tx)
                     .await?
                     .unwrap_or(0);
             let backoff = (60i64 * 2i64.pow(tries.min(6) as u32)).min(3_600);
@@ -258,20 +252,20 @@ impl Chat {
                 "UPDATE chat_log
                  SET consolidation_tries = consolidation_tries + 1,
                      consolidation_next_at = datetime('now', ?),
-                     consolidated = 0
+                     consolidated = 0,
+                     consolidation_claimed_at = NULL
                  WHERE id = ?",
             )
             .bind(format!("+{backoff} seconds"))
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
-    // ("Mark as consolidated" is no longer a separate step: `claim_unconsolidated` marked
-    //  them at claim time. The old `mark_consolidated` was deleted with it — keeping it
-    //  would leave a door open for "mark it again after it's already marked".)
+    // Admission and completion have separate durable markers (see chat_claims.rs).
 
     /// An old session's (user, assistant) turns in order — rebuilds working memory on switch-back.
     pub async fn session_history(&self, session_id: &str) -> Result<Vec<(String, String)>> {
@@ -546,3 +540,6 @@ impl From<RawSession> for SessionRow {
 fn blank_to_null(text: Option<&str>) -> Option<&str> {
     text.map(str::trim).filter(|t| !t.is_empty())
 }
+
+#[path = "chat_claims.rs"]
+mod claims;

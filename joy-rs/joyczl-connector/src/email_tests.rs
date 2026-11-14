@@ -29,6 +29,7 @@ impl Fixture {
         let pool = joyczl_state_open(&home).await;
         ToolCtx {
             on_uncertain: None,
+            resource_lease: None,
             task_run_id: None,
             activate: None,
             embedder: None,
@@ -51,7 +52,7 @@ impl Fixture {
 async fn joyczl_state_open(home: &std::path::Path) -> sqlx::SqlitePool {
     joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库")
+        .expect("open the store")
 }
 
 fn config(port: u16, live: bool) -> EmailConfig {
@@ -88,7 +89,7 @@ impl Fake {
 
 impl ApprovalBroker for Fake {
     fn request(&self, request: ApprovalRequest) -> ApprovalFut {
-        self.seen.lock().expect("锁").push(request);
+        self.seen.lock().expect("lock").push(request);
         let answer = self.answer;
         Box::pin(async move { answer })
     }
@@ -102,8 +103,8 @@ struct FakeSmtp {
 }
 
 async fn fake_smtp() -> FakeSmtp {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("监听");
-    let port = listener.local_addr().expect("地址").port();
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+    let port = listener.local_addr().expect("the address").port();
     let data = Arc::new(Mutex::new(String::new()));
     let auth_seen = Arc::new(AtomicBool::new(false));
     let (data_for_task, auth_for_task) = (data.clone(), auth_seen.clone());
@@ -162,7 +163,7 @@ async fn converse(mut stream: TcpStream, data: Arc<Mutex<String>>, auth_seen: Ar
                     break;
                 }
             }
-            *data.lock().expect("锁") = String::from_utf8_lossy(&payload).to_string();
+            *data.lock().expect("lock") = String::from_utf8_lossy(&payload).to_string();
             write.write_all(b"250 queued\r\n").await.ok();
         }
     }
@@ -173,7 +174,7 @@ async fn converse(mut stream: TcpStream, data: Arc<Mutex<String>>, auth_seen: Ar
 #[tokio::test]
 async fn without_live_a_send_is_only_a_draft() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let tool = email_send_tool(config(1, false));
     let ctx = fixture.ctx(None).await;
@@ -181,25 +182,25 @@ async fn without_live_a_send_is_only_a_draft() {
     let reply = call(
         &tool,
         ctx,
-        json!({"to": "alice@corp.com", "subject": "周报", "body": "这周干得不错"}),
+        json!({"to": "alice@corp.com", "subject": "weekly report", "body": "good work this week"}),
     )
     .await
-    .expect("草稿该成功");
+    .expect("the draft should succeed");
     assert!(reply.contains("draft"), "{reply}");
     assert!(reply.contains("not live"), "{reply}");
 
     let outbox = fixture.dir.path().join("outbox");
-    let mut entries = std::fs::read_dir(&outbox).expect("outbox 目录");
-    let entry = entries.next().expect("至少一份草稿").expect("读");
-    let text = std::fs::read_to_string(entry.path()).expect("读草稿");
-    assert!(text.contains("Subject: 周报"), "{text}");
-    assert!(text.contains("这周干得不错"), "{text}");
+    let mut entries = std::fs::read_dir(&outbox).expect("the outbox directory");
+    let entry = entries.next().expect("at least one draft").expect("read");
+    let text = std::fs::read_to_string(entry.path()).expect("read the draft");
+    assert!(text.contains("Subject: weekly report"), "{text}");
+    assert!(text.contains("good work this week"), "{text}");
 }
 
 #[tokio::test]
 async fn dry_run_overrides_live_and_asks_nothing() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let broker = Fake::answering(true);
     let tool = email_send_tool(config(1, true));
@@ -211,11 +212,11 @@ async fn dry_run_overrides_live_and_asks_nothing() {
         json!({"to": "alice@corp.com", "subject": "s", "body": "b", "dry_run": true}),
     )
     .await
-    .expect("显式 dry_run 该成功");
+    .expect("an explicit dry_run should succeed");
     assert!(reply.contains("dry_run"), "{reply}");
     assert!(
-        broker.seen.lock().expect("锁").is_empty(),
-        "留草稿不是对外动作，不该弹审批"
+        broker.seen.lock().expect("lock").is_empty(),
+        "leaving a draft is not an outward action, so it should not raise an approval"
     );
 }
 
@@ -224,7 +225,7 @@ async fn dry_run_overrides_live_and_asks_nothing() {
 #[tokio::test]
 async fn a_recipient_outside_the_allowlist_stops_before_any_network() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let tool = email_send_tool(config(1, false));
     let ctx = fixture.ctx(None).await;
@@ -235,10 +236,13 @@ async fn a_recipient_outside_the_allowlist_stops_before_any_network() {
         json!({"to": "mallory@elsewhere.io", "subject": "s", "body": "b"}),
     )
     .await
-    .expect_err("白名单外必须拒绝");
+    .expect_err("anything outside the whitelist must be refused");
     let text = error.to_string();
     assert!(text.contains("mallory@elsewhere.io"), "{text}");
-    assert!(text.contains("allow_recipients"), "要说清去哪改：{text}");
+    assert!(
+        text.contains("allow_recipients"),
+        "it has to say where to change it: {text}"
+    );
 }
 
 // ---- live: approval + the wire dialogue ----------------------------------------------
@@ -246,7 +250,7 @@ async fn a_recipient_outside_the_allowlist_stops_before_any_network() {
 #[tokio::test]
 async fn a_denied_approval_means_nothing_is_sent() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let broker = Fake::answering(false);
     let tool = email_send_tool(config(9, true)); // port 9 = discard: nothing listens
@@ -258,22 +262,25 @@ async fn a_denied_approval_means_nothing_is_sent() {
         json!({"to": "alice@corp.com", "subject": "s", "body": "b"}),
     )
     .await
-    .expect_err("没批准就不能发");
+    .expect_err("without approval nothing may be sent");
     assert!(error.to_string().contains("not approved"), "{error}");
 
-    let seen = broker.seen.lock().expect("锁");
-    assert_eq!(seen.len(), 1, "每次实际发送问一次");
+    let seen = broker.seen.lock().expect("lock");
+    assert_eq!(seen.len(), 1, "one approval per real send");
     assert!(
         seen[0].args_preview.contains("alice@corp.com"),
-        "卡片要写清收件人"
+        "the card has to name the recipient"
     );
-    assert!(seen[0].args_preview.contains("s"), "卡片要带上主题");
+    assert!(
+        seen[0].args_preview.contains("s"),
+        "the card carries the subject"
+    );
 }
 
 #[tokio::test]
 async fn an_approved_send_reaches_the_smtp_server() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let server = fake_smtp().await;
     let broker = Fake::answering(true);
@@ -283,16 +290,19 @@ async fn an_approved_send_reaches_the_smtp_server() {
     let reply = call(
         &tool,
         ctx,
-        json!({"to": "alice@corp.com", "subject": "你好", "body": "测试正文"}),
+        json!({"to": "alice@corp.com", "subject": "hello", "body": "the test body"}),
     )
     .await
-    .expect("批准后该发成功");
+    .expect("after approval it should send");
     assert!(reply.contains("through"), "{reply}");
 
     // The payload is MIME base64: decode the body back and compare.
     use base64::Engine;
-    let raw = server.data.lock().expect("锁").clone();
-    assert!(raw.contains("Subject: =?UTF-8?B?"), "中文主题要编码：{raw}");
+    let raw = server.data.lock().expect("lock").clone();
+    assert!(
+        raw.contains("Subject: =?UTF-8?B?"),
+        "a non-ASCII subject has to be encoded: {raw}"
+    );
     assert!(raw.contains("To: alice@corp.com"), "{raw}");
     let body_b64 = raw
         .split("\r\n\r\n")
@@ -303,18 +313,18 @@ async fn an_approved_send_reaches_the_smtp_server() {
         .to_string();
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(body_b64.trim())
-        .expect("正文是 base64");
-    assert_eq!(String::from_utf8_lossy(&decoded), "测试正文");
+        .expect("the body is base64");
+    assert_eq!(String::from_utf8_lossy(&decoded), "the test body");
     assert!(
         !server.auth_seen.load(Ordering::SeqCst),
-        "没配用户名就不该发 AUTH"
+        "with no username configured, AUTH must not be sent"
     );
 }
 
 #[tokio::test]
 async fn a_missing_password_is_reported_before_the_human_is_asked() {
     let fixture = Fixture {
-        dir: tempdir().expect("临时目录"),
+        dir: tempdir().expect("temp dir"),
     };
     let broker = Fake::answering(true);
     let mut cfg = config(9, true);
@@ -329,10 +339,10 @@ async fn a_missing_password_is_reported_before_the_human_is_asked() {
         json!({"to": "alice@corp.com", "subject": "s", "body": "b"}),
     )
     .await
-    .expect_err("没有密码就该失败");
+    .expect_err("no password means failure");
     assert!(error.to_string().contains("password"), "{error}");
     assert!(
-        broker.seen.lock().expect("锁").is_empty(),
-        "参数不全就别浪费那次点击"
+        broker.seen.lock().expect("lock").is_empty(),
+        "incomplete arguments should not waste that click"
     );
 }

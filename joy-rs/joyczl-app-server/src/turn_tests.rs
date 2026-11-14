@@ -37,7 +37,9 @@ struct Ran {
 
 impl Ran {
     fn meta(&self) -> &TurnMeta {
-        self.meta.as_ref().expect("跑完一轮必有 TurnCompleted")
+        self.meta
+            .as_ref()
+            .expect("a finished turn always has TurnCompleted")
     }
 }
 
@@ -45,7 +47,7 @@ async fn server(mock: Arc<Mock>, graph_workflows: bool) -> Server {
     let dir = tempfile::tempdir().expect("temporary directory");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let settings = Settings {
         home: dir.path().to_path_buf(),
         graph_workflows,
@@ -78,7 +80,7 @@ async fn call(server: &Server, request: JsonRpcRequest) -> JsonRpcMessage {
             last = Some(message);
         }
     }
-    last.expect("每个请求必有应答")
+    last.expect("every request has a reply")
 }
 
 fn request(id: i32, method: &str, params: serde_json::Value) -> JsonRpcRequest {
@@ -127,7 +129,7 @@ async fn run(mock: Mock, message: &str, graph_workflows: bool) -> Ran {
     }
 
     // Copy out the received requests before building Ran — the lock guard cannot live to the function's tail expression.
-    let requests = mock.received.lock().expect("锁").clone();
+    let requests = mock.received.lock().expect("lock").clone();
     Ran {
         notifications,
         meta,
@@ -171,18 +173,27 @@ async fn graph_off_is_the_plain_path() {
         // Retrieval gate: no need to consult memory.
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
         // THE LOOP.
-        Mock::text("四。"),
+        Mock::text("Four."),
     ]);
-    let ran = run(mock, "2+2 等于几？", false).await;
+    let ran = run(mock, "What is 2+2?", false).await;
 
     assert!(ran.error.is_none(), "{:?}", ran.error);
     let meta = ran.meta();
-    assert!(meta.graph.is_none(), "图关着的时候不该留痕迹");
-    assert!(meta.gate.is_some(), "普通路径有检索门");
+    assert!(
+        meta.graph.is_none(),
+        "with the graph off there should be no trace of it"
+    );
+    assert!(
+        meta.gate.is_some(),
+        "the ordinary path runs a retrieval gate"
+    );
     assert_eq!(meta.model, "test-model");
-    assert_eq!(ran.reply, "四。");
-    assert!(!has_graph_started(&ran), "没开图就没图的通知");
-    assert_eq!(ran.requests.len(), 2, "门一次 + loop 一次");
+    assert_eq!(ran.reply, "Four.");
+    assert!(
+        !has_graph_started(&ran),
+        "no graph means no graph notification"
+    );
+    assert_eq!(ran.requests.len(), 2, "one for the gate, one for the loop");
     // Usage is persisted along with meta: token counts no longer live only in turnCompleted.
     assert_eq!(
         meta.usage,
@@ -191,7 +202,10 @@ async fn graph_off_is_the_plain_path() {
             output_tokens: 5,
         })
     );
-    assert!(!meta.interrupted, "没人打断它，meta 得说实话");
+    assert!(
+        !meta.interrupted,
+        "nobody interrupted it, and meta has to say so"
+    );
 }
 
 /// Quick answer: two model calls, one of them the small model's classification. **No retrieval gate**.
@@ -200,22 +214,32 @@ async fn quick_route_is_one_short_call_and_no_gate() {
     let mock = Mock::new(vec![
         // Classifier: this line needs no memory lookup; the small model answers directly.
         Mock::text(r#"{"route": "quick", "reason": "greeting"}"#),
-        Mock::text("你好呀。"),
+        Mock::text("hi there."),
     ]);
-    let ran = run(mock, "你好", true).await;
+    let ran = run(mock, "hello", true).await;
 
     assert!(ran.error.is_none(), "{:?}", ran.error);
     let meta = ran.meta();
-    let graph = meta.graph.as_ref().expect("走图就该有图的记录");
+    let graph = meta
+        .graph
+        .as_ref()
+        .expect("taking the graph means there is a graph record");
     assert_eq!(graph.workflow, "triage");
     assert_eq!(graph.route, GraphRouteKind::Quick);
     assert_eq!(graph.reason, "greeting");
     assert!(graph.path.contains(&"quick_reply".to_string()), "{graph:?}");
 
-    assert_eq!(gate_of(&ran), None, "快答连记忆都不翻，哪来的门");
+    assert_eq!(
+        gate_of(&ran),
+        None,
+        "quick personal context is a local read and must not add a retrieval gate"
+    );
     assert_eq!(meta.iterations, 1);
-    assert_eq!(meta.model, "test-small", "快答是小模型答的，meta 得说实话");
-    assert_eq!(ran.reply, "你好呀。");
+    assert_eq!(
+        meta.model, "test-small",
+        "the quick answer came from the small model, and meta has to say so"
+    );
+    assert_eq!(ran.reply, "hi there.");
 
     // Two calls: one classify, one quick answer. No third — that is the entire cheapness of the quick path.
     assert_eq!(ran.requests.len(), 2);
@@ -232,7 +256,7 @@ async fn quick_route_is_one_short_call_and_no_gate() {
             .filter(|n| matches!(n, ServerNotification::GraphEnded(_)))
             .count(),
         1,
-        "图有始有终"
+        "the graph has a beginning and an end"
     );
 }
 
@@ -241,14 +265,17 @@ async fn quick_route_is_one_short_call_and_no_gate() {
 async fn full_route_is_the_same_turn_as_the_plain_path() {
     let mock = Mock::new(vec![
         Mock::text(r#"{"route": "full", "reason": "about a person"}"#),
-        Mock::text(r#"{"retrieve": true, "query": "阿明 会议", "reason": "about a person"}"#),
-        Mock::text("你和阿明周四下午三点开会。"),
+        Mock::text(r#"{"retrieve": true, "query": "Alex meeting", "reason": "about a person"}"#),
+        Mock::text("You are meeting Alex on Thursday at 3pm."),
     ]);
-    let ran = run(mock, "我什么时候和阿明开会？", true).await;
+    let ran = run(mock, "when am I meeting Alex?", true).await;
 
     assert!(ran.error.is_none(), "{:?}", ran.error);
     let meta = ran.meta();
-    let graph = meta.graph.as_ref().expect("走图就该有图的记录");
+    let graph = meta
+        .graph
+        .as_ref()
+        .expect("taking the graph means a graph record");
     assert_eq!(graph.route, GraphRouteKind::Full);
     assert!(graph.path.contains(&"full_agent".to_string()), "{graph:?}");
 
@@ -256,15 +283,18 @@ async fn full_route_is_the_same_turn_as_the_plain_path() {
         gate_of(&ran),
         Some(joyczl_protocol::GateDecisionKind::Retrieve)
     );
-    assert_eq!(meta.model, "test-model", "完整路径还是大模型");
-    assert_eq!(ran.reply, "你和阿明周四下午三点开会。");
+    assert_eq!(
+        meta.model, "test-model",
+        "the full path still uses the big model"
+    );
+    assert_eq!(ran.reply, "You are meeting Alex on Thursday at 3pm.");
     // Classify + gate + loop.
     assert_eq!(ran.requests.len(), 3);
     assert!(
         ran.requests[1].messages[0]
             .text()
             .contains("retrieval gate"),
-        "第二次调用是门，不是别的东西"
+        "the second call is the gate, nothing else"
     );
 }
 
@@ -273,9 +303,9 @@ async fn full_route_is_the_same_turn_as_the_plain_path() {
 async fn a_failed_loop_inside_the_graph_is_reported_without_a_retry() {
     // The classifier said full, then nothing: the gate and the loop each hit the empty queue once.
     let mock = Mock::new(vec![Mock::text(r#"{"route": "full", "reason": "x"}"#)]);
-    let ran = run(mock, "帮我看下", true).await;
+    let ran = run(mock, "take a look for me", true).await;
 
-    let error = ran.error.expect("该报错");
+    let error = ran.error.expect("this should have failed");
     assert_eq!(error.code, joyczl_protocol::codes::PROVIDER_ERROR);
     assert!(error.message.contains("Model call failed"), "{error:?}");
 
@@ -297,12 +327,12 @@ async fn a_broken_mcp_server_still_leaves_the_builtin_tools() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     std::fs::write(
         dir.path().join("mcp.json"),
         json!({"servers": [{"name": "ghost", "command": "/definitely/not/a/binary"}]}).to_string(),
     )
-    .expect("写配置");
+    .expect("write the config");
 
     let settings = Settings {
         home: dir.path().to_path_buf(),
@@ -314,7 +344,7 @@ async fn a_broken_mcp_server_still_leaves_the_builtin_tools() {
     assert!(names.contains(&"save_note"), "{names:?}");
     assert!(
         !names.iter().any(|name| name.starts_with("ghost")),
-        "连不上的服务器不该留下半截工具：{names:?}"
+        "an unreachable server must not leave half a tool behind: {names:?}"
     );
 }
 
@@ -325,21 +355,21 @@ async fn a_broken_mcp_server_still_leaves_the_builtin_tools() {
 #[tokio::test]
 async fn an_mcp_server_next_to_home_lands_in_the_tool_table() {
     let Some(python) = python3() else {
-        eprintln!("跳过：这台机器上没有 python3");
+        eprintln!("skipped: no python3 on this machine");
         return;
     };
     let dir = tempfile::tempdir().expect("temporary directory");
     let script = dir.path().join("fake_mcp_server.py");
-    std::fs::write(&script, FAKE_SERVER).expect("写服务器");
+    std::fs::write(&script, FAKE_SERVER).expect("write the server");
     std::fs::write(
         dir.path().join("mcp.json"),
         json!({"servers": [{"name": "demo", "command": python, "args": [script]}]}).to_string(),
     )
-    .expect("写配置");
+    .expect("write the config");
 
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let settings = Settings {
         home: dir.path().to_path_buf(),
         ..Settings::default()
@@ -349,9 +379,12 @@ async fn an_mcp_server_next_to_home_lands_in_the_tool_table() {
     let names = server.tools.names();
     assert!(
         names.contains(&"demo_echo"),
-        "MCP 工具该带着服务器名前缀进表：{names:?}"
+        "MCP tools enter the table with their server name as prefix: {names:?}"
     );
-    assert!(names.contains(&"current_time"), "本家工具还在：{names:?}");
+    assert!(
+        names.contains(&"current_time"),
+        "the server's own tool is still there: {names:?}"
+    );
 }
 
 fn python3() -> Option<String> {
@@ -398,9 +431,9 @@ async fn tool_started_goes_out_before_tool_completed() {
         // Retrieval gate.
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
         Mock::tool_use("tu_1", "save_note", json!({"subject": "a", "content": "b"})),
-        Mock::text("记好了。"),
+        Mock::text("noted."),
     ]);
-    let ran = run(mock, "帮我记点事", false).await;
+    let ran = run(mock, "remind me of something", false).await;
 
     assert!(ran.error.is_none(), "{:?}", ran.error);
     let order: Vec<&str> = ran
@@ -415,7 +448,7 @@ async fn tool_started_goes_out_before_tool_completed() {
     assert_eq!(
         order,
         vec!["started", "completed"],
-        "ToolStarted 必须先于 ToolCompleted，且各只有一次"
+        "ToolStarted has to come before ToolCompleted, each exactly once"
     );
 }
 
@@ -430,8 +463,11 @@ async fn the_write_lock_is_lazy_but_stable_per_session() {
     let again = server.session_write_lock("s1");
     let other = server.session_write_lock("s2");
 
-    assert!(Arc::ptr_eq(&first, &again), "同一会话同一把锁");
-    assert!(!Arc::ptr_eq(&first, &other), "不同会话各一把");
+    assert!(Arc::ptr_eq(&first, &again), "one lock per session");
+    assert!(
+        !Arc::ptr_eq(&first, &other),
+        "different sessions get different locks"
+    );
 }
 
 /// The lock run_turn takes is a real mutex: while one task holds it, another's acquire
@@ -448,7 +484,10 @@ async fn a_held_write_lock_blocks_another_acquirer() {
         let _ = attempt.lock().await;
     })
     .await;
-    assert!(blocked.is_err(), "写段被持有时，另一个获取者必须等");
+    assert!(
+        blocked.is_err(),
+        "while the write lock is held another taker has to wait"
+    );
 
     drop(guard);
     let relock = lock.clone();
@@ -457,7 +496,10 @@ async fn a_held_write_lock_blocks_another_acquirer() {
         drop(guard);
     })
     .await;
-    assert!(acquired.is_ok(), "释放后另一个获取者立刻进来");
+    assert!(
+        acquired.is_ok(),
+        "after the release the next taker gets in at once"
+    );
 }
 
 /// turn/interrupt: a running turn's token can be flipped; a non-running turn cannot be interrupted —
@@ -477,11 +519,13 @@ async fn interrupt_hits_a_running_turn_and_misses_a_finished_one() {
         JsonRpcMessage::Response(resp) => {
             assert_eq!(resp.result, json!({"interrupted": false}))
         }
-        other => panic!("打断一个不存在的 turn 不该报错：{other:?}"),
+        other => panic!("interrupting a turn that does not exist should not error: {other:?}"),
     }
 
     // A running turn: the response says it hit, and the token really flipped.
-    let (interrupt, _) = server.begin_turn("t_live", "default").expect("会话空闲");
+    let (interrupt, _) = server
+        .begin_turn("t_live", "default")
+        .expect("the session is idle");
     let response = call(
         &server,
         request(2, "turn/interrupt", json!({"turnId": "t_live"})),
@@ -491,9 +535,12 @@ async fn interrupt_hits_a_running_turn_and_misses_a_finished_one() {
         JsonRpcMessage::Response(resp) => {
             assert_eq!(resp.result, json!({"interrupted": true}))
         }
-        other => panic!("打断在跑的 turn 不该报错：{other:?}"),
+        other => panic!("interrupting a running turn should not error: {other:?}"),
     }
-    assert!(interrupt.is_cancelled(), "令牌必须真的取消");
+    assert!(
+        interrupt.is_cancelled(),
+        "the token has to be cancelled for real"
+    );
     server.finish_turn("t_live");
 }
 
@@ -504,7 +551,7 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     let settings = Settings {
         home: home.clone(),
@@ -527,20 +574,23 @@ async fn config_write_lands_in_memory_and_survives_a_reboot() {
             assert_eq!(resp.result["config"]["maxIterations"], 20);
             assert_eq!(resp.result["config"]["maxTokens"], 4096);
         }
-        other => panic!("config/write 不该报错：{other:?}"),
+        other => panic!("config/write should not error: {other:?}"),
     }
     // The next turn in memory uses the new values too.
     assert_eq!(server.settings().max_iterations, 20);
     assert_eq!(server.settings().max_tokens, 4096);
     // There is a record on disk.
-    assert!(home.join("settings.json").exists(), "补丁必须落盘");
+    assert!(
+        home.join("settings.json").exists(),
+        "the patch has to reach the disk"
+    );
 
     // Reboot: open the same home again, patches stacked on top of env values.
     let settings2 = Settings {
         home,
         ..Settings::default()
     };
-    let server2 = crate::open(&settings2).await.expect("重开");
+    let server2 = crate::open(&settings2).await.expect("reopen");
     assert_eq!(server2.settings().max_iterations, 20);
     assert_eq!(server2.settings().max_tokens, 4096);
 }
@@ -553,7 +603,7 @@ async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep();
     let server = Server::boot(
         pool,
@@ -569,7 +619,7 @@ async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
         request(
             1,
             "config/write",
-            json!({"patch": {"provider": "deepseek", "model": "deepseek-chat", "apiKey": "sk-漏进来的"}}),
+            json!({"patch": {"provider": "deepseek", "model": "deepseek-flash", "apiKey": "sk-leaked-in"}}),
         ),
     )
     .await;
@@ -578,7 +628,7 @@ async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
             // Unknown fields are ignored (not an error) — the point is that they **do not take effect**.
             assert_eq!(resp.result["config"]["provider"], "anthropic");
         }
-        other => panic!("不该报错：{other:?}"),
+        other => panic!("should not error: {other:?}"),
     }
     assert_eq!(server.settings().provider, "anthropic");
     assert_eq!(server.settings().model, None);
@@ -586,7 +636,7 @@ async fn config_write_cannot_smuggle_a_model_or_a_key_in() {
     let saved = std::fs::read_to_string(home.join("settings.json")).unwrap_or_default();
     assert!(
         !saved.contains("sk-"),
-        "密钥绝不能落到 settings.json：{saved}"
+        "a key must never reach settings.json: {saved}"
     );
 }
 
@@ -597,7 +647,7 @@ async fn a_bad_patch_is_rejected_without_touching_anything() {
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     let settings = Settings {
         home: home.clone(),
@@ -615,7 +665,7 @@ async fn a_bad_patch_is_rejected_without_touching_anything() {
             assert_eq!(error.error.code, joyczl_protocol::codes::INVALID_PARAMS);
             assert!(error.error.message.contains("maxIterations"));
         }
-        other => panic!("非法补丁必须被拒绝：{other:?}"),
+        other => panic!("an illegal patch must be refused: {other:?}"),
     }
     // Nothing changed: memory still holds the defaults, and no patch file is on disk.
     assert_eq!(
@@ -634,12 +684,12 @@ async fn model_list_reports_the_provider_catalog() {
     let response = call(&server, request(1, "model/list", json!({}))).await;
     match response {
         JsonRpcMessage::Response(resp) => {
-            let data = resp.result["data"].as_array().expect("data 数组");
+            let data = resp.result["data"].as_array().expect("the data array");
             assert_eq!(data.len(), joyczl_provider::PROVIDERS.len());
             assert_eq!(data[0]["provider"], "anthropic");
             assert_eq!(data[0]["flagship"], "claude-sonnet-5");
         }
-        other => panic!("model/list 不该报错：{other:?}"),
+        other => panic!("model/list should not error: {other:?}"),
     }
 
     let response = call(
@@ -649,11 +699,11 @@ async fn model_list_reports_the_provider_catalog() {
     .await;
     match response {
         JsonRpcMessage::Response(resp) => {
-            let data = resp.result["data"].as_array().expect("data 数组");
+            let data = resp.result["data"].as_array().expect("the data array");
             assert_eq!(data.len(), 1);
             assert_eq!(data[0]["provider"], "deepseek");
         }
-        other => panic!("model/list 过滤不该报错：{other:?}"),
+        other => panic!("model/list with a filter should not error: {other:?}"),
     }
 }
 
@@ -663,7 +713,7 @@ async fn model_list_reports_the_provider_catalog() {
 async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
     let mock = Mock::new(vec![
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
-        Mock::text("四。"),
+        Mock::text("Four."),
     ]);
     let server = server(Arc::new(mock), false).await;
     let home = server.settings().home.clone();
@@ -674,7 +724,7 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
         TurnStartParams {
             attachments: None,
             session_id: Some("test".to_string()),
-            message: "2+2 等于几？".to_string(),
+            message: "What is 2+2?".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -683,25 +733,25 @@ async fn a_turn_leaves_a_trace_and_a_usage_line_behind() {
         &EventSink::new(tx),
     )
     .await
-    .expect("这轮该跑通");
+    .expect("this turn should get through");
 
     // The trace file is named by date, one line per turn, each line carrying turnId / meta.
     let mut traces = std::fs::read_dir(home.join("traces"))
-        .expect("traces 目录")
+        .expect("a traces directory")
         .collect::<Vec<_>>();
-    assert_eq!(traces.len(), 1, "一轮一个文件：{:?}", traces);
+    assert_eq!(traces.len(), 1, "one file per turn: {:?}", traces);
     let trace = std::fs::read_to_string(traces.remove(0).unwrap().path()).unwrap();
-    let record: serde_json::Value = serde_json::from_str(trace.trim()).expect("合法 JSON");
-    assert_eq!(record["userMessage"], "2+2 等于几？");
+    let record: serde_json::Value = serde_json::from_str(trace.trim()).expect("valid JSON");
+    assert_eq!(record["userMessage"], "What is 2+2?");
     assert_eq!(record["meta"]["model"], "test-model");
     assert_eq!(
         record["meta"]["usage"]["outputTokens"], 5,
-        "usage 随 meta 落盘"
+        "usage lands on disk with meta"
     );
 
     // The usage ledger: one line per turn.
     let usage = std::fs::read_to_string(home.join("usage.jsonl")).unwrap();
-    let row: serde_json::Value = serde_json::from_str(usage.trim()).expect("合法 JSON");
+    let row: serde_json::Value = serde_json::from_str(usage.trim()).expect("valid JSON");
     assert_eq!(row["provider"], "mock");
     assert_eq!(row["inputTokens"], 10);
     assert_eq!(row["iterations"], 1);
@@ -720,9 +770,9 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
         // First loop: the provider says the context overflowed
         Mock::context_overflow(),
         // Forced compaction before the retry (that one summary model call)
-        Ok(Mock::text("更早的对话摘要。")),
+        Ok(Mock::text("a summary of the earlier conversation.")),
         // Second loop: success
-        Ok(Mock::text("四。")),
+        Ok(Mock::text("Four.")),
     ]));
     let server = server(mock.clone(), false).await;
     // Accumulate a few turns of history — forced compaction needs something to fold.
@@ -730,14 +780,14 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
         server
             .chat
             .append_exchange(
-                &format!("问题 {i}"),
-                &format!("回答 {i}"),
+                &format!("question {i}"),
+                &format!("answer {i}"),
                 "test",
                 "cli",
                 None,
             )
             .await
-            .expect("写会话");
+            .expect("write the session");
     }
 
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -746,7 +796,7 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
         TurnStartParams {
             attachments: None,
             session_id: Some("test".to_string()),
-            message: "2+2 等于几？".to_string(),
+            message: "What is 2+2?".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -755,7 +805,7 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
         &EventSink::new(tx),
     )
     .await
-    .expect("溢出后重试该跑通");
+    .expect("the retry after the overflow should get through");
 
     let mut reply = String::new();
     while let Ok(frame) = rx.try_recv() {
@@ -763,20 +813,20 @@ async fn a_context_overflow_is_compacted_and_retried_exactly_once() {
             reply = done.reply.clone();
         }
     }
-    assert_eq!(reply, "四。");
+    assert_eq!(reply, "Four.");
     assert_eq!(
-        mock.received.lock().expect("锁").len(),
+        mock.received.lock().expect("lock").len(),
         4,
-        "门 + 溢出 + 摘要 + 重试，一次都不多"
+        "gate + overflow + summary + retry, not one call extra"
     );
     assert!(
         server
             .chat
             .load_rollup("test")
             .await
-            .expect("查库")
+            .expect("query the store")
             .is_some(),
-        "强制压缩该留下摘要"
+        "a forced compaction has to leave a summary"
     );
 }
 
@@ -797,7 +847,7 @@ async fn a_plain_provider_error_is_not_retried() {
         TurnStartParams {
             attachments: None,
             session_id: Some("test".to_string()),
-            message: "你好".to_string(),
+            message: "hello".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -806,13 +856,13 @@ async fn a_plain_provider_error_is_not_retried() {
         &EventSink::new(tx),
     )
     .await
-    .expect_err("要如实报错");
+    .expect_err("it has to report honestly");
 
     assert_eq!(error.code, joyczl_protocol::codes::PROVIDER_ERROR);
     assert_eq!(
-        mock.received.lock().expect("锁").len(),
+        mock.received.lock().expect("lock").len(),
         2,
-        "门一次 + loop 一次，不该有第二次模型调用"
+        "one for the gate, one for the loop, no third model call"
     );
 }
 
@@ -862,8 +912,8 @@ async fn scripted_http(responses: Vec<(u16, String)>) -> String {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("监听端口");
-    let addr = listener.local_addr().expect("本地地址");
+        .expect("bind the port");
+    let addr = listener.local_addr().expect("the local address");
     tokio::spawn(async move {
         let mut index = 0usize;
         while let Ok((mut socket, _)) = listener.accept().await {
@@ -919,7 +969,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
             completion(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
         ),
         // Loop
-        (200, sse_text("四。")),
+        (200, sse_text("Four.")),
     ])
     .await;
 
@@ -934,7 +984,9 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
         max_tokens: 256,
         ..Default::default()
     };
-    let server = crate::open(&settings).await.expect("装配（走真实客户端）");
+    let server = crate::open(&settings)
+        .await
+        .expect("assemble with the real client");
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     crate::turn::run_turn(
@@ -942,7 +994,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
         TurnStartParams {
             attachments: None,
             session_id: Some("test".to_string()),
-            message: "2+2 等于几？".to_string(),
+            message: "What is 2+2?".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -951,7 +1003,7 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
         &EventSink::new(tx),
     )
     .await
-    .expect("限流之后该照常跑完");
+    .expect("after the rate limit it should finish as usual");
 
     let mut retries = 0;
     let mut meta_retries = -1;
@@ -961,7 +1013,10 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
                 ServerNotification::Retry(retry) => {
                     retries += 1;
                     assert!(retry.reason.contains("429"), "{retry:?}");
-                    assert!(!retry.turn_id.is_empty(), "通知要带上是哪一轮");
+                    assert!(
+                        !retry.turn_id.is_empty(),
+                        "the notification has to name the turn"
+                    );
                 }
                 ServerNotification::TurnCompleted(done) => {
                     meta_retries = done.meta.retries;
@@ -970,8 +1025,11 @@ async fn a_rate_limited_call_is_retried_and_reported_in_the_meta() {
             }
         }
     }
-    assert_eq!(retries, 1, "每次重试都要有一条通知");
-    assert_eq!(meta_retries, 1, "meta 里的次数是实测的");
+    assert_eq!(retries, 1, "every retry owes a notification");
+    assert_eq!(
+        meta_retries, 1,
+        "the count in meta is measured, not guessed"
+    );
 }
 
 /// Working-directory admission (fail-closed): valid ones pass; relative and nonexistent paths are blocked;
@@ -982,24 +1040,28 @@ fn turn_cwd_validation_is_fail_closed() {
 
     let dir = tempfile::tempdir().expect("temporary directory");
     let ok = resolve_turn_cwd(&Some(dir.path().display().to_string()));
-    assert!(ok.unwrap().is_some(), "存在的绝对路径应该通过");
+    assert!(
+        ok.unwrap().is_some(),
+        "an absolute path that exists should pass"
+    );
 
     assert!(resolve_turn_cwd(&None).unwrap().is_none());
     assert!(resolve_turn_cwd(&Some(String::new())).unwrap().is_none());
     assert!(resolve_turn_cwd(&Some("   ".into())).unwrap().is_none());
 
     // Relative path: rejected, and the error speaks plainly.
-    let err = resolve_turn_cwd(&Some("相对/路径".into())).unwrap_err();
+    let err = resolve_turn_cwd(&Some("relative/path".into())).unwrap_err();
     assert!(err.message.contains("absolute path"), "{}", err.message);
 
     // A nonexistent absolute path: rejected.
-    let err = resolve_turn_cwd(&Some("/不存在/的/目录/joy".into())).unwrap_err();
-    assert!(err.message.contains("不存在"), "{}", err.message);
+    let err = resolve_turn_cwd(&Some("/no/such/directory/joy".into())).unwrap_err();
+    assert!(err.message.contains("does not exist"), "{}", err.message);
 }
 
-// ---- 附件（多模态）：图片在进 provider 前被读成块、被 vision 闸门拦下 ----
+// ---- Attachments (multimodal): an image becomes a block before the provider sees it,
+// ---- and the vision gate refuses it first ----
 
-/// 与 `run` 相同的流程，但带 vision 开关、附件列表和一个「启动前装置」回调（往 home 里写上传文件）。
+/// The same flow as `run`, plus a vision switch, a list of attachments and a "set up before\n/// starting" callback that writes the uploaded files into home.
 async fn run_with_attachments(
     mock: Mock,
     vision: bool,
@@ -1012,7 +1074,7 @@ async fn run_with_attachments(
     prepare(dir.path());
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let settings = Settings {
         home: dir.path().to_path_buf(),
         ..Settings::default()
@@ -1056,7 +1118,7 @@ async fn run_with_attachments(
             Frame::Notification(notification) => notifications.push(notification),
         }
     }
-    let requests = mock.received.lock().expect("锁").clone();
+    let requests = mock.received.lock().expect("lock").clone();
     Ran {
         notifications,
         meta,
@@ -1075,10 +1137,11 @@ fn png_attachment(path: &str) -> Option<Vec<joyczl_protocol::TurnAttachment>> {
 
 #[tokio::test]
 async fn an_attachment_reaches_the_provider_as_an_image_block() {
-    // 真 PNG 头（1×1）：本地要读得出宽高才放行 —— 12 字节的假签名会被判「读不出」。
+    // A real PNG header (1×1): it only passes if the dimensions can be read locally — a
+    // 12-byte fake signature counts as unreadable.
     let png = {
         let mut bytes = vec![0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-        bytes.extend_from_slice(&13u32.to_be_bytes()); // IHDR 数据长
+        bytes.extend_from_slice(&13u32.to_be_bytes()); // IHDR data length
         bytes.extend_from_slice(b"IHDR");
         bytes.extend_from_slice(&1u32.to_be_bytes());
         bytes.extend_from_slice(&1u32.to_be_bytes());
@@ -1087,22 +1150,23 @@ async fn an_attachment_reaches_the_provider_as_an_image_block() {
     };
     let ran = run_with_attachments(
         Mock::new(vec![
-            // 检索门控先烧一条（small model）。
+            // The retrieval gate burns one call first (the small model).
             Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
-            Mock::text("图里是一个色块。"),
+            Mock::text("the image is a colour patch."),
         ]),
         true,
-        "这张图是什么？",
+        "what is in this image?",
         png_attachment("uploads/px.png"),
         |home| {
             let dir = home.join("uploads");
-            std::fs::create_dir_all(&dir).expect("建上传目录");
-            std::fs::write(dir.join("px.png"), png.clone()).expect("装置图片");
+            std::fs::create_dir_all(&dir).expect("create the upload directory");
+            std::fs::write(dir.join("px.png"), png.clone()).expect("place the image");
         },
     )
     .await;
     assert!(ran.error.is_none(), "{:?}", ran.error);
-    // 检索门控的调用在前，主调用在后：扫全部请求找携带图片的那条用户消息。
+    // The gate call comes first and the main call second: scan every request for the user
+    // message that carries the image.
     let image = ran
         .requests
         .iter()
@@ -1115,34 +1179,41 @@ async fn an_attachment_reaches_the_provider_as_an_image_block() {
             }
             _ => None,
         })
-        .expect("用户消息携带 Image 块");
-    assert_eq!(image.0, "image/png", "类型来自扩展名嗅探");
+        .expect("the user message carries an Image block");
+    assert_eq!(
+        image.0, "image/png",
+        "the type comes from the extension sniff"
+    );
     use base64::Engine as _;
     assert_eq!(
         base64::engine::general_purpose::STANDARD
             .decode(image.1)
-            .expect("合法 base64"),
+            .expect("valid base64"),
         png,
-        "字节原样进 provider"
+        "the bytes reach the provider unchanged"
     );
-    // 正文文本仍在（chat 历史 / 模型都能看到用户说了什么）。
+    // The body text is still there (the chat history and the model both see what was said).
     let with_text = ran
         .requests
         .iter()
         .flat_map(|r| r.messages.iter())
         .filter(|m| matches!(m.role, joyczl_provider::Role::User))
-        .any(|m| m.text().contains("这张图是什么？"));
-    assert!(with_text, "用户正文文本随图片一起进请求");
+        .any(|m| m.text().contains("what is in this image?"));
+    assert!(
+        with_text,
+        "the user's text rides into the request with the image"
+    );
 }
 
-/// 长截图（1120×11100）字节数只有 2 MB 出头，旧的「20 MiB」闸门会放行，远端才拒 ——
-/// 现在必须在发请求前拦下，并把真实尺寸说出来（远端只回一句 unsupported image）。
+/// A tall screenshot (1120×11100) is barely over 2 MB of bytes: the old "20 MiB" gate let it
+/// through and the far end refused it. Now it has to be stopped before the request goes out,
+/// with the real dimensions in the error (the far end only says "unsupported image").
 #[tokio::test]
 async fn an_oversized_image_is_refused_with_its_real_dimensions() {
     let ran = run_with_attachments(
         Mock::new(vec![]),
         true,
-        "看看这张长图",
+        "have a look at this long image",
         png_attachment("uploads/long.png"),
         |home| {
             let mut bytes = vec![0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
@@ -1152,23 +1223,29 @@ async fn an_oversized_image_is_refused_with_its_real_dimensions() {
             bytes.extend_from_slice(&11_100u32.to_be_bytes());
             bytes.extend_from_slice(&[8, 6, 0, 0, 0]);
             let dir = home.join("uploads");
-            std::fs::create_dir_all(&dir).expect("建上传目录");
-            std::fs::write(dir.join("long.png"), bytes).expect("装置图片");
+            std::fs::create_dir_all(&dir).expect("create the upload directory");
+            std::fs::write(dir.join("long.png"), bytes).expect("place the image");
         },
     )
     .await;
-    let error = ran.error.as_ref().expect("超过单边上限必须在门口拦下");
+    let error = ran
+        .error
+        .as_ref()
+        .expect("over the per-side limit it has to stop at the door");
     assert!(
         error.message.contains("1120×11100"),
-        "报错要给出真实尺寸：{}",
+        "the error has to give the real size: {}",
         error.message
     );
     assert!(
         error.message.contains("in pieces"),
-        "报错要给出可执行的下一步：{}",
+        "the error has to give an actionable next step: {}",
         error.message
     );
-    assert!(ran.requests.is_empty(), "失败不该烧掉任何模型调用");
+    assert!(
+        ran.requests.is_empty(),
+        "a failure must not burn a model call"
+    );
 }
 
 #[tokio::test]
@@ -1176,70 +1253,84 @@ async fn attachments_fail_up_front_on_a_non_vision_provider() {
     let ran = run_with_attachments(
         Mock::new(vec![]),
         false,
-        "看看这张图",
+        "have a look at this image",
         png_attachment("uploads/px.png"),
         |_| {},
     )
     .await;
-    let error = ran.error.as_ref().expect("vision 关着必须在门口拦下");
+    let error = ran
+        .error
+        .as_ref()
+        .expect("with vision off it has to stop at the door");
     assert!(
         error.message.contains("cannot take images"),
         "{}",
         error.message
     );
-    assert!(ran.requests.is_empty(), "失败不该烧掉任何模型调用");
+    assert!(
+        ran.requests.is_empty(),
+        "a failure must not burn a model call"
+    );
 }
 
 #[tokio::test]
 async fn an_attachment_outside_home_is_refused_before_the_turn() {
-    // 平台无关的逃逸向量：`..` 走出 home。文件必须真实存在 —— canonicalize 才分得清
-    // 「不存在」与「越界」，断言才能钉住越界那一条错误。
+    // A platform-neutral escape vector: `..` out of home. The file has to really exist — only
+    // then does canonicalize tell "missing" apart from "outside", and only then does the
+    // assertion pin the escape error rather than the missing one.
     let ran = run_with_attachments(
         Mock::new(vec![]),
         true,
-        "看看这张图",
+        "have a look at this image",
         png_attachment("../escape.png"),
         |home| {
             std::fs::write(
                 home.parent()
-                    .expect("tempdir 必有父目录")
+                    .expect("a tempdir always has a parent")
                     .join("escape.png"),
                 [0u8; 8],
             )
-            .expect("放逃逸文件");
+            .expect("place the escaping file");
         },
     )
     .await;
-    let error = ran.error.as_ref().expect("越界路径必须被拒");
+    let error = ran
+        .error
+        .as_ref()
+        .expect("a path outside the workspace must be refused");
     assert!(error.message.contains("outside home"), "{}", error.message);
     assert!(ran.requests.is_empty());
 }
 
-/// Unix 专属逃逸向量：符号链接指向 home 之外、路径本身「存在」。
-/// Windows 上符号链接需要特权语义，同一个闸门由上面的 `../` 用例覆盖。
+/// A Unix-only escape vector: a symlink pointing outside home, where the path itself exists.
+/// Symlinks need privileged semantics on Windows, so the `../` case above covers that gate.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_symlinked_attachment_outside_home_is_refused() {
     let ran = run_with_attachments(
         Mock::new(vec![]),
         true,
-        "看看这张图",
+        "have a look at this image",
         png_attachment("uploads/escape.png"),
         |home| {
             let dir = home.join("uploads");
-            std::fs::create_dir_all(&dir).expect("建上传目录");
+            std::fs::create_dir_all(&dir).expect("create the upload directory");
             std::os::unix::fs::symlink("/etc/hosts", dir.join("escape.png"))
-                .expect("建逃逸符号链接");
+                .expect("create the escaping symlink");
         },
     )
     .await;
-    let error = ran.error.as_ref().expect("越界路径必须被拒");
+    let error = ran
+        .error
+        .as_ref()
+        .expect("a path outside the workspace must be refused");
     assert!(error.message.contains("outside home"), "{}", error.message);
     assert!(ran.requests.is_empty());
 }
 
-/// 0.15：`turn/start` 不带 cwd 时，用**会话自己记住**的那个目录 —— "工作目录跟着会话走"
-/// 的全部实现就在这一个分支上，所以它值得一条自己的测试。
+/// 0.15: with no cwd on `turn/start`, the directory the **session remembers** is used — the
+/// whole of "the working directory follows the session" lives in this one branch, which is
+/// why it deserves a test of its own.
 #[tokio::test]
 async fn the_session_working_directory_is_used_when_the_turn_names_none() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
@@ -1251,26 +1342,27 @@ async fn the_session_working_directory_is_used_when_the_turn_names_none() {
         .chat
         .create_session("s1", None, Some(cwd_text.as_str()))
         .await
-        .expect("建会话");
+        .expect("create the session");
 
     assert_eq!(
         crate::turn::session_cwd(&server, "s1").await.as_deref(),
         Some(cwd.as_path()),
-        "会话记着的目录就是这一轮的可写范围根"
+        "the directory the session remembers is this turn's writable root"
     );
     assert_eq!(
         crate::turn::session_cwd(&server, "s2").await,
         None,
-        "没有这个会话时不该编一个目录出来"
+        "with no such session, no directory may be invented"
     );
     assert_eq!(
         crate::turn::session_cwd(&server, "default").await,
         None,
-        "没选过目录的会话就是没有目录（写入会被拒，而不是落到进程 cwd）"
+        "a session that never chose a directory has none (writes are refused, not dropped into the process cwd)"
     );
 }
 
-/// 目录在选中之后被删掉了：不能悄悄退回进程 cwd，那会让写入落在没人预期的地方。
+/// The directory was deleted after it was picked: falling back to the process cwd would put
+/// writes somewhere nobody expects.
 #[tokio::test]
 async fn a_vanished_session_directory_is_not_silently_replaced() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
@@ -1280,148 +1372,184 @@ async fn a_vanished_session_directory_is_not_silently_replaced() {
         .chat
         .create_session("s1", None, Some(&path))
         .await
-        .expect("建会话");
+        .expect("create the session");
     assert!(crate::turn::session_cwd(&server, "s1").await.is_some());
 
     drop(work);
     assert_eq!(
         crate::turn::session_cwd(&server, "s1").await,
         None,
-        "目录不在了就是没有可写范围，不该拿别的目录顶上"
+        "the directory is gone, so there is no writable scope — another directory must not stand in"
     );
 }
 
-/// `turn/list` 只报还在跑的：结束的那一轮必须消失，别人的会话不该被算进来。
+/// `turn/list` reports only what is still running: a finished turn must disappear, and
+/// another session's turns must not be counted in.
 #[tokio::test]
 async fn turn_list_reports_only_what_is_still_running() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
-    let _token = server.begin_turn("t1", "s1").expect("会话空闲");
+    let _token = server.begin_turn("t1", "s1").expect("the session is idle");
 
     let all = server.active_turns(None);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].0, "t1");
     assert_eq!(all[0].1, "s1");
-    assert!(server.active_turns(Some("s2")).is_empty(), "别的会话不串");
+    assert!(
+        server.active_turns(Some("s2")).is_empty(),
+        "another session does not leak in"
+    );
     assert_eq!(server.active_turns(Some("s1")).len(), 1);
 
     server.finish_turn("t1");
-    assert!(server.active_turns(None).is_empty(), "跑完了就该消失");
+    assert!(
+        server.active_turns(None).is_empty(),
+        "once it is done it must be gone"
+    );
 }
 
-/// 0.16 的第一半：**一个会话一次只跑一轮**。
+/// The first half of 0.16: **one session runs one turn at a time**.
 ///
-/// 这条不变量以前不存在：两个 `turn/start` 会并行跑，写段交错、各自只看见一半历史。
+/// This invariant did not exist before: two `turn/start` calls ran in parallel, writes
+/// interleaved, and each one saw only half the history.
 #[tokio::test]
 async fn one_turn_at_a_time_per_session() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
 
-    let (_interrupt, _steering) = server.begin_turn("t1", "s1").expect("第一个该拿到会话");
+    let (_interrupt, _steering) = server
+        .begin_turn("t1", "s1")
+        .expect("the first one should get the session");
     let holder = server
         .begin_turn("t2", "s1")
-        .expect_err("同会话第二个必须被拒");
-    assert_eq!(holder, "t1", "拒绝里要带住占用者的回合 id");
+        .expect_err("a second turn on the same session must be refused");
+    assert_eq!(
+        holder, "t1",
+        "the refusal has to carry the occupant's turn id"
+    );
 
-    assert!(server.begin_turn("t3", "s2").is_ok(), "别的会话不该被牵连");
+    assert!(
+        server.begin_turn("t3", "s2").is_ok(),
+        "another session must not be dragged in"
+    );
 
     server.finish_turn("t1");
-    assert!(server.begin_turn("t4", "s1").is_ok(), "上一轮结束后该放行");
+    assert!(
+        server.begin_turn("t4", "s1").is_ok(),
+        "once the previous turn ends, it should pass"
+    );
 }
 
-/// 0.16 的第二半：补一句进的是**在跑的那一轮**；没有在跑的回合就明说，不静默变成新一轮。
+/// The second half of 0.16: a follow-up goes into **the turn that is running**; with no turn
+/// running it says so, rather than silently becoming a new one.
 #[tokio::test]
 async fn steering_needs_a_running_turn_and_keeps_arrival_order() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
 
     assert!(
-        server.steer("s1", "随便补一句").is_err(),
-        "没有在跑的回合就该说不 —— 静默开新一轮是撒谎"
+        server.steer("s1", "just one more thing").is_err(),
+        "with no turn running it has to say so — silently starting a new turn would be a lie"
     );
 
-    let (_interrupt, steering) = server.begin_turn("t1", "s1").expect("会话空闲");
-    let (turn_id, queued) = server.steer("s1", "顺便看下 README").expect("有回合在跑");
+    let (_interrupt, steering) = server.begin_turn("t1", "s1").expect("the session is idle");
+    let (turn_id, queued) = server
+        .steer("s1", "have a look at the README too")
+        .expect("a turn is running");
     assert_eq!(turn_id, "t1");
     assert_eq!(queued, 1);
     let (_, queued) = server
-        .steer("s1", "再看一眼 CHANGELOG")
-        .expect("有回合在跑");
+        .steer("s1", "a second look at the CHANGELOG")
+        .expect("a turn is running");
     assert_eq!(queued, 2);
 
-    let mut channel = steering.lock().expect("锁");
+    let mut channel = steering.lock().expect("lock");
     assert_eq!(
         channel.drain_pending(),
         vec![
-            "顺便看下 README".to_string(),
-            "再看一眼 CHANGELOG".to_string()
+            "have a look at the README too".to_string(),
+            "a second look at the CHANGELOG".to_string()
         ],
-        "按到达顺序交给模型"
+        "handed to the model in arrival order"
     );
-    assert!(channel.drain_pending().is_empty(), "取过的不再重复");
-    assert_eq!(channel.all().len(), 2, "转录仍然看得到全部");
+    assert!(
+        channel.drain_pending().is_empty(),
+        "what was taken is not repeated"
+    );
+    assert_eq!(
+        channel.all().len(),
+        2,
+        "the transcript still shows everything"
+    );
 }
 
-/// 0.16 follow-up：只有**有回合在跑**时，「等这轮结束」才有对象。
+/// 0.16 follow-up: "after this turn" has a referent only while **a turn is running**.
 #[tokio::test]
 async fn follow_up_needs_a_turn_in_flight_and_counts_the_line() {
     let server = server(Arc::new(Mock::new(vec![])), false).await;
 
     assert!(
         matches!(
-            server.follow_up("test", "等会儿做").await,
+            server.follow_up("test", "I will do it later").await,
             crate::FollowUp::Idle
         ),
-        "空闲时说「等这轮结束」没有对象 —— 应该让调用方直接 turn/start"
+        "queueing while idle has no turn to wait on — the caller should just turn/start"
     );
 
-    let (_interrupt, _steering) = server.begin_turn("t1", "test").expect("会话空闲");
+    let (_interrupt, _steering) = server
+        .begin_turn("t1", "test")
+        .expect("the session is idle");
     assert!(matches!(
-        server.follow_up("test", "第二件事").await,
+        server.follow_up("test", "the second thing").await,
         crate::FollowUp::Queued(1)
     ));
     assert!(matches!(
-        server.follow_up("test", "第三件事").await,
+        server.follow_up("test", "the third thing").await,
         crate::FollowUp::Queued(2)
     ));
-    assert_eq!(server.queue.count("test").await.expect("数"), 2);
+    assert_eq!(server.queue.count("test").await.expect("count"), 2);
     assert!(
         matches!(
-            server.follow_up("other", "无关").await,
+            server.follow_up("other", "unrelated").await,
             crate::FollowUp::Idle
         ),
-        "别的会话没在跑，跟它无关"
+        "another session is not running, so this is unrelated"
     );
 }
 
-/// 0.16 follow-up 的承诺：排队的消息**自己变成一个回合**，会话空了就接着跑，先进先出。
+/// The promise of 0.16 follow-up: a queued message **becomes a turn of its own**, runs as
+/// soon as the session is free, first in first out.
 ///
-/// 每一轮两次模型调用（检索门 + 回复），所以两条排队消息要备四份脚本。
+/// Two model calls per turn (the gate plus the reply), so two queued messages need four
+/// scripted responses.
 #[tokio::test]
 async fn a_queued_message_becomes_its_own_turn_when_the_session_frees_up() {
     let mock = Mock::new(vec![
-        Mock::text(r#"{"retrieve": false, "query": "", "reason": "小事"}"#),
-        Mock::text("第二件事做完了。"),
-        Mock::text(r#"{"retrieve": false, "query": "", "reason": "小事"}"#),
-        Mock::text("第三件事做完了。"),
+        Mock::text(r#"{"retrieve": false, "query": "", "reason": "a small thing"}"#),
+        Mock::text("the second thing is done."),
+        Mock::text(r#"{"retrieve": false, "query": "", "reason": "a small thing"}"#),
+        Mock::text("the third thing is done."),
     ]);
     let server = server(Arc::new(mock), false).await;
 
-    let (_interrupt, _steering) = server.begin_turn("t1", "test").expect("会话空闲");
-    server.follow_up("test", "第二件事").await;
-    server.follow_up("test", "第三件事").await;
+    let (_interrupt, _steering) = server
+        .begin_turn("t1", "test")
+        .expect("the session is idle");
+    server.follow_up("test", "the second thing").await;
+    server.follow_up("test", "the third thing").await;
 
-    // 一轮结束：守卫被丢掉的等价物（Drop 里就是 finish + drain）。
+    // A turn ends: the equivalent of dropping the guard (Drop does finish + drain).
     server.finish_turn("t1");
     crate::turn::drain_queue(&server, "test").await;
 
-    // 两条各自成回合、各自收尾（后一条由前一条的守卫在结束时排空）。
+    // Each message becomes its own turn and finishes on its own (the guard of the first drains
+    // the second when it ends).
     let mut rows = Vec::new();
     for _ in 0..200 {
         rows = server
             .chat
             .messages("test", None, 50)
             .await
-            .expect("读对话");
-        let has_both = rows.iter().any(|row| row.content == "第二件事")
-            && rows.iter().any(|row| row.content == "第三件事");
+            .expect("read the conversation");
+        let has_both = rows.iter().any(|row| row.content == "the second thing")
+            && rows.iter().any(|row| row.content == "the third thing");
         if has_both && rows.len() >= 4 {
             break;
         }
@@ -1432,12 +1560,20 @@ async fn a_queued_message_becomes_its_own_turn_when_the_session_frees_up() {
         rows.iter()
             .find(|row| row.content == text)
             .map(|row| row.id)
-            .unwrap_or_else(|| panic!("排队的消息没进对话：{text}"))
+            .unwrap_or_else(|| panic!("a queued message never reached the conversation: {text}"))
     };
-    assert!(id_of("第二件事") < id_of("第三件事"), "先进先出");
-    assert_eq!(server.queue.count("test").await.expect("数"), 0, "都跑完了");
-    // 消息进了历史 ≠ 最后一轮已经收尾：`finish_turn` 把会话放回去发生在落盘**之后**，
-    // 全量并行跑测试时这两步会被拉开。轮询等它，别赌顺序。
+    assert!(
+        id_of("the second thing") < id_of("the third thing"),
+        "first in, first out"
+    );
+    assert_eq!(
+        server.queue.count("test").await.expect("count"),
+        0,
+        "everything has run"
+    );
+    // A message reaching the history is not the same as the last turn having finished:
+    // `finish_turn` releases the session **after** the write lands, and with the whole suite
+    // running in parallel those two steps drift apart. Poll for it; do not bet on the order.
     let mut released = false;
     for _ in 0..200 {
         if server.active_turns(Some("test")).is_empty() {
@@ -1446,17 +1582,19 @@ async fn a_queued_message_becomes_its_own_turn_when_the_session_frees_up() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    assert!(released, "跑完就该把会话放回去");
+    assert!(released, "a finished turn has to give the session back");
 }
 
-/// 一轮跑完，账本里就有这一轮：请求、回复各一行，保真度 exact，轮摘要验得过。
+/// A turn finishes and the ledger has it: one row for the request, one for the reply,
+/// fidelity exact, and the turn digest verifies.
 ///
-/// 这是「可重建」的入口断言 —— 没有它，账本只是又一个没人读的表。
+/// This is the entry assertion for "rebuildable" — without it the ledger is just another
+/// table nobody reads.
 #[tokio::test]
 async fn a_finished_turn_lands_in_the_ledger() {
     let mock = Arc::new(Mock::new(vec![
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "small talk"}"#),
-        Mock::text("四。"),
+        Mock::text("Four."),
     ]));
     let server = server(mock, false).await;
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -1466,7 +1604,7 @@ async fn a_finished_turn_lands_in_the_ledger() {
         TurnStartParams {
             attachments: None,
             session_id: Some("test".to_string()),
-            message: "2+2 等于几？".to_string(),
+            message: "What is 2+2?".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -1477,40 +1615,51 @@ async fn a_finished_turn_lands_in_the_ledger() {
     .await;
     while rx.try_recv().is_ok() {}
 
-    let turns = server.ledger.turns("test", 10).await.expect("列账");
-    assert_eq!(turns.len(), 1, "一轮就是一轮");
-    assert_eq!(turns[0].fidelity, "exact", "这一轮是现场记的，不是回填");
-    assert!(turns[0].preview.contains("2+2"), "预览要能认出这一轮");
+    let turns = server
+        .ledger
+        .turns("test", 10)
+        .await
+        .expect("list the ledger");
+    assert_eq!(turns.len(), 1, "one turn is one turn");
+    assert_eq!(
+        turns[0].fidelity, "exact",
+        "this turn was recorded live, not backfilled"
+    );
+    assert!(
+        turns[0].preview.contains("2+2"),
+        "the preview has to be recognisable"
+    );
 
     let entries = server
         .ledger
         .entries("test", &turns[0].turn_id)
         .await
-        .expect("读账");
+        .expect("read the ledger");
     assert!(
         entries.iter().any(|entry| entry.kind == "user"),
-        "请求要入账"
+        "the request has to be accounted for"
     );
     assert!(
         entries.iter().any(|entry| entry.kind == "assistant"),
-        "回复要入账"
+        "the reply has to be accounted for"
     );
     assert!(
         server
             .ledger
             .verify("test", &turns[0].turn_id)
             .await
-            .expect("验账"),
-        "刚写完就该验得过"
+            .expect("verify the ledger"),
+        "written just now, so verification has to pass"
     );
 }
 
-/// 系统提示里带「记忆库目录」，但不带正文；目录为空时一个字都不多占。
+/// The system prompt carries the memory catalog but not the page bodies; an empty catalog
+/// costs not a single word.
 #[test]
 fn the_system_prompt_carries_the_catalog_not_the_pages() {
-    let catalog = "# 记忆目录\n\n2 页 · 最后更新 2026-11-12T00:00:00Z\n\n- [Alex](alex.md) · person — 喜欢早会\n";
+    let catalog = "# Memory index\n\n2 pages · last updated 2026-11-12T00:00:00Z\n\n- [Alex](alex.md) · person — likes morning meetings\n";
     let with = crate::turn::build_system(crate::turn::PromptParts {
-        soul: "你是 Joy。",
+        soul: "You are Joy.",
         model: "test-model",
         provider: "mock",
         memory: "",
@@ -1524,15 +1673,21 @@ fn the_system_prompt_carries_the_catalog_not_the_pages() {
     })
     .full();
     assert!(with.contains("Memory library"), "{with}");
-    assert!(with.contains("[Alex](alex.md)"), "目录要进去：{with}");
+    assert!(
+        with.contains("[Alex](alex.md)"),
+        "the catalog has to go in: {with}"
+    );
     assert!(
         with.contains("read_memory_page"),
-        "要告诉模型按需读页：{with}"
+        "the model has to be told to read pages on demand: {with}"
     );
-    assert!(!with.contains("Alice 喜欢"), "正文不该常驻：{with}");
+    assert!(
+        !with.contains("Alice likes"),
+        "page bodies must not ride along: {with}"
+    );
 
     let without = crate::turn::build_system(crate::turn::PromptParts {
-        soul: "你是 Joy。",
+        soul: "You are Joy.",
         model: "test-model",
         provider: "mock",
         memory: "",
@@ -1547,12 +1702,16 @@ fn the_system_prompt_carries_the_catalog_not_the_pages() {
     .full();
     assert!(
         !without.contains("Memory library"),
-        "空目录不占提示：{without}"
+        "an empty index takes up no prompt: {without}"
     );
-    assert!(without.len() < with.len(), "有目录才更长");
+    assert!(
+        without.len() < with.len(),
+        "the catalog is what makes it longer"
+    );
 }
 
-/// 薄 SOUL 是给强模型的：同样的三条纪律，去掉脚手架；用户动过文件之后，文件说了算。
+/// The thin soul is for strong models: the same three rules without the scaffolding. Once
+/// the user has touched the file, the file decides.
 #[test]
 fn the_thin_soul_trades_scaffolding_for_tokens_and_a_user_edit_wins() {
     let dir = tempfile::tempdir().expect("temporary directory");
@@ -1561,33 +1720,44 @@ fn the_thin_soul_trades_scaffolding_for_tokens_and_a_user_edit_wins() {
     let thin = crate::turn::load_soul(&home, true);
     assert!(
         thin.contains("Concise, warm, proactive"),
-        "薄版该保留身份：{thin}"
+        "the thin version has to keep the identity: {thin}"
     );
     assert!(
-        !thin.contains("先征得同意"),
-        "薄版不该带长脚手架的细则：{thin}"
+        !thin.contains("ask first"),
+        "the thin version must not carry the long scaffolding's details: {thin}"
     );
 
-    // 默认文本可以随模式互换 —— 那是「用户没动过」这一种情况。
+    // The default text may swap with the mode — that is the "user never touched it" case.
     let full = crate::turn::load_soul(&home, false);
-    assert!(full.contains("ask first"), "全版该有完整规则：{full}");
+    assert!(
+        full.contains("ask first"),
+        "the full seed should carry the complete rules: {full}"
+    );
 
-    // 用户写过的 SOUL.md 是权威：任何模式都不覆盖。
-    std::fs::write(home.join("SOUL.md"), "只叫我船长。").expect("写 SOUL.md");
-    assert_eq!(crate::turn::load_soul(&home, true), "只叫我船长。");
-    assert_eq!(crate::turn::load_soul(&home, false), "只叫我船长。");
+    // A SOUL.md the user wrote is authoritative: no mode overwrites it.
+    std::fs::write(home.join("SOUL.md"), "Call me captain and nothing else.")
+        .expect("write SOUL.md");
+    assert_eq!(
+        crate::turn::load_soul(&home, true),
+        "Call me captain and nothing else."
+    );
+    assert_eq!(
+        crate::turn::load_soul(&home, false),
+        "Call me captain and nothing else."
+    );
 }
 
-/// 稳定前缀与会变的尾巴必须分开：同一会话里前缀逐字节不变，时间只到日。
+/// The stable prefix and the changing tail have to stay apart: within one session the
+/// prefix is byte-identical, and the timestamp goes down to the day only.
 #[test]
 fn the_stable_prefix_does_not_move_between_turns() {
     let parts = |todo: Option<&'static str>| crate::turn::PromptParts {
-        soul: "你是 Joy。",
+        soul: "You are Joy.",
         model: "test-model",
         provider: "mock",
-        memory: "Alex 喜欢早上的会议",
-        memory_index: Some("- [Alex](alex.md) — 人"),
-        skill_index: Some("- demo — 一段流程"),
+        memory: "Alex likes morning meetings",
+        memory_index: Some("- [Alex](alex.md) — person"),
+        skill_index: Some("- demo — a workflow"),
         skills: "",
         todo,
         summary: None,
@@ -1595,44 +1765,67 @@ fn the_stable_prefix_does_not_move_between_turns() {
         capabilities: None,
     };
     let first = crate::turn::build_system(parts(None));
-    let second = crate::turn::build_system(parts(Some("## 待办清单\n- [ ] 写测试")));
+    let second = crate::turn::build_system(parts(Some("## To-do\n- [ ] write tests")));
 
-    assert_eq!(first.stable, second.stable, "前缀跨轮必须逐字节相同");
-    assert_ne!(first.tail, second.tail, "待办变了，尾巴就该变");
-    assert!(first.tail.contains("Right now it is"), "日期在尾巴里");
-    // 日粒度：带时分就意味着每小时失效一次缓存。
+    assert_eq!(
+        first.stable, second.stable,
+        "the prefix must be byte-identical across turns"
+    );
+    assert_ne!(
+        first.tail, second.tail,
+        "the to-do board changed, so the tail should change"
+    );
+    assert!(
+        first.tail.contains("Right now it is"),
+        "the date lives in the tail"
+    );
+    // Day granularity: hours and minutes would bust the cache once an hour.
     let now = chrono::Local::now();
     assert!(first.tail.contains(&now.format("%Y-%m-%d").to_string()));
     assert!(!first.tail.contains(&now.format("%H:%M").to_string()));
 }
 
-/// 本机缺什么要写进提示。
+/// What this machine cannot do has to be said in the prompt.
 ///
-/// 没有这句时，模型分不清「这个工具不存在」和「我还没找到合适的工具」—— 一次「清理日历」
-/// 的请求因此在 10 步里读了 4 篇本仓库文档。Codex 把自己的沙箱权限写进 developer 消息，
-/// Claude Code 把权限模式写进系统提示，同一个理由：能力边界属于上下文，不属于试错。
+/// Without that sentence the model cannot tell "this tool does not exist" from "I have not
+/// found the right one yet" — one "clean up my calendar" request spent 4 of its 10 steps
+/// reading this repository's docs. Codex puts its sandbox permissions in a developer
+/// message, Claude Code puts the permission mode in the system prompt, for the same
+/// reason: the boundary of what is possible belongs in the context, not in trial and error.
 #[test]
 fn the_prompt_says_what_the_machine_cannot_do() {
     let off = joyczl_config::Settings::default();
     assert!(
         !off.exec_enabled && !off.write_enabled,
-        "两个开关默认都是关的"
+        "both switches are off by default"
     );
 
-    let note = crate::turn::capability_note(&off).expect("都关着就该出现");
+    let note = crate::turn::capability_note(&off).expect("with everything off it has to appear");
     assert!(note.contains("JOY_EXEC"), "{note}");
     assert!(note.contains("JOY_WRITE"), "{note}");
-    assert!(note.contains("say so"), "要说的是「做不到就直说」：{note}");
+    assert!(
+        note.contains("say so"),
+        "the point is \"if you cannot, say so\": {note}"
+    );
+    assert!(
+        note.contains("`glob`") && note.contains("`grep`"),
+        "no shell is not no search: {note}"
+    );
 
-    // 只缺一样就只说一样：提示不是固定文案，它跟着开关走。
+    // One thing missing means one line about it: the note is not a fixed string, it follows
+    // the switches.
     let half = joyczl_config::Settings {
         exec_enabled: true,
         ..joyczl_config::Settings::default()
     };
-    let note = crate::turn::capability_note(&half).expect("缺写文件");
+    let note = crate::turn::capability_note(&half).expect("writing files is missing");
     assert!(
         note.contains("JOY_WRITE") && !note.contains("JOY_EXEC"),
         "{note}"
+    );
+    assert!(
+        !note.contains("no shell") && !note.contains("Searching is not"),
+        "with the shell on, the searching aside would only confuse: {note}"
     );
 
     let full = joyczl_config::Settings {
@@ -1642,7 +1835,7 @@ fn the_prompt_says_what_the_machine_cannot_do() {
     };
     assert!(
         crate::turn::capability_note(&full).is_none(),
-        "都开着就不该占提示"
+        "with both on they must take up no prompt"
     );
 }
 
@@ -1662,23 +1855,30 @@ async fn a_stop_does_not_wait_for_a_slow_preloop_step() {
     let started = std::time::Instant::now();
     let result = crate::turn::interruptible(
         Some(&cancel),
-        "测试用长步骤",
+        "a long test step",
         tokio::time::sleep(std::time::Duration::from_secs(30)),
     )
     .await;
 
-    assert!(result.is_none(), "被中断时不应返回步骤结果");
+    assert!(
+        result.is_none(),
+        "an interrupted step should not return a result"
+    );
     assert!(
         started.elapsed() < std::time::Duration::from_millis(500),
-        "停止应立即生效，不能等步骤跑完：{:?}",
+        "a stop has to take effect at once, not after the step finishes: {:?}",
         started.elapsed()
     );
 }
 
 #[tokio::test]
 async fn without_an_interrupt_the_step_just_runs() {
-    let value = crate::turn::interruptible(None, "测试用步骤", async { 7 }).await;
-    assert_eq!(value, Some(7), "没有 interrupt 信号时行为不变");
+    let value = crate::turn::interruptible(None, "a test step", async { 7 }).await;
+    assert_eq!(
+        value,
+        Some(7),
+        "with no interrupt signal the behaviour is unchanged"
+    );
 }
 
 // ---- Folded tool activity keeps an address, not just a memory --------------------------
@@ -1695,39 +1895,50 @@ fn outcome(name: &str, output: &str) -> joyczl_loop::ToolOutcome {
 #[test]
 fn a_folded_call_says_what_ran_how_much_and_the_first_line() {
     let folded = crate::turn::fold_tool_activity(
-        "我看过了。",
-        &[outcome("read_file", "第一行内容\n第二行\n第三行")],
+        "I have read it.",
+        &[outcome("read_file", "first line\nsecond line\nthird line")],
     );
     assert!(folded.contains("read_file"), "{folded}");
     assert!(folded.contains("chars"), "{folded}");
-    assert!(folded.contains("第一行内容"), "{folded}");
     assert!(
-        !folded.contains("第二行"),
-        "只留首行，正文靠 read_file 重取：{folded}"
+        folded.contains("first line"),
+        "the first line has to survive: {folded}"
+    );
+    assert!(
+        !folded.contains("second line"),
+        "only the first line is kept; the body comes back through read_file: {folded}"
     );
 }
 
 #[test]
 fn a_spilled_result_keeps_the_address_to_read_it_again() {
-    let output = "头几行\n…（结果共 90000 字符，已截断，省略了 41 行；完整输出在 spill/20261112/exec-101500-42.txt）\n尾几行";
-    let folded = crate::turn::fold_tool_activity("跑完了。", &[outcome("run_command", output)]);
+    let output = "the first few lines\n…(90000 characters in total, truncated — 41 lines omitted; full output at spill/20261112/exec-101500-42.txt)\nthe last few lines";
+    let folded =
+        crate::turn::fold_tool_activity("done running.", &[outcome("run_command", output)]);
     assert!(
         folded.contains("spill/20261112/exec-101500-42.txt"),
-        "折叠后必须留下去哪儿重取：{folded}"
+        "after folding, where to fetch it again has to remain: {folded}"
     );
     assert!(folded.contains("run_command"), "{folded}");
 }
 
 #[test]
 fn a_result_without_spill_does_not_invent_an_address() {
-    let folded = crate::turn::fold_tool_activity("好了。", &[outcome("echo", "hi")]);
-    assert!(!folded.contains("全量在"), "{folded}");
+    let folded = crate::turn::fold_tool_activity("all right.", &[outcome("echo", "hi")]);
+    assert!(
+        !folded.contains("the full thing is at"),
+        "the Chinese spill marker must be gone: {folded}"
+    );
     assert!(folded.contains("hi"), "{folded}");
 }
 
 #[test]
 fn no_tool_calls_leaves_the_reply_untouched() {
-    assert_eq!(crate::turn::fold_tool_activity("就说一句", &[]), "就说一句");
+    assert_eq!(
+        crate::turn::fold_tool_activity("just say one line", &[]),
+        "just say one line",
+        "nothing to fold leaves it alone"
+    );
 }
 
 #[tokio::test]
@@ -1805,4 +2016,129 @@ async fn quick_chat_keeps_recent_context_and_personality() {
         .messages
         .iter()
         .any(|m| m.text().contains("private other session")));
+}
+
+#[tokio::test]
+async fn quick_chat_retains_saved_preferences_without_retrieving_stale_or_project_claims() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text(r#"{"route":"quick","reason":"greeting"}"#),
+        Mock::text("Welcome back."),
+    ]));
+    let server = server(mock.clone(), true).await;
+    server
+        .facts
+        .add("user", "Please call me Lin.", "user", "user")
+        .await
+        .unwrap();
+    server
+        .facts
+        .add("style", "Prefer gentle, short replies.", "user", "feedback")
+        .await
+        .unwrap();
+    let (expired, _) = server
+        .facts
+        .add("mood", "obsolete mood marker", "user", "user")
+        .await
+        .unwrap();
+    server
+        .facts
+        .set_validity(expired.id, None, Some("2000-01-01T00:00:00Z"))
+        .await
+        .unwrap();
+    let (removed, _) = server
+        .facts
+        .add("user", "deleted preference marker", "user", "user")
+        .await
+        .unwrap();
+    server.facts.delete(removed.id).await.unwrap();
+    server
+        .facts
+        .add("project", "unrelated project marker", "user", "project")
+        .await
+        .unwrap();
+    server
+        .facts
+        .add(
+            "user",
+            "unconfirmed inference marker",
+            "consolidation",
+            "user",
+        )
+        .await
+        .unwrap();
+    let (sink, _receiver) = EventSink::channel();
+    crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("test".into()),
+            message: "Hello again".into(),
+            ..Default::default()
+        },
+        RequestId::Number(1),
+        &sink,
+    )
+    .await
+    .unwrap();
+    let requests = mock.received.lock().unwrap();
+    assert_eq!(
+        requests.len(),
+        2,
+        "Personal context must not add a provider call"
+    );
+    let quick = &requests[1];
+    assert!(quick.tools.is_empty());
+    let memory = quick
+        .messages
+        .iter()
+        .map(joyczl_provider::Message::text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(memory.contains("Please call me Lin."));
+    assert!(memory.contains("Prefer gentle, short replies."));
+    for excluded in [
+        "obsolete mood marker",
+        "deleted preference marker",
+        "unrelated project marker",
+        "unconfirmed inference marker",
+    ] {
+        assert!(
+            !memory.contains(excluded),
+            "Unexpected quick context: {excluded}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn quick_chat_still_answers_when_saved_preferences_are_unavailable() {
+    let mock = Arc::new(Mock::new(vec![
+        Mock::text(r#"{"route":"quick","reason":"greeting"}"#),
+        Mock::text("Still here."),
+    ]));
+    let server = server(mock.clone(), true).await;
+    sqlx::query("DROP VIEW durable_facts")
+        .execute(&server.pool)
+        .await
+        .unwrap();
+    let (sink, _receiver) = EventSink::channel();
+    let result = crate::turn::run_turn(
+        &server,
+        TurnStartParams {
+            session_id: Some("test".into()),
+            message: "Hello".into(),
+            ..Default::default()
+        },
+        RequestId::Number(1),
+        &sink,
+    )
+    .await;
+    assert!(result.is_ok());
+    let requests = mock.received.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].tools.is_empty());
+    assert!(requests[1]
+        .messages
+        .last()
+        .unwrap()
+        .text()
+        .contains("Hello"));
 }

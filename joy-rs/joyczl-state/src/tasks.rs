@@ -211,6 +211,8 @@ impl Tasks {
         Ok(sqlx::query_as::<_, TaskRow>(&format!(
             "SELECT {COLS} FROM agent_tasks
              WHERE session_id = ? AND status IN ('pending', 'running', 'suspended', 'needs_attention')
+             AND NOT EXISTS(SELECT 1 FROM task_dispatch d WHERE d.task_id=agent_tasks.id)
+             AND NOT EXISTS(SELECT 1 FROM task_pause_fences p WHERE p.task_id=agent_tasks.id)
              ORDER BY created_at DESC, rowid DESC LIMIT 1"
         ))
         .bind(session_id)
@@ -272,14 +274,15 @@ impl Tasks {
 
     /// A run starts carrying this task.
     pub async fn set_running(&self, id: &str, turn_id: &str) -> Result<()> {
-        sqlx::query(
+        let changed=sqlx::query(
             "UPDATE agent_tasks SET status = 'running', current_turn_id = ?, suspend_reason = NULL,
-             updated_at = datetime('now') WHERE id = ?",
+             updated_at = datetime('now') WHERE id = ? AND NOT EXISTS(SELECT 1 FROM task_pause_fences WHERE task_id=agent_tasks.id)",
         )
         .bind(turn_id)
         .bind(id)
         .execute(&self.pool)
-        .await?;
+        .await?.rows_affected();
+        anyhow::ensure!(changed == 1, "Task is unavailable or paused by the user");
         Ok(())
     }
 
@@ -324,17 +327,6 @@ impl Tasks {
     }
 
     /// Replace the latest measured verdict list (one JSON array, same order as the conditions).
-    pub async fn set_checks(&self, id: &str, checks_json: &str) -> Result<()> {
-        sqlx::query(
-            "UPDATE agent_tasks SET checks_json = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .bind(checks_json)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     /// The `/goal` door: change the condition on the live task (the only place a goal lives).
     pub async fn set_goal(&self, id: &str, condition: Option<&str>) -> Result<()> {
         sqlx::query(
@@ -349,39 +341,93 @@ impl Tasks {
 
     /// Terminal state: `done` / `failed` / `cancelled`. Closes the row and stamps the time.
     pub async fn finish(&self, id: &str, status: TaskStatus) -> Result<()> {
+        self.finish_with_reason(id, status, None).await
+    }
+
+    pub async fn finish_with_reason(
+        &self,
+        id: &str,
+        status: TaskStatus,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.finish_run(id, status, reason, None).await
+    }
+
+    /// Close an exact execution with its task and completion receipt in one commit.
+    pub async fn finish_run(
+        &self,
+        id: &str,
+        status: TaskStatus,
+        reason: Option<&str>,
+        run_id: Option<&str>,
+    ) -> Result<()> {
         if !status.is_terminal() {
             return Err(anyhow::anyhow!(
                 "finish only takes terminal states; got {status} (for anything else use suspend / needs_attention)"
             ));
         }
+        let mut tx = self.pool.begin().await?;
+        if let Some(run_id) = run_id {
+            let run_status = match status {
+                TaskStatus::Done => "completed",
+                TaskStatus::Failed => "failed",
+                TaskStatus::Cancelled => "cancelled",
+                _ => unreachable!("terminal status checked above"),
+            };
+            let changed = sqlx::query("UPDATE task_runs SET status=?,stop_reason=?,ended_at=datetime('now') WHERE id=? AND task_id=?")
+                .bind(run_status).bind(reason).bind(run_id).bind(id).execute(&mut *tx).await?.rows_affected();
+            anyhow::ensure!(changed == 1, "Task completion run binding is missing");
+        }
+
+        if status == TaskStatus::Done {
+            crate::verification::Verifications::require_completion(&mut tx, id, run_id).await?;
+        }
         sqlx::query(
-            "UPDATE agent_tasks SET status = ?, current_turn_id = NULL,
+            "UPDATE agent_tasks SET status = ?, current_turn_id = NULL,suspend_reason=NULL,
+             last_stop_reason=CASE WHEN ?='done' THEN ? ELSE COALESCE(?,last_stop_reason) END,
              finished_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
         )
         .bind(status)
+        .bind(status)
+        .bind(reason)
+        .bind(reason)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     /// A human pressed pause: the reason is kept and shown, never dropped.
     pub async fn suspend(&self, id: &str, reason: Option<&str>) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO task_pause_fences(task_id) SELECT id FROM agent_tasks WHERE id=? ON CONFLICT(task_id) DO UPDATE SET paused_at=datetime('now')")
+            .bind(id).execute(&mut *tx).await?;
+        let changed=sqlx::query("UPDATE agent_tasks SET status='suspended',suspend_reason=?,last_stop_reason=?,updated_at=datetime('now') WHERE id=? AND status IN ('pending','running','suspended','needs_attention')")
+            .bind(reason).bind(reason).bind(id).execute(&mut *tx).await?.rows_affected();
+        anyhow::ensure!(changed == 1, "Task has ended or is unavailable for pause");
         sqlx::query(
-            "UPDATE agent_tasks SET status = 'suspended', suspend_reason = ?,
-             last_stop_reason = ?, updated_at = datetime('now') WHERE id = ?",
+            "UPDATE task_job_waits SET state='cancelled' WHERE task_id=? AND state='waiting'",
         )
-        .bind(reason)
-        .bind(reason)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            "UPDATE task_input_waits SET state='cancelled' WHERE task_id=? AND state='waiting'",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE turn_checkpoints SET status='suspended',updated_at=datetime('now') WHERE status IN ('open','suspended','waiting_jobs','waiting_input') AND (run_id=(SELECT id FROM task_runs WHERE task_id=? ORDER BY started_at DESC,rowid DESC LIMIT 1) OR (run_id IS NULL AND turn_id=(SELECT current_turn_id FROM agent_tasks WHERE id=?)))")
+            .bind(id).bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
     /// Something a machine must not decide alone: stopped, but still open for a human.
     /// Distinct from `suspend` so the card can show it in warning colours and say why.
     pub async fn needs_attention(&self, id: &str, reason: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "UPDATE agent_tasks SET status = 'needs_attention', current_turn_id = NULL,
              suspend_reason = ?, last_stop_reason = ?, updated_at = datetime('now') WHERE id = ?",
@@ -389,8 +435,9 @@ impl Tasks {
         .bind(reason)
         .bind(reason)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -406,13 +453,19 @@ impl Tasks {
 
     /// A human pressed continue: back to running; the caller starts the run.
     pub async fn resume(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM task_pause_fences WHERE task_id=?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(
             "UPDATE agent_tasks SET status = 'running', suspend_reason = NULL,
              updated_at = datetime('now') WHERE id = ?",
         )
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -426,11 +479,13 @@ impl Tasks {
         ))
         .fetch_all(&self.pool)
         .await?;
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "UPDATE agent_tasks SET status = 'suspended',\n             suspend_reason = 'the process restarted; an unfinished turn resumes automatically if it can',\n             last_stop_reason = 'the process restarted; an unfinished turn resumes automatically if it can',\n             updated_at = datetime('now')\n             WHERE status = 'running'",
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(rows)
     }
 }

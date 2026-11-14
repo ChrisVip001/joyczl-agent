@@ -297,7 +297,7 @@ mod tests {
     use super::*;
 
     fn home() -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let home = dir.path().to_path_buf();
         (dir, home)
     }
@@ -306,7 +306,7 @@ mod tests {
         JobBody {
             name: name.to_string(),
             cron: cron.to_string(),
-            prompt: "写一份简报".to_string(),
+            prompt: "write a briefing".to_string(),
             delivery: "outbox".to_string(),
             catch_up: None,
         }
@@ -315,28 +315,28 @@ mod tests {
     #[test]
     fn save_then_read_then_remove_roundtrips() {
         let (_dir, home) = home();
-        save(&home, &body("morning-news", "0 8 * * *"), &[]).expect("保存");
+        save(&home, &body("morning-news", "0 8 * * *"), &[]).expect("save");
         let (jobs, error) = read(&home);
         assert!(error.is_none(), "{error:?}");
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].name, "morning-news");
-        assert!(jobs[0].catch_up, "默认补跑");
+        assert!(jobs[0].catch_up, "catches up by default");
 
-        remove(&home, "morning-news", &[]).expect("删除");
+        remove(&home, "morning-news", &[]).expect("delete");
         assert!(read(&home).0.is_empty());
     }
 
     #[test]
     fn a_second_save_replaces_instead_of_appending() {
         let (_dir, home) = home();
-        save(&home, &body("digest", "0 8 * * *"), &[]).expect("保存");
+        save(&home, &body("digest", "0 8 * * *"), &[]).expect("save");
         let mut changed = body("digest", "30 19 * * *");
-        changed.prompt = "晚上的那一份".to_string();
-        save(&home, &changed, &[]).expect("覆盖");
+        changed.prompt = "the evening edition".to_string();
+        save(&home, &changed, &[]).expect("overwrite");
         let jobs = read(&home).0;
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].cron, "30 19 * * *");
-        assert_eq!(jobs[0].prompt, "晚上的那一份");
+        assert_eq!(jobs[0].prompt, "the evening edition");
     }
 
     #[test]
@@ -344,21 +344,24 @@ mod tests {
         let (_dir, home) = home();
         std::fs::write(
             home.join("schedules.json"),
-            r#"{"note":"我自己的备注","jobs":[
-                {"name":"a","cron":"0 8 * * *","prompt":"x","tag":"手写"},
+            r#"{"note":"my own note","jobs":[
+                {"name":"a","cron":"0 8 * * *","prompt":"x","tag":"hand-written"},
                 {"name":"b","cron":"0 9 * * *","prompt":"y"}]}"#,
         )
-        .expect("写");
-        save(&home, &body("a", "0 10 * * *"), &[]).expect("覆盖");
+        .expect("write");
+        save(&home, &body("a", "0 10 * * *"), &[]).expect("overwrite");
 
         let value: Value = serde_json::from_str(
-            &std::fs::read_to_string(home.join("schedules.json")).expect("读"),
+            &std::fs::read_to_string(home.join("schedules.json")).expect("read"),
         )
-        .expect("解析");
-        assert_eq!(value["note"], "我自己的备注");
-        assert_eq!(value["jobs"][0]["tag"], "手写");
+        .expect("parse");
+        assert_eq!(value["note"], "my own note");
+        assert_eq!(value["jobs"][0]["tag"], "hand-written");
         assert_eq!(value["jobs"][0]["cron"], "0 10 * * *");
-        assert_eq!(value["jobs"][1]["name"], "b", "别的任务不能被这次保存弄丢");
+        assert_eq!(
+            value["jobs"][1]["name"], "b",
+            "another job must not be lost by this save"
+        );
     }
 
     #[test]
@@ -384,19 +387,20 @@ mod tests {
         let (_dir, home) = home();
         let reserved = vec!["weekly-review".to_string()];
         assert!(save(&home, &body("weekly-review", "0 8 * * 1"), &reserved).is_err());
-        // 同名文件任务已经存在时也不能删 —— 它属于技能。
+        // It must not delete a file-backed job of the same name either — that one belongs to a
+        // skill.
         assert!(remove(&home, "weekly-review", &reserved).is_err());
-        // 别的名字照常。
+        // Any other name goes through as usual.
         assert!(save(&home, &body("other", "0 8 * * 1"), &reserved).is_ok());
     }
 
     #[test]
     fn a_broken_file_is_never_overwritten() {
         let (_dir, home) = home();
-        std::fs::write(home.join("schedules.json"), "{ not json").expect("写");
+        std::fs::write(home.join("schedules.json"), "{ not json").expect("write");
         assert!(save(&home, &body("a", "0 8 * * *"), &[]).is_err());
         assert_eq!(
-            std::fs::read_to_string(home.join("schedules.json")).expect("读"),
+            std::fs::read_to_string(home.join("schedules.json")).expect("read"),
             "{ not json"
         );
     }

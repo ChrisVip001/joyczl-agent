@@ -80,10 +80,10 @@ export function sessionIdFor(conversation: string): string {
 function progressText(notification: ServerNotification): string | null {
   switch (notification.type) {
     case "toolStarted":
-      return `在用 ${notification.tool}…`;
+      return `using ${notification.tool}…`;
     case "toolCompleted":
       return notification.status === "error"
-        ? `${notification.tool} 没成功，它换条路继续`
+        ? `${notification.tool} did not succeed; it is trying another way`
         : null;
     default:
       return null;
@@ -99,17 +99,17 @@ function progressText(notification: ServerNotification): string | null {
 export function explain(error: unknown): string {
   if (error instanceof JoyError) {
     if (error.isProvider) {
-      return `模型那边没接上：${error.message}\n先去 \`joy config\` 里把 key 和模型名确认一下。`;
+      return `the model side is not connected: ${error.message}\ncheck the key and the model name in \`joy config\` first.`;
     }
     if (error.isNotImplemented) {
-      return `这个功能还没做：${error.message}`;
+      return `this is not built yet: ${error.message}`;
     }
     if (error.isInvalidParams) {
-      return `参数不对，多半是网关和 app-server 版本对不上：${error.message}`;
+      return `the arguments are wrong, most likely the gateway and the app-server are different versions: ${error.message}`;
     }
-    return `Joy 报错（${error.code}）：${error.message}`;
+    return `Joy reported an error (${error.code}): ${error.message}`;
   }
-  return `连不上 Joy：${error instanceof Error ? error.message : String(error)}`;
+  return `cannot reach Joy: ${error instanceof Error ? error.message : String(error)}`;
 }
 
 interface InFlight {
@@ -239,7 +239,7 @@ export class JoyBridge {
       const completed = this.#completed.get(turnId);
       if (completed === undefined) {
         throw new Error(
-          `这一轮没有收到 turnCompleted（turnId=${turnId}）—— 服务端的通知和应答对不上`,
+          `this turn never saw turnCompleted (turnId=${turnId}) — the server's notifications and answers do not line up`,
         );
       }
 

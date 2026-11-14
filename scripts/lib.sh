@@ -41,5 +41,5 @@ track_pid() {
 }
 
 need_bin() {
-  [[ -x "$BIN" ]] || fail "找不到 $BIN，先跑：cd joy-rs && cargo build"
+  [[ -x "$BIN" ]] || fail "cannot find $BIN; run: cd joy-rs && cargo build"
 }

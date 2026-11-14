@@ -9,22 +9,22 @@ use tokio::net::TcpListener;
 
 use super::imap::{fetch, parse, ImapConfig};
 
-const MESSAGE: &str = "From: =?UTF-8?B?5byg5LiJ?= <zhangsan@corp.com>\r\n\
+const MESSAGE: &str = "From: =?UTF-8?B?WmhhbmcgU2Fu?= <zhangsan@corp.com>\r\n\
 To: joy@corp.com\r\n\
-Subject: =?UTF-8?B?5ZGo5oql6K+35p+l5pS2?=\r\n\
+Subject: =?UTF-8?B?dGhlIHdlZWtseSByZXBvcnQgaXMgYXR0YWNoZWQ=?=\r\n\
 Date: Wed, 5 Nov 2026 09:00:00 +0800\r\n\
 Message-ID: <m6@corp.com>\r\n\
 Content-Type: text/plain; charset=utf-8\r\n\
 Content-Transfer-Encoding: 8bit\r\n\
 \r\n\
-这周的服务器一切正常。\r\n";
+The server has been fine all week.\r\n";
 
 /// Serve exactly one IMAP session and return the commands it saw.
 async fn fake_imap() -> (u16, tokio::task::JoinHandle<Vec<String>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("监听");
-    let port = listener.local_addr().expect("地址").port();
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+    let port = listener.local_addr().expect("the address").port();
     let handle = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("接上");
+        let (stream, _) = listener.accept().await.expect("it connects");
         let (read, mut write) = stream.into_split();
         let mut reader = BufReader::new(read);
         let mut seen = Vec::new();
@@ -103,36 +103,50 @@ fn config(port: u16) -> ImapConfig {
 #[tokio::test]
 async fn the_first_run_only_reads_the_high_water_mark() {
     let (port, server) = fake_imap().await;
-    let outcome = fetch(&config(port), None).await.expect("首轮该成功");
-    assert!(outcome.messages.is_empty(), "首轮不拉历史");
-    assert_eq!(outcome.server_max_uid, Some(6), "水位该是邮箱里最大的 UID");
+    let outcome = fetch(&config(port), None)
+        .await
+        .expect("the first round should succeed");
+    assert!(
+        outcome.messages.is_empty(),
+        "the first round does not pull history"
+    );
+    assert_eq!(
+        outcome.server_max_uid,
+        Some(6),
+        "the watermark should be the biggest UID in the mailbox"
+    );
 
     let commands = tokio::time::timeout(Duration::from_secs(2), server)
         .await
-        .expect("服务端该收尾")
-        .expect("任务");
+        .expect("the server should close")
+        .expect("the task");
     assert!(commands.iter().any(|c| c.contains("UID SEARCH ALL")));
     assert!(
         !commands.iter().any(|c| c.contains("FETCH")),
-        "首轮不该取信"
+        "the first round should not take messages"
     );
 }
 
 #[tokio::test]
 async fn only_uids_after_the_cursor_are_fetched_and_parsed() {
     let (port, _server) = fake_imap().await;
-    let outcome = fetch(&config(port), Some(5)).await.expect("增量该成功");
+    let outcome = fetch(&config(port), Some(5))
+        .await
+        .expect("the increment should succeed");
     assert_eq!(outcome.server_max_uid, Some(6));
     assert_eq!(outcome.messages.len(), 1);
     let message = &outcome.messages[0];
     assert_eq!(message.uid, 6);
-    assert_eq!(message.subject, "周报请查收", "RFC 2047 主题要解开");
+    assert_eq!(
+        message.subject, "the weekly report is attached",
+        "an RFC 2047 subject has to be decoded"
+    );
     assert!(
-        message.from.contains("张三"),
-        "发件人名字也要解开：{}",
+        message.from.contains("Zhang San"),
+        "the sender's name has to be decoded too: {}",
         message.from
     );
-    assert!(message.got_body(), "正文取到了");
+    assert!(message.got_body(), "the body was fetched");
     assert_eq!(message.message_id.as_deref(), Some("<m6@corp.com>"));
 }
 
@@ -144,16 +158,16 @@ trait BodyCheck {
 
 impl BodyCheck for super::imap::Incoming {
     fn got_body(&self) -> bool {
-        self.body.contains("服务器一切正常")
+        self.body.contains("The server has been fine all week")
     }
 }
 
 #[tokio::test]
 async fn a_rejected_login_names_the_tag_that_failed() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("监听");
-    let port = listener.local_addr().expect("地址").port();
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listen");
+    let port = listener.local_addr().expect("the address").port();
     tokio::spawn(async move {
-        let (stream, _) = listener.accept().await.expect("接上");
+        let (stream, _) = listener.accept().await.expect("it connects");
         let (read, mut write) = stream.into_split();
         let mut reader = BufReader::new(read);
         write.write_all(b"* OK hi\r\n").await.ok();
@@ -167,12 +181,12 @@ async fn a_rejected_login_names_the_tag_that_failed() {
 
     let error = fetch(&config(port), Some(1))
         .await
-        .expect_err("密码错该失败");
+        .expect_err("a wrong password should fail");
     let text = error.to_string();
     assert!(text.contains("a1"), "{text}");
     assert!(
         text.contains("AUTHENTICATIONFAILED"),
-        "要带服务器原话：{text}"
+        "it has to carry the server's own words: {text}"
     );
 }
 
@@ -199,8 +213,8 @@ fn html_only_mail_is_stripped_to_text() {
 
 #[test]
 fn base64_and_quoted_printable_bodies_are_decoded() {
-    let base64_body = b"Subject: hi\r\nContent-Transfer-Encoding: base64\r\n\r\n5L2g5aW9\r\n";
-    assert_eq!(parse(base64_body, 1).body, "你好");
+    let base64_body = b"Subject: hi\r\nContent-Transfer-Encoding: base64\r\n\r\naGVsbG8=\r\n";
+    assert_eq!(parse(base64_body, 1).body, "hello");
 
     let qp_body = b"Subject: hi\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n\
 hello=20world=0Asecond=20line\r\n";

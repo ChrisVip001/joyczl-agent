@@ -15,14 +15,14 @@ fn the_meter_warns_at_the_threshold_it_was_given() {
     assert_eq!(full.used_tokens, 1_000);
     assert!(
         (full.ratio - 1.0).abs() < 1e-9,
-        "比例要按预算算：{}",
+        "the ratio is computed against the budget: {}",
         full.ratio
     );
-    assert!(full.notice.is_some(), "100% 必须提示");
+    assert!(full.notice.is_some(), "100% has to warn");
 
     let calm = usage_of(vec![("soul", 100), ("history", 400)], 1000, 85);
     assert_eq!(calm.used_tokens, 500);
-    assert!(calm.notice.is_none(), "50% 不该弹提示");
+    assert!(calm.notice.is_none(), "50% must not warn");
 }
 
 /// A zero budget (no window resolved yet) must not divide by zero into `inf` — the panel
@@ -38,19 +38,25 @@ fn a_missing_budget_reads_as_zero_rather_than_infinity() {
 /// then anything textual, then the raw bytes. Folded backfill rows are not always JSON.
 #[test]
 fn a_ledger_preview_uses_the_payloads_own_text() {
-    assert_eq!(preview_of("{\"text\":\"第一行\\n第二行\"}"), "第一行");
+    assert_eq!(
+        preview_of("{\"text\":\"first line\\nsecond line\"}"),
+        "first line"
+    );
     assert_eq!(
         preview_of("{\"preview\":\"ptr → spill/…\",\"bytes\":12}"),
         "ptr → spill/…"
     );
     assert_eq!(preview_of("{\"kind\":\"image\"}"), "{\"kind\":\"image\"}");
-    assert_eq!(preview_of("纯文本的一行"), "纯文本的一行");
+    assert_eq!(
+        preview_of("one line of plain text"),
+        "one line of plain text"
+    );
 }
 
 /// Long single lines are clipped for the list row; the full bytes stay in the ledger.
 #[test]
 fn a_long_preview_is_clipped_not_squeezed() {
-    let long = "字".repeat(400);
+    let long = "char".repeat(400);
     let clipped = preview_of(&format!("{{\"text\":\"{long}\"}}"));
     assert_eq!(clipped.chars().count(), 160);
 }

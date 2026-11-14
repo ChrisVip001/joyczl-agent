@@ -63,23 +63,17 @@ means "we would like this, nobody has built it".
 
 ## Long-running and the daemon lock
 
-- **The app-server takes a daemon lock**: only one app-server per `<home>` at a
-  time (`<home>/app-server.lock`, holding the PID; a lock left by a dead process is
-  reaped by the next start). Two resident processes each holding their own
-  in-memory state (approvals, goals, jobs) while writing one database is an
-  incident, not a feature — so it is a hard error, not a warning. The REPL and
-  `joy schedule` take no lock: they are separate, one-shot processes.
-- **Missed schedule firings are caught up**: `joy schedule` persists its
-  last-fired table to `<home>/schedules-state.json`; at boot each job looks back
-  over the minutes since its last firing (capped at seven days) and fires the
-  latest missed slot **once**, marked as a catch-up in the prompt. Three days of
-  downtime does not produce three days of catch-ups.
+- **Checked runtimes share execution ownership.** The common `open()` path takes a kernel-backed advisory lock before opening/recovering the database. This covers app-server, REPL, scheduler and single-turn CLI entry points. The lock follows the canonical database path, so database symlinks cannot create a second owner. `<database>.runtime.lock` is a persistent lock inode; do not remove it to bypass a running owner. `<home>/app-server.lock` remains legacy PID metadata. Runtime clones and live background-job handles retain ownership through settlement; a crashed process releases its OS lock.
+- **Only one execution runtime can own a database.** A competing command fails with a visible error. Use the active runtime's client, stop it, or choose a separate `JOY_HOME`. This is local cooperative ownership, not a distributed lease or workspace write-isolation system. Low-level `Server::boot(pool, settings)` is for isolated embedding; its caller must exclusively own that store. Memory-only state access still uses SQLite WAL and does not run execution recovery.
+- **Schedule catch-up is conservative.** See [schedule recovery and delivery](operations.md#schedule-recovery-and-delivery) for missed triggers and unsettled claims; unknown claimed work is never automatically replayed.
 
 ## Execution (`run_command`, `JOY_EXEC`)
 
-`read_file` / `list_dir` are on by default and bypass the execution gate — their
-trust boundary is the **process user's OS permissions**: the model can read any
-file that user can read (as broad as typical read-only tools). Put files you do not
+`read_file` / `list_dir` / `glob` / `grep` are on by default and bypass the execution gate —
+their trust boundary is the **process user's OS permissions**: the model can read any file
+that user can read (as broad as typical read-only tools), and `glob` / `grep` can also see
+the layout of every such directory — they skip `.git`, `node_modules`, `target`, `dist`,
+`build` and similar trees, not because those are secrets but because they are noise. Put files you do not
 want the model to see where that user cannot read them. `fetch_url` mirrors
 this: its network access does **not** go through the `run_command` sandbox (it is
 a direct in-process request) — the guard is the SSRF address check plus
@@ -407,6 +401,17 @@ no image library, no decode).
 
 ## Memory
 
+* **Boundary** — Human deletion and correction atomically store suppression digests (migration
+  0032). Background consolidation skips the same normalized subject/content; forgetting a
+  whole subject blocks automatic extraction for that subject, including paraphrases. Explicit
+  user memory writes remain allowed, but do not re-enable automatic extraction of a forgotten
+  subject. Corrections discard the old embedding and record the replaced claim's digest and
+  replacement id. These markers survive restart and cannot race with extraction.
+  Individual-claim suppression cannot recognize arbitrary paraphrases, and this is not erasure
+  of original conversations, backups or human-edited Markdown pages. Digest storage is not an
+  anonymity guarantee. Existing deleted facts from before this migration have no markers.
+
+
 * **Deliberate** — Exact duplicates never enter the table: migration 0008 puts a
   unique index on `(subject, lower(trim(content)))` and `add` resolves the conflict
   by returning the existing row with `is_new = false` — a rerun of consolidation or
@@ -425,10 +430,11 @@ no image library, no decode).
   with at least two distinct overlaps. It does not understand synonyms; the skill catalog
   remains available to the model for semantic selection.
   → `joy-rs/joyczl-memory/src/skills.rs` (`tokens`)
-* **Deliberate** — The bundle catalog injected into the prompt is truncated
-  (`index_text`). An unpruned catalog becomes the context problem it was meant
-  to solve; a page that falls off the list is still reachable by name.
-  → `joy-rs/joyczl-memory/src/bundle.rs` (`index_text`)
+* **Deliberate** — Database-backed memory pages are checked against current durable
+  facts at recall time. Missing, corrected or bounded sources exclude the whole page;
+  raw files remain on disk. Human pages without fact sources remain independent.
+  Validity applies to facts, not historical episodes or conversation checkpoints.
+  → [Memory validity contract](protocol.md#memory-validity-and-derivation-context)
 
 ## Retrieval
 
@@ -544,14 +550,7 @@ no image library, no decode).
   inside its process mark the checkpoint `abandoned`, **not** auto-resumed; after
   a process ends, `open` can only mean a crash.
   → `joy-rs/joyczl-app-server/src/turn.rs` (`finalize_turn`)
-* **Boundary** — A task **never speaks its own first line**: `task/create` makes a goal
-  and a ledger row; progress still comes from the human's next message (or an existing
-  turn). Self-starting tasks would mean the model assigning itself work — out of scope.
-  → `joy-rs/joyczl-app-server/src/task.rs` (`create`)
-* **Deliberate** — No task queue and no parallel scheduler: several tasks may be open in one
-  session (0.14 removed the one-active rule — a task is its own entity and may even have no
-  session), but the card shows the newest and turns in one session stay serial by nature.
-  → `joy-rs/joyczl-state/src/tasks.rs` (`create`), `joy-rs/joyczl-app-server/src/task.rs` (`view_of`)
+* **Boundary** — Creation alone does not execute a task. Human-only `task/start` queues one initial execution in a separate work session, leaving the original chat available. Unknown claims are not replayed; queued pause/cancel wins. The local single worker needs a live process and configured model; it is not an always-online or distributed scheduler. See [independent execution](protocol.md#independent-task-execution).
 * **Boundary** — "Done" is decided by **facts, not by the model's verdict**: `fileExists` /
   `fileContains` / `toolsOk` are checked after every round, and a failing condition skips the
   judge entirely. Three kinds only — anything else ("the report is good") is not checkable and
@@ -724,16 +723,48 @@ Tool batches persist intent before execution. A failed checkpoint stops executio
 
 Background jobs use restart-safe random IDs and persist intent before starting a process. A ledger failure prevents execution; spawn failures are recorded as failed.
 
-Quick replies retain up to 12 recent messages from their own session, capped at 8,000 characters total and 2,000 per message, plus SOUL. They still skip long-term memory retrieval and rolling summaries; they do not provide complete relationship continuity. Job completion waits up to two seconds for output pipes; incomplete drains are marked in output rather than silently treated as complete.
+Quick replies retain up to 12 recent messages from their own session, capped at 8,000 characters total and 2,000 per message, plus SOUL. They also read bounded saved personal preferences ([selection and provenance](architecture.md#quick-chat-personal-continuity)), while skipping general long-term retrieval and rolling summaries; this does not establish relationship-support quality. Job completion waits up to two seconds for output pipes; incomplete drains are marked in output rather than silently treated as complete.
 
-Goal and schedule state updates and notification production are still separate commits: a crash between them can omit a notice. Background jobs commit their completion-production receipt atomically. The outbox records transport acknowledgement, not user readership.
+Background jobs, task/goal transitions and schedule settlements atomically commit their outcome and completion-production receipts. The outbox records transport acknowledgement, not user readership.
 
 Round accounts have stable checkpoint identities (migration 0023). Task/run totals and cumulative watermarks commit atomically; recovery charges new deltas and accounting failure stops the task for review. A legacy checkpoint with prior run accounting but no round identity is suspended. Wall time lost before a crash is approximate, not a hard cap.
 
-Background jobs started in a task carry the exact host run/task identity (migration 0024); foreign, missing or terminal run bindings are rejected before process launch. Job outcome, task timeline event and completion-production receipt commit atomically (migration 0025). Requested notices retry from those receipts after enqueue failure or restart and remain tied to the original notification destination. A crash between enqueue and acknowledgement may duplicate a notice. Goal and schedule outcome production still has a separate-commit gap; job completion can wake a durable wait for an already authorized task.
+Background jobs started in a task carry the exact host run/task identity (migration 0024); foreign, missing or terminal run bindings are rejected before process launch. Job outcome, task timeline event and completion-production receipt commit atomically (migration 0025). Requested notices retry from those receipts after enqueue failure or restart and remain tied to the original notification destination. A crash between enqueue and acknowledgement may duplicate a notice. Schedules also persist their outcome and production receipt; job completion can wake a durable wait for an already authorized task.
 
 Task job waits persist their exact dependency set (migration 0026). A task with unfinished background work becomes suspended with the reason `waiting for background jobs`; it resumes after those jobs finish, including after restart. Unknown/interrupted or killed jobs require review. Human pause/cancel takes precedence, and cancelling a task stops its live jobs when the job host is available. Task-control admission and wake claims prevent duplicate continuations. Waiting does not grant additional permissions or goal rounds. Other kinds of external-event waits are not implemented.
 
 Plans now commit a whole immutable version with readable step rows (migration 0027). Fresh and resumed tasks restore the latest complete version, including subsequent goal rounds; legacy partial step rows are not inferred to be a complete plan. Plans remain advisory and do not change acceptance or authorization. Tool-count acceptance is scoped to the current run. A truncated or iteration-limited model response cannot finish a task; MCP uncertainty also stops remaining tools and model continuation.
 
 The `deepseek` Chat adapter preserves `reasoning_content` across tool turns and checkpoints. It supplies an empty continuation field for legacy text-only history; it cannot reconstruct previously discarded reasoning. Native continuation blocks are rejected by incompatible wire adapters rather than silently dropped. The budgeted live smoke and its sample limits are recorded in [live reliability](live-reliability.md).
+
+Structured task handoffs are rebuilt each round from normalized persistent records, independently of rolling summaries. They carry the complete contract and up to 16 recent steps and 16 artifact references. Evidence is explicitly historical and still needs current verification. Corruption, an execution-context mismatch or a handoff over 64,000 bytes stops execution instead of truncating constraints. Ledger operation keys do not imply external idempotency.
+
+An attention-needing task may have no live heartbeat. Human resume and ordinary continuation both locate its exact latest run checkpoint; unmatched tool calls require reconciliation rather than a fresh attempt. Known results can continue the same run. An initial claim with neither a run nor checkpoint is requeued only after explicit human resume.
+
+A foreground command timeout, output-read failure or termination without an exit code reports unknown effects and stops further tools/model continuation, retaining the execution intent. Killing a process does not undo its prior writes. A nonzero exit is a known failure and must not satisfy successful-tool acceptance.
+
+Task and goal stop notices are produced by the committed status transition (migration 0029), including pause, cancellation and attention. State APIs wrap these transitions in transactions so receipt failures roll back the status, including SQLite FAIL errors. A completion commit failure becomes a turn error and retains recovery for review; it cannot advertise success. The notifier intent keeps its original opaque destination. Pending receipts retry on restart and every 30 seconds; enqueue acknowledgement means the local durable notification queue accepted it, not that the user read it. A crash after enqueue and before acknowledgement can duplicate a notice. Historical transitions before this migration are not backfilled.
+
+Scheduled triggers claim atomically; unsettled claims cannot be overwritten by later minutes, and recorded minutes cannot replay after a clock rollback. Outcome, trigger settlement and delivery intent commit together (migration 0030). Unknown outcomes retain their claim and block future firings, regardless of catch_up. Catch-up only handles missed, unclaimed triggers. After stopping the scheduler and reviewing external effects, `joy schedule acknowledge <name>` releases the old claim without replaying it or asserting verified completion.
+
+Scheduled report bodies persist before outbox materialization. File failures and restart retry delivery without rerunning the model. Different existing content is retained for review rather than overwritten; output filenames cannot escape outbox. Notification enqueue waits for file-delivery confirmation and retains the original destination. `produced` denotes generated output, not domain acceptance. Delivery needs a live Joy process and does not establish user readership.
+
+Round admission records its explicit number with the execution checkpoint (migration 0031), before the main model/tool loop. Recovery retains that ordinal and the authorized cap; a failed round-ledger write stops execution. This does not make uncheckpointed wall time or provider billing a hard transaction.
+
+Execution validates every stored acceptance condition and budget before planning or model calls; malformed constraints stop the task instead of becoming an empty checklist. Recovery first charges known checkpoint token usage through cumulative watermarks and rechecks the budget. Already exhausted budgets cannot be bypassed with a new turn or recovery. Budgets still stop at measured boundaries: they are not provider billing reservations, and uncheckpointed usage can remain unknown.
+
+Terminal execution commits close the exact run, change the task status and produce its receipt in one transaction. New receipts resolve run identity through explicit turn bindings (migration 0034); historical receipts are not rewritten. Conflicting bindings stop execution rather than selecting an arbitrary run.
+
+Late execution errors preserve committed cancellation, pause and review states under the same task-control lock. A stale turn cannot overwrite a newer task execution; ordinary error finalization uses the same atomic terminal commit as successful finalization.
+
+## External input waits
+
+External waits currently support one immutable condition and one targeted event per task, with a 16 KiB JSON payload. Source/event-key matching is correlation rather than sender authentication. No public callback listener, event broadcast, recurring conditions or automatic attachment retrieval is provided. Host authorization is required; neither condition declaration nor task continuation is a model tool. Input arrival is not verified completion. Persistent human pause fences prevent late checkpoint writes and recovery from silently restarting paused work; they do not provide cross-runtime execution leases.
+
+## Operation reconciliation boundaries
+
+The operation journal (migration 0037) records current tool batches atomically with intent/result checkpoints. An interrupted or uncertain batch remains conservatively unresolved, including calls whose local outcomes never reached a durable boundary. It cannot prove network transmission, roll back an effect, prevent every semantically repeated action with a new call ID, or supply idempotency support absent from the external provider. Task-less turns retain conservative uncertainty protection and have no reconciliation route. Stopped task checkpoints created before the journal can reconstruct labelled pending-operation metadata after an exact snapshot check; this does not establish a pre-execution record or prove transmission. Human receipts are evidence with provenance, not independent verification of a remote service. Cross-runtime ownership still requires additional coordination.
+
+## Artifact evidence boundaries
+
+Verification fingerprints describe bytes observed at measurement time; they are not archived copies or a permanent filesystem lock. Local concurrent edits detected during a read fail the check, but a file can change after verification. Matching substrings does not establish research quality, source truth, calculation correctness or remote transaction settlement. Those need domain-specific acceptance adapters. Human-reconciled remote effects retain their separate provenance and do not become observed successful tools. File hashing adds disk work; the active wall-time budget remains an observation-based cap rather than a hard real-time interrupt of filesystem I/O.

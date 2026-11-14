@@ -46,7 +46,7 @@ pub async fn roll_forward(
     roll_forward_with(client, model, previous, newly_evicted, None).await
 }
 
-/// Same, with a human's emphasis (`/compact 盯住迁移方案`).
+/// Same, with a human's emphasis (`/compact keep the migration plan in view`).
 ///
 /// The focus is one extra sentence in the material, not a different prompt: "keep this in
 /// mind while summarizing" is exactly what a person means, and rewriting the summarizer

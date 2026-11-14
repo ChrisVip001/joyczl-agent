@@ -12,10 +12,10 @@ use crate::{Provider, StopReason};
 /// Start a server that answers once, returning its address.
 /// The caller supplies the body — the same server feeds anthropic or openai wire formats.
 fn spawn_sse_server(body: String) -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定端口");
-    let addr = listener.local_addr().expect("地址").to_string();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the port");
+    let addr = listener.local_addr().expect("the address").to_string();
     std::thread::spawn(move || {
-        let (mut socket, _) = listener.accept().expect("接受连接");
+        let (mut socket, _) = listener.accept().expect("accept the connection");
         let mut buf = [0u8; 4096];
         let _ = socket.read(&mut buf); // reading the request head is enough; no need to parse
         let response = format!(
@@ -33,8 +33,8 @@ fn anthropic_sse_body() -> String {
     [
         "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\n\n",
         "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\n",
-        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\n",
-        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"，世界\"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\", world\"}}\n\n",
         "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n",
         "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
     ]
@@ -43,8 +43,8 @@ fn anthropic_sse_body() -> String {
 
 fn openai_sse_body() -> String {
     [
-        "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"你\"},\"finish_reason\":null}]}\n\n",
-        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"好\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"he\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"llo\"},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":2}}\n\n",
         "data: [DONE]\n\n",
     ]
@@ -55,7 +55,7 @@ fn collect_deltas() -> (Arc<Mutex<Vec<String>>>, crate::TextSink) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let captured = seen.clone();
     let sink: crate::TextSink = Arc::new(move |delta: &str| {
-        captured.lock().expect("锁").push(delta.to_string());
+        captured.lock().expect("lock").push(delta.to_string());
     });
     (seen, sink)
 }
@@ -84,13 +84,17 @@ async fn anthropic_stream_yields_deltas_over_a_real_socket() {
             on_text,
         )
         .await
-        .expect("流式调用成功");
+        .expect("the streaming call succeeds");
 
     assert_eq!(
         *deltas.lock().unwrap(),
-        vec!["你好".to_string(), "，世界".to_string()]
+        vec!["hello".to_string(), ", world".to_string()]
     );
-    assert_eq!(response.text(), "你好，世界", "最终应答仍是完整文本");
+    assert_eq!(
+        response.text(),
+        "hello, world",
+        "the final reply is still the full text"
+    );
     assert_eq!(response.stop_reason, StopReason::EndTurn);
     assert_eq!(response.usage.input_tokens, 10);
     assert_eq!(response.usage.output_tokens, 5);
@@ -120,13 +124,13 @@ async fn openai_stream_yields_deltas_over_a_real_socket() {
             on_text,
         )
         .await
-        .expect("流式调用成功");
+        .expect("the streaming call succeeds");
 
     assert_eq!(
         *deltas.lock().unwrap(),
-        vec!["你".to_string(), "好".to_string()]
+        vec!["he".to_string(), "llo".to_string()]
     );
-    assert_eq!(response.text(), "你好");
+    assert_eq!(response.text(), "hello");
     assert_eq!(response.stop_reason, StopReason::EndTurn);
     assert_eq!(response.usage.input_tokens, 7);
     assert_eq!(response.usage.output_tokens, 2);
@@ -145,7 +149,7 @@ fn thought_signature_round_trips_through_the_openai_wire() {
         "usage": {"prompt_tokens": 1, "completion_tokens": 1}
     });
     let response =
-        crate::openai::from_openai(&serde_json::to_string(&body).unwrap()).expect("解析");
+        crate::openai::from_openai(&serde_json::to_string(&body).unwrap()).expect("parse");
     let extra = response
         .content
         .iter()
@@ -153,7 +157,7 @@ fn thought_signature_round_trips_through_the_openai_wire() {
             crate::ContentBlock::ToolUse { extra, .. } => extra.clone(),
             _ => None,
         })
-        .expect("tool 调用应当带上 extra_content");
+        .expect("the tool call should carry extra_content");
     assert_eq!(extra.get("thought_signature"), Some(&json!("sig-abc")));
 
     // In the next message, the signature must appear on the outgoing extra_content.
@@ -180,6 +184,6 @@ fn thought_signature_round_trips_through_the_openai_wire() {
     let wire = crate::openai::to_openai(&request);
     let signature = wire["messages"][0]["tool_calls"][0]["extra_content"]["thought_signature"]
         .as_str()
-        .expect("签名应当被带回去");
+        .expect("the signature should come back");
     assert_eq!(signature, "sig-abc");
 }

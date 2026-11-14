@@ -14,6 +14,10 @@ import type {
   MemoryForgetResponse,
   MemoryListParams,
   MemoryListResponse,
+  MemoryValidityParams,
+  MemoryValidityResponse,
+  MemoryProvenanceParams,
+  MemoryProvenanceResponse,
   MemoryRememberParams,
   MemoryRememberResponse,
   MemorySearchParams,
@@ -29,6 +33,16 @@ import type {
   TurnInterruptResponse,
   TurnStartParams,
   TurnStartResponse,
+  TaskStartParams,
+  TaskGetParams,
+  TaskOperationsResponse,
+  TaskReconcileParams,
+  TurnOperationsParams,
+  TurnReconcileParams,
+  TaskWaitParams,
+  TaskSignalParams,
+  TaskSignalResponse,
+  TaskEnvelope,
 } from "./protocol.ts";
 import type { Transport } from "./transport.ts";
 
@@ -45,6 +59,13 @@ import type { Transport } from "./transport.ts";
  * The only drift left is "mispairing" — tsc reports it at the call site, because shapes clash.
  */
 export interface Methods {
+  [METHODS.TURN_OPERATIONS]: { params: TurnOperationsParams; result: TaskOperationsResponse };
+  [METHODS.TURN_RECONCILE]: { params: TurnReconcileParams; result: TaskOperationsResponse };
+  [METHODS.TASK_START]: {params: TaskStartParams; result: TaskEnvelope};
+  [METHODS.TASK_OPERATIONS]: { params: TaskGetParams; result: TaskOperationsResponse };
+  [METHODS.TASK_RECONCILE]: { params: TaskReconcileParams; result: TaskOperationsResponse };
+  [METHODS.TASK_WAIT]: { params: TaskWaitParams; result: TaskEnvelope };
+  [METHODS.TASK_SIGNAL]: { params: TaskSignalParams; result: TaskSignalResponse };
   [METHODS.TURN_START]: { params: TurnStartParams; result: TurnStartResponse };
   [METHODS.TURN_INTERRUPT]: {
     params: TurnInterruptParams;
@@ -64,6 +85,8 @@ export interface Methods {
     result: MemorySearchResponse;
   };
   [METHODS.MEMORY_LIST]: { params: MemoryListParams; result: MemoryListResponse };
+  [METHODS.MEMORY_VALIDITY]: { params: MemoryValidityParams; result: MemoryValidityResponse };
+  [METHODS.MEMORY_PROVENANCE]: { params: MemoryProvenanceParams; result: MemoryProvenanceResponse };
   [METHODS.MEMORY_REMEMBER]: {
     params: MemoryRememberParams;
     result: MemoryRememberResponse;
@@ -175,7 +198,7 @@ export class JoyClient {
     params: Methods[M]["params"],
   ): Promise<Methods[M]["result"]> {
     if (this.#closedReason !== null) {
-      return Promise.reject(new Error(`连接已经没了：${this.#closedReason}`));
+      return Promise.reject(new Error(`the connection is gone: ${this.#closedReason}`));
     }
 
     const id = this.#nextId;
@@ -202,7 +225,7 @@ export class JoyClient {
   /** Civilized close: stop accepting new requests, wait for queued frames to flush. */
   close(): void {
     if (this.#closedReason !== null) return;
-    this.#closedReason = "客户端主动关闭";
+    this.#closedReason = "the client closed it";
     this.#transport.close();
     this.#rejectAll(this.#closedReason);
   }
@@ -214,7 +237,7 @@ export class JoyClient {
     } catch {
       // The server only writes valid JSON; a broken line means it's in real trouble,
       // but one bad line shouldn't crash the client — shake it out for humans to see.
-      this.#onLog(`这一帧读不出来，原样贴出来：${line}`);
+      this.#onLog(`this frame cannot be read; pasted as it came: ${line}`);
       return;
     }
 
@@ -231,7 +254,7 @@ export class JoyClient {
     const key = asId(frame.id);
     const pending = this.#pending.get(key);
     if (pending === undefined) {
-      this.#onLog(`应答的 id 没人在等：${JSON.stringify(frame.id)}`);
+      this.#onLog(`nobody is waiting for response id ${JSON.stringify(frame.id)}`);
       return;
     }
     this.#pending.delete(key);
@@ -240,7 +263,7 @@ export class JoyClient {
 
   #handleNotification(frame: JsonRpcNotification): void {
     if (frame.method !== NOTIFICATION_METHOD) {
-      this.#onLog(`不认识的通知方法：${frame.method}`);
+      this.#onLog(`unknown notification method: ${frame.method}`);
       return;
     }
     // `params` is `unknown` in the artifacts (on the server side it's just JSON).
@@ -249,7 +272,7 @@ export class JoyClient {
     // A malformed frame is a server bug; the frontend breaks when the field is used — closer to it.
     const notification = frame.params as ServerNotification | null | undefined;
     if (notification == null || typeof notification !== "object") {
-      this.#onLog(`通知没有内容：${JSON.stringify(frame)}`);
+      this.#onLog(`the notification carries nothing: ${JSON.stringify(frame)}`);
       return;
     }
     for (const handler of this.#notificationHandlers) handler(notification);
@@ -266,7 +289,7 @@ export class JoyClient {
     const id = asId(frame.id);
     const pending = this.#pending.get(id);
     if (pending === undefined) {
-      this.#onLog(`错误的 id 没人在等：${frame.error.message}`);
+      this.#onLog(`nobody is waiting for the error id: ${frame.error.message}`);
       return;
     }
     this.#pending.delete(id);
@@ -284,7 +307,7 @@ export class JoyClient {
     for (const entry of pending) {
       // Include the method name: the hardest part of debugging a forever-pending await is not
       // knowing which request it was waiting for.
-      entry.reject(new Error(`${entry.method} 没等到应答，连接断了：${reason}`));
+      entry.reject(new Error(`${entry.method} never got its response; the connection dropped: ${reason}`));
     }
   }
 }

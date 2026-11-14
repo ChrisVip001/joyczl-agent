@@ -3,7 +3,7 @@ name = "joyczl-app-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Joy 的 JSON-RPC 服务端：唯一持有 state.db、跑 loop 的进程。"
+description = "Joy's JSON-RPC server: the one process that holds state.db and runs the loop."
 
 [lib]
 name = "joyczl_app_server"
@@ -16,6 +16,7 @@ tempfile = { workspace = true }
 [dependencies]
 base64 = "0.22"
 anyhow = { workspace = true }
+fs2 = { workspace = true }
 chrono = { workspace = true }
 joyczl-agent = { workspace = true }
 joyczl-config = { workspace = true }

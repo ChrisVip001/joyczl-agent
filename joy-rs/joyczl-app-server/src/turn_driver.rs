@@ -44,17 +44,28 @@ pub(crate) async fn drive_task(
         interrupt,
         turn_cwd,
         route_reason: turn_route,
-        checkpoint,
+        checkpoint: _,
         steering,
         ..
     } = frame;
     let (session_id, turn_id) = (session_id.to_string(), turn_id.to_string());
     let task_id = task.as_ref().map(|task| task.id.clone());
     let goal_condition = task.as_ref().and_then(|task| task.goal_condition.clone());
-    let acceptance = task
+    let acceptance = match task
         .as_ref()
-        .map(|task| joyczl_agent::verify::parse(&task.acceptance_json))
-        .unwrap_or_default();
+        .map(|task| joyczl_agent::verify::parse_checked(&task.acceptance_json))
+        .transpose()
+    {
+        Ok(acceptance) => acceptance.unwrap_or_default(),
+        Err(reason) => {
+            return Ok(DrivenTask {
+                full,
+                decision: TaskDecision::NeedsAttention(reason),
+                goal_status: Some("invalid-contract".into()),
+                round_no,
+            })
+        }
+    };
     let verify_root = turn_cwd.clone();
     let mut observation = observe_round(&full.result, &turn_id, turn_cwd.as_deref());
     if let Some(condition) = &goal_condition {
@@ -71,7 +82,10 @@ pub(crate) async fn drive_task(
         let goal_rounds = round_no;
         if let Some(id) = &task_id {
             if let Err(e) = server.tasks.record_round(id, round_no).await {
-                eprintln!("(joy) round not recorded in the task ledger: {e}");
+                break (
+                    TaskDecision::NeedsAttention(format!("Cannot record task round: {e}")),
+                    Some("accounting-failed".into()),
+                );
             }
         }
 
@@ -205,6 +219,51 @@ pub(crate) async fn drive_task(
             );
         }
 
+        if let Some(task) = &task {
+            let inputs = joyczl_state::external_waits::ExternalWaits::new(server.pool.clone());
+            match inputs.get(&task.id).await {
+                Ok(Some(input))
+                    if input.event_id.is_none()
+                        || run_id.is_none()
+                        || input.consumed_run_id.as_deref() != run_id.as_deref() =>
+                {
+                    match inputs.expired(&task.id).await {
+                        Ok(false) => {
+                            break (
+                                TaskDecision::WaitingForInput(input.condition_id),
+                                Some("waiting-input".into()),
+                            )
+                        }
+                        Ok(true) => {
+                            break (
+                                TaskDecision::NeedsAttention(
+                                    "Expected input did not arrive before its deadline".into(),
+                                ),
+                                Some("input-expired".into()),
+                            )
+                        }
+                        Err(error) => {
+                            break (
+                                TaskDecision::NeedsAttention(format!(
+                                    "Cannot verify task input deadline: {error}"
+                                )),
+                                Some("input-unavailable".into()),
+                            )
+                        }
+                    }
+                }
+                Ok(_) => (),
+                Err(error) => {
+                    break (
+                        TaskDecision::NeedsAttention(format!(
+                            "Cannot verify task input condition: {error}"
+                        )),
+                        Some("input-unavailable".into()),
+                    )
+                }
+            }
+        }
+
         // ---- 2. Acceptance: a failing condition is a fact, and facts end rounds.
         if let Some(reason) = joyczl_agent::verify::failure_summary(&checks) {
             let who = task_id.as_deref().unwrap_or("(no task)");
@@ -280,7 +339,15 @@ pub(crate) async fn drive_task(
                     route_reason: turn_route.clone(),
                     steering: steering.clone(),
                     resume: None,
-                    checkpoint: checkpoint.clone(),
+                    checkpoint: Some(checkpoint_outlet(
+                        &server.checkpoints,
+                        sink,
+                        &turn_id,
+                        &session_id,
+                        &correction,
+                        run_id.as_deref(),
+                        round_no,
+                    )),
                 },
                 None,
             )
@@ -339,7 +406,6 @@ pub(crate) async fn drive_task(
                 // The judge broke down: stop continuing, **keep the goal** (don't fake success).
                 notify_goal(sink, &turn_id, goal_rounds, max_rounds, "blocked", &why);
                 eprintln!("(joy) goal loop stopped: {why}");
-                server.notify_goal_finished(&session_id, "blocked", &why);
                 // A broken judge is not "the goal is impossible" — a human should look.
                 break (
                     TaskDecision::NeedsAttention(format!("Judge failure: {why}")),
@@ -357,7 +423,6 @@ pub(crate) async fn drive_task(
                 "satisfied",
                 &judgement.reason,
             );
-            server.notify_goal_finished(&session_id, "satisfied", &judgement.reason);
             break (TaskDecision::Done, Some("satisfied".to_string()));
         }
         if judgement.impossible {
@@ -369,7 +434,6 @@ pub(crate) async fn drive_task(
                 "impossible",
                 &judgement.reason,
             );
-            server.notify_goal_finished(&session_id, "impossible", &judgement.reason);
             break (
                 TaskDecision::Failed(judgement.reason),
                 Some("impossible".to_string()),
@@ -389,7 +453,6 @@ pub(crate) async fn drive_task(
                 "round-limit",
                 &reason,
             );
-            server.notify_goal_finished(&session_id, "round-limit", &judgement.reason);
             break (
                 TaskDecision::Failed(reason),
                 Some("round-limit".to_string()),
@@ -431,7 +494,15 @@ pub(crate) async fn drive_task(
                 route_reason: turn_route.clone(),
                 steering: steering.clone(),
                 resume: None,
-                checkpoint: checkpoint.clone(),
+                checkpoint: Some(checkpoint_outlet(
+                    &server.checkpoints,
+                    sink,
+                    &turn_id,
+                    &session_id,
+                    &continuation,
+                    run_id.as_deref(),
+                    round_no,
+                )),
             },
             None,
         )

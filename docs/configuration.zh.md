@@ -14,7 +14,7 @@ Joy **不读任何 `.env` 文件**——需要 dotenv 的话由启动方自行 s
 
 ```
 /model                      看已配好的套（★ 是当前）
-/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY
+/model add ds deepseek deepseek-flash --env DEEPSEEK_API_KEY
 /model use ds              切换（不用重发密钥）
 ```
 
@@ -711,3 +711,25 @@ dashboard 或协议的 `config/write` 把补丁累计写入 `<home>/settings.jso
 ```
 
 包含原生 Responses 接续数据的断点不能换到其他 wire 恢复；应使用 Responses 配置或开始新回合。接口依据当前[函数调用](https://developers.openai.com/api/docs/guides/function-calling)与[Responses 迁移文档](https://developers.openai.com/api/docs/guides/migrate-to-responses)。
+## 单模型能力声明
+
+`model/save` 接受可选 `capabilities` 对象，保存到 `models.json` 中对应配置，并由
+`model/profiles` 返回。已有配置可传入：
+
+```json
+{"id":"oa","capabilities":{"tools":true,"contextWindow":128000,"reasoningEffort":"high"}}
+```
+
+`tools:false` 在调用供应商前拒绝携带函数工具声明的主模型请求。`contextWindow` 必须为正数，
+替换供应商默认的上下文估计；既有 `JOY_CONTEXT_WINDOW` 运行时覆盖仍然生效。图像支持仍用
+配置中的 `vision` 声明。这些是人工声明，不是根据模型名称推断或通过联网探测证明的能力。
+
+`reasoningEffort` 当前要求 Responses 适配器。接受 `none`、`minimal`、`low`、`medium`、
+`high`、`xhigh`、`max`，具体模型可能仅支持其中一部分。已知 GPT-6 Astra / GPT-6.1 Sol
+无效组合及其 Chat Completions 函数工具不兼容在本地拒绝；其他模型特有限制由供应商判断。
+显式力度只用于配置中的主模型，不应用到另一个 `smallModel`；未声明时不发送力度字段。
+参见[官方推理参数协议](https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort)。
+
+省略 `capabilities` 保留原声明；传入 `{}` 则整体替换为继承默认值。未知字段拒绝处理，
+不会被当作无作用的开关接受。`model/save` 在写入凭据前拒绝无效声明。
+托管工具、原生压缩和 API 异步工具仍未支持。

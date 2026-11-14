@@ -58,6 +58,7 @@ fn views(file: &cfg::ModelsFile) -> Vec<ModelProfileView> {
             key_source: p.key_source.clone(),
             // `null` is meaningful: "follow the vendor default", not "no images".
             vision: p.vision,
+            capabilities: p.capabilities.clone(),
             active: active == Some(p.id.as_str()),
         })
         .collect()
@@ -249,6 +250,22 @@ impl Server {
         };
         validate_provider(&self.catalog, &provider, p.base_url.as_deref())?;
 
+        let entry = self.catalog.lookup(&provider).expect("provider validated");
+        let model = match p.model.as_deref() {
+            Some(value) if value.trim().is_empty() => entry.model.as_str(),
+            Some(value) => value,
+            None => existing
+                .as_ref()
+                .and_then(|profile| profile.model.as_deref())
+                .unwrap_or(&entry.model),
+        };
+        let capabilities = p.capabilities.as_ref().or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|profile| profile.capabilities.as_ref())
+        });
+        joyczl_provider::capabilities::validate(capabilities, entry.wire, model)?;
+
         // Credentials: if given, store them (keychain first); if absent, keep the old pointer.
         let home = self.settings().home.clone();
         let key_stored_in = match (p.api_key.as_deref(), p.key_env.as_deref()) {
@@ -281,6 +298,7 @@ impl Server {
             base_url: None,
             key_source: None,
             vision: None,
+            capabilities: None,
         });
         cfg::upsert(
             &mut file,
@@ -293,6 +311,7 @@ impl Server {
                 // Same patch convention as the strings above: absent keeps the old
                 // declaration (`None` stays `None` = follow the vendor default).
                 vision: p.vision.or(existing_fields.vision),
+                capabilities: p.capabilities.or(existing_fields.capabilities),
                 key_source,
             },
         );

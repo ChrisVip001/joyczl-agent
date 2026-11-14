@@ -22,8 +22,7 @@
 //! state lives in state.db's `schedule_state` table (old schedules-state.json is
 //! only a one-time import source now, no longer authoritative). Before firing,
 //! `claim` the slot, then execute; after settling, `confirm` — a crash in between
-//! is decided on restart by each job's `catch_up`: `catch_up=1` (report class)
-//! re-runs once — at-least-once; `catch_up=0` (notify class) drops — at-most-once.
+//! requires human reconciliation. `catch_up` applies only to missed triggers that were never claimed.
 //!
 //! Each job also has `delivery`: `outbox` (default, writes a file) | `notify` (file
 //! plus notifier, for people away from the screen) | `quiet` (log only, so high-
@@ -39,8 +38,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::{Local, NaiveDateTime};
-use joyczl_app_server::{run_turn, EventSink, Frame, Server};
-use joyczl_protocol::{RequestId, ServerNotification, TurnStartParams};
+use joyczl_app_server::Server;
+#[path = "schedule_fire.rs"]
+mod execution;
+use execution::fire;
 
 /// Where output is delivered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +78,7 @@ pub struct Job {
     pub cron: String,
     /// The prompt sent to Joy when it fires.
     pub prompt: String,
-    /// Catch up after a miss/interruption? Default true (at-least-once — reports prefer no loss).
+    /// Catch up missed, unclaimed triggers. Interrupted claims require human review.
     pub catch_up: bool,
     /// How output is delivered. Defaults to Outbox.
     pub delivery: Delivery,
@@ -105,46 +106,17 @@ pub fn load_jobs(home: &Path) -> Vec<Job> {
         }
     }
 
-    // schedules.json。
-    let path = home.join("schedules.json");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(value) => {
-                for entry in value
-                    .get("jobs")
-                    .and_then(serde_json::Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-                {
-                    let name = entry.get("name").and_then(|v| v.as_str());
-                    let cron = entry.get("cron").and_then(|v| v.as_str());
-                    let prompt = entry.get("prompt").and_then(|v| v.as_str());
-                    match (name, cron, prompt) {
-                        (Some(name), Some(cron), Some(prompt)) => jobs.push(Job {
-                            name: name.to_string(),
-                            cron: cron.to_string(),
-                            prompt: prompt.to_string(),
-                            catch_up: entry
-                                .get("catch_up")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(true),
-                            delivery: Delivery::parse(
-                                entry
-                                    .get("delivery")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("outbox"),
-                            ),
-                        }),
-                        _ => eprintln!(
-                            "(joy) a job in {} is missing name/cron/prompt — skipped",
-                            path.display()
-                        ),
-                    }
-                }
-            }
-            Err(e) => eprintln!("(joy) {} is not valid JSON — skipped: {e}", path.display()),
-        }
+    let (file_jobs, error) = joyczl_schedule::declarations::read(home);
+    if let Some(error) = error {
+        eprintln!("(joy) {error}");
     }
+    jobs.extend(file_jobs.into_iter().map(|job| Job {
+        name: job.name,
+        cron: job.cron,
+        prompt: job.prompt,
+        catch_up: job.catch_up,
+        delivery: Delivery::parse(&job.delivery),
+    }));
 
     jobs
 }
@@ -297,35 +269,21 @@ pub async fn run(server: Server) -> Result<()> {
             }
         }
 
-        // Crash recovery: claimed but unconfirmed = the process died mid-run last time.
-        if let Ok(Some(claimed)) = schedules.pending_claim(&job.name).await {
-            if job.catch_up {
-                eprintln!(
-                    "(joy) job '{}' was interrupted at {claimed}; catch_up=1 means it runs once more",
-                    job.name
-                );
-                let resumed = Job {
-                    prompt: format!(
-                        "{}\n\n(catch-up: the process died after the {claimed} trigger — this is a fresh run.)",
-                        job.prompt
-                    ),
-                    ..job.clone()
-                };
-                if let Err(e) = fire(&server, &resumed, now0).await {
-                    eprintln!("(joy) the catch-up run of job '{}' failed: {e}", job.name);
-                }
-                let minute = now0.format("%Y-%m-%dT%H:%M").to_string();
-                let _ = schedules.confirm(&job.name, &minute).await;
-                fired.insert(job.name.clone(), minute);
-            } else {
-                eprintln!(
-                    "(joy) job '{}' was interrupted at {claimed}; catch_up=0 means it is dropped (at most once)",
-                    job.name
-                );
-                let _ = schedules.confirm(&job.name, &claimed).await;
-                fired.insert(job.name.clone(), claimed);
+        // An interrupted claim may already have committed effects. Catch-up is for missed triggers only.
+        match schedules.pending_claim(&job.name).await {
+            Ok(Some(claimed)) => {
+                eprintln!("(joy) job '{}' has an unsettled trigger at {claimed}; review external effects, then use joy schedule acknowledge <name>. It is not replayed.",job.name);
+                fired.insert(job.name.clone(), now0.format("%Y-%m-%dT%H:%M").to_string());
+                continue;
             }
-            continue;
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!(
+                    "(joy) schedule claim could not be checked; skipping '{}': {error}",
+                    job.name
+                );
+                continue;
+            }
         }
 
         // Regular catch-up: the latest trigger missed since the last confirm.
@@ -341,7 +299,11 @@ pub async fn run(server: Server) -> Result<()> {
             let from = (last
                 + chrono::TimeDelta::try_minutes(1).expect("once a minute is always valid"))
             .max(now0 - chrono::TimeDelta::try_days(7).expect("once a week is always valid"));
-            if let Some(missed) = last_missed(&job, from, now0) {
+            if let Some(missed) = job
+                .catch_up
+                .then(|| last_missed(&job, from, now0))
+                .flatten()
+            {
                 eprintln!(
                     "(joy) job '{}' missed its {} trigger; catching up now",
                     job.name,
@@ -356,150 +318,52 @@ pub async fn run(server: Server) -> Result<()> {
                     ..job.clone()
                 };
                 let minute = now0.format("%Y-%m-%dT%H:%M").to_string();
-                let _ = schedules.claim(&job.name, &minute).await;
                 if let Err(e) = fire(&server, &catch_up, now0).await {
                     eprintln!("(joy) the catch-up run of job '{}' failed: {e}", job.name);
                 }
-                let _ = schedules.confirm(&job.name, &minute).await;
                 fired.insert(job.name.clone(), minute);
             }
         }
     }
 
     loop {
+        server.flush_completion_notices().await;
         let at = Local::now().naive_local();
         let jobs = load_jobs(&home);
         for job in due_now(&jobs, at, &fired) {
             let minute = at.format("%Y-%m-%dT%H:%M").to_string();
-            // dispatch claims the slot before executing: a crash in between is handled by
-            // the restart recovery logic explicitly (catch up or give up), not by luck.
-            let _ = schedules.claim(&job.name, &minute).await;
+            // fire owns the durable claim; this cache prevents repeated attempts in one tick minute.
             fired.insert(job.name.clone(), minute.clone());
             // Serial execution: other jobs in the same minute wait for it to finish.
             // Hammering the model with scheduled jobs isn't "fast" — nobody can read it.
             if let Err(e) = fire(&server, job, at).await {
                 eprintln!("(joy) job '{}' failed: {e}", job.name);
             }
-            // Confirm on both success and failure: no backoff exists, so failures mustn't retry every 20s.
-            let _ = schedules.confirm(&job.name, &minute).await;
         }
         tokio::time::sleep(Duration::from_secs(20)).await;
     }
 }
 
-/// Runs one turn and writes the result to the outbox. Sessions are split by job
-/// name — each execution carries that job's history and rolling summary.
-async fn fire(server: &Server, job: &Job, at: NaiveDateTime) -> Result<()> {
-    eprintln!("(joy) fired job '{}' ({})", job.name, job.cron);
-    let (sink, mut rx) = EventSink::channel();
-    let params = TurnStartParams {
-        session_id: Some(format!("schedule:{}", job.name)),
-        message: job.prompt.clone(),
-        stream: Some(true),
-        // No working directory for scheduled jobs: home semantics is safest (scripts use absolute paths).
-        cwd: None,
-        attachments: None,
-        tier: None,
-    };
-    let server_for_turn = server.clone();
-    let task = tokio::spawn(async move {
-        run_turn(&server_for_turn, params, RequestId::Number(0), &sink).await
-    });
-
-    let mut reply = String::new();
-    while let Some(frame) = rx.recv().await {
-        if let Frame::Notification(ServerNotification::TurnCompleted(done)) = frame {
-            reply = done.reply;
-            break;
+/// Human review releases an interrupted slot without rerunning its work.
+pub async fn acknowledge(server: &Server, name: &str) -> Result<()> {
+    let rows = joyczl_state::schedule_completions::ScheduleCompletions::new(server.state_pool());
+    match rows.acknowledge(name).await? {
+        Some(minute) => {
+            append_run_log(
+                &server.settings().home,
+                &run_log_line(
+                    name,
+                    &minute,
+                    "reviewed",
+                    "Human acknowledged the prior effects; no replay",
+                    0,
+                    false,
+                ),
+            );
+            println!("Acknowledged '{name}' at {minute}; the old trigger will not be replayed.");
         }
+        None => println!("No unsettled trigger for '{name}'."),
     }
-    // All three turn outcomes (completed / turn error / job crash) go through this
-    // ledger — error is a first-class citizen; it's exactly the line inspection seeks.
-    let home = server.settings().home;
-    let minute_text = at.format("%Y-%m-%dT%H:%M").to_string();
-    let turn_result = match task.await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(format!("turn error: {}", e.message)),
-        Err(e) => Err(format!("the turn task crashed: {e}")),
-    };
-    if let Err(why) = turn_result {
-        append_run_log(
-            &home,
-            &run_log_line(&job.name, &minute_text, "error", &why, 0, false),
-        );
-        anyhow::bail!("job '{}' did not get through: {why}", job.name);
-    }
-
-    // An empty reply (or the model answering NO_REPLY by convention) isn't worth
-    // delivering — an empty file or empty push is an interruption. One ledger line is enough.
-    let trimmed = reply.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("no_reply") {
-        eprintln!(
-            "(joy) job '{}' finished with no output; skipping delivery",
-            job.name
-        );
-        append_run_log(
-            &home,
-            &run_log_line(&job.name, &minute_text, "empty", "", 0, false),
-        );
-        return Ok(());
-    }
-
-    let stamp = at.format("%Y%m%d-%H%M");
-    if job.delivery != Delivery::Quiet {
-        let path = home
-            .join("outbox")
-            .join(format!("schedule-{}-{stamp}.md", job.name));
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(
-            &path,
-            format!(
-                "# {name}\n\n_fired by joy schedule at {at} on cron '{cron}'_\n\n## Request\n\n{prompt}\n\n## Answer\n\n{reply}\n",
-                name = job.name,
-                at = at.format("%Y-%m-%d %H:%M"),
-                cron = job.cron,
-                prompt = job.prompt,
-            ),
-        )?;
-        eprintln!(
-            "(joy) job '{}' finished; the result went to {}",
-            job.name,
-            path.display()
-        );
-    } else {
-        eprintln!(
-            "(joy) job '{}' finished (quiet: no file written), {} characters of answer",
-            job.name,
-            trimmed.chars().count()
-        );
-    }
-
-    // Notify delivery: off-screen people should know — side path; missing notifier or send failure never blocks.
-    if job.delivery == Delivery::Notify {
-        if let Some(notifier) = server.notifier() {
-            notifier.notify(joyczl_tools::notify::NotifyEvent::ScheduleRan {
-                name: job.name.clone(),
-                status: "done".to_string(),
-                preview: trimmed.chars().take(120).collect(),
-            });
-        }
-    }
-
-    // Output accounting: delivered only means "wrote the outbox file" (quiet has
-    // output but doesn't write it — different from empty, which has no output).
-    append_run_log(
-        &home,
-        &run_log_line(
-            &job.name,
-            &minute_text,
-            "ok",
-            "",
-            trimmed.chars().count(),
-            job.delivery != Delivery::Quiet,
-        ),
-    );
     Ok(())
 }
 

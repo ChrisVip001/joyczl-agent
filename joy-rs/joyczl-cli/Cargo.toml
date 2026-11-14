@@ -3,9 +3,9 @@ name = "joyczl-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "`joy` 命令行入口。"
+description = "The `joy` command-line entry point."
 
-# 二进制就叫 `joy`：人格名，短、好打。
+# The binary is just `joy`: a persona's name, short and easy to type.
 [[bin]]
 name = "joy"
 path = "src/main.rs"
@@ -34,5 +34,5 @@ tokio = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-#  schedule 的测试要真的建临时 home。
+#  the schedule tests need a real temporary home.
 tempfile = { workspace = true }

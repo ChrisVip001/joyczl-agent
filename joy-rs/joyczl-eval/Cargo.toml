@@ -3,7 +3,7 @@ name = "joyczl-eval"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "评测：确定性 eval（离线 0/1）、judge（LLM 评分）与 release gate。"
+description = "Evaluation: deterministic evals (offline, 0/1), the judge (an LLM scoring), and the release gate."
 
 [lib]
 name = "joyczl_eval"
@@ -18,15 +18,17 @@ joyczl-config = { workspace = true }
 joyczl-protocol = { workspace = true }
 joyczl-provider = { workspace = true }
 joyczl-state = { workspace = true }
-# prereq "sandbox" 要问的就是 exec 模块：这台机器有没有可用的沙箱。
+# The "sandbox" prereq asks the exec module one thing: is there a usable sandbox on this
+# machine?
 joyczl-tools = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# 每个用例一个全新的临时 home —— state.db 互不串味。
+# A fresh temporary home per case, so one state.db never flavours another.
 tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+joyczl-memory = { workspace = true }
 
 [lints]
 workspace = true

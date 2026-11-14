@@ -30,6 +30,11 @@ pub enum Acceptance {
         pattern: String,
         min: usize,
     },
+    JsonEquals {
+        path: String,
+        pointer: String,
+        expected: serde_json::Value,
+    },
     ToolsOk {
         tool: String,
         min: u32,
@@ -73,12 +78,28 @@ impl Acceptance {
                 pattern: field("pattern")?,
                 min: min(1),
             }),
+            "jsonEquals" => {
+                let pointer = view.pointer.as_deref().ok_or("missing pointer")?;
+                if pointer.len() > 1024 || (!pointer.is_empty() && !pointer.starts_with('/')) {
+                    return Err("JSON pointer must be empty or begin with / and fit in 1024 bytes".into());
+                }
+                let mut chars = pointer.chars();
+                while let Some(ch) = chars.next() {
+                    if ch == '~' && !matches!(chars.next(), Some('0' | '1')) {
+                        return Err("JSON pointer contains an invalid escape".into());
+                    }
+                }
+                let raw = view.expected_json.as_deref().ok_or("missing expectedJson")?;
+                if raw.len() > 16_384 { return Err("expectedJson exceeds 16384 bytes".into()); }
+                let expected = serde_json::from_str(raw).map_err(|_| "expectedJson must contain a valid JSON value")?;
+                Ok(Self::JsonEquals { path: field("path")?, pointer: pointer.into(), expected })
+            }
             "toolsOk" => Ok(Self::ToolsOk {
                 tool: field("tool")?,
                 min: min(1) as u32,
             }),
             other => Err(format!(
-                "unknown acceptance kind '{other}' (supported: fileExists / fileContains / toolsOk)"
+                "unknown acceptance kind '{other}' (supported: fileExists / fileContains / jsonEquals / toolsOk)"
             )),
         }
     }
@@ -91,9 +112,26 @@ impl Acceptance {
             Self::FileContains { path, pattern, min } => {
                 format!("{path} contains at least {min} × “{pattern}”")
             }
+            Self::JsonEquals { path, pointer, .. } => {
+                format!("{path} {pointer} matches the expected JSON value")
+            }
             Self::ToolsOk { tool, min } => format!("{tool} succeeds at least {min} times"),
         }
     }
+}
+
+/// Execution must preserve every declared condition, including after storage corruption.
+pub fn parse_checked(json: &str) -> Result<Vec<Acceptance>, String> {
+    let views: Vec<AcceptanceView> = serde_json::from_str(json)
+        .map_err(|error| format!("Invalid task acceptance criteria: {error}"))?;
+    views
+        .iter()
+        .enumerate()
+        .map(|(index, view)| {
+            Acceptance::from_view(view)
+                .map_err(|reason| format!("Invalid acceptance check #{}: {reason}", index + 1))
+        })
+        .collect()
 }
 
 /// Parse a task row's `acceptance_json`. Bad entries are dropped **with a loud line** — they can
@@ -122,8 +160,9 @@ pub struct CheckResult {
     /// Human-readable condition (see `Acceptance::label`).
     pub label: String,
     pub passed: bool,
-    /// Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md 不存在").
+    /// Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md does not exist").
     pub detail: String,
+    pub artifact: Option<joyczl_state::verification::FileMeasurement>,
 }
 
 impl CheckResult {
@@ -133,6 +172,10 @@ impl CheckResult {
             label: self.label.clone(),
             passed: self.passed,
             detail: self.detail.clone(),
+            artifact_sha256: self
+                .artifact
+                .as_ref()
+                .map(|artifact| artifact.sha256.clone()),
         }
     }
 }
@@ -156,17 +199,26 @@ impl Verifier {
         let mut results = Vec::with_capacity(conditions.len());
         for acceptance in conditions {
             let label = acceptance.label();
-            let (passed, detail) = match acceptance {
+            let (passed, detail, artifact) = match acceptance {
                 Acceptance::FileExists { path } => self.file_exists(path),
                 Acceptance::FileContains { path, pattern, min } => {
                     self.file_contains(path, pattern, *min)
                 }
-                Acceptance::ToolsOk { tool, min } => self.tools_ok(tool, *min).await,
+                Acceptance::JsonEquals {
+                    path,
+                    pointer,
+                    expected,
+                } => self.json_equals(path, pointer, expected),
+                Acceptance::ToolsOk { tool, min } => {
+                    let (passed, detail) = self.tools_ok(tool, *min).await;
+                    (passed, detail, None)
+                }
             };
             results.push(CheckResult {
                 label,
                 passed,
                 detail,
+                artifact,
             });
         }
         results
@@ -186,42 +238,108 @@ impl Verifier {
         crate::paths::inside_workspace(&candidate, root)
     }
 
-    fn file_exists(&self, path: &str) -> (bool, String) {
-        match self.locate(path) {
-            Err(why) => (false, why),
-            Ok(full) => match std::fs::metadata(&full) {
-                Ok(meta) if meta.is_file() => {
-                    (true, format!("{} {}", path, human_bytes(meta.len())))
+    fn file_exists(
+        &self,
+        path: &str,
+    ) -> (
+        bool,
+        String,
+        Option<joyczl_state::verification::FileMeasurement>,
+    ) {
+        let full = match self.locate(path) {
+            Ok(full) => full,
+            Err(why) => return (false, why, None),
+        };
+        match std::fs::metadata(&full) {
+            Ok(meta) if meta.is_file() => {
+                match joyczl_state::verification::FileMeasurement::read(&full) {
+                    Ok(measurement) => (
+                        true,
+                        format!("{} {}", path, human_bytes(measurement.bytes as u64)),
+                        Some(measurement),
+                    ),
+                    Err(error) => (false, format!("Could not measure {path}: {error}"), None),
                 }
-                Ok(_) => (false, format!("{path} exists but is not a file")),
-                Err(_) => (false, format!("{path} does not exist")),
-            },
+            }
+            Ok(_) => (false, format!("{path} exists but is not a file"), None),
+            Err(_) => (false, format!("{path} does not exist"), None),
         }
     }
 
-    fn file_contains(&self, path: &str, pattern: &str, min: usize) -> (bool, String) {
+    fn file_contains(
+        &self,
+        path: &str,
+        pattern: &str,
+        min: usize,
+    ) -> (
+        bool,
+        String,
+        Option<joyczl_state::verification::FileMeasurement>,
+    ) {
         let full = match self.locate(path) {
             Ok(full) => full,
-            Err(why) => return (false, why),
+            Err(why) => return (false, why, None),
         };
-        let text = match std::fs::read_to_string(&full) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return (false, format!("{path} does not exist"))
-            }
-            Err(e) => return (false, format!("could not read {path}: {e}")),
-        };
-        // Plain substring count, deliberately not JSON/regex aware: the condition came from a
-        // human's config file, and "a broken pattern must not stall the round" wins.
+        let (text, measurement) =
+            match joyczl_state::verification::FileMeasurement::read_text(&full) {
+                Ok(measured) => measured,
+                Err(error) => return (false, format!("Could not read {path}: {error}"), None),
+            };
         let found = text.matches(pattern).count();
-        if found >= min {
-            (true, format!("found {found} in {path} (needs {min})"))
+        let detail = if found >= min {
+            format!("found {found} in {path} (needs {min})")
         } else {
-            (
-                false,
-                format!("only {found} × “{pattern}” in {path} (needs {min})"),
-            )
-        }
+            format!("only {found} × “{pattern}” in {path} (needs {min})")
+        };
+        (found >= min, detail, Some(measurement))
+    }
+
+    fn json_equals(
+        &self,
+        path: &str,
+        pointer: &str,
+        expected: &serde_json::Value,
+    ) -> (
+        bool,
+        String,
+        Option<joyczl_state::verification::FileMeasurement>,
+    ) {
+        let full = match self.locate(path) {
+            Ok(full) => full,
+            Err(error) => return (false, error, None),
+        };
+        let (text, measurement) =
+            match joyczl_state::verification::FileMeasurement::read_text_limited(
+                &full,
+                16 * 1024 * 1024,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    return (
+                        false,
+                        format!("Could not measure JSON document {path}: {error}"),
+                        None,
+                    )
+                }
+            };
+        let value: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(value) => value,
+            Err(_) => {
+                return (
+                    false,
+                    format!("{path} is not a valid JSON document"),
+                    Some(measurement),
+                )
+            }
+        };
+        let found = value.pointer(pointer);
+        let passed = found == Some(expected);
+        let detail = match found {
+            None => format!("{path} has no JSON value at {pointer}"),
+            Some(_) if passed => format!("{path} {pointer} matches the expected JSON value"),
+            Some(_) => format!("{path} {pointer} differs from the expected JSON value"),
+        };
+        (passed, detail, Some(measurement))
     }
 
     async fn tools_ok(&self, tool: &str, min: u32) -> (bool, String) {

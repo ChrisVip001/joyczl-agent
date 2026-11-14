@@ -19,8 +19,10 @@ use serde_json::Value;
 
 pub mod approval;
 pub mod calendar;
+pub mod declarative;
 pub mod exec;
 pub mod fs;
+pub mod fs_manage;
 pub mod fs_write;
 pub mod handlers;
 pub mod hooks;
@@ -31,8 +33,10 @@ pub mod notify;
 mod notify_queue;
 pub mod patch;
 pub mod report;
+pub mod resources;
 pub mod roots;
 pub mod schedules;
+pub mod search;
 pub mod spill;
 pub mod subagent;
 pub mod todo;
@@ -94,6 +98,14 @@ mod patch_tests;
 #[path = "web_tests.rs"]
 mod web_tests;
 
+#[cfg(test)]
+#[path = "declarative_tests.rs"]
+mod declarative_tests;
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod search_tests;
+
 /// Host notification that a tool cannot establish its external outcome.
 pub type UncertainSink = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -102,6 +114,8 @@ pub type UncertainSink = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct ToolCtx {
     /// Host-only signal that an external operation may have committed without a receipt.
     pub on_uncertain: Option<UncertainSink>,
+    /// Host-acquired mutation permit, shared with any background child.
+    pub resource_lease: Option<resources::Lease>,
     /// Execution identity assigned by the host; never supplied by tool arguments.
     pub task_run_id: Option<String>,
     pub facts: Facts,
@@ -192,9 +206,11 @@ pub const ALWAYS_ON: &[&str] = &[
     "read_skill",
     "read_file",
     "list_dir",
-    // Scheduling is something people ask for in a sentence ("每天八点给我一份简报"). If the
-    // model has to discover these first, the answer to that sentence is "先让我找找工具" —
-    // and before they existed, it was "请选择工作目录", which is worse: a file outside every
+    "glob",
+    "grep",
+    // Scheduling is something people ask for in a sentence ("send me a briefing every morning at eight"). If the
+    // model has to discover these first, the answer to that sentence is "let me go find the tool first" —
+    // and before they existed, it was "pick a working directory", which is worse: a file outside every
     // workspace that `write_file` is right to refuse.
     "schedule_job",
     "list_schedules",
@@ -214,6 +230,7 @@ pub type Activator = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
+    resources: Option<Arc<dyn resources::ResourceCoordinator>>,
     /// Lifecycle hooks (see `hooks.rs`). Loaded on the app-server side (it knows home).
     hooks: Option<Arc<crate::hooks::Hooks>>,
     tools: BTreeMap<String, Tool>,
@@ -242,6 +259,11 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     /// Install lifecycle hooks (app-server calls once after `builtin_tools`).
+    /// Share one mutation coordinator across session copies of this registry.
+    pub fn set_resources(&mut self, coordinator: Arc<dyn resources::ResourceCoordinator>) {
+        self.resources = Some(coordinator);
+    }
+
     pub fn set_hooks(&mut self, hooks: Option<Arc<crate::hooks::Hooks>>) {
         self.hooks = hooks;
     }
@@ -433,7 +455,7 @@ impl ToolRegistry {
 
     /// Run one call. **Never returns Err** — errors become text the model can read.
     /// Unknown tools too; the model can correct itself.
-    pub async fn execute(&self, ctx: ToolCtx, name: &str, args: Value) -> String {
+    pub async fn execute(&self, mut ctx: ToolCtx, name: &str, args: Value) -> String {
         let Some(tool) = self.tools.get(name) else {
             return format!(
                 "Error: no tool named '{name}'. Available: {}",
@@ -449,6 +471,17 @@ impl ToolRegistry {
                 return format!(
                     "Error: the arguments do not match the {name} schema — {why}. Rewrite the input to satisfy the schema."
                 );
+            }
+        }
+
+        // Delegation orchestrates child tools, which acquire their own permits.
+        // Holding one here would deadlock a delegated mutation.
+        if self.is_exclusive(name) && name != "delegate_task" {
+            if let Some(resources) = &self.resources {
+                match resources.acquire(name).await {
+                    Ok(lease) => ctx.resource_lease = Some(lease),
+                    Err(error) => return format!("Error: {error}"),
+                }
             }
         }
 

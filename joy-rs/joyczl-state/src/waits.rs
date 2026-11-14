@@ -94,6 +94,7 @@ impl JobWaits {
     pub async fn claim(&self, wait: &JobWait, messages_json: &str) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let claimed = sqlx::query("UPDATE task_job_waits SET state = 'claimed' WHERE task_id = ? AND run_id = ? AND turn_id = ? AND state = 'waiting'
+            AND NOT EXISTS(SELECT 1 FROM task_pause_fences p WHERE p.task_id=task_job_waits.task_id)
             AND EXISTS (SELECT 1 FROM agent_tasks t WHERE t.id = task_job_waits.task_id AND t.status = 'suspended' AND t.suspend_reason = ? AND t.current_turn_id = task_job_waits.turn_id)
             AND EXISTS (SELECT 1 FROM task_job_wait_members WHERE task_id = task_job_waits.task_id)
             AND NOT EXISTS (SELECT 1 FROM jobs j JOIN task_job_wait_members m ON m.job_id = j.id WHERE m.task_id = task_job_waits.task_id AND j.status IN ('running', 'interrupted', 'killed'))")

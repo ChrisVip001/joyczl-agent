@@ -3,15 +3,16 @@
 // Centered, single column, the M1 design language at its quietest — a wordmark, four
 // fields, two actions. It replaces the whole view while visible (fixed overlay) and
 // removes itself on success. Server, username, password, device — the device name is
-// what makes "登录即配对" visible: the token this card earns belongs to this device.
+// what makes "signing in is pairing" visible: the token this card earns belongs to this device.
 
 import { loginAccount, registerAccount, setServerBase, serverBase } from "./api";
+import { t } from "./i18n";
 import { failure } from "./render";
 import { el } from "./render";
 
 /** Where this login came from — the card shows it as the first line under the brand. */
 export interface LoginRequest {
-  /** Why the card appeared ("登录已过期…"). Absent on first run. */
+  /** Why the card appeared ("your sign-in expired…"). Absent on first run. */
   notice?: string;
   /** Called once an account exists and the token is stored. */
   onAuthed: () => void;
@@ -24,7 +25,7 @@ function guessDevice(): string {
 }
 
 export function showLogin(request: LoginRequest): void {
-  const view = el("div", { class: "login-view", role: "dialog", "aria-label": "登录 Joy" });
+  const view = el("div", { class: "login-view", role: "dialog", "aria-label": t("登录 Joy") });
   const card = el("form", { class: "login-card" });
   card.noValidate = true;
 
@@ -32,23 +33,23 @@ export function showLogin(request: LoginRequest): void {
 
   const server = el("input", {
     type: "url",
-    placeholder: "服务器地址（默认本机）",
+    placeholder: t("服务器地址（默认本机）"),
     value: serverBase(),
     autocomplete: "url",
     spellcheck: "false",
   });
   const username = el("input", {
     type: "text",
-    placeholder: "用户名（小写字母数字连字符）",
+    placeholder: t("用户名（小写字母数字连字符）"),
     autocomplete: "username",
     autocapitalize: "none",
   });
   const password = el("input", {
     type: "password",
-    placeholder: "密码（至少 8 个字符）",
+    placeholder: t("密码（至少 8 个字符）"),
     autocomplete: "current-password",
   });
-  const device = el("input", { type: "text", value: guessDevice(), "aria-label": "设备名" });
+  const device = el("input", { type: "text", value: guessDevice(), "aria-label": t("设备名") });
 
   card.append(
     el(
@@ -58,7 +59,7 @@ export function showLogin(request: LoginRequest): void {
       el("span", { text: "Joy" }),
     ),
     request.notice === undefined
-      ? el("p", { class: "login-hint", text: "连接你的 Joy 服务器。首次使用会注册一个新账号。" })
+      ? el("p", { class: "login-hint", text: t("连接你的 Joy 服务器。首次使用会注册一个新账号。") })
       : el("p", { class: "login-hint", text: request.notice }),
     server,
     username,
@@ -68,8 +69,8 @@ export function showLogin(request: LoginRequest): void {
     el(
       "div",
       { class: "login-actions" },
-      el("button", { class: "login-primary", type: "submit", text: "登录" }),
-      el("button", { class: "ghost", type: "button", text: "注册新账号" }),
+      el("button", { class: "login-primary", type: "submit", text: t("登录") }),
+      el("button", { class: "ghost", type: "button", text: t("注册新账号") }),
     ),
   );
   view.append(card);

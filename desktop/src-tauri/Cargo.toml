@@ -1,7 +1,7 @@
 [package]
 name = "joy-desktop"
 version = "0.16.0"
-description = "Joy 桌面壳：驾驶舱前端 + 任意 Joy 服务器的客户端"
+description = "The Joy desktop shell: the cockpit front end plus a client for any Joy server"
 edition = "2021"
 
 [build-dependencies]
@@ -10,5 +10,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 
-# 独立 workspace：桌面壳的依赖树（tauri/wry）不该混进 joy-rs 的每一次 cargo build。
+# A workspace of its own: the shell's dependency tree (tauri/wry) should not join every
+# `cargo build` in joy-rs.
 [workspace]

@@ -41,8 +41,8 @@ impl Fake {
         self.requests
             .read_line(&mut line)
             .await
-            .expect("读客户端发来的请求");
-        serde_json::from_str(line.trim()).expect("请求是 JSON")
+            .expect("read the client's request");
+        serde_json::from_str(line.trim()).expect("the request is JSON")
     }
 
     async fn send(&mut self, frame: Value) {
@@ -50,7 +50,7 @@ impl Fake {
         self.to_client
             .write_all(line.as_bytes())
             .await
-            .expect("写给客户端");
+            .expect("write to the client");
     }
 
     pub(crate) async fn respond(&mut self, id: &Value, result: Value) {
@@ -82,7 +82,7 @@ impl Fake {
         self.to_client
             .write_all(line.as_bytes())
             .await
-            .expect("写给客户端");
+            .expect("write to the client");
     }
 }
 
@@ -96,7 +96,7 @@ fn spawn_call(
 }
 
 #[tokio::test]
-async fn 应答按_id_配对_倒着回来也对得上() {
+async fn responses_pair_by_id_even_when_they_come_back_out_of_order() {
     let (app, mut fake) = fake();
     let app = Arc::new(app);
 
@@ -107,7 +107,10 @@ async fn 应答按_id_配对_倒着回来也对得上() {
     let two = fake.next_request().await;
     assert_eq!(one["method"], "memory/list");
     assert_eq!(two["method"], "session/list");
-    assert_ne!(one["id"], two["id"], "每条请求都该有自己的 id");
+    assert_ne!(
+        one["id"], two["id"],
+        "every request has to carry its own id"
+    );
 
     // Answer out of order: the later arrival first. A mix-up would show right here.
     fake.respond(&two["id"], json!({"data": ["second"]})).await;
@@ -118,29 +121,29 @@ async fn 应答按_id_配对_倒着回来也对得上() {
 }
 
 #[tokio::test]
-async fn 通知原样广播出来() {
+async fn notifications_are_broadcast_unchanged() {
     let (app, mut fake) = fake();
     // Subscribe before sending the request — the rule in real code; tests follow it.
     let mut events = app.subscribe();
 
     let call = spawn_call(&Arc::new(app), "turn/start");
     let request = fake.next_request().await;
-    fake.notify(json!({"type": "textDelta", "turnId": "t1", "delta": "你"}))
+    fake.notify(json!({"type": "textDelta", "turnId": "t1", "delta": "you"}))
         .await;
     fake.respond(&request["id"], json!({"turnId": "t1"})).await;
 
-    match events.recv().await.expect("收到通知") {
+    match events.recv().await.expect("the notice arrives") {
         ServerNotification::TextDelta(delta) => {
             assert_eq!(delta.turn_id, "t1");
-            assert_eq!(delta.delta, "你");
+            assert_eq!(delta.delta, "you");
         }
-        other => panic!("该是 textDelta，收到 {other:?}"),
+        other => panic!("this should be textDelta, got {other:?}"),
     }
     assert!(call.await.unwrap().is_ok());
 }
 
 #[tokio::test]
-async fn 错误带着原来的错误码传回去() {
+async fn an_error_carries_its_code_back() {
     let (app, mut fake) = fake();
     let app = Arc::new(app);
 
@@ -149,11 +152,11 @@ async fn 错误带着原来的错误码传回去() {
     fake.fail(
         &request["id"],
         codes::PROVIDER_ERROR,
-        "缺 API key：往 .env 里加 ANTHROPIC_API_KEY",
+        "no API key: add ANTHROPIC_API_KEY to .env",
     )
     .await;
 
-    let error = call.await.unwrap().expect_err("该是错误");
+    let error = call.await.unwrap().expect_err("it should be an error");
     // Passed back verbatim: the dashboard shows this sentence to the user directly.
     assert_eq!(error.code, codes::PROVIDER_ERROR);
     assert!(
@@ -164,20 +167,23 @@ async fn 错误带着原来的错误码传回去() {
 }
 
 #[tokio::test]
-async fn 读不懂的一行不会打断后面的帧() {
+async fn an_unreadable_line_does_not_break_the_frames_after_it() {
     let (app, mut fake) = fake();
     let app = Arc::new(app);
 
     let call = spawn_call(&app, "memory/list");
     let request = fake.next_request().await;
-    fake.raw("这不是 JSON").await;
+    fake.raw("this is not JSON").await;
     fake.respond(&request["id"], json!({"data": []})).await;
 
-    assert!(call.await.unwrap().is_ok(), "坏行之后应答照样要对上");
+    assert!(
+        call.await.unwrap().is_ok(),
+        "after a bad line the responses still have to pair up"
+    );
 }
 
 #[tokio::test]
-async fn 服务端走了_挂着的请求会被叫醒() {
+async fn a_departed_server_wakes_the_pending_requests() {
     let (app, mut fake) = fake();
     let app = Arc::new(app);
 
@@ -190,7 +196,7 @@ async fn 服务端走了_挂着的请求会被叫醒() {
     let error = call
         .await
         .unwrap()
-        .expect_err("连接断了就该报错，而不是永远挂着");
+        .expect_err("a dropped connection should fail, not hang forever");
     assert_eq!(error.code, codes::INTERNAL_ERROR);
     assert!(error.message.contains("app-server"), "{}", error.message);
 }

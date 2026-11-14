@@ -1,14 +1,15 @@
-"""app-server 的客户端。
+"""The client for the app-server.
 
-只做三件事，多一件都不做：
+It does three things and nothing else:
 
-1. 给请求配 id、按 id 把应答还给发出请求的那个 `await`；
-2. 把通知分发给订阅者 —— **不解释、不缓存、不重放**。一轮对话的过程事件属于当下
-   那个调用方，客户端替它记着只会记出另一份状态；
-3. 进程一没，把所有挂着的请求一口气拒掉。不然调用方会永远等下去，而「永远等下去」
-   是最难查的那种坏法。
+1. give every request an id, and hand each response back to the `await` that asked for it;
+2. fan notifications out to subscribers — **no interpreting, no caching, no replaying**. A turn's
+   progress events belong to the caller that is in that turn; a client remembering them would
+   only remember a second copy of the state;
+3. the moment the process dies, reject every pending request in one go. Otherwise a caller waits
+   forever, and "waits forever" is the hardest kind of breakage to trace.
 
-跟 TS 侧的 `packages/client/src/client.ts` 是同一个东西。
+The same thing as `packages/client/src/client.ts` on the TS side.
 """
 
 from __future__ import annotations
@@ -38,6 +39,10 @@ from .protocol import (
     MemoryListEpisodesResponse,
     MemoryListParams,
     MemoryListResponse,
+    MemoryValidityParams,
+    MemoryValidityResponse,
+    MemoryProvenanceParams,
+    MemoryProvenanceResponse,
     MemoryRememberParams,
     MemoryRememberResponse,
     MemorySearchParams,
@@ -77,6 +82,15 @@ from .protocol import (
     TaskRunsResponse,
     TaskActionParams,
     TaskCreateParams,
+    TaskStartParams,
+    TaskGetParams,
+    TaskOperationsResponse,
+    TaskReconcileParams,
+    TurnOperationsParams,
+    TurnReconcileParams,
+    TaskWaitParams,
+    TaskSignalParams,
+    TaskSignalResponse,
     TaskEnvelope,
     TaskListParams,
     TaskListResponse,
@@ -90,26 +104,37 @@ from .protocol import (
 )
 from .transport import StdioTransport, Transport
 
-#: 解析一次，别每帧都重建 —— 这是 `textDelta` 那一类高频帧要走的路。
+#: Parse once rather than rebuild per frame — this is the road `textDelta` and its
+#: high-frequency kin take.
 #:
-#: 标注写成 `TypeAdapter[Any]` 是被迫的：`Notification` 是运行时从 `RootModel`
-#: 上摘的，mypy 求不出它，这里写得出花来也是自欺。运行时是准的。
+#: The `TypeAdapter[Any]` annotation is forced: `Notification` is plucked off `RootModel`
+#: at runtime, mypy cannot work it out, and dressing that up would be self-deception. At
+#: runtime it is exact.
 _NOTIFICATION: TypeAdapter[Any] = TypeAdapter(Notification)
 
-#: 方法名 → 应答类型。`request` 用它把回包还原成模型。
+#: Method name → response type. `request` uses it to turn the reply back into a model.
 #:
-#: TS 那边不需要这一层：`JSON.parse` 出来的普通对象，`reply.reply` 直接就能读。
-#: Python 不行 —— 不还原的话用户拿到的是 dict，`reply.reply` 得写成 `reply["reply"]`，
-#: 而下面那一串 `-> TurnStartResponse` 也就成了句假话。
+#: TS needs no such layer: a plain object out of `JSON.parse` lets `reply.reply` be read
+#: directly. Python does not — without restoring it the user holds a dict, `reply.reply`
+#: has to be written `reply["reply"]`, and the `-> TurnStartResponse` on that string of
+#: overloads below becomes a lie.
 #:
-#: key 用枚举成员而不是字符串：`request` 一进来就把 `method` 收敛成枚举，
-#: 存和取走的是同一条路，不会出现 `1` 和 `"1"` 那种配不上还静悄悄的情况。
+#: Keys are enum members rather than strings: `request` folds `method` into an enum on the
+#: way in, so storing and looking up take the same road, and `1` versus `"1"` cannot
+#: mismatch silently.
 _RESPONSES: dict[Methods, type[BaseModel]] = {
     Methods.TURN_START: TurnStartResponse,
     Methods.TURN_INTERRUPT: TurnInterruptResponse,
     Methods.APPROVAL_RESPOND: ApprovalRespondResponse,
     Methods.TODO_VIEW: TodoListView,
     Methods.TASK_CREATE: TaskEnvelope,
+    Methods.TASK_START: TaskEnvelope,
+    Methods.TASK_OPERATIONS: TaskOperationsResponse,
+    Methods.TURN_OPERATIONS: TaskOperationsResponse,
+    Methods.TURN_RECONCILE: TaskOperationsResponse,
+    Methods.TASK_RECONCILE: TaskOperationsResponse,
+    Methods.TASK_WAIT: TaskEnvelope,
+    Methods.TASK_SIGNAL: TaskSignalResponse,
     Methods.TASK_LIST: TaskListResponse,
     Methods.TASK_VIEW: TaskViewResponse,
     Methods.TASK_SUSPEND: TaskEnvelope,
@@ -129,6 +154,8 @@ _RESPONSES: dict[Methods, type[BaseModel]] = {
     Methods.MEMORY_SEARCH: MemorySearchResponse,
     Methods.MEMORY_LIST: MemoryListResponse,
     Methods.MEMORY_LIST_EPISODES: MemoryListEpisodesResponse,
+    Methods.MEMORY_VALIDITY: MemoryValidityResponse,
+    Methods.MEMORY_PROVENANCE: MemoryProvenanceResponse,
     Methods.MEMORY_REMEMBER: MemoryRememberResponse,
     Methods.MEMORY_FORGET: MemoryForgetResponse,
     Methods.CONFIG_READ: ConfigReadResponse,
@@ -148,11 +175,12 @@ _RESPONSES: dict[Methods, type[BaseModel]] = {
 
 
 class JoyError(Exception):
-    """服务端回的错，按 JSON-RPC 的错误对象还原。
+    """An error the server sent back, restored as a JSON-RPC error object.
 
-    带上 `code` 而不是只留一句话，是因为调用方**真的会按它分流**：
-    `PROVIDER_ERROR` 要提示用户去配 key，`NOT_IMPLEMENTED` 是「这功能还没做」
-    而不是「你调错了」，两者对用户是两件事。
+    The `code` travels with it rather than a sentence alone, because callers **really do
+    branch on it**: `PROVIDER_ERROR` means "tell the user to configure a key",
+    `NOT_IMPLEMENTED` means "not built yet" rather than "you called it wrong" — two
+    different things to a user.
     """
 
     def __init__(self, object_: ErrorObject) -> None:
@@ -162,22 +190,23 @@ class JoyError(Exception):
 
     @property
     def is_provider(self) -> bool:
-        """key 无效、限流、模型不存在…… 都是这一类。"""
+        """An invalid key, a rate limit, a model that does not exist… all of these."""
         return self.code == Codes.PROVIDER_ERROR
 
     @property
     def is_not_implemented(self) -> bool:
-        """协议里有、当前阶段还没做。"""
+        """In the protocol, not built at this stage yet."""
         return self.code == Codes.NOT_IMPLEMENTED
 
     @property
     def is_invalid_params(self) -> bool:
-        """参数形状不对 —— 多半是本端跟服务端版本对不上。"""
+        """The arguments are shaped wrong — usually this side and the server disagree on"
+        versions."""
         return self.code == Codes.INVALID_PARAMS
 
 
 class _Pending:
-    """一个发出去了、还没回来的请求。"""
+    """A request that has gone out and not come back yet."""
 
     __slots__ = ("future", "method", "response")
 
@@ -193,7 +222,7 @@ class _Pending:
 
 
 class JoyClient:
-    """把一个 `JoyClient` 想成「一个 app-server 进程的遥控器」。"""
+    """Think of a `JoyClient` as "a remote control for one app-server process"."""
 
     def __init__(
         self,
@@ -202,11 +231,12 @@ class JoyClient:
         on_log: Callable[[str], None] | None = None,
     ) -> None:
         self._transport = transport
-        # 服务端的人话（stderr）与解析不了的帧。默认打到 stderr：
-        # 这些是「该被看见但不该中断流程」的东西，吞掉才是错的。
+        # The server's human-readable lines (stderr) and the frames that will not parse.
+        # Sent to stderr by default: these are things that should be seen without stopping
+        # the flow, and swallowing them would be the wrong call.
         self._on_log = on_log if on_log is not None else _stderr_log
 
-        #: key 是 id 归一化后的字符串 —— 见 `_as_id`。
+        #: Keys are ids normalised to strings — see `_as_id`.
         self._pending: dict[str, _Pending] = {}
         self._notification_handlers: list[Callable[[Any], None]] = []
         self._next_id = 1
@@ -226,7 +256,8 @@ class JoyClient:
         env: Mapping[str, str] | None = None,
         on_log: Callable[[str], None] | None = None,
     ) -> JoyClient:
-        """起一个 `joy app-server` 并接上。TS 那边要调用方自己拼这两步。"""
+        """Start a `joy app-server` and connect to it. On the TS side the caller assembles
+        these two steps."""
         transport = StdioTransport(command=command, args=args, cwd=cwd, env=env)
         client = cls(transport, on_log=on_log)
         await transport.start()
@@ -238,16 +269,54 @@ class JoyClient:
     async def __aexit__(self, *exc_info: object) -> None:
         await self.close()
 
-    # ── 出请求 ───────────────────────────────────────────────────────────
+    # ── Sending requests ───────────────────────────────────────────
 
-    # 下面这一串 `overload` 就是 TS 那个 `Methods` 接口的等价物 ——
-    # 「哪个方法收什么、回什么」的对照表。
+    # The string of `overload`s below is the equivalent of TS's `Methods` interface — the
+    # table of "which method takes what, and answers what".
     #
-    # 手写的**只有配对关系**，形状全部来自生成物 —— Rust 侧的方法名是个运行时
-    # 字符串常量，跟 `*Params` 类型之间没有任何类型层面的联系，生成器无从推导，
-    # 只能在这边写一次。写不错的地方：方法名用生成的枚举成员（Rust 改名这里就
-    # 报 AttributeError），参数/应答直接引用生成的类型（字段改名这里跟着变）。
-    # 剩下唯一能漂的就是「配错对」，而配错了 mypy 会在调用处报出来，因为形状不合。
+    # Hand-written here: **only the pairing**. Every shape comes from the generated artefacts
+    # — a method name on the Rust side is a runtime string constant with no type-level link
+    # to its `*Params`, so a generator has nothing to derive the pairing from and it has to
+    # be written once, here. Where it cannot go wrong: method names are generated enum
+    # members (rename in Rust and this raises AttributeError), arguments and responses are
+    # the generated types (rename a field and this follows). The only thing left to drift
+    # is "paired with the wrong one", and mypy reports that at the call site, because the
+    # shapes do not fit.
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.TURN_OPERATIONS], params: TurnOperationsParams
+    ) -> TaskOperationsResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.TURN_RECONCILE], params: TurnReconcileParams
+    ) -> TaskOperationsResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.TASK_OPERATIONS], params: TaskGetParams
+    ) -> TaskOperationsResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.TASK_RECONCILE], params: TaskReconcileParams
+    ) -> TaskOperationsResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.TASK_WAIT], params: TaskWaitParams
+    ) -> TaskEnvelope: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.TASK_SIGNAL], params: TaskSignalParams
+    ) -> TaskSignalResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.TASK_START], params: TaskStartParams
+    ) -> TaskEnvelope: ...
 
     @overload
     async def request(
@@ -295,6 +364,16 @@ class JoyClient:
         method: Literal[Methods.MEMORY_LIST_EPISODES],
         params: MemoryListEpisodesParams,
     ) -> MemoryListEpisodesResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.MEMORY_VALIDITY], params: MemoryValidityParams
+    ) -> MemoryValidityResponse: ...
+
+    @overload
+    async def request(
+        self, method: Literal[Methods.MEMORY_PROVENANCE], params: MemoryProvenanceParams
+    ) -> MemoryProvenanceResponse: ...
 
     @overload
     async def request(
@@ -352,30 +431,35 @@ class JoyClient:
     ) -> ScheduleListResponse: ...
 
     async def request(self, method: Methods, params: BaseModel) -> Any:
-        """调一个方法，等它的应答。
+        """Call a method and wait for its response.
 
-        参数是必填的 —— 连「什么都不带」也要写成一个空模型。可选的第二参数会让
-        「忘了传」和「就传空」看起来一样，而这个协议里它们往往不一样。
+        The argument is required — even "carrying nothing" is written as an empty model. An
+        optional second argument would make "forgot to pass it" and "passed nothing" look
+        alike, and in this protocol they usually are not.
         """
         if self._closed_reason is not None:
-            raise RuntimeError(f"连接已经没了：{self._closed_reason}")
+            raise RuntimeError(f"the connection is gone: {self._closed_reason}")
 
-        # 收敛成枚举：`_RESPONSES` 的存和取就都走这一条路了，传字符串也对得上。
-        # 认不出来就当场说 —— 发出去换一句服务端的 METHOD_NOT_FOUND 更绕，
-        # 而且那个错分不清「方法名打错了」和「服务端没有这个方法」。
+        # Folded into an enum, so storing and looking up `_RESPONSES` take that one road, and
+        # a plain string still matches. Unrecognised is said on the spot — sending it and
+        # getting a METHOD_NOT_FOUND back is more roundabout, and that error cannot tell
+        # "the method name is misspelt" from "the server has no such method".
         try:
             method = Methods(method)
         except ValueError:
             raise ValueError(
-                f"本端不认识这个方法：{method!r} —— 多半是本端和服务端版本不一致"
+                f"this side does not know that method: {method!r} — usually this side and the"
+                " server are on different versions"
             ) from None
 
         response = _RESPONSES.get(method)
         if response is None:
-            # 生成物里有了、配对表里没有 —— 只可能是 Rust 加了方法而这里没跟上。
-            # 说清楚，别让调用方对着一句 KeyError 猜。
+            # Present in the generated artefacts, absent from the pairing table — only
+            # possible if Rust added a method and this side did not follow. Say so, rather
+            # than leaving the caller to guess at a KeyError.
             raise NotImplementedError(
-                f"{method} 还没有配对应答类型 —— 补进 `_RESPONSES`（和上面那串 overload）"
+                f"{method} has no response type paired yet — add it to `_RESPONSES` (and to"
+                " the overloads above)"
             )
 
         request_id = self._next_id
@@ -383,24 +467,28 @@ class JoyClient:
 
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[_as_id(request_id)] = _Pending(future, method, response)
-        # `exclude_none` 是把 TS 那边 `JSON.stringify` 丢掉 `undefined` 的动作
-        # 跟着做一遍：可选字段「没填」时该是不出现，而不是出现成 `null`。
+        # Omit absent optional values, but preserve required JSON null data.
+        payload = params.model_dump(exclude_none=True, by_alias=True)
+        if isinstance(payload, dict):
+            for name, field in type(params).model_fields.items():
+                if field.is_required() and getattr(params, name) is None:
+                    payload[field.alias or name] = None
         self._transport.write(
             json.dumps(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "method": str(method),
-                    "params": params.model_dump(exclude_none=True, by_alias=True),
+                    "params": payload,
                 }
             )
         )
         return await future
 
-    # ── 订阅 ─────────────────────────────────────────────────────────────
+    # ── Subscribing ─────────────────────────────────────────────
 
     def on_notification(self, handler: Callable[[Any], None]) -> Callable[[], None]:
-        """订阅过程事件。返回退订函数。"""
+        """Subscribe to progress events. Returns the unsubscribe function."""
         self._notification_handlers.append(handler)
 
         def unsubscribe() -> None:
@@ -412,31 +500,32 @@ class JoyClient:
         return unsubscribe
 
     async def close(self) -> None:
-        """文明关闭：不再收新请求，等排着的帧写完。"""
+        """A civil close: take no new requests, wait for the queued frames to be written."""
         if self._closed_reason is not None:
             return
-        self._closed_reason = "客户端主动关闭"
+        self._closed_reason = "the client closed it"
         await self._transport.close()
         self._reject_all(self._closed_reason)
 
     @property
     def closed_reason(self) -> str | None:
-        """连接没了的原因；还在就是 None。"""
+        """Why the connection ended; None while it is still up."""
         return self._closed_reason
 
-    # ── 收帧 ─────────────────────────────────────────────────────────────
+    # ── Receiving frames ────────────────────────────────────────
 
     def _handle_line(self, line: str) -> None:
         try:
             frame = json.loads(line)
         except json.JSONDecodeError:
-            # 服务端只会写合法 JSON；真写坏了说明它自己也出了事，
-            # 但这一句坏掉不该让客户端跟着崩 —— 抖出去给人看。
-            self._on_log(f"这一帧读不出来，原样贴出来：{line}")
+            # The server only writes valid JSON; if it really did write something broken then
+            # it has a problem of its own — but one bad line should not take the client down
+            # with it. Shake it out for a human to see.
+            self._on_log(f"this frame will not parse, pasted as it came: {line}")
             return
 
         if not isinstance(frame, dict):
-            self._on_log(f"这一帧不是个对象：{line}")
+            self._on_log(f"this frame is not an object: {line}")
             return
 
         if "method" in frame:
@@ -450,44 +539,50 @@ class JoyClient:
         key = _as_id(frame.get("id"))
         pending = self._pending.pop(key, None)
         if pending is None:
-            self._on_log(f"应答的 id 没人在等：{frame.get('id')!r}")
+            self._on_log(f"nobody is waiting for this response id: {frame.get('id')!r}")
             return
         if pending.future.done():
             return
         try:
             pending.future.set_result(pending.response.model_validate(frame.get("result")))
         except ValidationError as error:
-            # 形状对不上是「本端和服务端不是同一个协议版本」的典型症状，
-            # 而症状摆在眼前时最该说的是这句话。
+            # A shape mismatch is the classic symptom of "this side and the server are not
+            # on the same protocol version", and with the symptom right there, that is the
+            # thing to say.
             pending.future.set_exception(
                 RuntimeError(
-                    f"{pending.method} 的应答对不上本端的协议"
-                    f"（{error.error_count()} 处）—— 多半是本端和服务端版本不一致"
+                    f"the response to {pending.method} does not match this side's protocol"
+                    f" ({error.error_count()} problems) — usually this side and the server"
+                    f" are on different versions"
                 )
             )
 
     def _handle_notification(self, frame: dict[str, Any]) -> None:
         if frame.get("method") != NOTIFICATION_METHOD:
-            self._on_log(f"不认识的通知方法：{frame.get('method')!r}")
+            self._on_log(f"unknown notification method: {frame.get('method')!r}")
             return
 
         params = frame.get("params")
         if params is None or not isinstance(params, dict):
-            self._on_log(f"通知没有内容：{json.dumps(frame)}")
+            self._on_log(f"the notification carries nothing: {json.dumps(frame)}")
             return
 
-        # 这里跟 TS 分了个岔。TS 那边**刻意不校验**，理由是「在客户端再抄一遍
-        # 校验逻辑就是又一份会漂的合同」—— 但那话只在手写校验时成立。这里的
-        # 校验是 pydantic 从同一份 schema 生成的，跟服务端同源，漂不了；而不用它
-        # 的话，订阅者拿到的就是一个 dict，`n.delta` 得写成 `n["delta"]`。
+        # Here this parts ways with TS. TS **deliberately validates nothing**, on the grounds
+        # that "copying the validation into the client is just another contract that will
+        # drift" — but that only holds for hand-written validation. This one is generated by
+        # pydantic from the same schema the server uses, same origin, cannot drift; and
+        # without it a subscriber holds a dict, and `n.delta` has to be written
+        # `n["delta"]`.
         #
-        # 代价是每帧一次校验。真出形状不对的帧，那还是服务端的 bug —— 差别只在
-        # 这里当场说清楚，而不是等到某个 handler 用到那个字段时才炸。
+        # The price is one validation per frame. A genuinely misshapen frame is still the
+        # server's bug — the difference is that it is said here, on the spot, rather than
+        # blowing up whenever some handler reaches for that field.
         try:
             notification = _NOTIFICATION.validate_python(params)
         except ValidationError as error:
             self._on_log(
-                f"通知的形状对不上（{error.error_count()} 处），原样贴出来："
+                f"the notification's shape does not match ({error.error_count()} problems), "
+                f"pasted as it came: "
                 f"{json.dumps(params)}"
             )
             return
@@ -498,11 +593,11 @@ class JoyClient:
     def _handle_error(self, frame: dict[str, Any]) -> None:
         error = _error_object(frame.get("error"))
         if error is None:
-            self._on_log(f"错误对象读不出来：{json.dumps(frame)}")
+            self._on_log(f"the error object will not parse: {json.dumps(frame)}")
             return
 
-        # 解析不了请求时服务端给不了 id（JSON-RPC 规定为 null）——没有请求
-        # 能拿这个错，只能当噪音。
+        # A request that will not parse leaves the server no id to give (JSON-RPC says null)
+        # — no request can take this error, so it can only be noise.
         if frame.get("id") is None:
             self._on_log(error.message)
             return
@@ -510,7 +605,7 @@ class JoyClient:
         key = _as_id(frame.get("id"))
         pending = self._pending.pop(key, None)
         if pending is None:
-            self._on_log(f"错误的 id 没人在等：{error.message}")
+            self._on_log(f"nobody is waiting for this error's id: {error.message}")
             return
         if not pending.future.done():
             pending.future.set_exception(JoyError(error))
@@ -526,18 +621,19 @@ class JoyClient:
         for entry in pending:
             if entry.future.done():
                 continue
-            # 把方法名带上：一个永远挂着的 await 最难查的地方就是不知道
-            # 它在等哪个请求。
+            # Carry the method name: the hardest thing about an await that hangs forever is
+            # not knowing which request it is waiting on.
             entry.future.set_exception(
-                RuntimeError(f"{entry.method} 没等到应答，连接断了：{reason}")
+                RuntimeError(f"{entry.method} never got a response; the connection went down: "
+                f"{reason}")
             )
 
 
 def _error_object(raw: Any) -> ErrorObject | None:
-    """把帧里的 `error` 读成 `ErrorObject`；读不出来就 None。
+    """Read a frame's `error` as an `ErrorObject`; None if it will not parse.
 
-    读不出来也要往上抛 —— 一个连 `code` 都没有的错误对象，调用方按 `code`
-    分流的那套逻辑在它身上全都不成立，不如原样抖出去。
+    Unparseable still gets raised — an error object without even a `code` invalidates every
+    bit of the caller's branching on `code`, and shaking it out as it came is better.
     """
     try:
         return ErrorObject.model_validate(raw)
@@ -550,12 +646,14 @@ def _stderr_log(text: str) -> None:
 
 
 def _as_id(request_id: Any) -> str:
-    """帧里的 id 归一化成 `_pending` 的 key。
+    """Normalise a frame's id into a `_pending` key.
 
-    JSON-RPC 的 id 可以是数字也可以是字符串（`RequestId` 就是这么定义的），
-    两种都得能用同一条路配对回来 —— 所以按字符串存，不猜类型。
+    A JSON-RPC id may be a number or a string (that is how `RequestId` defines it), and both
+    have to pair back through the same road — so it is stored as a string, without
+    guessing the type.
 
-    存和取**必须**都过这里：dict 不帮你转换 `1` 和 `"1"`，键写成数字、查用字符串，
-    配不上是静悄悄的 —— 那个 `await` 会永远挂着。
+    Both storing and looking up **must** go through here: a dict does not convert `1` and
+    `"1"` for you, and a numeric key with a string lookup simply does not match —
+    silently, so that `await` hangs forever.
     """
     return str(request_id)

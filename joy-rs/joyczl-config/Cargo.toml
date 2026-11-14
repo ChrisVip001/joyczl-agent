@@ -3,7 +3,7 @@ name = "joyczl-config"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "全部配置都是环境变量，读一次，不再有设置框架。"
+description = "All configuration is environment variables, read once, with no settings framework."
 
 [lib]
 name = "joyczl_config"
@@ -15,8 +15,9 @@ joyczl-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# 只在 Windows 编译：钥匙串走 Credential Manager（keyring crate，CredWrite/CredRead）。
-# macOS/Linux 的命令行路径（security / secret-tool）已上过线，不换实现。
+# Compiled on Windows only: the keychain goes through Credential Manager (the keyring crate,
+# CredWrite/CredRead). The macOS/Linux command-line path (security / secret-tool) has shipped,
+# so its implementation stays.
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 

@@ -6,10 +6,10 @@ use serde_json::{json, Value};
 use super::server::MemoryServer;
 
 async fn server() -> MemoryServer {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     MemoryServer::new(
         joyczl_state::Facts::new(pool.clone()),
@@ -21,7 +21,7 @@ async fn call(server: &MemoryServer, method: &str, params: Value) -> Value {
     server
         .handle(json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))
         .await
-        .expect("带 id 的请求必有应答")
+        .expect("a request with an id always gets a reply")
 }
 
 /// The text result of tools/call (content[0].text).
@@ -40,7 +40,7 @@ async fn initialize_hands_back_capabilities_and_identity() {
     assert_eq!(result["protocolVersion"], "2025-06-18");
     assert!(
         result["capabilities"]["tools"].is_object(),
-        "要声明工具能力"
+        "it has to declare the tools capability"
     );
     assert_eq!(result["serverInfo"]["name"], "joy-memory");
 }
@@ -51,7 +51,7 @@ async fn tools_list_exposes_only_the_memory_tools() {
     let response = call(&server, "tools/list", json!({})).await;
     let names: Vec<&str> = response["result"]["tools"]
         .as_array()
-        .expect("tools 数组")
+        .expect("the tools array")
         .iter()
         .map(|t| t["name"].as_str().unwrap_or_default())
         .collect();
@@ -78,7 +78,7 @@ async fn remember_then_search_round_trips_through_the_memory_tables() {
         &server,
         "tools/call",
         json!({"name": "memory_remember",
-               "arguments": {"subject": "alex", "content": "喜欢早上的会议"}}),
+               "arguments": {"subject": "alex", "content": "likes morning meetings"}}),
     )
     .await;
     assert!(text(&saved).contains("Remembered"), "{}", saved);
@@ -90,11 +90,15 @@ async fn remember_then_search_round_trips_through_the_memory_tables() {
     )
     .await;
     assert!(
-        text(&found).contains("喜欢早上的会议"),
-        "写进去的必须搜得到：{found}"
+        text(&found).contains("likes morning meetings"),
+        "what was written has to be findable: {found}"
     );
     // Source honestly marked as mcp — this fact was written by someone else's agent.
-    assert_eq!(found["result"]["isError"], Value::Null, "不该是错误");
+    assert_eq!(
+        found["result"]["isError"],
+        Value::Null,
+        "this should not be an error"
+    );
 }
 
 #[tokio::test]
@@ -129,7 +133,7 @@ async fn forget_reports_the_count_and_says_when_there_is_nothing() {
     .await;
     assert!(
         text(&again).contains("no memory about"),
-        "第二次要如实说：{again}"
+        "the second time has to say so plainly: {again}"
     );
 }
 
@@ -143,7 +147,10 @@ async fn empty_memory_answers_honestly_not_with_an_error() {
             json!({"name": tool, "arguments": args}),
         )
         .await;
-        assert!(response["error"].is_null(), "{tool} 空库不该是 RPC 错误");
+        assert!(
+            response["error"].is_null(),
+            "{tool} on an empty store should not be an RPC error"
+        );
         assert_eq!(response["result"]["isError"], Value::Null);
         assert!(
             text(&response).contains("Memory has no"),
@@ -169,7 +176,10 @@ async fn a_notification_gets_no_response() {
     let response = server
         .handle(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
         .await;
-    assert!(response.is_none(), "通知不该有应答：{response:?}");
+    assert!(
+        response.is_none(),
+        "a notification must not get a response: {response:?}"
+    );
 }
 
 #[tokio::test]
@@ -200,7 +210,10 @@ async fn protocol_errors_and_tool_failures_take_different_paths() {
         json!({"name": "memory_search", "arguments": {}}),
     )
     .await;
-    assert!(bad_args["error"].is_null(), "参数错误不该是 RPC 错误");
+    assert!(
+        bad_args["error"].is_null(),
+        "bad arguments should not be an RPC error"
+    );
     assert_eq!(bad_args["result"]["isError"], true);
     assert!(text(&bad_args).contains("query"), "{bad_args}");
 }

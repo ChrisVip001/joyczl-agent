@@ -49,7 +49,7 @@ class FakeGateway {
   /** The latest connection. */
   get latest(): FakeSocket {
     const socket = this.sockets.at(-1);
-    assert.ok(socket !== undefined, "还没有连过");
+    assert.ok(socket !== undefined, "it never connected at all");
     return socket;
   }
 }
@@ -132,7 +132,7 @@ function message(
     t: "MESSAGE_CREATE",
     d: {
       channel_id: "555",
-      content: "你好",
+      content: "hello",
       author: { id: "42", username: "alice" },
       ...overrides,
     },
@@ -156,7 +156,7 @@ function setup(
       socket: gateway.factory,
       onLog: options.onLog ?? (() => {}),
     },
-    options.respond ?? (async () => "答复"),
+    options.respond ?? (async () => "the answer"),
   );
   return { adapter, gateway, discord };
 }
@@ -166,11 +166,11 @@ async function stopWhen(
   adapter: DiscordAdapter,
   running: Promise<void>,
   done: () => boolean,
-  what = "条件",
+  what = "the condition",
 ): Promise<void> {
   const deadline = Date.now() + 5000;
   while (!done()) {
-    if (Date.now() > deadline) throw new Error(`等 ${what} 超时了`);
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   adapter.stop();
@@ -179,7 +179,7 @@ async function stopWhen(
 
 // ---- Connecting ------------------------------------------------------------------
 
-test("连上之后：报上身份，而且该开的事件位一位不少", async () => {
+test("once connected: it identifies itself, and every event bit it needs is on", async () => {
   const { adapter, gateway } = setup();
   const running = adapter.run();
   const socket = gateway.latest;
@@ -187,7 +187,7 @@ test("连上之后：报上身份，而且该开的事件位一位不少", async
   hello(socket);
 
   const identify = socket.frames(2);
-  assert.equal(identify.length, 1, "HELLO 之后该报一次身份");
+  assert.equal(identify.length, 1, "one IDENTIFY after HELLO");
   const payload = identify[0]!["d"] as Record<string, unknown>;
   assert.equal(payload["token"], "test-token");
 
@@ -200,14 +200,14 @@ test("连上之后：报上身份，而且该开的事件位一位不少", async
     ["DIRECT_MESSAGES", 12],
     ["MESSAGE_CONTENT", 15],
   ] as const) {
-    assert.equal(intents & (1 << bit), 1 << bit, `少了 ${name}`);
+    assert.equal(intents & (1 << bit), 1 << bit, `missing ${name}`);
   }
 
   adapter.stop();
   await running;
 });
 
-test("心跳按 HELLO 给的间隔发，带上最近一次的序号", async () => {
+test("the heartbeat follows the interval HELLO gave, carrying the latest sequence number", async () => {
   const { adapter, gateway } = setup();
   const running = adapter.run();
   const socket = gateway.latest;
@@ -216,13 +216,13 @@ test("心跳按 HELLO 给的间隔发，带上最近一次的序号", async () =
   ready(socket);
   message(socket, {});
 
-  await stopWhen(adapter, running, () => socket.frames(1).length > 0, "心跳");
+  await stopWhen(adapter, running, () => socket.frames(1).length > 0, "a heartbeat");
 
   // The sequence must track the latest frame: always null, and the server thinks nothing was ever received.
   assert.equal(socket.frames(1)[0]!["d"], 2);
 });
 
-test("stop() 之后 run() 收尾返回，不会自己连回来", async () => {
+test("after stop() the run winds up and does not come back on its own", async () => {
   const { adapter, gateway } = setup();
   const running = adapter.run();
   hello(gateway.latest);
@@ -231,10 +231,10 @@ test("stop() 之后 run() 收尾返回，不会自己连回来", async () => {
   await running;
 
   assert.ok(gateway.latest.closed);
-  assert.equal(gateway.sockets.length, 1, "停了就不该再连");
+  assert.equal(gateway.sockets.length, 1, "once stopped it must not reconnect");
 });
 
-test("连都连不上（比如网络不通）：留个痕，退避之后再来", async () => {
+test("it cannot even connect (no network, say): leave a trace, then try again after a backoff", async () => {
   const logs: string[] = [];
   const { adapter, gateway } = setup({ onLog: (text) => logs.push(text) });
   const running = adapter.run();
@@ -245,48 +245,48 @@ test("连都连不上（比如网络不通）：留个痕，退避之后再来",
 
   const deadline = Date.now() + 5000;
   while (gateway.sockets.length < 2) {
-    if (Date.now() > deadline) throw new Error("没等到重连");
+    if (Date.now() > deadline) throw new Error("the reconnect never came");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   adapter.stop();
   await running;
 
-  assert.ok(first.closed, "出错的那条得关掉，不然它的句柄会把进程吊着");
-  assert.ok(logs.some((line) => line.includes("连不上")));
+  assert.ok(first.closed, "the failed one has to be closed, or its handle keeps the process alive");
+  assert.ok(logs.some((line) => line.includes("cannot connect")));
 });
 
 // ---- Receiving messages ----------------------------------------------------------------
 
-test("私聊来一条文字：按频道去问 Joy，把答复发回那个频道", async () => {
+test("a direct message arrives: ask Joy by channel, and send the answer back to that channel", async () => {
   const asked: Array<[string, string]> = [];
   const { adapter, gateway, discord } = setup({
     respond: async (conversation, text) => {
       asked.push([conversation, text]);
-      return "你也好";
+      return "hello to you too";
     },
   });
   const running = adapter.run();
   const socket = gateway.latest;
   hello(socket);
   ready(socket);
-  message(socket, { channel_id: "555", content: "你好" });
+  message(socket, { channel_id: "555", content: "hello" });
 
-  await stopWhen(adapter, running, () => discord.sent.length > 0, "答复");
+  await stopWhen(adapter, running, () => discord.sent.length > 0, "the answer");
 
   // Sessions split by **channel**: one conversation per DM channel; a server channel shares one.
-  assert.deepEqual(asked, [["discord:555", "你好"]]);
-  assert.deepEqual(discord.sent, ["你也好"]);
+  assert.deepEqual(asked, [["discord:555", "hello"]]);
+  assert.deepEqual(discord.sent, ["hello to you too"]);
 });
 
-test("发消息：带上 bot 身份，以及 Discord 要求的 User-Agent", async () => {
-  const { adapter, gateway, discord } = setup({ respond: async () => "答复" });
+test("sending a message: it carries the bot identity and the User-Agent Discord asks for", async () => {
+  const { adapter, gateway, discord } = setup({ respond: async () => "the answer" });
   const running = adapter.run();
   const socket = gateway.latest;
   hello(socket);
   ready(socket);
   message(socket, { channel_id: "555" });
 
-  await stopWhen(adapter, running, () => discord.calls.length > 0, "发消息");
+  await stopWhen(adapter, running, () => discord.calls.length > 0, "the message");
 
   const call = discord.calls[0]!;
   assert.equal(call.channel, "555");
@@ -295,12 +295,12 @@ test("发消息：带上 bot 身份，以及 Discord 要求的 User-Agent", asyn
   assert.match(call.agent ?? "", /^DiscordBot \(.+\)$/);
 });
 
-test("别的 bot 说的话不算 —— 包括自己刚发出去的那条", async () => {
+test("what another bot says does not count — including the one it just sent itself", async () => {
   let asked = 0;
   const { adapter, gateway } = setup({
     respond: async () => {
       asked += 1;
-      return "答复";
+      return "the answer";
     },
   });
   const running = adapter.run();
@@ -308,19 +308,19 @@ test("别的 bot 说的话不算 —— 包括自己刚发出去的那条", asyn
   hello(socket);
   ready(socket);
   message(socket, { author: { id: "9", username: "joy", bot: true } });
-  message(socket, { content: "这句是人说的" });
+  message(socket, { content: "a human said this" });
 
-  await stopWhen(adapter, running, () => asked > 0, "问 Joy");
+  await stopWhen(adapter, running, () => asked > 0, "asking Joy");
 
-  assert.equal(asked, 1, "不挡住自己的回话，就会自己跟自己聊起来");
+  assert.equal(asked, 1, "without blocking its own echo it ends up talking to itself");
 });
 
-test("频道里没叫就不接话；叫了才接，而且那个标记要摘掉", async () => {
+test("in a channel it stays quiet unless called; once called it answers, and the marker comes off", async () => {
   const asked: string[] = [];
   const { adapter, gateway } = setup({
     respond: async (_conversation, text) => {
       asked.push(text);
-      return "答复";
+      return "the answer";
     },
   });
   const running = adapter.run();
@@ -328,23 +328,23 @@ test("频道里没叫就不接话；叫了才接，而且那个标记要摘掉",
   hello(socket);
   ready(socket);
   // Channel chatter, not calling it
-  message(socket, { guild_id: "1", content: "今天天气不错" });
+  message(socket, { guild_id: "1", content: "nice weather today" });
   // Calling it
-  message(socket, { guild_id: "1", content: "<@9> 记一下", mentions: [{ id: "9" }] });
+  message(socket, { guild_id: "1", content: "<@9> note this down", mentions: [{ id: "9" }] });
 
-  await stopWhen(adapter, running, () => asked.length > 0, "问 Joy");
+  await stopWhen(adapter, running, () => asked.length > 0, "asking Joy");
 
-  assert.deepEqual(asked, ["记一下"], "没叫的闲聊不该问 Joy，@ 的标记也不该带给模型");
+  assert.deepEqual(asked, ["note this down"], "unaddressed chatter must not reach Joy, and the @ marker must not reach the model");
 });
 
-test("不在白名单里的人：不问 Joy，也不回一句", async () => {
+test("someone outside the allowlist: Joy is not asked and nothing is said back", async () => {
   const logs: string[] = [];
   let asked = 0;
   const { adapter, gateway, discord } = setup({
     allow: ["@alice"],
     respond: async () => {
       asked += 1;
-      return "答复";
+      return "the answer";
     },
     onLog: (text) => logs.push(text),
   });
@@ -355,17 +355,17 @@ test("不在白名单里的人：不问 Joy，也不回一句", async () => {
   message(socket, { channel_id: "1", author: { id: "99", username: "mallory" } });
   message(socket, { channel_id: "2", author: { id: "7", username: "alice" } });
 
-  await stopWhen(adapter, running, () => discord.sent.length > 0, "答复");
+  await stopWhen(adapter, running, () => discord.sent.length > 0, "the answer");
 
   assert.equal(asked, 1);
-  assert.ok(logs.some((line) => line.includes("不在白名单")));
-  assert.equal(discord.calls[0]!.channel, "2", "只该回白名单里那个人");
+  assert.ok(logs.some((line) => line.includes("outside the allowlist")));
+  assert.equal(discord.calls[0]!.channel, "2", "only the allowlisted person gets an answer");
 });
 
-test("白名单里的登录名大小写不敏感", async () => {
+test("an allowlisted login name is case-insensitive", async () => {
   const { adapter, gateway, discord } = setup({
     allow: ["@Alice"],
-    respond: async () => "答复",
+    respond: async () => "the answer",
   });
   const running = adapter.run();
   const socket = gateway.latest;
@@ -373,17 +373,17 @@ test("白名单里的登录名大小写不敏感", async () => {
   ready(socket);
   message(socket, { author: { id: "7", username: "alice" } });
 
-  await stopWhen(adapter, running, () => discord.sent.length > 0, "答复");
+  await stopWhen(adapter, running, () => discord.sent.length > 0, "the answer");
 
-  assert.deepEqual(discord.sent, ["答复"]);
+  assert.deepEqual(discord.sent, ["the answer"]);
 });
 
-test("只发了个附件、没有文字：明说读不了", async () => {
+test("an attachment and no text: say plainly that it cannot be read", async () => {
   let asked = 0;
   const { adapter, gateway, discord } = setup({
     respond: async () => {
       asked += 1;
-      return "答复";
+      return "the answer";
     },
   });
   const running = adapter.run();
@@ -392,13 +392,13 @@ test("只发了个附件、没有文字：明说读不了", async () => {
   ready(socket);
   message(socket, { content: "" });
 
-  await stopWhen(adapter, running, () => discord.sent.length > 0, "回话");
+  await stopWhen(adapter, running, () => discord.sent.length > 0, "the reply");
 
-  assert.equal(asked, 0, "没文字就别去问模型");
-  assert.match(discord.sent[0]!, /读不了/);
+  assert.equal(asked, 0, "with no text, do not go asking the model");
+  assert.match(discord.sent[0]!, /cannot read this one/);
 });
 
-test("Joy 那边出错：把原因说出来，而不是默不作声", async () => {
+test("Joy fails: the reason is said out loud instead of staying quiet", async () => {
   const { adapter, gateway, discord } = setup({
     respond: async () => {
       throw new JoyError({ code: CODES.PROVIDER_ERROR, message: "401 Unauthorized" });
@@ -410,17 +410,17 @@ test("Joy 那边出错：把原因说出来，而不是默不作声", async () =
   ready(socket);
   message(socket);
 
-  await stopWhen(adapter, running, () => discord.sent.length > 0, "回话");
+  await stopWhen(adapter, running, () => discord.sent.length > 0, "the reply");
 
   // The chat box offers the user no other clue, so the problem class must be stated.
-  assert.match(discord.sent[0]!, /模型那边没接上/);
+  assert.match(discord.sent[0]!, /the model side is not connected/);
   assert.match(discord.sent[0]!, /joy config/);
 });
 
-test("回话发不出去（比如被踢出频道）：只留个痕，网关不能跟着倒", async () => {
+test("the reply cannot go out (kicked from the channel, say): leave a trace, the gateway must not fall over", async () => {
   const logs: string[] = [];
   const { adapter, gateway, discord } = setup({
-    respond: async () => "答复",
+    respond: async () => "the answer",
     onLog: (text) => logs.push(text),
   });
   discord.script({ status: 403, body: { message: "Missing Permissions" } });
@@ -435,20 +435,22 @@ test("回话发不出去（比如被踢出频道）：只留个痕，网关不�
   await stopWhen(
     adapter,
     running,
-    () => logs.some((line) => line.includes("没处理完")),
-    "留痕",
+    () => logs.some((line) => line.includes("not handled")),
+    "a trace",
   );
 
   assert.ok(
     logs.some((line) => line.includes("403")),
-    "得说清是发不出去，而不是翻成「连不上 Joy」指错方向",
+    "it has to say the send failed, not translate it into «cannot reach Joy» and point the wrong way",
   );
 });
 
 // ---- Sending out ----------------------------------------------------------------
 
-test("回答太长：切成几条发，每条都在上限以内", async () => {
-  const line = "这一行特意写长一点，好让总长度确实超过一条消息的上限，看看会不会被硬切。";
+test("an answer that is too long: split into several, each within the limit", async () => {
+  const line =
+    "this line is written long on purpose, so the total really exceeds one message and we can "
+    + "see whether it gets cut hard.";
   const long = Array.from({ length: 120 }, (_, i) => `${i} ${line}`).join("\n");
   assert.ok(long.length > 2000);
 
@@ -459,17 +461,17 @@ test("回答太长：切成几条发，每条都在上限以内", async () => {
   ready(socket);
   message(socket);
 
-  await stopWhen(adapter, running, () => discord.sent.join("\n") === long, "分批发完整答复");
+  await stopWhen(adapter, running, () => discord.sent.join("\n") === long, "the whole answer, sent in batches");
 
   assert.ok(
     discord.sent.every((chunk) => chunk.length <= 2000),
-    "超了 Discord 会直接 400，不会替你截",
+    "past the limit Discord just answers 400; it will not truncate for you",
   );
-  assert.equal(discord.sent.join("\n"), long, "切完之后不能少字");
+  assert.equal(discord.sent.join("\n"), long, "nothing may be lost in the split");
 });
 
-test("撞上限流：等它说的那么久再发一次", async () => {
-  const { adapter, gateway, discord } = setup({ respond: async () => "答复" });
+test("rate limited: wait as long as it says, then send once more", async () => {
+  const { adapter, gateway, discord } = setup({ respond: async () => "the answer" });
   discord.script({ status: 429, body: { retry_after: 0.01 } });
   const running = adapter.run();
   const socket = gateway.latest;
@@ -477,13 +479,13 @@ test("撞上限流：等它说的那么久再发一次", async () => {
   ready(socket);
   message(socket);
 
-  await stopWhen(adapter, running, () => discord.sent.length > 0, "重发");
+  await stopWhen(adapter, running, () => discord.sent.length > 0, "the resend");
 
-  assert.equal(discord.calls.length, 2, "第一次 429，第二次才成功");
-  assert.deepEqual(discord.sent, ["答复"]);
+  assert.equal(discord.calls.length, 2, "a 429 first, success the second time");
+  assert.deepEqual(discord.sent, ["the answer"]);
 });
 
-test("连接断了：歇一下自己连回来，而且是重新握手", async () => {
+test("the connection drops: it rests, reconnects itself, and starts with a fresh handshake", async () => {
   const logs: string[] = [];
   const { adapter, gateway } = setup({ onLog: (text) => logs.push(text) });
   const running = adapter.run();
@@ -496,7 +498,7 @@ test("连接断了：歇一下自己连回来，而且是重新握手", async ()
 
   const deadline = Date.now() + 5000;
   while (gateway.sockets.length < 2) {
-    if (Date.now() > deadline) throw new Error("没等到重连");
+    if (Date.now() > deadline) throw new Error("the reconnect never came");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
@@ -504,13 +506,13 @@ test("连接断了：歇一下自己连回来，而且是重新握手", async ()
   hello(second);
   // A fresh handshake, not RESUME — messages spoken during the drop are just lost. That's the
   // cost of not implementing RESUME, pinned here so it isn't chased as a bug for hours later.
-  assert.equal(second.frames(2).length, 1, "重连得以 IDENTIFY 开场");
+  assert.equal(second.frames(2).length, 1, "a reconnect opens with IDENTIFY");
 
   adapter.stop();
   await running;
 
   assert.ok(
-    logs.some((line) => line.includes("连接断了")),
-    "断线得留个痕，不然出问题只能靠猜",
+    logs.some((line) => line.includes("the connection dropped")),
+    "a drop has to leave a trace, or a problem can only be guessed at",
   );
 });

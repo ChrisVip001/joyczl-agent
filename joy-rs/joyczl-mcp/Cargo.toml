@@ -3,7 +3,7 @@ name = "joyczl-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MCP 客户端 —— 把「别人的工具」接成 Joy 自己的工具。"
+description = "The MCP client — wires somebody else's tools in as Joy's own."
 
 [lib]
 name = "joyczl_mcp"
@@ -12,14 +12,15 @@ doctest = false
 
 [dependencies]
 anyhow = { workspace = true }
-# `joy mcp serve`（server.rs）直接读写记忆表 —— 服务器一侧需要 state。
+# `joy mcp serve` (server.rs) reads and writes the memory tables directly — the server side
+# needs state.
 joyczl-state = { workspace = true }
 joyczl-tools = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-#   OAuth 授权码流程的 PKCE 用 S256：challenge = base64url(sha256(verifier))。
-#   不引 base64 crate —— 编码只有 60 行，自己写（见 oauth.rs）。
+#   PKCE in the OAuth code flow uses S256: challenge = base64url(sha256(verifier)).
+#   No base64 crate — the encoding is 60 lines, so it is written out (see oauth.rs).
 sha2 = { workspace = true }
 tokio = { workspace = true }
 

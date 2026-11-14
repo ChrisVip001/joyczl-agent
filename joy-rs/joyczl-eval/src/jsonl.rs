@@ -1,7 +1,7 @@
 //! Reading a directory of JSONL cases — **one** copy.
 //!
 //! Three loaders used to do this by hand (deterministic, judge, replay). The copies had drifted
-//! exactly where it hurts: one had no 文件:行号 in its errors, two did not sort, so the same suite
+//! exactly where it hurts: one had no file:line in its errors, two did not sort, so the same suite
 //! printed its table in a different order on a different machine — which reads as "a case
 //! changed" when nothing changed.
 //!
@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 
 /// Reads every case under `paths`; a path may be a file or a directory of `*.jsonl`.
 ///
-/// `check` gets the case and a human-readable location (`<file> 第 N 行`), so a refusal can say
+/// `check` gets the case and a human-readable location (`<file> line N`), so a refusal can say
 /// where the offender is without re-deriving it.
 pub fn read_jsonl<T>(
     paths: &[PathBuf],

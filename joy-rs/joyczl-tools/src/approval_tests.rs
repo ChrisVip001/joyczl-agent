@@ -36,7 +36,7 @@ impl Fake {
 
 impl ApprovalBroker for Fake {
     fn request(&self, request: ApprovalRequest) -> ApprovalFut {
-        self.seen.lock().expect("锁").push(request);
+        self.seen.lock().expect("lock").push(request);
         let answer = self.answer;
         Box::pin(async move { answer })
     }
@@ -50,11 +50,11 @@ fn on_request_turns_a_denial_into_a_question() {
 
     let ask = vet("echo hi", &policy(&["ls *"], true));
     let Gate::NeedsApproval { reason } = &ask else {
-        panic!("on-request 时该问一句，实际 {ask:?}");
+        panic!("on-request means asking once, actually {ask:?}");
     };
     assert!(
         reason.contains("No allow rule matched"),
-        "拒因要留给模型看：{reason}"
+        "the refusal reason is for the model to read: {reason}"
     );
 }
 
@@ -68,7 +68,7 @@ fn a_hard_denied_command_is_never_negotiable() {
     ] {
         let verdict = vet(command, &policy(&["*"], true));
         let Gate::Deny(why) = &verdict else {
-            panic!("{command} 必须被hard block，实际 {verdict:?}");
+            panic!("{command} has to be hard blocked, actually {verdict:?}");
         };
         assert!(why.contains("hard block"), "{command}: {why}");
     }
@@ -87,7 +87,7 @@ fn the_sandbox_gate_is_not_negotiable_either() {
     }
     let verdict = vet("echo hi", &policy(&["echo*"], true));
     let Gate::Deny(why) = &verdict else {
-        panic!("没有sandbox就该拒绝，实际 {verdict:?}");
+        panic!("no sandbox means refuse, actually {verdict:?}");
     };
     assert!(why.contains("sandbox"), "{why}");
 }
@@ -98,7 +98,7 @@ async fn approval_decides_whether_the_command_runs() {
     if !sandbox_available() {
         return;
     }
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let writable = vec![dir.path().to_path_buf()];
 
     let broker = Fake::answering(true);
@@ -110,15 +110,18 @@ async fn approval_decides_whether_the_command_runs() {
         None,
     )
     .await;
-    assert!(output.contains("approved-ok"), "approved了就该跑：{output}");
-    assert_eq!(broker.seen.lock().expect("锁").len(), 1);
+    assert!(
+        output.contains("approved-ok"),
+        "approved means it runs: {output}"
+    );
+    assert_eq!(broker.seen.lock().expect("lock").len(), 1);
     assert_eq!(
-        broker.seen.lock().expect("锁")[0].args_preview,
+        broker.seen.lock().expect("lock")[0].args_preview,
         "echo approved-ok"
     );
-    // "记住这条" must record exactly what the human read: the command, not its class.
+    // "remember this one" must record exactly what the human read: the command, not its class.
     assert_eq!(
-        broker.seen.lock().expect("锁")[0].remember,
+        broker.seen.lock().expect("lock")[0].remember,
         Some(RememberTarget::Command("echo approved-ok".to_string()))
     );
 
@@ -133,23 +136,27 @@ async fn approval_decides_whether_the_command_runs() {
     .await;
     assert!(output.starts_with("Error:"), "{output}");
     assert!(output.contains("not approved"), "{output}");
-    assert!(!output.contains("nope"), "拒绝就是没跑：{output}");
+    assert!(
+        !output.contains("nope"),
+        "a refusal means it did not run: {output}"
+    );
 }
 
-/// "本会话总是允许" is a rule of its own: the same command stops being asked about, immediately.
+/// "always allow in this session" is a rule of its own: the same command stops being asked about,
+/// immediately.
 /// It does **not** lift the hard-deny list, and it does not touch the sandbox gate.
 #[test]
 fn a_session_approved_command_needs_no_second_question() {
     let policy = policy(&["ls *"], true);
     assert!(
         matches!(vet("echo hi", &policy), Gate::NeedsApproval { .. }),
-        "起点：没匹配上allowed表，问一句"
+        "the starting point: the allowed table did not match, so ask once"
     );
 
     policy
         .session_allow
         .lock()
-        .expect("锁")
+        .expect("lock")
         .push("echo hi".to_string());
     let gate = vet("echo hi", &policy);
     // The sandbox gate is still the last word (a machine without one refuses here).
@@ -157,11 +164,11 @@ fn a_session_approved_command_needs_no_second_question() {
         assert_eq!(gate, Gate::Allow, "{gate:?}");
     } else {
         let Gate::Deny(why) = &gate else {
-            panic!("没有sandbox就该拒绝，实际 {gate:?}");
+            panic!("no sandbox means refuse, actually {gate:?}");
         };
         assert!(
             why.contains("sandbox"),
-            "拒绝的理由必须是sandbox，而不是allowed表：{why}"
+            "the refusal has to name the sandbox, not the allowed table: {why}"
         );
     }
 
@@ -169,11 +176,11 @@ fn a_session_approved_command_needs_no_second_question() {
     policy
         .session_allow
         .lock()
-        .expect("锁")
+        .expect("lock")
         .push("sudo reboot".to_string());
     assert!(
         matches!(vet("sudo reboot", &policy), Gate::Deny(_)),
-        "记住一条命令也解放不了hard block名单"
+        "remembering one command does not free it from the hard-block list"
     );
 }
 
@@ -184,7 +191,7 @@ async fn without_a_broker_it_refuses_and_says_why() {
     if !sandbox_available() {
         return;
     }
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let output = execute(
         "echo hi",
         &policy(&["ls *"], true),
@@ -196,6 +203,6 @@ async fn without_a_broker_it_refuses_and_says_why() {
     assert!(output.starts_with("Error:"), "{output}");
     assert!(
         output.contains("JOY_APPROVAL"),
-        "要说清怎么才能有人答：{output}"
+        "it has to say how a human would get to answer: {output}"
     );
 }

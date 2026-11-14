@@ -318,10 +318,10 @@ export class LarkAdapter {
         // A connection reached clears the failure count: one drop shouldn't lengthen the next wait.
         this.#failures = 0;
         if (this.#stopped) return;
-        await this.#pause("长连接断了");
+        await this.#pause("the long connection dropped");
       } catch (error) {
         if (this.#stopped) return;
-        await this.#pause("长连接出错", error);
+        await this.#pause("the long connection failed", error);
       }
     }
   }
@@ -337,7 +337,7 @@ export class LarkAdapter {
     const waitMs = Math.min(MAX_PAUSE_MS, 1000 * 2 ** Math.min(this.#failures, 5));
     const detail = error === undefined ? "" : `：${explain(error)}`;
     this.#log(
-      `${reason}（第 ${this.#failures} 次），${Math.round(waitMs / 1000)} 秒后重连${detail}`,
+      `${reason} (failure ${this.#failures}); reconnecting in ${Math.round(waitMs / 1000)} s${detail}`,
     );
 
     const until = Date.now() + waitMs;
@@ -407,7 +407,7 @@ export class LarkAdapter {
           if (settled) return;
           const limit = idleTimeoutMs(pingMs);
           if (Date.now() - lastHeard < limit) return;
-          finish(new Error(`${Math.round(limit / 1000)} 秒没收到任何东西，当它已经死了`));
+          finish(new Error(`nothing arrived for ${Math.round(limit / 1000)} s; treating it as dead`));
         }, 10_000);
       };
 
@@ -419,8 +419,8 @@ export class LarkAdapter {
             this.#warnedFrame = true;
             this.#log(
               event.data instanceof Blob
-                ? "帧是 Blob 递过来的 —— 这根连接没把 binaryType 设成 arraybuffer，帧全丢了"
-                : "收到一个不是二进制的帧，丢掉",
+                ? "frames arrived as Blobs — this connection never set binaryType to arraybuffer, so every frame is lost"
+                : "a frame that is not binary arrived; dropped",
             );
           }
           return;
@@ -429,20 +429,20 @@ export class LarkAdapter {
 
         const frame = decodeFrame(bytes);
         if (frame === null) {
-          this.#log("认不出一帧，丢掉");
+          this.#log("a frame could not be recognised; dropped");
           return;
         }
 
         if (frame.method === METHOD_CONTROL) {
           const updated = pingIntervalOf(frame);
           if (updated !== null && updated !== pingMs) {
-            this.#log(`服务端把心跳间隔调成了 ${Math.round(updated / 1000)} 秒`);
+            this.#log(`the server moved the heartbeat interval to ${Math.round(updated / 1000)} s`);
             restartHeartbeat(updated);
           }
           return;
         }
         if (frame.method !== METHOD_DATA) {
-          this.#log(`收到一个不认识的帧（method=${frame.method}），丢掉`);
+          this.#log(`an unknown frame arrived (method=${frame.method}); dropped`);
           return;
         }
 
@@ -452,12 +452,12 @@ export class LarkAdapter {
         this.#ack(socket, frame);
 
         void this.#onData(frame).catch((error: unknown) => {
-          this.#log(`处理这一帧时出错：${explain(error)}`);
+          this.#log(`handling this frame failed: ${explain(error)}`);
         });
       };
 
       socket.onclose = () => finish();
-      socket.onerror = () => finish(new Error("长连接的 socket 报错了"));
+      socket.onerror = () => finish(new Error("the long connection socket reported an error"));
     });
   }
 
@@ -472,7 +472,7 @@ export class LarkAdapter {
     } catch (error) {
       // A failed send must not take the gateway down — the next heartbeat retries, and the
       // watchdog declares death and reconnects if it keeps failing.
-      this.#log(`一帧没发出去：${explain(error)}`);
+      this.#log(`a frame did not go out: ${explain(error)}`);
     }
   }
 
@@ -497,7 +497,7 @@ export class LarkAdapter {
     });
 
     if (!response.ok) {
-      throw new Error(`换连接地址失败：HTTP ${response.status} ${await response.text()}`);
+      throw new Error(`could not exchange the connection address: HTTP ${response.status} ${await response.text()}`);
     }
 
     const envelope = (await response.json()) as {
@@ -508,8 +508,8 @@ export class LarkAdapter {
     const url = envelope.data?.URL ?? "";
     if (envelope.code !== 0 || url === "") {
       throw new Error(
-        `换连接地址被拒：code=${String(envelope.code)} ${envelope.msg ?? ""} —— 多半是 ` +
-          "AppID/AppSecret 不对，或者这个应用没开长连接",
+        `the connection address was refused: code=${String(envelope.code)} ${envelope.msg ?? ""} — most likely ` +
+          "the AppID/AppSecret is wrong, or the app has no long connection enabled",
       );
     }
 
@@ -527,7 +527,7 @@ export class LarkAdapter {
     const type = headerValue(frame, "type");
     if (type !== "event") {
       // "card" is an interactive-card callback. Leave a line, or someone will be guessing from logs.
-      if (type !== "") this.#log(`收到 ${type} 帧，还没接`);
+      if (type !== "") this.#log(`a ${type} frame arrived; not wired up yet`);
       return;
     }
 
@@ -536,7 +536,7 @@ export class LarkAdapter {
     if (payload === null) return; // fragments still incomplete
 
     if (messageId !== "" && !this.#claim(messageId)) {
-      this.#log("这一条刚才处理过了（飞书重发），跳过");
+      this.#log("this one was handled a moment ago (Feishu resent it); skipped");
       return;
     }
 
@@ -544,7 +544,7 @@ export class LarkAdapter {
     try {
       event = JSON.parse(new TextDecoder().decode(payload)) as LarkEvent;
     } catch {
-      this.#log("事件不是 JSON，丢掉");
+      this.#log("the event is not JSON; dropped");
       return;
     }
 
@@ -568,7 +568,7 @@ export class LarkAdapter {
     if (messageId === "" || seq < 0 || seq >= sum) {
       // It declared fragmentation but gave no group key, or the index is out of range — the frame
       // is broken. Treating it as whole would yield half a JSON; dropping it outright is better.
-      this.#log(`分片帧不对劲（sum=${sum} seq=${seq}），丢掉`);
+      this.#log(`the fragmented frame does not add up (sum=${sum} seq=${seq}); dropped`);
       return null;
     }
 
@@ -624,12 +624,12 @@ export class LarkAdapter {
     const openId = sender.sender_id?.open_id ?? "";
     const chatId = message.chat_id ?? "";
     if (openId === "" || chatId === "") {
-      this.#log("事件里没有 open_id 或 chat_id，丢掉");
+      this.#log("the event carries neither open_id nor chat_id; dropped");
       return;
     }
 
     if (this.#allow.size > 0 && !this.#allow.has(openId)) {
-      this.#log(`不在白名单里，不理：${openId}`);
+      this.#log(`outside the allowlist, not answering: ${openId}`);
       return;
     }
 
@@ -642,7 +642,7 @@ export class LarkAdapter {
       message.message_type === "text" ? stripMentionKeys(this.#textOf(message.content ?? "")) : "";
 
     if (text === "") {
-      await this.#say(chatId, "这条我读不了 —— 目前只认文字，图片、语音和文件还没接。");
+      await this.#say(chatId, "I cannot read this one — text only for now; images, voice and files are not wired up yet.");
       return;
     }
 
@@ -653,7 +653,7 @@ export class LarkAdapter {
     try {
       reply = await this.#respond(conversation, text);
     } catch (error) {
-      reply = `我这边出错了：${explain(error)}`;
+      reply = `something failed on my side: ${explain(error)}`;
     }
 
     await this.#say(chatId, reply);
@@ -685,7 +685,7 @@ export class LarkAdapter {
     if (self === undefined) {
       if (!this.#warnedSelf) {
         this.#warnedSelf = true;
-        this.#log("问不到机器人自己的 open_id —— 群里只能按「有 @ 就算」，@ 到别人也可能接话");
+        this.#log("cannot ask for the bot's own open_id — in a group it has to go by «an @ means me», so it may answer an @ aimed at someone else");
       }
       return true;
     }
@@ -728,8 +728,8 @@ export class LarkAdapter {
       if (body.code !== 0) {
         this.#selfId = undefined;
         this.#log(
-          `问机器人信息被拒：code=${String(body.code)} ${body.msg ?? ""} —— ` +
-            "多半是这个应用没开机器人能力、或者没发版",
+          `asking for the bot's own info was refused: code=${String(body.code)} ${body.msg ?? ""} — ` +
+            "most likely the app has no bot capability enabled, or was never released",
         );
         return this.#selfId;
       }
@@ -737,14 +737,14 @@ export class LarkAdapter {
       const openId = body.bot?.open_id;
       if (typeof openId !== "string" || openId === "") {
         this.#selfId = undefined;
-        this.#log("机器人信息里没有 open_id，问不出来");
+        this.#log("the bot info carries no open_id, so it cannot be asked");
         return this.#selfId;
       }
 
       this.#selfId = openId;
     } catch (error) {
       this.#selfId = undefined;
-      this.#log(`问机器人信息失败：${explain(error)}`);
+      this.#log(`asking for the bot's own info failed: ${explain(error)}`);
     }
 
     return this.#selfId;
@@ -774,7 +774,7 @@ export class LarkAdapter {
 
     const value = body.tenant_access_token ?? "";
     if (body.code !== 0 || value === "") {
-      throw new Error(`拿 tenant_access_token 失败：code=${String(body.code)} ${body.msg ?? ""}`);
+      throw new Error(`could not get a tenant_access_token: code=${String(body.code)} ${body.msg ?? ""}`);
     }
 
     const life = Math.max(60_000, (body.expire ?? 7200) * 1000 - 120_000);
@@ -789,7 +789,7 @@ export class LarkAdapter {
         await this.#sendText(chatId, chunk);
       } catch (error) {
         // A failed send must not take the connection down — the gateway must keep serving.
-        this.#log(`发消息失败：${explain(error)}`);
+        this.#log(`sending the message failed: ${explain(error)}`);
         return;
       }
     }
@@ -821,7 +821,7 @@ export class LarkAdapter {
         this.#token = undefined;
         continue;
       }
-      throw new Error(`发消息失败：code=${String(body.code)} ${body.msg ?? ""}`);
+      throw new Error(`sending the message failed: code=${String(body.code)} ${body.msg ?? ""}`);
     }
   }
 }

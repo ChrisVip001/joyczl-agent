@@ -46,6 +46,7 @@ struct Job {
 
 /// The in-process job table. **The ledger is in state.db** (see module header); memory holds only the live part.
 pub struct Jobs {
+    execution_owner: Option<Arc<crate::lock::DaemonLock>>,
     policy: ExecPolicy,
     home: std::path::PathBuf,
     jobs: Arc<Mutex<HashMap<JobId, Job>>>,
@@ -62,6 +63,7 @@ pub struct Jobs {
 impl Jobs {
     pub fn new(policy: ExecPolicy, home: std::path::PathBuf, rows: joyczl_state::Jobs) -> Self {
         Self {
+            execution_owner: None,
             policy,
             home,
             jobs: Arc::new(Mutex::new(HashMap::new())),
@@ -70,6 +72,15 @@ impl Jobs {
             notify: None,
             delivery_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
+    }
+
+    /// Live job handles and their settlement tasks retain checked-runtime ownership.
+    pub(crate) fn with_execution_owner(
+        mut self,
+        owner: Option<Arc<crate::lock::DaemonLock>>,
+    ) -> Self {
+        self.execution_owner = owner;
+        self
     }
 
     /// Attach the notifier (called at boot; not attached in tests).
@@ -172,7 +183,7 @@ impl JobRegistry for Jobs {
         command: &str,
         cwd: Option<String>,
     ) -> JobFut<Result<JobId, String>> {
-        self.spawn_with_run(owner, command, cwd, None)
+        self.spawn_with_run(owner, command, cwd, None, None)
     }
     fn spawn_for_run(
         &self,
@@ -181,8 +192,19 @@ impl JobRegistry for Jobs {
         cwd: Option<String>,
         run_id: Option<String>,
     ) -> JobFut<Result<JobId, String>> {
-        self.spawn_with_run(owner, command, cwd, run_id)
+        self.spawn_with_run(owner, command, cwd, run_id, None)
     }
+    fn spawn_guarded(
+        &self,
+        owner: &str,
+        command: &str,
+        cwd: Option<String>,
+        run_id: Option<String>,
+        lease: Option<joyczl_tools::resources::Lease>,
+    ) -> JobFut<Result<JobId, String>> {
+        self.spawn_with_run(owner, command, cwd, run_id, lease)
+    }
+
     fn output(
         &self,
         owner: &str,
@@ -342,6 +364,7 @@ impl Jobs {
         command: &str,
         cwd: Option<String>,
         run_id: Option<String>,
+        lease: Option<joyczl_tools::resources::Lease>,
     ) -> JobFut<Result<JobId, String>> {
         let owner = owner.to_string();
         let command = command.to_string();
@@ -352,6 +375,7 @@ impl Jobs {
         // A reference to self must not enter the async block (the lifetime does not live that long) — clone outside the block.
         let notifier = self.notify.clone();
         let delivery_lock = self.delivery_lock.clone();
+        let execution_owner = self.execution_owner.clone();
 
         // Writable roots: the explicitly given working directory (or the process cwd) — exactly
         // the same sources as foreground `run_command` (plus the policy's extra_roots, merged
@@ -456,6 +480,8 @@ impl Jobs {
             let watched_id = job_id.clone();
             let watched_rows = rows.clone();
             tokio::spawn(async move {
+                let _execution_owner = execution_owner;
+                let _mutation_lease = lease;
                 // Wait for it to finish by itself, or until "someone wants it stopped". A stopped job is
                 // recorded as killed — "failed" and "stopped by someone" are two different things in the ledger.
                 let (exit, was_killed) = tokio::select! {

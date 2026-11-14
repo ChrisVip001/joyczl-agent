@@ -200,8 +200,9 @@ fn resolve_attachments(
                 bytes.len()
             )));
         }
-        // 像素尺寸也得量：长截图（1120×11100 这种）字节数只有 2 MB 出头，却会被远端
-        // 一句 "unsupported image" 挡回来 —— 它既不说原因也不说上限，所以本地先量。
+        // Pixel dimensions have to be measured too: a tall screenshot (1120×11100 and the like) is
+        // barely 2 MB of bytes, yet the far end rejects it with a bare "unsupported image" — no
+        // reason, no limit — so measure locally first.
         let (width, height) = crate::image_meta::size(&bytes).ok_or_else(|| {
             bad(format!(
 "Attachment {} has no readable dimensions — its header is not a complete png / jpg / gif / webp, so it is probably corrupt, or only had its extension changed.",
@@ -231,6 +232,16 @@ pub async fn run_turn(
     id: RequestId,
     sink: &EventSink,
 ) -> Result<(), ErrorObject> {
+    run_turn_inner(server, params, id, sink, None).await
+}
+
+pub(crate) async fn run_turn_inner(
+    server: &Server,
+    params: TurnStartParams,
+    id: RequestId,
+    sink: &EventSink,
+    dispatch: Option<joyczl_state::dispatch::DispatchRow>,
+) -> Result<(), ErrorObject> {
     let started = std::time::Instant::now();
 
     let session_id = params
@@ -243,7 +254,7 @@ pub async fn run_turn(
     //
     // The worker does its work off the clock, so this is the moment the client hears about
     // it: the same `consolidationCompleted` notification, one turn later than before, at
-    // the point where the user can actually act on it ("记住了 3 条新事实").
+    // the point where the user can actually act on it ("remembered 3 new facts").
     if let Some(worker) = server.memory_worker.as_ref() {
         let pending = worker.take_pending();
         if pending > 0 {
@@ -256,8 +267,23 @@ pub async fn run_turn(
     // ---- Long task: if the session has an active one, this turn carries it. The heartbeat
     // (`current_turn_id`) is what `task/suspend`, `task/resume` and the boot reconcile hang on.
     // Read before model resolution: a task may **declare its tier**, and that pins this turn's model.
-    let task = server.tasks.active(&session_id).await.ok().flatten();
-
+    let task = if let Some(dispatch) = &dispatch {
+        server.tasks.get(&dispatch.task_id).await
+    } else {
+        server.tasks.active(&session_id).await
+    }
+    .map_err(|e| ErrorObject {
+        code: codes::INTERNAL_ERROR,
+        message: format!("Cannot read task state: {e}"),
+        data: None,
+    })?;
+    if dispatch.is_some() && task.is_none() {
+        return Err(ErrorObject {
+            code: codes::INVALID_PARAMS,
+            message: "Dispatched task no longer exists".into(),
+            data: None,
+        });
+    }
     // The turn's tier: an explicit `tier` (task API / webhook) wins over the task's declaration;
     // a typo is refused here, before any side effect (a silently-guessed tier would bill the wrong model).
     let tier = route::clean_tier(params.tier.as_deref())?
@@ -283,7 +309,52 @@ message: "The model is not configured yet: no API key. One command is enough —
     // not leave a half-turn behind.
     let user_images = resolve_attachments(server, &params, &resolved.provider_id, resolved.vision)?;
 
-    let turn_id = new_turn_id();
+    let task_lock = task
+        .as_ref()
+        .map(|task| server.session_write_lock(&format!("task-control:{}", task.id)));
+    let task_guard = match &task_lock {
+        Some(lock) => Some(lock.lock().await),
+        None => None,
+    };
+    if let Some(task) = &task {
+        let current = server.tasks.get(&task.id).await.map_err(|e| ErrorObject {
+            code: codes::INTERNAL_ERROR,
+            message: format!("Cannot recheck task admission: {e}"),
+            data: None,
+        })?;
+        let dispatched = joyczl_state::dispatch::TaskDispatch::new(server.pool.clone())
+            .get(&task.id)
+            .await
+            .map_err(|e| ErrorObject {
+                code: codes::INTERNAL_ERROR,
+                message: format!("Cannot read task dispatch: {e}"),
+                data: None,
+            })?;
+        if !current.as_ref().is_some_and(|t| t.status.is_open())
+            || (dispatch.is_none() && dispatched.is_some())
+            || (dispatch.is_some()
+                && !current
+                    .as_ref()
+                    .is_some_and(|t| t.status == joyczl_state::TaskStatus::Pending))
+        {
+            return Err(ErrorObject {
+                code: codes::SESSION_BUSY,
+                message: "Task admission changed; inspect its current state before continuing"
+                    .into(),
+                data: None,
+            });
+        }
+    }
+
+    if let Some(task) = &task {
+        if let Some(checkpoint) = crate::task_recovery::checkpoint(server, task).await? {
+            crate::task_recovery::require_known(&checkpoint)?;
+        }
+    }
+    let turn_id = dispatch
+        .as_ref()
+        .map(|row| row.turn_id.clone())
+        .unwrap_or_else(new_turn_id);
 
     // ---- One driver per session (0.16), claimed **before any side effect**: a turn refused
     // here must not flip a task to `running` or leave a checkpoint behind. The holder's id goes
@@ -304,6 +375,10 @@ message: "The model is not configured yet: no API key. One command is enough —
         session_id: session_id.clone(),
     };
 
+    let acceptance = match &task {
+        Some(task) => crate::task_contract::admit(server, sink, task).await?,
+        None => Vec::new(),
+    };
     if let Some(task) = &task {
         match server.tasks.set_running(&task.id, &turn_id).await {
             Ok(()) => {
@@ -311,22 +386,24 @@ message: "The model is not configured yet: no API key. One command is enough —
                     crate::task::notify(sink, &row, None);
                 }
             }
-            Err(e) => eprintln!("(joy) task heartbeat not recorded (the task card keeps showing the old state): {e}"),
+            Err(e) => {
+                return Err(ErrorObject {
+                    code: codes::INTERNAL_ERROR,
+                    message: format!(
+                        "Task heartbeat could not be recorded; execution stopped: {e}"
+                    ),
+                    data: None,
+                })
+            }
         }
     }
+    drop(task_guard);
     let task_id = task.as_ref().map(|task| task.id.clone());
 
     // The task's objective half: what must be measurably true, and where its paths live.
     // Parsed once per turn — verification runs after every round, and re-parsing the same JSON
     // each time would cost more than the `stat`s it guards.
-    let acceptance = task
-        .as_ref()
-        .map(|row| joyczl_agent::verify::parse(&row.acceptance_json))
-        .unwrap_or_default();
-    let task_root = task
-        .as_ref()
-        .and_then(|row| row.cwd.as_deref())
-        .map(std::path::PathBuf::from);
+    let task_root = resolve_turn_cwd(&task.as_ref().and_then(|row| row.cwd.clone()))?;
 
     // ---- P1: an execution plan — opt-in (JOY_PLAN), and only when there is a task to plan for.
     //
@@ -372,7 +449,14 @@ message: "The model is not configured yet: no API key. One command is enough —
     // carries it share an id, so a checkpoint inside it always knows which attempt it belongs
     // to). No task, no run — an ordinary chat turn has nothing to account for.
     let run_id = open_run(server, task.as_ref(), &turn_id, &session_id).await;
-    // Only meaningful while this turn is the one driving the task: the card's "现在在跑第几轮".
+    if task.is_some() && run_id.is_none() {
+        return Err(ErrorObject {
+            code: codes::INTERNAL_ERROR,
+            message: "Task run could not be recorded; execution stopped".into(),
+            data: None,
+        });
+    }
+    // Only meaningful while this turn is the one driving the task: the card's "which round is running".
     let round_no = 1i32;
     let max_rounds = task
         .as_ref()
@@ -393,6 +477,7 @@ message: "The model is not configured yet: no API key. One command is enough —
         &session_id,
         &params.message,
         run_id.as_deref(),
+        round_no,
     );
 
     // Working directory for this turn: validate when provided (fail-closed). Reject before the
@@ -616,7 +701,7 @@ message: "The model is not configured yet: no API key. One command is enough —
         // nothing does the built-in gate look at facts — and it opens **only when the turn was cut
         // off** (`iterations >= cap`), because that is what "ran out of steps with work left" means.
         //
-        // Why not on a natural stop too: a turn that writes a plan and answers "计划如下" is
+        // Why not on a natural stop too: a turn that writes a plan and answers "here is the plan" is
         // finished work, not unfinished work. Driving that one to keep going would execute a plan
         // nobody asked to execute. A model that stops early with an open todo list is visible in
         // the trace as `unfinished`, and one word from the human continues it.
@@ -786,6 +871,7 @@ pub(crate) enum TaskDecision {
     /// The task stays **open** — a human can continue or cancel it.
     NeedsAttention(String),
     WaitingForJobs(Vec<String>),
+    WaitingForInput(String),
     /// The loop's own verdict: not achievable, or the round cap was reached.
     Failed(String),
 }
@@ -856,6 +942,10 @@ pub(crate) async fn finalize_turn(
     let paused = server.take_suspending(&turn_id);
     let waiting_for_jobs =
         !paused && !result.interrupted && matches!(decision, Some(TaskDecision::WaitingForJobs(_)));
+    let waiting_for_input = !paused
+        && !result.interrupted
+        && matches!(decision, Some(TaskDecision::WaitingForInput(_)));
+    let mut input_wait_committed = false;
     let (final_status, suspended_reason) = if paused {
         (
             "suspended",
@@ -870,6 +960,11 @@ pub(crate) async fn finalize_turn(
         )
     } else if waiting_for_jobs {
         ("waiting_jobs", Some(joyczl_state::waits::JOB_WAIT_REASON))
+    } else if waiting_for_input {
+        (
+            "waiting_input",
+            Some(joyczl_state::external_waits::INPUT_WAIT_REASON),
+        )
     } else {
         ("done", None)
     };
@@ -896,7 +991,16 @@ pub(crate) async fn finalize_turn(
         let _control = control.lock().await;
         let latest = server.tasks.get(&task.id).await.ok().flatten();
         let task = latest.as_ref().unwrap_or(task);
+        let human_paused = joyczl_state::human_pauses::HumanPauses::new(server.pool.clone())
+            .is_paused(&task.id)
+            .await
+            .map_err(|error| ErrorObject {
+                code: codes::INTERNAL_ERROR,
+                message: format!("Cannot verify human task control: {error}"),
+                data: None,
+            })?;
         let paused = paused
+            || human_paused
             || server.take_suspending(&turn_id)
             || (task.status == TaskStatus::Suspended
                 && task.suspend_reason.as_deref() != Some(joyczl_state::waits::JOB_WAIT_REASON));
@@ -918,8 +1022,64 @@ pub(crate) async fn finalize_turn(
         } else {
             match decision {
                 Some(TaskDecision::Done) => {
-                    let _ = server.tasks.finish(&task.id, TaskStatus::Done).await;
+                    crate::completion_delivery::finish_task(
+                        server,
+                        &task.id,
+                        TaskStatus::Done,
+                        None,
+                        &turn_id,
+                        run_id.as_deref(),
+                    )
+                    .await?;
                     (None, RunStatus::Completed)
+                }
+                Some(TaskDecision::WaitingForInput(condition_id)) => {
+                    let registered = async {
+                        let id = run_id
+                            .as_deref()
+                            .ok_or_else(|| anyhow::anyhow!("Task has no execution identity"))?;
+                        let wait = joyczl_state::external_waits::InputWait {
+                            task_id: task.id.clone(),
+                            condition_id,
+                            run_id: id.into(),
+                            turn_id: turn_id.clone(),
+                            session_id: session_id.clone(),
+                            state: "waiting".into(),
+                        };
+                        crate::task_recovery::require_known_messages(&result.messages)
+                            .map_err(|error| anyhow::anyhow!(error.message))?;
+                        let messages = serde_json::to_string(&result.messages)?;
+                        let usage = serde_json::to_string(&result.usage)?;
+                        joyczl_state::external_waits::ExternalWaits::new(server.pool.clone())
+                            .register(
+                                &wait,
+                                joyczl_state::external_waits::WaitSnapshot {
+                                    messages_json: &messages,
+                                    usage_json: &usage,
+                                    iterations: result.iterations,
+                                    round_id: &result.round_id,
+                                    round_no: goal_rounds,
+                                },
+                            )
+                            .await
+                    }
+                    .await;
+                    match registered {
+                        Ok(()) => {
+                            input_wait_committed = true;
+                            (
+                                Some(joyczl_state::external_waits::INPUT_WAIT_REASON.into()),
+                                RunStatus::Waiting,
+                            )
+                        }
+                        Err(error) => {
+                            let reason = format!("Cannot persist external input wait: {error}");
+                            eprintln!("(joy) {reason}");
+                            let _ = server.tasks.needs_attention(&task.id, &reason).await;
+                            let _ = server.checkpoints.finish(&turn_id, "suspended").await;
+                            (Some(reason), RunStatus::Waiting)
+                        }
+                    }
                 }
                 Some(TaskDecision::WaitingForJobs(job_ids)) => {
                     let waits = joyczl_state::waits::JobWaits::new(server.pool.clone());
@@ -951,20 +1111,42 @@ pub(crate) async fn finalize_turn(
                     (Some(reason), RunStatus::Waiting)
                 }
                 Some(TaskDecision::Failed(reason)) => {
-                    let _ = server.tasks.finish(&task.id, TaskStatus::Failed).await;
-                    let _ = server.tasks.set_last_stop(&task.id, &reason).await;
+                    crate::completion_delivery::finish_task(
+                        server,
+                        &task.id,
+                        TaskStatus::Failed,
+                        Some(&reason),
+                        &turn_id,
+                        run_id.as_deref(),
+                    )
+                    .await?;
                     (Some(reason), RunStatus::Failed)
                 }
                 // Nobody decided (a resumed turn): fall back to what the goal loop said, and to
                 // the pre-0.14 rule that a task without a condition is done when its turn is.
                 None => match goal_status.as_deref() {
                     Some("satisfied") => {
-                        let _ = server.tasks.finish(&task.id, TaskStatus::Done).await;
+                        crate::completion_delivery::finish_task(
+                            server,
+                            &task.id,
+                            TaskStatus::Done,
+                            None,
+                            &turn_id,
+                            run_id.as_deref(),
+                        )
+                        .await?;
                         (None, RunStatus::Completed)
                     }
                     Some(status @ ("impossible" | "round-limit")) => {
-                        let _ = server.tasks.finish(&task.id, TaskStatus::Failed).await;
-                        let _ = server.tasks.set_last_stop(&task.id, status).await;
+                        crate::completion_delivery::finish_task(
+                            server,
+                            &task.id,
+                            TaskStatus::Failed,
+                            Some(status),
+                            &turn_id,
+                            run_id.as_deref(),
+                        )
+                        .await?;
                         (Some(status.to_string()), RunStatus::Failed)
                     }
                     Some("blocked") => {
@@ -983,7 +1165,15 @@ pub(crate) async fn finalize_turn(
                             let _ = server.tasks.suspend(&task.id, Some(reason)).await;
                             (Some(reason.to_string()), RunStatus::Suspended)
                         } else {
-                            let _ = server.tasks.finish(&task.id, TaskStatus::Done).await;
+                            crate::completion_delivery::finish_task(
+                                server,
+                                &task.id,
+                                TaskStatus::Done,
+                                None,
+                                &turn_id,
+                                run_id.as_deref(),
+                            )
+                            .await?;
                             (None, RunStatus::Completed)
                         }
                     }
@@ -1011,6 +1201,8 @@ pub(crate) async fn finalize_turn(
             .await;
     }
 
+    crate::completion_delivery::flush(server).await;
+
     for call in &result.tool_calls {
         sink.notification(ServerNotification::ToolCompleted(
             ToolCompletedNotification {
@@ -1036,6 +1228,10 @@ pub(crate) async fn finalize_turn(
     }
     if waiting_for_jobs {
         reply.push_str("\n\n(Background jobs are still running; task completion is pending.)");
+    }
+
+    if input_wait_committed {
+        reply.push_str("\n\n(Waiting for the declared input; task completion is pending.)");
     }
 
     // The quick answer came from the small model. Record that honestly — so "what model are you" won't be answered wrong by the model itself.
@@ -1251,6 +1447,20 @@ pub(crate) async fn finalize_turn(
         }
     }
 
+    if input_wait_committed {
+        if let Some(task) = &carried_task {
+            if let Ok(Some(wait)) =
+                joyczl_state::external_waits::ExternalWaits::new(server.pool.clone())
+                    .waiting(&task.id)
+                    .await
+            {
+                if wait.state == "waiting" {
+                    crate::input_wake::arm(server.clone(), sink.clone(), wait);
+                }
+            }
+        }
+    }
+
     // ---- Memory work is the worker's job now: the turn ends when the reply is on disk.
     //
     // The worker decides whether distillation is due (its trigger is unchanged: enough new
@@ -1314,9 +1524,8 @@ pub(crate) struct FullTurn {
 }
 
 /// The checkpoint outlet, constructed once per turn (fresh or resumed): every tool-results
-/// boundary lands in state.db **before** the next model call goes out. A crash then costs
-/// at most "finish this iteration again", never the whole turn. A save failure warns and
-/// moves on — checkpointing must not stall the turn.
+/// boundary lands in state.db before execution advances. A failed save stops the turn;
+/// an unknown in-flight tool batch remains suspended rather than being replayed.
 pub(crate) fn checkpoint_outlet(
     checkpoints: &joyczl_state::Checkpoints,
     sink: &EventSink,
@@ -1324,6 +1533,7 @@ pub(crate) fn checkpoint_outlet(
     session_id: &str,
     user_message: &str,
     run_id: Option<&str>,
+    round_no: i32,
 ) -> joyczl_loop::CheckpointSink {
     let (checkpoints, session, user_message) = (
         checkpoints.clone(),
@@ -1342,8 +1552,18 @@ pub(crate) fn checkpoint_outlet(
         Box::pin(async move {
             let messages_json = serde_json::to_string(&cp.messages).unwrap_or_default();
             let usage_json = serde_json::to_string(&cp.usage).unwrap_or_default();
+            let operations: Vec<_> = cp
+                .operations
+                .into_iter()
+                .map(|operation| joyczl_state::operations::OperationSnapshot {
+                    tool_use_id: operation.tool_use_id,
+                    tool: operation.tool,
+                    input_json: operation.input.to_string(),
+                    output: operation.output,
+                })
+                .collect();
             if let Err(e) = checkpoints
-                .save_round(
+                .save_with_operations(
                     &turn_id,
                     &session,
                     &user_message,
@@ -1352,10 +1572,12 @@ pub(crate) fn checkpoint_outlet(
                     &usage_json,
                     run.as_deref(),
                     Some(&cp.round_id),
+                    Some(round_no),
+                    &operations,
                 )
                 .await
             {
-                eprintln!("(joy) checkpoint persistence failed; stopping execution：{e}");
+                eprintln!("(joy) checkpoint persistence failed; stopping execution: {e}");
                 return Err(format!("checkpoint persistence failed: {e}"));
             }
             sink.notification(ServerNotification::TurnCheckpointed(
@@ -1479,6 +1701,20 @@ async fn open_run(
     session_id: &str,
 ) -> Option<String> {
     let task = task?;
+    let target = server
+        .notifier
+        .as_ref()
+        .and_then(|notifier| notifier.delivery_target());
+    if let Err(error) = server
+        .completions
+        .bind(&task.id, server.notifier.is_some(), target.as_deref())
+        .await
+    {
+        eprintln!(
+            "(joy) completion delivery intent could not be recorded; execution stopped: {error}"
+        );
+        return None;
+    }
     match server
         .runs
         .start(turn_id, &task.id, Some(session_id), Some(turn_id))
@@ -1492,19 +1728,6 @@ async fn open_run(
     }
 }
 
-/// A run that ended because something broke: close it before the error leaves, otherwise the
-/// card keeps saying "running" until the next restart.
-async fn abort_run(server: &Server, run_id: Option<&str>, reason: &str) {
-    let Some(run_id) = run_id else { return };
-    if let Err(e) = server
-        .runs
-        .close(run_id, RunStatus::Failed, Some(reason))
-        .await
-    {
-        eprintln!("(joy) run record not closed out (the error still reaches you): {e}");
-    }
-}
-
 /// A turn that failed inside the loop (model died, graph blew up): close the checkpoint, the
 /// run and the task honestly, so nothing is left looking "still running".
 pub(crate) async fn fail_turn(
@@ -1515,16 +1738,7 @@ pub(crate) async fn fail_turn(
     task_id: Option<&str>,
     message: &str,
 ) {
-    if let Err(e) = server.checkpoints.finish(turn_id, "abandoned").await {
-        eprintln!("(joy) the failed turn's checkpoint was not marked: {e}");
-    }
-    abort_run(server, run_id, message).await;
-    if let Some(id) = task_id {
-        let _ = server.tasks.finish(id, TaskStatus::Failed).await;
-        if let Ok(Some(row)) = server.tasks.get(id).await {
-            crate::task::notify(sink, &row, Some(message));
-        }
-    }
+    crate::turn_failure::finish(server, sink, turn_id, run_id, task_id, message).await;
 }
 
 /// Checkpoint recovery and continuation observe the same round with identical operation keys.
@@ -1623,14 +1837,23 @@ pub(crate) async fn account_round(
     // 4. The verdict list belongs on the row: the card reads one row, not an event replay.
     if !checks.is_empty() {
         let views: Vec<_> = checks.iter().map(|check| check.view()).collect();
-        match serde_json::to_string(&views) {
-            Ok(json) => {
-                if let Err(e) = server.tasks.set_checks(&task.id, &json).await {
-                    eprintln!("(joy) acceptance result not recorded: {e}");
-                }
-            }
-            Err(e) => eprintln!("(joy) acceptance result could not be serialised: {e}"),
-        }
+        let json = serde_json::to_string(&views)
+            .map_err(|error| format!("Acceptance results could not be serialized: {error}"))?;
+        let files: Vec<_> = checks
+            .iter()
+            .filter_map(|check| check.artifact.clone())
+            .collect();
+        joyczl_state::verification::Verifications::new(server.pool.clone())
+            .record(
+                &task.id,
+                ctx.run_id.unwrap_or_default(),
+                &result.round_id,
+                &task.acceptance_json,
+                &json,
+                &files,
+            )
+            .await
+            .map_err(|error| format!("Acceptance evidence could not be committed: {error}"))?;
         let detail = if joyczl_agent::verify::all_passed(&checks) {
             Some("All acceptance checks passed".to_string())
         } else {
@@ -1652,7 +1875,21 @@ pub(crate) async fn account_round(
 /// Reaching the cap counts as over it: the next round would spend more, and the whole point of
 /// a cap is to stop **before** the money is gone, not after.
 pub(crate) fn budget_overrun(task: &TaskRow) -> Option<String> {
-    let budget: joyczl_protocol::BudgetView = serde_json::from_str(&task.budget_json).ok()?;
+    let budget: joyczl_protocol::BudgetView = match serde_json::from_str(&task.budget_json) {
+        Ok(budget) => budget,
+        Err(error) => return Some(format!("Invalid task budget: {error}")),
+    };
+    for (name, value) in [
+        ("wallMs", budget.wall_ms),
+        ("tokens", budget.tokens),
+        ("tools", budget.tools),
+    ] {
+        if value.is_some_and(|value| value <= 0) {
+            return Some(format!(
+                "Invalid task budget {name}: the cap must be greater than zero"
+            ));
+        }
+    }
     let mut over = Vec::new();
     if let Some(cap) = budget.wall_ms.filter(|cap| *cap > 0) {
         if task.spent_wall_ms >= cap as i64 {
@@ -1844,6 +2081,8 @@ pub(crate) async fn full_turn(
         ..
     } = frame;
     let settings = server.settings();
+    let chat_operations = crate::turn_operations::context(server, session_id).await?;
+    let task_handoff = crate::task_handoff::load(server, turn_id, session_id).await?;
 
     // The vector leg is assembled once per turn and shared: the gate's retrieval and
     // `search_memory` must see the same embedder, or the two disagree about what "similar"
@@ -1981,6 +2220,13 @@ pub(crate) async fn full_turn(
         format!("{}\n\n{}", skill_hits.hints.join("\n"), skill_hits.message)
     };
 
+    let memory_context = format!(
+        "{}{}{}",
+        memory_context,
+        crate::task_dispatch::projection(server, session_id).await,
+        task_handoff
+    );
+
     // ---- Working memory: sliding window + rolling summary + token budget.
     //
     // The turn count is the **ceiling**, tokens are the gate: one long tool output can blow past the
@@ -1997,6 +2243,24 @@ pub(crate) async fn full_turn(
     let mut turn_tools = server
         .tools
         .session_view_with(server.activation_set(session_id));
+    // Declarative tools are read **here, every turn**. That is the whole feature: `define_tool`
+    // writes a JSON definition and the next turn can call it — no restart, no rebuild, no code.
+    // The table stays honest in both directions: with exec off there is nothing to read (a
+    // definition can only ever run a command), and a definition may never displace a built-in
+    // (`register` refuses the name and says so).
+    if settings.exec_enabled {
+        joyczl_tools::declarative::attach(
+            &mut turn_tools,
+            &settings.home,
+            crate::exec_policy(&settings, server.exec_session_allow.clone()),
+        );
+    }
+    if chat_operations.unresolved {
+        crate::turn_operations::restrict(&mut turn_tools);
+        eprintln!(
+            "(joy) earlier chat operations need review; this loop permits only proven read tools"
+        );
+    }
     if settings.tool_policy == "deferred" {
         turn_tools.defer_all_but_always();
     }
@@ -2063,9 +2327,15 @@ pub(crate) async fn full_turn(
     };
     // The catalog a new session carries (index layer). Read once per turn — it is a small
     // regenerated file, and the cost of a stat + read is far below a single prompt token.
-    let memory_index = joyczl_memory::bundle::Bundle::new(&settings.home)
-        .index_text()
-        .unwrap_or_default();
+    let memory_index = joyczl_memory::mirror::recall_catalog(
+        &server.facts,
+        &joyczl_memory::bundle::Bundle::new(&settings.home),
+    )
+    .await
+    .unwrap_or_else(|error| {
+        eprintln!("(joy) memory catalog unavailable: {error}");
+        String::new()
+    });
 
     // The repository's own conventions, read from the folder the human picked. No folder ⇒
     // nothing to read (and no guessing at the process cwd, which is wherever the server
@@ -2084,6 +2354,8 @@ pub(crate) async fn full_turn(
         instructions: instructions.as_deref(),
         capabilities: capability_note(&settings).as_deref(),
     });
+
+    prompt.tail.push_str(&chat_operations.prompt);
 
     // ---- The meter: what this turn's prompt actually costs, section by section.
     //
@@ -2145,7 +2417,7 @@ pub(crate) async fn full_turn(
     let mut ctx = server.tool_ctx(session_id, turn_cwd, server.approval_bridge(turn_id, sink));
     ctx.task_run_id = server
         .runs
-        .get(turn_id)
+        .for_turn(turn_id)
         .await
         .map_err(|e| ErrorObject {
             code: codes::INTERNAL_ERROR,
@@ -2325,7 +2597,7 @@ async fn graph_route(
 
     // Task execution always uses the durable full loop; quick chat does not create a
     // working-memory checkpoint or load task context.
-    match server.runs.get(turn_id).await {
+    match server.runs.for_turn(turn_id).await {
         Ok(Some(_)) => return Ok(None),
         Ok(None) => {}
         Err(e) => {
@@ -2399,7 +2671,21 @@ async fn graph_route(
                     }
                     Err(e) => eprintln!("(joy) quick reply history unavailable: {e}"),
                 }
+                match crate::quick_context::personal(&server.facts).await {
+                    Ok(Some(context)) => history.insert(0, Message::user_text(context)),
+                    Ok(None) => {}
+                    Err(error) => eprintln!("(joy) quick personal context unavailable: {error}"),
+                }
                 history.push(Message::user_text(prompt));
+                let operation_context = crate::turn_operations::context(&server, &session_id)
+                    .await
+                    .map_err(|error| error.message)?;
+                let soul = format!(
+                    "{}{}{}",
+                    soul,
+                    crate::task_dispatch::projection(&server, &session_id).await,
+                    operation_context.prompt,
+                );
                 let response = client
                     .create(CreateRequest {
                         cache_prefix: None,
@@ -2699,10 +2985,20 @@ pub(crate) fn capability_note(settings: &joyczl_config::Settings) -> Option<Stri
     if missing.is_empty() {
         return None;
     }
-    Some(format!(
+    let mut note = format!(
 "What this machine cannot do right now:\n{}\nIf a request needs one of these, say so in one sentence and stop — do not approximate it with the tools you do have, and do not go reading source code to find a workaround.",
         missing.join("\n")
-    ))
+    );
+    // The note used to read as if "no shell" meant "cannot look around", and the model said so
+    // out loud: "I have no way to search the repository". Both searches are built in, so it is
+    // worth one sentence to keep the two apart.
+    if !settings.exec_enabled {
+        note.push_str(
+            "\nSearching is not on that list: `glob` finds files by name and `grep` finds lines \
+             by content, and neither needs a shell.",
+        );
+    }
+    Some(note)
 }
 
 pub(crate) fn build_system(parts_in: PromptParts<'_>) -> SystemPrompt {
@@ -3021,7 +3317,7 @@ pub(crate) fn fold_tool_activity(reply: &str, calls: &[joyczl_loop::ToolOutcome]
     format!("{reply}\n[tools used: {summary}]")
 }
 
-/// One call, one line: `name(1.2k 字, 全量在 spill/20261112/exec-….txt: 第一行…)`.
+/// One call, one line: `name(1.2k chars, full output at spill/20261112/exec-….txt: first line…)`.
 fn fold_one(call: &joyczl_loop::ToolOutcome) -> String {
     let chars = call.output.chars().count();
     let first = call.output.lines().next().unwrap_or("").trim();
@@ -3039,8 +3335,10 @@ fn fold_one(call: &joyczl_loop::ToolOutcome) -> String {
 ///
 /// Parsed back out of the text instead of threaded through the loop: the text the model read
 /// is exactly the text folded here, so there is one source of truth and no second field to
-/// keep in sync (`joyczl_tools::spill` writes "...完整输出在 <path>）").
+/// keep in sync (`joyczl_tools::spill` writes "... full output at <path>)").
 fn spill_address(output: &str) -> Option<&str> {
+    /// The Chinese markers are still here on purpose: ledgers written before the wording was
+    /// translated contain them, and a resume re-reads those rows.
     const MARKERS: &[&str] = &["完整输出在 ", "全量输出在 ", "full output at "];
     for marker in MARKERS {
         let Some(start) = output.rfind(marker) else {

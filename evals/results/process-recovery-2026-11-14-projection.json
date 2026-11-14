@@ -1,0 +1,78 @@
+{
+  "provider": "local-scripted-fixture",
+  "results": [
+    {
+      "case": "normal",
+      "status": "done",
+      "toolRequests": 1,
+      "effects": 1,
+      "rounds": 1,
+      "tokens": 30,
+      "checks": [
+        {
+          "detail": "fault_commit succeeded 1 times (needs 1)",
+          "label": "fault_commit succeeds at least 1 times",
+          "passed": true
+        }
+      ],
+      "memoryRecovery": null
+    },
+    {
+      "case": "before_request",
+      "status": "needs_attention",
+      "toolRequests": 0,
+      "effects": 0,
+      "rounds": 1,
+      "tokens": 15,
+      "checks": [],
+      "memoryRecovery": null
+    },
+    {
+      "case": "after_effect",
+      "status": "needs_attention",
+      "toolRequests": 1,
+      "effects": 1,
+      "rounds": 1,
+      "tokens": 15,
+      "checks": [],
+      "memoryRecovery": null
+    },
+    {
+      "case": "after_checkpoint",
+      "status": "done",
+      "toolRequests": 1,
+      "effects": 1,
+      "rounds": 1,
+      "tokens": 30,
+      "checks": [
+        {
+          "detail": "fault_commit succeeded 1 times (needs 1)",
+          "label": "fault_commit succeeds at least 1 times",
+          "passed": true
+        }
+      ],
+      "memoryRecovery": null
+    },
+    {
+      "case": "memory_claim",
+      "status": "done",
+      "toolRequests": 1,
+      "effects": 1,
+      "rounds": 1,
+      "tokens": 30,
+      "checks": [
+        {
+          "detail": "fault_commit succeeded 1 times (needs 1)",
+          "label": "fault_commit succeeds at least 1 times",
+          "passed": true
+        }
+      ],
+      "memoryRecovery": {
+        "pendingRows": 2,
+        "completedRows": 0,
+        "summaries": 0,
+        "sourceBatchPreserved": true
+      }
+    }
+  ]
+}

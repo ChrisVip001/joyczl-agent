@@ -8,6 +8,7 @@
 // Interactive pieces (approval cards) do NOT live here — they stay inline in the
 // message where a decision can't be buried inside a collapsed list.
 
+import { t } from "./i18n";
 import { el, formatMs } from "./render";
 
 /** One step on the thread. */
@@ -39,9 +40,9 @@ export interface Timeline {
   settle(): void;
 }
 
-/** The head line shows "N 步 · latest label" — the only thing visible while collapsed. */
+/** The head line shows "N steps · latest label" — the only thing visible while collapsed. */
 function headText(steps: number, latest: string): string {
-  return steps <= 1 ? latest : `${steps} 步活动 · ${latest}`;
+  return steps <= 1 ? latest : t("{steps} 步活动 · {latest}", { steps, latest });
 }
 
 export function createTimeline(): Timeline {

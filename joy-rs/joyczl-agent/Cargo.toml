@@ -3,7 +3,7 @@ name = "joyczl-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Joy 的确定性内核：验收事实、工具观察、执行计划。不碰协议、不碰网络。"
+description = "Joy's deterministic core: acceptance facts, tool observations, execution plans. No protocol, no network."
 
 [lib]
 name = "joyczl_agent"

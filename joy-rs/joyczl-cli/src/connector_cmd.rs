@@ -6,7 +6,7 @@
 //! the obvious reason: the person typing the command **is** the approval.
 //!
 //!   joy connector list
-//!   joy connector email --to a@b.c --subject 主题 --body 正文 [--dry-run]
+//!   joy connector email --to a@b.c --subject subject --body body [--dry-run]
 
 use std::path::Path;
 

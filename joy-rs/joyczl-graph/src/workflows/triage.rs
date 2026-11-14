@@ -29,8 +29,9 @@ use crate::nodes::fn_node;
 use crate::workflow_def::{builtin_routes, WorkflowDef};
 use crate::{writes, Boxed, Graph, NodeCtx, NodeFn, NodeWrites, State};
 
-/// 拓扑的唯一定义，编译期内嵌（`definitions/triage.json`）。工作流是代码的一部分，
-/// 随二进制发布——改动走 review，不走运行时加载。
+/// The one definition of the topology, embedded at compile time (`definitions/triage.json`).
+/// A workflow is part of the code and ships with the binary — changes go through review,
+/// not through runtime loading.
 const TRIAGE_DEF: &str = include_str!("definitions/triage.json");
 
 pub const TRIAGE_PROMPT: &str = r#"You are a triage gate for a personal assistant. Given the user's message,
@@ -41,13 +42,16 @@ Reply with ONLY this JSON, nothing else:
 
 quick — greetings, thanks, acknowledgements, pure small talk: nothing to do,
         nothing to look up.
-full  — anything mentioning tasks, schedules, people, notes, memory, or that
-        needs a tool. When unsure, choose full.
+full  — emotional distress, relationship concerns, sensitive personal support,
+        or anything mentioning tasks, schedules, people, notes, memory, or that
+        needs a tool. Support quality matters more than choosing a cheap reply.
+        When unsure, choose full.
 
 User message: {message}"#;
 
 pub const QUICK_REPLY_PROMPT: &str = r#"You are Joy, a warm, concise personal assistant. The user's message needs no
-tools or memory — reply in one or two short, natural sentences. If today's
+tools — reply in one or two short, natural sentences, using provided recent
+conversation and saved personal context only when relevant. If today's
 calendar (below) is clearly relevant, you may mention it; otherwise ignore it.
 
 Today's calendar: {calendar}
@@ -151,8 +155,9 @@ pub fn build_triage_graph(
     quick_fn: QuickFn,
     full_fn: FullFn,
 ) -> Result<Graph, String> {
-    // 拓扑在 definitions/triage.json 里（编译期内嵌，启动即校验）；这里只按节点名
-    // 注入行为 —— 与引擎的约定一致：JSON 声明形状，代码提供动作。
+    // The topology lives in definitions/triage.json (embedded at compile time, validated at
+    // startup); this file only attaches behaviour by node name — the engine's contract: JSON
+    // declares the shape, code provides the action.
     let mut bindings: BTreeMap<String, NodeFn> = BTreeMap::new();
 
     let classify = classify_fn.clone();

@@ -66,22 +66,22 @@ mod routes_tests {
 
     #[test]
     fn missing_or_broken_file_means_fixed_mode() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let routes = load_routes(dir.path());
-        assert_eq!(routes.mode, RouteMode::Fixed, "没文件 = fixed");
+        assert_eq!(routes.mode, RouteMode::Fixed, "no file = fixed");
         assert!(routes.routes.is_empty());
 
-        std::fs::write(routes_path(dir.path()), "{ 不是 json").unwrap();
+        std::fs::write(routes_path(dir.path()), "{ not json").unwrap();
         assert_eq!(
             load_routes(dir.path()).mode,
             RouteMode::Fixed,
-            "坏文件也 = fixed"
+            "a broken file = fixed too"
         );
     }
 
     #[test]
     fn the_file_round_trips_with_tiers() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let mut routes = RouteFile {
             mode: RouteMode::Auto,
             routes: HashMap::new(),
@@ -89,7 +89,7 @@ mod routes_tests {
         routes
             .routes
             .insert("reasoning".to_string(), "ds-r1".to_string());
-        save_routes(dir.path(), &routes).expect("写");
+        save_routes(dir.path(), &routes).expect("write");
 
         let back = load_routes(dir.path());
         assert_eq!(back.mode, RouteMode::Auto);

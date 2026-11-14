@@ -158,7 +158,7 @@ pub fn observe(
                 .map(|(_, content)| content.as_str())
                 .unwrap_or("Error: no result: the turn ended before the tool returned");
             // Same rule the loop uses to report success: output starting with "Error:" failed.
-            let ok = !output.starts_with("Error:");
+            let ok = !output.starts_with("Error:") && !output.starts_with("Human reconciliation:");
 
             let step = StepDraft {
                 seq,

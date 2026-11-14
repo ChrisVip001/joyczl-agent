@@ -15,13 +15,14 @@ use crate::{run, LoopEvent, Turn};
 
 /// A real state.db + the default tool set.
 async fn ctx() -> joyczl_tools::ToolCtx {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the directory must not be deleted here
     joyczl_tools::ToolCtx {
         on_uncertain: None,
+        resource_lease: None,
         task_run_id: None,
         activate: None,
         embedder: None,
@@ -51,9 +52,9 @@ async fn turn<'a>(
         user_images: Vec::new(),
         client,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "记住 alex 喜欢早会".to_string(),
+        user_message: "remember that alex likes morning meetings".to_string(),
         tools,
         ctx,
         max_iterations: 5,
@@ -68,27 +69,33 @@ async fn turn<'a>(
         resume: None,
     })
     .await
-    .expect("loop 跑完")
+    .expect("the loop should finish")
 }
 
-/// 0.16：运行中补的那一句，进的是**下一次**模型调用，已经跑完的工具不重跑。
+/// 0.16: the sentence added mid-run goes into the **next** model call, and tools that already
+/// ran are not run again.
 ///
-/// 这就是 steering 与 "取消重来" 的分界线：不是重放这一轮，而是往工作记忆末尾接一句话。
+/// That is the line between steering and "cancel and start over": it does not replay the
+/// turn, it appends one sentence to the end of working memory.
 #[tokio::test]
 async fn words_added_mid_turn_join_the_next_model_call_and_do_not_rerun_tools() {
     let steering = crate::Steering::new();
     let mock = Mock::new(vec![
         Mock::tool_use("call-1", "list_dir", json!({ "path": "." })),
-        Mock::text("看完了。"),
+        Mock::text("read it all."),
     ]);
     let tools = handlers::build_default();
 
-    // 从 observer 里推：正是 turn/steer 的真实时序 —— 第一次模型调用之后被接受、第二次看得见。
+    // Read off the observer: the real ordering of turn/steer — accepted after the first model
+    // call, visible to the second.
     let observer: Option<crate::Observer> = {
         let steering = steering.clone();
         Some(Arc::new(move |event: LoopEvent| {
             if let LoopEvent::Llm { iteration: 1, .. } = event {
-                steering.lock().expect("锁").push("顺便看下 README");
+                steering
+                    .lock()
+                    .expect("lock")
+                    .push("have a look at the README too");
             }
         }))
     };
@@ -97,9 +104,9 @@ async fn words_added_mid_turn_join_the_next_model_call_and_do_not_rerun_tools() 
         system_prefix: None,
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "看看目录".to_string(),
+        user_message: "have a look at the directory".to_string(),
         user_images: vec![],
         tools: &tools,
         ctx: ctx().await,
@@ -115,34 +122,42 @@ async fn words_added_mid_turn_join_the_next_model_call_and_do_not_rerun_tools() 
         resume: None,
     })
     .await
-    .expect("loop 跑完");
+    .expect("the loop finishes");
 
-    assert_eq!(result.tool_calls.len(), 1, "工具只该跑一次");
-    let received = mock.received.lock().expect("锁");
-    assert_eq!(received.len(), 2, "两句话 = 两次模型调用");
-    let last = received[1].messages.last().expect("第二次调用非空");
+    assert_eq!(
+        result.tool_calls.len(),
+        1,
+        "the tool should run exactly once"
+    );
+    let received = mock.received.lock().expect("lock");
+    assert_eq!(received.len(), 2, "two sentences = two model calls");
+    let last = received[1]
+        .messages
+        .last()
+        .expect("the second call is not empty");
     assert!(matches!(last.role, Role::User));
     assert!(
         last.content
             .iter()
-            .any(|block| matches!(block, ContentBlock::Text { text } if text == "顺便看下 README")),
+            .any(|block| matches!(block, ContentBlock::Text { text } if text == "have a look at the README too")),
         "{:?}",
         last.content
     );
-    // 全部记录都留着 —— 转录要能看见那句补充（哪怕它是在收尾前一刻被接受的）。
+    // Every record stays: the transcript has to show the addition, even if it was accepted a
+    // moment before the ending.
     assert_eq!(
-        steering.lock().expect("锁").all(),
-        vec!["顺便看下 README".to_string()]
+        steering.lock().expect("lock").all(),
+        vec!["have a look at the README too".to_string()]
     );
 }
 
 #[tokio::test]
 async fn no_tool_call_ends_the_turn_immediately() {
-    let mock = Mock::new(vec![Mock::text("好，我记住了。")]);
+    let mock = Mock::new(vec![Mock::text("fine, noted.")]);
     let tools = handlers::build_default();
     let result = turn(&mock, &tools, ctx().await, None).await;
 
-    assert_eq!(result.reply, "好，我记住了。");
+    assert_eq!(result.reply, "fine, noted.");
     assert_eq!(result.iterations, 1);
     assert!(result.tool_calls.is_empty());
     assert_eq!(result.usage.input_tokens, 10);
@@ -151,8 +166,8 @@ async fn no_tool_call_ends_the_turn_immediately() {
     assert!(sent
         .messages
         .iter()
-        .any(|m| m.text().contains("alex 喜欢早会")));
-    assert_eq!(sent.system.as_deref(), Some("你是 Joy"));
+        .any(|m| m.text().contains("alex likes morning meetings")));
+    assert_eq!(sent.system.as_deref(), Some("You are Joy"));
 }
 
 #[tokio::test]
@@ -161,20 +176,20 @@ async fn tool_call_round_trip_feeds_result_back() {
         Mock::tool_use(
             "tu_1",
             "save_note",
-            json!({"subject": "alex", "content": "喜欢早会"}),
+            json!({"subject": "alex", "content": "likes morning meetings"}),
         ),
-        Mock::text("已经记下了。"),
+        Mock::text("already noted."),
     ]);
     let tools = handlers::build_default();
     let ctx = ctx().await;
     let result = turn(&mock, &tools, ctx.clone(), None).await;
 
     assert_eq!(result.iterations, 2);
-    assert_eq!(result.reply, "已经记下了。");
+    assert_eq!(result.reply, "already noted.");
     assert_eq!(result.tool_calls.len(), 1);
     assert!(
         result.tool_calls[0].ok(),
-        "save_note 不该失败：{}",
+        "save_note must not fail: {}",
         result.tool_calls[0].output
     );
 
@@ -185,23 +200,35 @@ async fn tool_call_round_trip_feeds_result_back() {
             .iter()
             .any(|b| matches!(b, joyczl_provider::ContentBlock::ToolResult { .. }))
     });
-    assert!(has_tool_result, "第二轮的 messages 里应当有 tool_result");
+    assert!(
+        has_tool_result,
+        "the second round's messages should carry a tool_result"
+    );
     // And the fact really was written to the store.
-    assert_eq!(ctx.facts.search("早会", 4).await.unwrap().len(), 1);
+    assert_eq!(
+        ctx.facts.search("morning meeting", 4).await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]
 async fn tool_error_becomes_text_and_the_loop_continues() {
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "save_note", json!({"subject": 42})), // type error → the tool returns an "Error:" text
-        Mock::text("参数好像不对，你能再说一遍吗？"),
+        Mock::text("the arguments look wrong, could you say that again?"),
     ]);
     let tools = handlers::build_default();
     let result = turn(&mock, &tools, ctx().await, None).await;
 
     assert!(!result.tool_calls[0].ok());
-    assert_eq!(result.iterations, 2, "出错后 loop 应当继续，而不是崩掉");
-    assert_eq!(result.reply, "参数好像不对，你能再说一遍吗？");
+    assert_eq!(
+        result.iterations, 2,
+        "after an error the loop should carry on, not fall over"
+    );
+    assert_eq!(
+        result.reply,
+        "the arguments look wrong, could you say that again?"
+    );
     // The error text went back to the model as a tool_result.
     let second = mock.received.lock().unwrap()[1].clone();
     let text = second
@@ -220,7 +247,7 @@ async fn tool_error_becomes_text_and_the_loop_continues() {
 async fn unknown_tool_name_is_surfaced_not_fatal() {
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "hack_the_planet", json!({})),
-        Mock::text("我没有那个工具。"),
+        Mock::text("I do not have that tool."),
     ]);
     let tools = handlers::build_default();
     let result = turn(&mock, &tools, ctx().await, None).await;
@@ -232,14 +259,16 @@ async fn unknown_tool_name_is_surfaced_not_fatal() {
 
 #[tokio::test]
 async fn the_last_iteration_is_a_wrap_up_not_a_cliff() {
-    // 预算用尽时不再硬停：最后一次调用把工具收起，让模型用三句话收尾。
+    // Running out of budget no longer stops hard: the last call puts the tools away and lets the
+    // model close in three sentences.
     //
-    // 这条规则来自一次真实的浪费：10 步、21 万输入 token 之后，用户只拿到
-    // 「我还没做完就到了迭代上限——试试把请求拆小一点」。Claude Code 的循环根本没有
-    // 交互式上限（模型不调工具就结束），所以我们也把「上限」从失败改成收尾。
+    // That rule comes from a real waste: after 10 steps and 210k input tokens the user got
+    // "I hit the iteration limit before finishing — try splitting the request into smaller
+    // pieces". Claude Code's loop has no interactive limit at all (the model stops by not calling
+    // a tool), so the "limit" here changed from a failure into a closing.
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "current_time", json!({})),
-        Mock::text("读到了时间；没做完的是清理；需要你确认删哪些。"),
+        Mock::text("the time was read; what is unfinished is the cleanup; I need you to confirm what to delete."),
     ]);
     let tools = handlers::build_default();
     let ctx = ctx().await;
@@ -249,9 +278,9 @@ async fn the_last_iteration_is_a_wrap_up_not_a_cliff() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "现在几点".to_string(),
+        user_message: "what time is it".to_string(),
         tools: &tools,
         ctx,
         max_iterations: 2,
@@ -266,36 +295,38 @@ async fn the_last_iteration_is_a_wrap_up_not_a_cliff() {
         resume: None,
     })
     .await
-    .expect("收尾轮不该报错");
+    .expect("the closing round should not error");
 
     assert_eq!(result.iterations, 2);
     assert_eq!(
-        result.reply, "读到了时间；没做完的是清理；需要你确认删哪些。",
-        "收尾轮的话要原样交给用户，而不是被换成一句模板"
+        result.reply, "the time was read; what is unfinished is the cleanup; I need you to confirm what to delete.",
+        "the wrapping-up round's words go to the user as they are, not swapped for a template"
     );
 
-    // 最后一次请求必须**没有工具**，并且带上收尾指令（否则模型会继续调工具）。
-    let requests = mock.received.lock().expect("锁");
-    let last = requests.last().expect("至少要请求一次");
+    // The last request must have **no tools** and carry the closing instruction (otherwise the
+    // model keeps calling tools).
+    let requests = mock.received.lock().expect("lock");
+    let last = requests.last().expect("at least one request has to go out");
     assert!(
         last.tools.is_empty(),
-        "收尾轮不该再给工具：{} 个",
+        "the wrapping-up round must get no more tools: {} of them",
         last.tools.len()
     );
-    let tail = serde_json::to_string(&last.messages).expect("序列化");
+    let tail = serde_json::to_string(&last.messages).expect("serialise");
     assert!(
         tail.contains("Budget note"),
-        "收尾指令要进上下文：{tail:.200}"
+        "the wrapping-up instruction has to reach the context: {tail:.200}"
     );
 }
 
 #[tokio::test]
 async fn the_token_budget_also_turns_the_next_round_into_a_wrap_up() {
-    // 步数上限管「跑几轮」，token 预算管「跑多贵」。到了预算就走同一条收尾路径 ——
-    // 并且要说清是钱包到了，不是活儿干完了。
+    // The step limit governs how many rounds, the token budget how expensive. Reaching the budget
+    // takes the same closing path —
+    // and it has to say the wallet ran out, not that the work is done.
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "current_time", json!({})),
-        Mock::text("预算到了，我先收尾：时间读到了，剩下的清理没做。"),
+        Mock::text("the budget is up, so I am wrapping up: the time was read, the rest of the cleanup is not done."),
     ]);
     let tools = handlers::build_default();
     let ctx = ctx().await;
@@ -305,12 +336,12 @@ async fn the_token_budget_also_turns_the_next_round_into_a_wrap_up() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "现在几点".to_string(),
+        user_message: "what time is it".to_string(),
         tools: &tools,
         ctx,
-        // 步数还够（10 轮），钱包只够一轮半。
+        // Steps to spare (10 rounds), but the wallet covers one and a half.
         max_iterations: 10,
         max_tokens: 1024,
         token_budget: Some(20),
@@ -323,29 +354,33 @@ async fn the_token_budget_also_turns_the_next_round_into_a_wrap_up() {
         resume: None,
     })
     .await
-    .expect("预算收尾不该报错");
+    .expect("the budget closing should not error");
 
-    assert_eq!(result.iterations, 2, "第一轮照常，第二轮直接收尾");
-    let requests = mock.received.lock().expect("锁");
+    assert_eq!(
+        result.iterations, 2,
+        "the first round as usual, the second goes straight to closing"
+    );
+    let requests = mock.received.lock().expect("lock");
     assert_eq!(requests.len(), 2);
     assert!(
         requests[1].tools.is_empty(),
-        "预算收尾那一轮不该再给工具：{} 个",
+        "the budget wrapping-up round must get no more tools: {} of them",
         requests[1].tools.len()
     );
-    let tail = serde_json::to_string(&requests[1].messages).expect("序列化");
+    let tail = serde_json::to_string(&requests[1].messages).expect("serialise");
     assert!(
         tail.contains("token budget is spent"),
-        "要明说是预算停的：{tail:.200}"
+        "it has to say plainly that the budget stopped it: {tail:.200}"
     );
 }
 
 #[tokio::test]
 async fn without_a_token_budget_the_loop_keeps_its_tools() {
-    // 默认关掉：不设预算时第二轮仍然带着工具（否则「默认不变」这句话就不成立）。
+    // Off by default: with no budget the second round still carries tools (otherwise "unchanged by
+    // default" would not be true).
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "current_time", json!({})),
-        Mock::text("好了"),
+        Mock::text("done"),
     ]);
     let tools = handlers::build_default();
     let ctx = ctx().await;
@@ -355,9 +390,9 @@ async fn without_a_token_budget_the_loop_keeps_its_tools() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "现在几点".to_string(),
+        user_message: "what time is it".to_string(),
         tools: &tools,
         ctx,
         max_iterations: 10,
@@ -372,12 +407,18 @@ async fn without_a_token_budget_the_loop_keeps_its_tools() {
         resume: None,
     })
     .await
-    .expect("两轮就该结束");
+    .expect("two rounds and it should be over");
 
-    let requests = mock.received.lock().expect("锁");
-    assert!(!requests[1].tools.is_empty(), "没有预算时第二轮照常带工具");
-    let tail = serde_json::to_string(&requests[1].messages).expect("序列化");
-    assert!(!tail.contains("Budget note"), "没预算就不该有收尾指令");
+    let requests = mock.received.lock().expect("lock");
+    assert!(
+        !requests[1].tools.is_empty(),
+        "with no budget the second round carries tools as usual"
+    );
+    let tail = serde_json::to_string(&requests[1].messages).expect("serialise");
+    assert!(
+        !tail.contains("Budget note"),
+        "no budget means no closing instruction"
+    );
 }
 
 #[tokio::test]
@@ -389,7 +430,7 @@ async fn observer_sees_llm_and_tool_events_in_order() {
 
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "save_note", json!({"subject": "a", "content": "b"})),
-        Mock::text("记好了"),
+        Mock::text("noted"),
     ]);
     let tools = handlers::build_default();
     let observer = move |event: LoopEvent| {
@@ -434,7 +475,7 @@ async fn observer_sees_llm_and_tool_events_in_order() {
 #[tokio::test]
 async fn streaming_emits_text_deltas_in_order() {
     // The mock splits into two-char chunks — they must arrive in order, and the final reply must be complete.
-    let mock = Mock::streaming(vec![Mock::text("好的，我记住了。")]);
+    let mock = Mock::streaming(vec![Mock::text("all right, noted.")]);
     let tools = handlers::build_default();
 
     let deltas: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -455,7 +496,7 @@ async fn streaming_emits_text_deltas_in_order() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
         user_message: "hi".to_string(),
         tools: &tools,
@@ -472,17 +513,20 @@ async fn streaming_emits_text_deltas_in_order() {
         resume: None,
     })
     .await
-    .expect("loop 跑完");
+    .expect("the loop finishes");
 
     assert!(
         mock.streamed.lock().unwrap().iter().all(|x| *x),
-        "应当真的走了流式"
+        "it really did go through streaming"
     );
     let collected = deltas.lock().unwrap().join("");
-    assert_eq!(collected, "好的，我记住了。", "增量拼起来应当是完整文本");
+    assert_eq!(
+        collected, "all right, noted.",
+        "the joined deltas should be the whole text"
+    );
     assert!(
         deltas.lock().unwrap().len() > 1,
-        "应当有多个增量，而不是一整段"
+        "there should be several deltas, not one whole paragraph"
     );
 
     // The observer also received the same Text events.
@@ -496,8 +540,11 @@ async fn streaming_emits_text_deltas_in_order() {
         })
         .collect::<Vec<_>>()
         .join("");
-    assert_eq!(text_events, "好的，我记住了。");
-    assert_eq!(result.reply, "好的，我记住了。", "最终应答应当还是完整的");
+    assert_eq!(text_events, "all right, noted.");
+    assert_eq!(
+        result.reply, "all right, noted.",
+        "the final reply should still be whole"
+    );
 }
 
 #[tokio::test]
@@ -505,7 +552,7 @@ async fn streaming_works_across_tool_rounds() {
     // First round streaming + tool call, second round plain text — the two paths must not interfere.
     let mock = Mock::streaming(vec![
         Mock::tool_use("tu_1", "save_note", json!({"subject": "a", "content": "b"})),
-        Mock::text("记好了。"),
+        Mock::text("noted."),
     ]);
     let tools = handlers::build_default();
 
@@ -521,7 +568,7 @@ async fn streaming_works_across_tool_rounds() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
         user_message: "hi".to_string(),
         tools: &tools,
@@ -538,13 +585,13 @@ async fn streaming_works_across_tool_rounds() {
         resume: None,
     })
     .await
-    .expect("loop 跑完");
+    .expect("the loop finishes");
 
     assert_eq!(result.iterations, 2);
     assert_eq!(
         deltas.lock().unwrap().join(""),
-        "记好了。",
-        "工具那一轮没有文本，不该产生增量"
+        "noted.",
+        "the tool round has no text, so no delta should be produced"
     );
     assert!(result.tool_calls[0].ok());
 }
@@ -553,7 +600,9 @@ async fn streaming_works_across_tool_rounds() {
 /// and the reply honestly says this turn was interrupted.
 #[tokio::test]
 async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
-    let mock = Mock::new(vec![Mock::text("这句话永远轮不到被说出。")]);
+    let mock = Mock::new(vec![Mock::text(
+        "this sentence never gets its turn to be said.",
+    )]);
     let tools = handlers::build_default();
 
     let interrupt = crate::Interrupt::new();
@@ -564,7 +613,7 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
         user_message: "hi".to_string(),
         tools: &tools,
@@ -581,14 +630,14 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
         resume: None,
     })
     .await
-    .expect("打断不该是错误");
+    .expect("an interrupt is not an error");
 
     assert!(result.interrupted);
-    assert_eq!(result.iterations, 0, "一次模型调用都不该发生");
-    assert_eq!(result.reply, "（这轮被打断了。）");
+    assert_eq!(result.iterations, 0, "not one model call should happen");
+    assert_eq!(result.reply, "(this turn was interrupted.)");
     assert!(
         mock.received.lock().unwrap().is_empty(),
-        "取消令牌拨下了还去调模型，就是没听话"
+        "calling the model after the cancel token was flipped means it did not listen"
     );
 }
 
@@ -598,7 +647,7 @@ async fn a_cancelled_interrupt_stops_the_loop_before_any_model_call() {
 async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "save_note", json!({"subject": "a", "content": "b"})),
-        Mock::text("这句话不该出现。"),
+        Mock::text("this sentence should not appear."),
     ]);
     let tools = handlers::build_default();
     let ctx = ctx().await;
@@ -621,7 +670,7 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
         user_message: "hi".to_string(),
         tools: &tools,
@@ -638,13 +687,17 @@ async fn an_interrupt_between_tool_rounds_keeps_what_already_happened() {
         resume: None,
     })
     .await
-    .expect("打断不该是错误");
+    .expect("an interrupt is not an error");
 
     assert!(first_tool_fired.load(std::sync::atomic::Ordering::SeqCst));
     assert!(result.interrupted);
-    assert_eq!(result.tool_calls.len(), 1, "第一轮工具确实做完了");
-    assert_eq!(result.iterations, 1, "第二轮模型调用没有发生");
-    assert_eq!(result.reply, "（这轮被打断了。）");
+    assert_eq!(
+        result.tool_calls.len(),
+        1,
+        "the first round's tool really did run"
+    );
+    assert_eq!(result.iterations, 1, "the second model call never happened");
+    assert_eq!(result.reply, "(this turn was interrupted.)");
 }
 
 /// The loop guardrail wired into the loop: when the same call repeats to the 3rd time, the
@@ -654,19 +707,25 @@ async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
     // Use `search_memory` instead of `save_note`: the latter dedupes now, so the first reply
     // ("remembered #1") differs from later ones ("already noted"), never forming "3 identical".
     // The guardrail wants the **same call, same result**, so pick a read-only tool with stable output.
-    let args = json!({"query": "查不到的东西"});
+    let args = json!({"query": "something that cannot be found"});
     let mock = Mock::new(vec![
         Mock::tool_use("tu_1", "search_memory", args.clone()),
         Mock::tool_use("tu_2", "search_memory", args.clone()),
         Mock::tool_use("tu_3", "search_memory", args.clone()),
-        Mock::text("好了。"),
+        Mock::text("done."),
     ]);
     let tools = handlers::build_default();
 
     let result = turn(&mock, &tools, ctx().await, None).await;
 
-    assert!(result.guard.hits >= 1, "第 3 次相同调用必须触发护栏");
-    assert!(result.guard.note.is_some(), "命中的说明要留下来");
+    assert!(
+        result.guard.hits >= 1,
+        "the third identical call must trip the guard"
+    );
+    assert!(
+        result.guard.note.is_some(),
+        "the note about the trip has to be kept"
+    );
 
     // The ToolResult fed back to the model carries the reminder...
     let warned = result.messages.iter().any(|message| {
@@ -675,7 +734,7 @@ async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
                      if content.contains("[guard]"))
         })
     });
-    assert!(warned, "提醒必须进到模型看得见的地方");
+    assert!(warned, "the warning has to land where the model can see it");
 
     // ...while the recorded tool output is still clean.
     assert!(
@@ -683,11 +742,11 @@ async fn the_stall_guard_warns_the_model_but_keeps_real_tool_output() {
             .tool_calls
             .iter()
             .all(|call| !call.output.contains("[guard]")),
-        "tool_calls 里该是真结果"
+        "tool_calls should hold the real result"
     );
     assert!(
         result.tool_calls.iter().all(|call| call.ok()),
-        "这三次调用本身都是成功的"
+        "all three calls were themselves successful"
     );
 }
 
@@ -698,12 +757,13 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
     use joyczl_tools::{BoxFut, Tool, ToolRegistry};
     use serde_json::Value;
 
-    let home = tempfile::tempdir().expect("临时目录");
+    let home = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&home.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let ctx = joyczl_tools::ToolCtx {
         on_uncertain: None,
+        resource_lease: None,
         task_run_id: None,
         activate: None,
         embedder: None,
@@ -724,7 +784,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
     // An "MCP-style" tool: nobody watches its output; it returns 100k characters.
     let big: Tool = Tool {
         name: "mcp__demo__fetch".to_string(),
-        description: "回一大段文本".to_string(),
+        description: "answer with one big block of text".to_string(),
         input_schema: json!({"type": "object", "properties": {}}),
         handler: Arc::new(|_ctx: joyczl_tools::ToolCtx, _args: Value| {
             Box::pin(async move { Ok("z".repeat(100_000)) }) as BoxFut
@@ -735,7 +795,7 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
 
     let mock = Mock::new(vec![
         Mock::tool_use("call-1", "mcp__demo__fetch", json!({})),
-        Mock::text("看完了。"),
+        Mock::text("read it all."),
     ]);
 
     let result = run(Turn {
@@ -743,9 +803,9 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "把那段文本拿来看看".to_string(),
+        user_message: "let us have a look at that text".to_string(),
         tools: &tools,
         ctx,
         max_iterations: 4,
@@ -764,11 +824,11 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         resume: None,
     })
     .await
-    .expect("loop 跑完");
+    .expect("the loop finishes");
 
-    assert_eq!(result.reply, "看完了。");
+    assert_eq!(result.reply, "read it all.");
     let requests = mock.received.lock().unwrap();
-    assert_eq!(requests.len(), 2, "一次工具往返 = 两次模型调用");
+    assert_eq!(requests.len(), 2, "one tool round trip = two model calls");
 
     let second = &requests[1];
     let stub = second
@@ -779,10 +839,10 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
             joyczl_provider::ContentBlock::ToolResult { content, .. } => Some(content.clone()),
             _ => None,
         })
-        .expect("第二次请求里该有工具结果");
+        .expect("the second request should carry the tool result");
     assert!(
         stub.contains("truncated") && stub.chars().count() < 5_000,
-        "超限结果该换成桩：{} 字符",
+        "an over-limit result should be swapped for a stub: {} characters",
         stub.chars().count()
     );
     assert!(stub.contains("full output at spill/"), "{stub}");
@@ -792,8 +852,8 @@ async fn an_oversized_tool_result_becomes_a_stub_before_the_next_request() {
         .split("full output at ")
         .nth(1)
         .and_then(|rest| rest.split(')').next())
-        .expect("路径");
-    let saved = std::fs::read_to_string(home.path().join(relative)).expect("读回落盘");
+        .expect("the path");
+    let saved = std::fs::read_to_string(home.path().join(relative)).expect("read the spill back");
     assert_eq!(saved.chars().count(), 100_000);
 
     // The spilled file lives under the session directory (`spill/date/…`).
@@ -807,9 +867,9 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
         Mock::tool_use(
             "tu_1",
             "save_note",
-            json!({"subject": "alex", "content": "喜欢早会"}),
+            json!({"subject": "alex", "content": "likes morning meetings"}),
         ),
-        Mock::text("记好了。"),
+        Mock::text("noted."),
     ]);
     let tools = handlers::build_default();
     let checkpoints: Arc<Mutex<Vec<crate::Checkpoint>>> = Arc::new(Mutex::new(Vec::new()));
@@ -830,9 +890,9 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "记住 alex 喜欢早会".to_string(),
+        user_message: "remember that alex likes morning meetings".to_string(),
         tools: &tools,
         ctx: ctx().await,
         max_iterations: 5,
@@ -847,7 +907,7 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
         resume: None,
     })
     .await
-    .expect("loop 跑完");
+    .expect("the loop finishes");
 
     assert_eq!(result.iterations, 2);
     let cps = checkpoints.lock().unwrap();
@@ -855,8 +915,13 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
     assert!(!result.round_id.is_empty());
     assert_eq!(cps.len(), 3, "initial input, execution intent, tool result");
     assert_eq!(cps[0].iterations, 0);
+    assert!(cps[0].operations.is_empty());
+    assert_eq!(cps[1].operations.len(), 1);
+    assert_eq!(cps[1].operations[0].tool_use_id, "tu_1");
+    assert!(cps[1].operations[0].output.is_none());
+    assert!(cps[2].operations[0].output.is_some());
     // The checkpoint's working memory holds the tool round: assistant's tool request + the result.
-    let last = cps[2].messages.last().expect("有结果块");
+    let last = cps[2].messages.last().expect("there is a result block");
     assert!(matches!(
         last.content.first(),
         Some(joyczl_provider::ContentBlock::ToolResult { .. })
@@ -867,7 +932,9 @@ async fn a_checkpoint_lands_at_every_tool_results_boundary() {
 /// no finished tool is re-run, and the pre-crash usage joins the final account.
 #[tokio::test]
 async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
-    let mock = Mock::new(vec![Mock::text("接着上一轮，已经办完了。")]);
+    let mock = Mock::new(vec![Mock::text(
+        "carrying on from the last round, it is done.",
+    )]);
     let tools = handlers::build_default();
 
     // The checkpoint's working memory: user asked, assistant requested a tool, result came back.
@@ -875,7 +942,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
         Message {
             role: Role::User,
             content: vec![ContentBlock::Text {
-                text: "记住 alex 喜欢早会".to_string(),
+                text: "remember that alex likes morning meetings".to_string(),
             }],
         },
         Message {
@@ -883,7 +950,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
             content: vec![ContentBlock::ToolUse {
                 id: "tu_1".to_string(),
                 name: "save_note".to_string(),
-                input: json!({"subject": "alex", "content": "喜欢早会"}),
+                input: json!({"subject": "alex", "content": "likes morning meetings"}),
                 extra: None,
             }],
         },
@@ -891,7 +958,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
             role: Role::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "tu_1".to_string(),
-                content: "已保存".to_string(),
+                content: "saved".to_string(),
             }],
         },
     ];
@@ -901,7 +968,7 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
         user_images: Vec::new(),
         client: &mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
         user_message: String::new(), // resume ignores it entirely
         tools: &tools,
@@ -928,13 +995,19 @@ async fn a_resumed_turn_continues_without_rerunning_finished_tools() {
         }),
     })
     .await
-    .expect("续跑完成");
+    .expect("the resume should finish");
 
     assert_eq!(result.round_id, "test-round");
-    assert_eq!(result.reply, "接着上一轮，已经办完了。");
-    assert_eq!(result.iterations, 4, "3 个已完成迭代 + 1 个新迭代");
-    assert!(result.tool_calls.is_empty(), "已完成的工具绝不重跑");
-    assert_eq!(result.usage.input_tokens, 110, "两段账加在一起（100 + 10）");
+    assert_eq!(result.reply, "carrying on from the last round, it is done.");
+    assert_eq!(result.iterations, 4, "3 finished iterations plus 1 new one");
+    assert!(
+        result.tool_calls.is_empty(),
+        "a tool that already ran never runs again"
+    );
+    assert_eq!(
+        result.usage.input_tokens, 110,
+        "the two ledgers added together (100 + 10)"
+    );
     // The request carried the checkpointed memory verbatim — no second user message appended.
     let sent = mock.received.lock().unwrap()[0].clone();
     assert_eq!(sent.messages.len(), 3);
@@ -947,7 +1020,7 @@ fn slow_tool(name: &str, ms: u64, answer: &str) -> joyczl_tools::Tool {
     let answer = answer.to_string();
     joyczl_tools::Tool {
         name: name.to_string(),
-        description: "测试用：睡一会儿再回答".to_string(),
+        description: "for the test: sleep a while, then answer".to_string(),
         input_schema: json!({"type": "object", "properties": {}, "required": []}),
         handler: Arc::new(move |_ctx: joyczl_tools::ToolCtx, _args| {
             let answer = answer.clone();
@@ -994,9 +1067,10 @@ async fn run_with(
     tools: &joyczl_tools::ToolRegistry,
     observer: Option<crate::Observer>,
 ) -> (crate::LoopResult, std::time::Duration) {
-    let ctx = ctx().await; // 建库不算进计时：测的是工具批次
-                           // tiktoken 的 BPE 词表是首次估算时才构造的（约 180ms，一次性）——这里预热掉，
-                           // 否则冷启动会被算进"工具批次"的耗时里，测出来的并发是假的。
+    let ctx = ctx().await; // building the store is not timed: the tool batch is what is measured
+                           // tiktoken builds its BPE table on the first estimate (~180ms, once) — warm it up here,
+                           // otherwise the cold start lands inside the "tool batch" timing and the measured concurrency
+                           // is fiction.
     joyczl_provider::tokens::estimate_text("warm");
     let started = std::time::Instant::now();
     let result = run(Turn {
@@ -1004,9 +1078,9 @@ async fn run_with(
         user_images: Vec::new(),
         client: mock,
         model: "test-model",
-        system: "你是 Joy".to_string(),
+        system: "You are Joy".to_string(),
         history: vec![],
-        user_message: "同时做两件事".to_string(),
+        user_message: "do two things at once".to_string(),
         tools,
         ctx,
         max_iterations: 5,
@@ -1021,7 +1095,7 @@ async fn run_with(
         resume: None,
     })
     .await
-    .expect("loop 跑完");
+    .expect("the loop finishes");
     (result, started.elapsed())
 }
 
@@ -1029,7 +1103,7 @@ async fn run_with(
 async fn read_only_tools_in_one_round_run_together() {
     let mock = Mock::new(vec![
         two_calls(("call-1", "slow_a"), ("call-2", "slow_b")),
-        Mock::text("都做完了。"),
+        Mock::text("everything is done."),
     ]);
     let mut tools = joyczl_tools::ToolRegistry::new();
     tools.register(slow_tool("slow_a", 200, "A"));
@@ -1040,7 +1114,7 @@ async fn read_only_tools_in_one_round_run_together() {
     assert_eq!(result.tool_calls.len(), 2);
     assert!(
         elapsed < std::time::Duration::from_millis(360),
-        "两个 200ms 的只读工具必须并发（串行要 400ms+）：{elapsed:?}"
+        "two 200 ms read-only tools have to run concurrently (serial would be 400 ms+): {elapsed:?}"
     );
 }
 
@@ -1049,7 +1123,7 @@ async fn results_are_reported_in_request_order_not_completion_order() {
     let mock = Mock::new(vec![
         // The slow one is asked for first and finishes last.
         two_calls(("call-slow", "slow_a"), ("call-fast", "slow_b")),
-        Mock::text("都做完了。"),
+        Mock::text("everything is done."),
     ]);
     let mut tools = joyczl_tools::ToolRegistry::new();
     tools.register(slow_tool("slow_a", 120, "A"));
@@ -1058,9 +1132,17 @@ async fn results_are_reported_in_request_order_not_completion_order() {
     let (result, _) = run_one_round(&mock, &tools).await;
 
     let names: Vec<&str> = result.tool_calls.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, vec!["slow_a", "slow_b"], "工具账按请求顺序记");
+    assert_eq!(
+        names,
+        vec!["slow_a", "slow_b"],
+        "the tool ledger keeps request order"
+    );
     let sent = mock.received.lock().unwrap().pop().unwrap();
-    let blocks = &sent.messages.last().expect("最后一条是工具结果").content;
+    let blocks = &sent
+        .messages
+        .last()
+        .expect("the last message is the tool result")
+        .content;
     let ids: Vec<&str> = blocks
         .iter()
         .filter_map(|b| match b {
@@ -1068,7 +1150,11 @@ async fn results_are_reported_in_request_order_not_completion_order() {
             _ => None,
         })
         .collect();
-    assert_eq!(ids, vec!["call-slow", "call-fast"], "回灌给模型的也保序");
+    assert_eq!(
+        ids,
+        vec!["call-slow", "call-fast"],
+        "what goes back to the model keeps order too"
+    );
 }
 
 #[tokio::test]
@@ -1076,7 +1162,7 @@ async fn an_exclusive_tool_is_a_barrier() {
     let mock = Mock::new(vec![
         two_calls(("call-1", "reader"), ("call-2", "writer")),
         two_calls(("call-3", "reader2"), ("call-4", "reader3")),
-        Mock::text("都做完了。"),
+        Mock::text("everything is done."),
     ]);
     let mut tools = joyczl_tools::ToolRegistry::new();
     tools.register(slow_tool("reader", 120, "R"));
@@ -1091,7 +1177,7 @@ async fn an_exclusive_tool_is_a_barrier() {
     // If the barrier were gone the two reader batches would overlap the writer: ~240ms.
     assert!(
         elapsed >= std::time::Duration::from_millis(330),
-        "独占工具必须是把前后隔开的屏障：{elapsed:?}"
+        "an exclusive tool has to be a barrier between what comes before and after: {elapsed:?}"
     );
 }
 
@@ -1107,22 +1193,22 @@ async fn a_streaming_tool_emits_deltas_and_still_returns_the_real_result() {
 
     let mock = Mock::new(vec![
         Mock::tool_use("call-1", "streamer", json!({})),
-        Mock::text("收到。"),
+        Mock::text("received."),
     ]);
     let mut tools = joyczl_tools::ToolRegistry::new();
     tools.register(joyczl_tools::Tool {
         name: "streamer".to_string(),
-        description: "边跑边报".to_string(),
+        description: "report as it goes".to_string(),
         input_schema: json!({"type": "object", "properties": {}, "required": []}),
         handler: Arc::new(|ctx: joyczl_tools::ToolCtx, _args| {
             Box::pin(async move {
                 // A real tool (run_command) writes stdout here; the fake just proves the
                 // wiring: the sink reaches the loop, the return value stays the answer.
                 if let Some(sink) = &ctx.on_delta {
-                    sink("第一段");
-                    sink("第二段");
+                    sink("the first paragraph");
+                    sink("the second paragraph");
                 }
-                Ok("完整结果".to_string())
+                Ok("the full result".to_string())
             })
         }),
     });
@@ -1137,13 +1223,17 @@ async fn a_streaming_tool_emits_deltas_and_still_returns_the_real_result() {
             _ => None,
         })
         .collect();
-    assert_eq!(deltas, vec!["第一段", "第二段"], "增量要按到达顺序发出去");
+    assert_eq!(
+        deltas,
+        vec!["the first paragraph", "the second paragraph"],
+        "deltas go out in arrival order"
+    );
     assert!(
         events.iter().any(|event| matches!(
             event,
             crate::LoopEvent::ToolDelta { tool_use_id, .. } if tool_use_id == "call-1"
         )),
-        "增量必须带 call id，否则并行时前端不知道更新哪一行"
+        "a delta has to carry the call id, or the front end cannot tell which row to update when parallel"
     );
     let finished: Vec<&str> = events
         .iter()
@@ -1152,8 +1242,12 @@ async fn a_streaming_tool_emits_deltas_and_still_returns_the_real_result() {
             _ => None,
         })
         .collect();
-    assert_eq!(finished, vec!["完整结果"], "Tool 事件仍然只发最终结果");
-    assert_eq!(result.tool_calls[0].output, "完整结果");
+    assert_eq!(
+        finished,
+        vec!["the full result"],
+        "the Tool event still carries only the final result"
+    );
+    assert_eq!(result.tool_calls[0].output, "the full result");
 }
 
 #[tokio::test]

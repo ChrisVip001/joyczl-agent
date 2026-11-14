@@ -59,7 +59,7 @@ export function renderOverview(
   data: DashboardData,
   session: string,
   onPick: (id: string) => void,
-  onTask: (task: AgentTaskView, action: "suspend" | "resume" | "cancel") => void,
+  onTask: (task: AgentTaskView, action: "start" | "wait" | "input" | "operations" | "suspend" | "resume" | "cancel") => void,
   onInbox: () => void,
 ): DocumentFragment {
   const { config } = data;
@@ -222,7 +222,7 @@ export function renderTaskCard(
   todos: TodoListView,
   task: AgentTaskView | undefined,
   artifacts: ArtifactView[],
-  onTask: (task: AgentTaskView, action: "suspend" | "resume" | "cancel") => void,
+  onTask: (task: AgentTaskView, action: "start" | "wait" | "input" | "operations" | "suspend" | "resume" | "cancel") => void,
 ): DocumentFragment {
   const fragment = document.createDocumentFragment();
   const block = el("div", { class: "block taskcard" });
@@ -241,8 +241,10 @@ export function renderTaskCard(
   };
   if (task != null) {
     const live = task.status === "running" || task.status === "pending";
-    // "Needs you" is resumable on purpose: continue is exactly what this state is for.
-    const resumable = task.status === "suspended" || task.status === "needs_attention";
+    const automaticWait = task.status === "suspended" &&
+      ["waiting for background jobs", "waiting for authorized external input"].includes(task.suspendReason ?? "");
+    const resumable = task.status === "needs_attention" || (task.status === "suspended" && !automaticWait);
+    const open = live || resumable || automaticWait;
     block.append(
       el("h3", { text: t("任务") }),
       el(
@@ -252,7 +254,11 @@ export function renderTaskCard(
         el("span", {
           class: `tag task-state st-${task.status}`,
           text:
-            (statusText[task.status] ?? task.status) +
+            (task.status === "done" && task.acceptance.length === 0
+              ? t("已产出，未核验")
+              : task.status === "suspended" && task.suspendReason === "waiting for authorized external input" ? t("等待资料")
+              : task.status === "suspended" && task.suspendReason === "waiting for background jobs" ? t("等待后台作业")
+              : task.status === "pending" && task.dispatchState === "pending" ? t("排队中") : (statusText[task.status] ?? task.status)) +
             (task.goalCondition !== null
               ? t(" · 第 {round}/{max} 轮", { round: task.roundsUsed, max: task.maxRounds })
               : ""),
@@ -261,19 +267,35 @@ export function renderTaskCard(
       task.suspendReason !== null
         ? el("div", { class: "task-note", text: task.suspendReason })
         : document.createDocumentFragment(),
-      // ---- 验收清单：每条条件一行；通过给勾，未通过给叉和实测结果。
-      // 没有验收条件时整块不出现 —— 空的"验收"标题只是噪音。
+      ...(task.inputCondition ? [el("div", { class: "task-note" },
+        el("p", { text: task.inputCondition.description }),
+        el("p", { text: task.inputCondition.eventId ? t("资料已收到") : t("资料尚未到达") }),
+        el("p", { text: task.inputCondition.source === "manual" ? t("由你提供") : t("来源：{source}", { source: task.inputCondition.source }) }),
+        ...(task.inputCondition.expiresAt ? [el("p", { text: t("最晚到达：{time}", { time: new Date(task.inputCondition.expiresAt).toLocaleString() }) })] : []),
+        ...(task.inputCondition.data !== undefined ? [el("details", {}, el("summary", { text: t("查看资料") }),
+          el("pre", { class: "task-input-data", text: typeof task.inputCondition.data === "string" ? task.inputCondition.data : JSON.stringify(task.inputCondition.data, null, 2) }))] : []),
+      )] : []),
+            // ---- Acceptance: one row per condition; a tick when it passed, a cross plus the
+            // measured result when it did not.
       ...acceptanceBlock(task.acceptance, task.checks),
-      // ---- 交付物：真的存在的文件，不是模型的总结。
+            // ---- Deliverables: files that really exist, not the model's summary of them.
       ...artifactBlock(artifacts),
-      // ---- 预算：只有设了上限的维度才画条（没上限的只显示已用）。
+            // ---- Budget: only a dimension with a limit gets a bar (an unlimited one just shows
+            // what was used).
       ...budgetBlock(task.budget, task.spent),
-      // ---- 脚注：执行几次、上次停在哪。
+            // ---- Footnote: how many runs, and where the last one stopped.
       taskFooter(task),
       el(
         "div",
         { class: "task-actions" },
-        ...(live
+        ...(task.status === "pending" && task.dispatchState === undefined
+          ? [el("button", {class: "task-act task-act-go", type: "button", text: t("开始任务"), onclick: () => onTask(task, "start")})]
+          : []),
+        ...(task.status === "pending" && task.dispatchState === undefined && task.runCount === 0 && !task.inputCondition
+          ? [el("button", { class: "task-act", type: "button", text: t("等待资料"), onclick: () => onTask(task, "wait") })] : []),
+        ...(open && task.inputCondition?.source === "manual" && !task.inputCondition.eventId
+          ? [el("button", { class: "task-act", type: "button", text: t("提供资料"), onclick: () => onTask(task, "input") })] : []),
+        ...(live || automaticWait
           ? [
               el("button", {
                 class: "task-act",
@@ -283,6 +305,8 @@ export function renderTaskCard(
               }),
             ]
           : []),
+        ...(resumable && task.runCount > 0
+          ? [el("button", { class: "task-act", type: "button", text: t("核对操作"), onclick: () => onTask(task, "operations") })] : []),
         ...(resumable
           ? [
               el("button", {
@@ -293,7 +317,7 @@ export function renderTaskCard(
               }),
             ]
           : []),
-        ...(live || resumable
+        ...(open
           ? [
               el("button", {
                 class: "task-act task-act-stop",
@@ -329,7 +353,7 @@ export function renderTaskCard(
   return fragment;
 }
 
-/** At most this many condition rows before folding into "还有 N 条". */
+/** At most this many condition rows before folding into "{N} more". */
 const CHECKS_SHOWN = 6;
 /** At most this many deliverables before folding. */
 const ARTIFACTS_SHOWN = 5;
@@ -357,6 +381,7 @@ function acceptanceBlock(
       }),
       el("span", {
         class: "task-check-detail",
+        title: check?.artifactSha256 ? t("核验时的文件版本：{hash}", { hash: check.artifactSha256 }) : "",
         // Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement.
         text: check?.detail ?? t("尚未检查"),
       }),
@@ -398,7 +423,7 @@ function budgetBlock(
   spent: { wallMs: number; tokens: number; tools: number },
 ): Node[] {
   if (budget === null) return [];
-  // One unit per row: both numbers must read in the same scale, or "45.2s / 10 分 0 秒"
+  // One unit per row: both numbers must read in the same scale, or "45.2s / 10 min 0 s"
   // happens — two ways of saying time side by side looks like a bug.
   const clock = (budget.wallMs ?? spent.wallMs) >= 60_000;
   const time = (value: number) => formatDuration(value, clock);
@@ -446,7 +471,7 @@ function budgetRow(
   );
 }
 
-/** "执行 3 次 · 上次停在「验收未通过：report.md 不存在」· 未设预算" */
+/** "3 runs · last stopped at "acceptance failed: report.md does not exist"" with no budget set */
 function taskFooter(task: AgentTaskView): Node {
   const parts: string[] = [];
   parts.push(task.runCount > 0 ? t("执行 {runCount} 次", { runCount: task.runCount }) : t("还没执行过"));
@@ -769,7 +794,8 @@ function sessionRow(
     el(
       "span",
       { class: "row-title" },
-      // 内层才被平移：外层负责在边界裁掉，内层负责省略号与滚动。
+            // Only the inner layer is translated: the outer one clips at the edge, the inner one
+            // owns the ellipsis and the scrolling.
       el("span", { class: "row-title-text", text: item.title }),
     ),
     el("span", { class: "row-when", text: fresh ? "" : formatWhen(item.lastAt) }),
@@ -814,7 +840,7 @@ function marqueeOnHover(row: HTMLElement): void {
   const text = row.querySelector<HTMLElement>(".row-title-text");
   if (box === null || text === null) return;
 
-  const SPEED = 40; // px/s：一眼能跟上、又不至于慢得着急
+  const SPEED = 40; // px/s: easy to follow, not so slow that it feels stuck
   const DELAY = 500;
   let timer: number | null = null;
   let running = false;
@@ -833,9 +859,9 @@ function marqueeOnHover(row: HTMLElement): void {
     if (running || !row.isConnected) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const distance = text.scrollWidth - box.clientWidth;
-    if (distance <= 0) return; // 没截断的标题不动
+    if (distance <= 0) return; // a title that was not clipped stays put
     running = true;
-    text.classList.add("scrolling"); // 摘掉省略号，让平移出的字露出来
+    text.classList.add("scrolling"); // drop the ellipsis so the sliding words can show
     const hold = (ms: number) =>
       new Promise<void>((resolve) => window.setTimeout(resolve, ms));
     try {
@@ -845,7 +871,7 @@ function marqueeOnHover(row: HTMLElement): void {
           { duration: (distance / SPEED) * 1000, easing: "linear", fill: "forwards" },
         );
         await out.finished;
-        await hold(1000); // 尾部停一拍，读完结尾
+        await hold(1000); // pause at the end so the last words can be read
         const back = text.animate(
           [{ transform: `translateX(${-distance}px)` }, { transform: "translateX(0)" }],
           { duration: Math.min((distance / SPEED) * 1000, 600), easing: "ease-in-out", fill: "forwards" },
@@ -854,7 +880,7 @@ function marqueeOnHover(row: HTMLElement): void {
         await hold(500);
       }
     } catch {
-      // cancel() 会让 finished reject —— 那是 stop() 的路径，不是错误。
+            // cancel() makes finished reject — that is stop()'s path, not an error.
     } finally {
       if (!running) text.classList.remove("scrolling");
     }
@@ -868,7 +894,7 @@ function marqueeOnHover(row: HTMLElement): void {
 
 // --- Formatting ---------------------------------------------------------------
 
-/** ISO time → "just now / 12 minutes ago / 09:31 / 8 月 3 日". */
+/** ISO time → "just now / 12 minutes ago / 09:31 / 3 Aug". */
 export function formatWhen(iso: string | null | undefined): string {
   if (iso === null || iso === undefined || iso === "") return "—";
   const at = new Date(iso);
@@ -948,11 +974,12 @@ export function elapsedSince(start: number): string {
   return formatMs(Date.now() - start);
 }
 
-// --- 能力中心：技能 / MCP 连接器 -----------------------------------------------
+// --- Capabilities: skills / MCP connectors ---------------------------------------
 //
-// 两个面板共用一套行样式：名字 + 一行说明 + 几个小标签。唯一的分别是「内置」行
-// 置灰且没有任何按钮 —— 它们随安装分发（JOY_SKILL_DIRS / JOY_MCP_CONFIG），
-// 从这一台机器的界面上删掉它，会让每一台共享它的机器一起失效。
+// Both panels share one row style: a name, one line of description, a few small tags. The
+// only difference is that built-in rows are greyed out and carry no buttons — they ship with
+// the installation (JOY_SKILL_DIRS / JOY_MCP_CONFIG), and removing one from this machine's
+// interface would break every machine that shares it.
 
 /** The skill list: what Joy knows how to do, and which rows belong to the human. */
 export function renderSkills(
@@ -1128,7 +1155,7 @@ function capMeta(items: (string | null)[]): HTMLElement {
  * The scheduled-jobs list: when it fires, what it does, and where the result goes.
  *
  * A row that came from a skill's `schedule:` line is greyed and has no delete button — the
- * job **is** that skill, and removing it here would either do nothing or lie. The `随技能`
+ * job **is** that skill, and removing it here would either do nothing or lie. The "From a skill"
  * tag plus the title attribute say where to go instead.
  */
 export function renderSchedules(

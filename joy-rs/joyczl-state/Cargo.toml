@@ -3,7 +3,7 @@ name = "joyczl-state"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Joy 的全部持久状态：state.db（SQLite + FTS5）。只有 app-server 持有它。"
+description = "All of Joy's persistent state: state.db (SQLite + FTS5). Only the app-server holds it."
 
 [lib]
 name = "joyczl_state"
@@ -11,11 +11,13 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
-# 事实的向量存成 JSON 数组文本（见 facts.rs）。
+# A fact's vector is stored as JSON array text (see facts.rs).
 serde_json = { workspace = true }
+serde = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 sqlx = { workspace = true }
-# 账本的行摘要与轮摘要（sha256）；workspace 里已有，不新增依赖。
+# Row and round digests for the ledger (sha256); already in the workspace, no new dependency.
 sha2 = { workspace = true }
 
 [dev-dependencies]

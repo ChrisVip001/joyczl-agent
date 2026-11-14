@@ -498,8 +498,84 @@ pub async fn task(
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_string();
+    if matches!(action.as_str(), "operations" | "reconcile") {
+        let translated = if action == "operations" {
+            serde_json::from_value::<joyczl_protocol::TaskGetParams>(body).map(|params| {
+                (
+                    methods::TASK_OPERATIONS,
+                    serde_json::to_value(params).expect("serialisable"),
+                )
+            })
+        } else {
+            serde_json::from_value::<joyczl_protocol::TaskReconcileParams>(body).map(|params| {
+                (
+                    methods::TASK_RECONCILE,
+                    serde_json::to_value(params).expect("serialisable"),
+                )
+            })
+        };
+        let result = match translated {
+            Ok((method, payload)) => {
+                app.request::<joyczl_protocol::TaskOperationsResponse>(method, payload)
+                    .await
+            }
+            Err(error) => Err(ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: format!("Bad operation parameters: {error}"),
+                data: None,
+            }),
+        };
+        return match result {
+            Ok(response) => Json(response).into_response(),
+            Err(error) => failed(StatusCode::OK, error),
+        };
+    }
+    if action == "signal" {
+        let result = match serde_json::from_value::<joyczl_protocol::TaskSignalParams>(body) {
+            Ok(params) => {
+                app.request::<joyczl_protocol::TaskSignalResponse>(
+                    methods::TASK_SIGNAL,
+                    serde_json::to_value(params).expect("serialisable"),
+                )
+                .await
+            }
+            Err(error) => Err(ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: format!("Bad task-input parameters: {error}"),
+                data: None,
+            }),
+        };
+        return match result {
+            Ok(response) => Json(response).into_response(),
+            Err(error) => failed(StatusCode::OK, error),
+        };
+    }
     // Translate the action into (method, payload); the request happens once, below.
     let translated: Result<(&str, serde_json::Value), ErrorObject> = match action.as_str() {
+        "wait" => serde_json::from_value::<joyczl_protocol::TaskWaitParams>(body.clone())
+            .map(|params| {
+                (
+                    methods::TASK_WAIT,
+                    serde_json::to_value(params).expect("serialisable"),
+                )
+            })
+            .map_err(|error| ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: format!("Bad task-wait parameters: {error}"),
+                data: None,
+            }),
+        "start" => serde_json::from_value::<joyczl_protocol::TaskStartParams>(body.clone())
+            .map(|params| {
+                (
+                    methods::TASK_START,
+                    serde_json::to_value(params).expect("serialisable"),
+                )
+            })
+            .map_err(|e| ErrorObject {
+                code: codes::INVALID_PARAMS,
+                message: format!("Bad task-start parameters: {e}"),
+                data: None,
+            }),
         "create" => serde_json::from_value::<TaskCreateParams>(body.clone())
             .map(|params| {
                 (
@@ -528,7 +604,9 @@ pub async fn task(
             }),
         other => Err(ErrorObject {
             code: codes::INVALID_PARAMS,
-            message: format!("unknown task action: {other} (create/suspend/resume/cancel)"),
+            message: format!(
+                "unknown task action: {other} (create/start/wait/signal/operations/reconcile/suspend/resume/cancel)"
+            ),
             data: None,
         }),
     };
@@ -994,11 +1072,12 @@ pub async fn approval(
     }
 }
 
-/// `POST /api/interrupt` — 停一个在跑的 turn。
+/// `POST /api/interrupt` — stop a turn that is running.
 ///
-/// 载荷就是协议的 `TurnInterruptParams`（**没有第二种形状**）；turnId 由前端从
-/// `turnStarted` 事件里拿到——它是这一轮的唯一句柄。太晚（turn 已结束）→
-/// `interrupted: false`，前端如实显示，不假装停掉了什么。
+/// The payload is the protocol's `TurnInterruptParams` (**there is no second shape**); the
+/// front end takes the turnId from the `turnStarted` event — it is that turn's only handle.
+/// Too late (the turn already ended) → `interrupted: false`, and the front end says so
+/// instead of pretending something was stopped.
 pub async fn interrupt(
     Extension(app): Extension<Arc<AppServer>>,
     Json(params): Json<TurnInterruptParams>,
@@ -1447,7 +1526,7 @@ pub(crate) fn failed(status: StatusCode, error: ErrorObject) -> Response {
     (status, Json(error)).into_response()
 }
 
-// ---- 能力中心：技能 / MCP 连接器 ------------------------------------------------
+// ---- Capabilities: skills / MCP connectors ---------------------------------------
 //
 // The domain (rows, fences, validation) lives in `capabilities.rs`; this is the HTTP
 // face, same as everything above. Built-in rows are refused by the write paths, so the
@@ -1569,3 +1648,57 @@ pub async fn mcp_remove(
 #[cfg(test)]
 #[path = "api_tests.rs"]
 mod api_tests;
+
+/// Human inspection/reconciliation of stopped ordinary-chat tool operations.
+pub async fn turn_operation(
+    Extension(app): Extension<Arc<AppServer>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let action = body
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let translated = match action {
+        "operations" => serde_json::from_value::<joyczl_protocol::TurnOperationsParams>(
+            body.clone(),
+        )
+        .map(|params| {
+            (
+                methods::TURN_OPERATIONS,
+                serde_json::to_value(params).expect("serialisable"),
+            )
+        }),
+        "reconcile" => serde_json::from_value::<joyczl_protocol::TurnReconcileParams>(body.clone())
+            .map(|params| {
+                (
+                    methods::TURN_RECONCILE,
+                    serde_json::to_value(params).expect("serialisable"),
+                )
+            }),
+        _ => {
+            return failed(
+                StatusCode::OK,
+                ErrorObject {
+                    code: codes::INVALID_PARAMS,
+                    message: "Unknown chat operation action".into(),
+                    data: None,
+                },
+            )
+        }
+    };
+    let result = match translated {
+        Ok((method, params)) => {
+            app.request::<joyczl_protocol::TaskOperationsResponse>(method, params)
+                .await
+        }
+        Err(error) => Err(ErrorObject {
+            code: codes::INVALID_PARAMS,
+            message: format!("Invalid chat operation parameters: {error}"),
+            data: None,
+        }),
+    };
+    match result {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => failed(StatusCode::OK, error),
+    }
+}

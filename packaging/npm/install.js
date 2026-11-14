@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// 安装期下载器：按 (process.platform, process.arch) 从 GitHub Releases 拉对应的
-// `joy` 压缩包，解包出二进制放进本包的 bin/ 下。失败时给可执行的指引，不让
-// npm 卡在一个看不懂的报错上。
+// The install-time downloader: picks the `joy` archive for (process.platform, process.arch) off
+// GitHub Releases, unpacks the binary into this package's bin/. On failure it gives instructions
+// you can act on, rather than leaving npm stuck on an error nobody can read.
 //
-// Release 资产名约定（release.yml 负责，两边必须一致）：
+// The release asset naming (release.yml's job; the two sides have to agree):
 //   joy-v<version>-<target>.tar.gz
 //     target ∈ { aarch64-apple-darwin, x86_64-apple-darwin,
 //                x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu }
@@ -29,9 +29,9 @@ const TARGETS = {
 const target = TARGETS[`${process.platform}-${process.arch}`];
 if (!target) {
   console.error(
-    `(joyczl-agent) 不支持的平台：${process.platform}-${process.arch}。` +
-      `Joy 支持 macOS 与 Linux（Windows 用 WSL2，见 docs/operations.md）。` +
-      `也可以从源码安装：cargo install --path joy-rs/joyczl-cli`
+    `(joyczl-agent) unsupported platform: ${process.platform}-${process.arch}. ` +
+      `Joy supports macOS and Linux (on Windows use WSL2, see docs/operations.md). ` +
+      `or install from source: cargo install --path joy-rs/joyczl-cli`
   );
   process.exit(1);
 }
@@ -41,17 +41,17 @@ const outDir = path.join(__dirname, "bin");
 const tarball = path.join(outDir, "joy.tar.gz");
 
 function fail(why) {
-  console.error(`(joyczl-agent) 下载失败：${why}\n  ${url}`);
+  console.error(`(joyczl-agent) download failed: ${why}\n  ${url}`);
   console.error(
-    "  可手动下载后放到 " +
+    "  download it by hand, put it at " +
       path.join(outDir, "joy") +
-      " 并 chmod +x；或从源码安装：cargo install --path joy-rs/joyczl-cli"
+      " and chmod +x; or install from source: cargo install --path joy-rs/joyczl-cli"
   );
   process.exit(1);
 }
 
 function fetch(url, redirects = 0) {
-  if (redirects > 5) return fail("重定向过多");
+  if (redirects > 5) return fail("too many redirects");
   return new Promise((resolve, reject) => {
     get(url, { headers: { "user-agent": "joyczl-agent-npm-shim" } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -68,7 +68,7 @@ function fetch(url, redirects = 0) {
 (async () => {
   if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
   rmSync(tarball, { force: true });
-  console.log(`(joyczl-agent) 下载 ${url}`);
+  console.log(`(joyczl-agent) downloading ${url}`);
   try {
     const response = await fetch(url);
     await pipeline(response, createWriteStream(tarball));
@@ -76,12 +76,12 @@ function fetch(url, redirects = 0) {
     return fail(error.message);
   }
   try {
-    // 系统自带 tar 就够：包里是 joy 二进制（可选 LICENSE/README）。
+    // The system tar is enough: the archive holds the joy binary (LICENSE/README optional).
     execFileSync("tar", ["-xzf", tarball, "-C", outDir, "joy"], { stdio: "pipe" });
     execFileSync("chmod", ["+x", path.join(outDir, "joy")]);
   } catch (error) {
-    return fail(`解包失败（${error.message}）`);
+    return fail(`unpacking failed (${error.message})`);
   }
   rmSync(tarball, { force: true });
-  console.log(`(joyczl-agent) 就绪：${path.join(outDir, "joy")}`);
+  console.log(`(joyczl-agent) ready: ${path.join(outDir, "joy")}`);
 })();

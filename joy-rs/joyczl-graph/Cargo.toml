@@ -3,7 +3,7 @@ name = "joyczl-graph"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "THE GRAPH —— 节点、边、波次。graph 不替代 loop，它安排 loop 被调用的位置。"
+description = "THE GRAPH — nodes, edges, waves. The graph does not replace the loop; it decides where the loop gets called."
 
 [lib]
 name = "joyczl_graph"

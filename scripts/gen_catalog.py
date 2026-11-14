@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""从 models.dev 生成 models-catalog.json 的条目 —— 加厂商不用改代码。
+"""Generate a models-catalog.json entry from models.dev — adding a vendor needs no code change.
 
-    python3 scripts/gen_catalog.py --list                  # 列出 models.dev 的厂商
-    python3 scripts/gen_catalog.py <id>                    # 生成一家厂商的目录行（stdout）
-    python3 scripts/gen_catalog.py <id> --model <模型名>    # 指定主模型
-    python3 scripts/gen_catalog.py <id> --out <路径>        # 合并进 models-catalog.json（默认只打印）
+    python3 scripts/gen_catalog.py --list                  # list the vendors models.dev knows
+    python3 scripts/gen_catalog.py <id>                    # one vendor's catalog row (stdout)
+    python3 scripts/gen_catalog.py <id> --model <name>     # name the main model
+    python3 scripts/gen_catalog.py <id> --out <path>       # merge into models-catalog.json
 
-数据源是 https://models.dev/api.json（MIT，OpenCode 团队维护的模型元数据库），
-只有标准库，无第三方依赖。生成的行遵循 `models-catalog.json` 的格式
-（见 docs/configuration.md「模型目录」）：已知 joy id 是补丁，新 id 是新厂商。
+The source is https://models.dev/api.json (MIT, the model metadata database the OpenCode team
+maintains), standard library only, no third-party dependency. The row it writes follows the
+`models-catalog.json` format (see "模型目录" in docs/configuration.md): a known joy id is a
+patch, a new id is a new vendor.
 
-models.dev 不替你做选择：主模型默认取「支持工具调用里上下文最大的」，这只是
-起点 —— 默认模型与小模型是人该拍板的事，输出时会列出候选提醒你确认。
+models.dev does not make the choice for you: the main model defaults to "the one with the
+largest context among those that support tool calls", which is only a starting point —
+the default and small models are a human's call, so the candidates are listed for you to
+confirm.
 """
 
 from __future__ import annotations
@@ -24,9 +27,9 @@ from pathlib import Path
 
 MODELS_DEV_URL = "https://models.dev/api.json"
 
-# joy 侧已知的映射：joy id → (models.dev id, wire, key_env)。
-# wire 是 joy 的两种传输格式之一（anthropic / openai），models.dev 不区分这个。
-# key_env 留 None = 新厂商，用 models.dev 的 env 字段（没有就 JOY_<ID>_API_KEY）。
+# The mapping joy already knows: joy id → (models.dev id, wire, key_env).
+# `wire` is one of joy's two transports (anthropic / openai); models.dev does not distinguish.
+# A key_env of None means a new vendor: take models.dev's env field (or JOY_<ID>_API_KEY).
 KNOWN: dict[str, tuple[str, str, str | None]] = {
     "anthropic": ("anthropic", "anthropic", "ANTHROPIC_API_KEY"),
     "openai": ("openai", "responses", "OPENAI_API_KEY"),
@@ -39,9 +42,9 @@ KNOWN: dict[str, tuple[str, str, str | None]] = {
     "xai": ("xai", "openai", "XAI_API_KEY"),
     "opencode_zen": ("opencode", "openai", "OPENCODE_ZEN_API_KEY"),
     "opencode_go": ("opencode-go", "openai", "OPENCODE_GO_API_KEY"),
-    "ollama": ("ollama", "openai", ""),  # 本地端点免 key
+    "ollama": ("ollama", "openai", ""),  # a local endpoint needs no key
 }
-# models.dev 的 id 里，joy 走 anthropic wire 的那四家：
+# Of models.dev's ids, the four whose joy side goes over the anthropic wire:
 ANTHROPIC_WIRE = {"anthropic", "moonshotai", "zhipuai", "minimax"}
 
 
@@ -57,14 +60,16 @@ def list_providers(data: dict) -> None:
     for md_id, info in sorted(data.items()):
         name = info.get("name", "?")
         models = len(info.get("models", {}))
-        print(f"{md_id:24} {name}  ({models} 个模型)")
+        print(f"{md_id:24} {name}  ({models} models)")
 
 
 def pick_model(models: dict, wanted: str | None) -> tuple[str, dict]:
-    """返回 (模型名, 模型元数据)。--model 给了就精确取；否则挑工具调用里上下文最大的。"""
+    """Return (model name, metadata). An explicit --model wins; otherwise take the largest
+    context among the tool-calling models."""
     if wanted:
         if wanted not in models:
-            sys.exit(f"错误：{wanted} 不在该厂商的模型表里。有：{', '.join(sorted(models))}")
+            sys.exit(f"error: {wanted} is not in this vendor's model table. Available: "
+                     f"{', '.join(sorted(models))}")
         return wanted, models[wanted]
 
     def sort_key(item):
@@ -78,7 +83,7 @@ def pick_model(models: dict, wanted: str | None) -> tuple[str, dict]:
         reverse=True,
     )
     if not ranked:
-        sys.exit("错误：该厂商在 models.dev 上没有任何模型条目")
+        sys.exit("error: this vendor has no model entries on models.dev at all")
     name, _ = ranked[0]
     return name, models[name]
 
@@ -89,8 +94,9 @@ def build_row(data: dict, joy_id: str, model: str | None, small_model: str | Non
     if known:
         md_id, wire, default_key_env = known
     else:
-        # 新厂商：id 直接用 models.dev 的。wire 靠猜（anthropic 系那四家已列全），
-        # 其余默认 openai 兼容 —— 这覆盖了绝大多数第三方端点。
+        # A new vendor: the id is models.dev's. The wire is a guess (the four anthropic-wire
+        # vendors are all listed), everything else defaults to openai-compatible — which covers
+        # the overwhelming majority of third-party endpoints.
         md_id, wire, default_key_env = joy_id, "openai", None
         if md_id in ANTHROPIC_WIRE:
             wire = "anthropic"
@@ -98,18 +104,19 @@ def build_row(data: dict, joy_id: str, model: str | None, small_model: str | Non
     info = data.get(md_id)
     if info is None:
         sys.exit(
-            f"错误：models.dev 上没有 '{md_id}'"
-            + ("（joy id 经映射得到）" if known else "")
-            + f"。先跑 --list 看有哪些。"
+            f"error: models.dev has no '{md_id}'"
+            + (" (that is the joy id after mapping)" if known else "")
+            + ". Run --list first to see what is there."
         )
 
     model_name, meta = pick_model(info.get("models", {}), model)
     context = (meta.get("limit") or {}).get("context")
     if not isinstance(context, int) or context <= 0:
-        sys.exit(f"错误：模型 {model_name} 没有 context 上限数据，请手工填 context_window")
+        sys.exit(f"error: model {model_name} has no context limit on models.dev; "
+                 "fill in context_window by hand")
     vision = "image" in ((meta.get("modalities") or {}).get("input") or [])
 
-    # models.dev 的 env 字段可能是字符串也可能是数组（如 ["ZHIPU_API_KEY"]）——拍平取一个。
+    # models.dev's env field may be a string or an array (e.g. ["ZHIPU_API_KEY"]) — flatten it.
     env = info.get("env")
     if isinstance(env, list):
         env = env[0] if env else None
@@ -128,9 +135,11 @@ def build_row(data: dict, joy_id: str, model: str | None, small_model: str | Non
     if base_url:
         row["base_url"] = base_url
     elif not known:
-        # 内置厂商的 base_url 已在二进制里，补丁不用带；新厂商没有它多半连不上。
+        # A built-in vendor's base_url is already in the binary, so the patch need not carry
+        # it; a new vendor usually cannot connect without one.
         print(
-            "提醒：新厂商没给 --base-url，目录行里不会有 —— 端点不对时补上再重启。",
+            "note: this new vendor got no --base-url, so the row will not carry one — add it "
+            "and restart if the endpoint is wrong.",
             file=sys.stderr,
         )
     return row
@@ -151,35 +160,37 @@ def merge_out(row: dict, out: Path) -> None:
     if out.exists():
         rows = json.loads(out.read_text())
         if not isinstance(rows, list):
-            sys.exit(f"错误：{out} 不是 JSON 数组，不肯改写")
+            sys.exit(f"error: {out} is not a JSON array; refusing to rewrite it")
     rows[:] = [r for r in rows if r.get("id") != row["id"]]
     rows.append(row)
     out.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n")
-    print(f"已写入 {out}（共 {len(rows)} 行）。改完要重启进程才生效。", file=sys.stderr)
+    print(f"wrote {out} ({len(rows)} rows). A running process has to restart to pick it up.",
+          file=sys.stderr)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("provider", nargs="?", help="joy 侧 provider id（内置 12 家或新名字）")
-    ap.add_argument("--list", action="store_true", help="列出 models.dev 上的厂商")
-    ap.add_argument("--model", help="主模型（缺省：工具调用里上下文最大的）")
-    ap.add_argument("--small-model", help="便宜模型（缺省同主模型）")
-    ap.add_argument("--base-url", help="API 端点（新厂商通常需要）")
-    ap.add_argument("--key-env", help="key 的环境变量名（缺省照内置表或 models.dev 的 env 字段）")
-    ap.add_argument("--out", type=Path, help="合并写入 models-catalog.json（缺省只打印到 stdout）")
+    ap.add_argument("provider", nargs="?", help="the joy-side provider id (one of the 12 built in, or a new name)")
+    ap.add_argument("--list", action="store_true", help="list the vendors on models.dev")
+    ap.add_argument("--model", help="the main model (default: the largest context among tool-calling ones)")
+    ap.add_argument("--small-model", help="the cheap model (defaults to the main one)")
+    ap.add_argument("--base-url", help="the API endpoint (usually needed for a new vendor)")
+    ap.add_argument("--key-env", help="the environment variable holding the key (default: the built-in table, or models.dev's env)")
+    ap.add_argument("--out", type=Path, help="merge into models-catalog.json (default: print to stdout)")
     args = ap.parse_args()
 
     if args.list:
         list_providers(fetch())
         return
     if not args.provider:
-        ap.error("给 --list 或一个 provider id")
+        ap.error("give --list or a provider id")
 
     data = fetch()
     row = build_row(data, args.provider, args.model, args.small_model,
                     args.base_url, args.key_env)
     md_id = KNOWN.get(args.provider, (args.provider,))[0]
-    print(f"# 默认模型是「工具调用里上下文最大的」，请确认；候选：", file=sys.stderr)
+    print("# The default model is «the largest context among tool-calling ones»; please confirm. "
+          "Candidates:", file=sys.stderr)
     print(f"#   {candidates(data.get(md_id, {}).get('models', {}))}", file=sys.stderr)
 
     if args.out:

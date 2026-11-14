@@ -113,7 +113,7 @@ export class TelegramAdapter {
             // rejection — Node takes the process down by default, and this process serves everyone.
             void this.#handle(message).catch((error: unknown) => {
               this.#onLog(
-                `这条消息没处理完：${error instanceof Error ? error.message : String(error)}`,
+                `this message was not handled: ${error instanceof Error ? error.message : String(error)}`,
               );
             });
           }
@@ -142,7 +142,7 @@ export class TelegramAdapter {
     this.#failures += 1;
     const waitMs = Math.min(30_000, 1000 * 2 ** Math.min(this.#failures, 5));
     this.#onLog(
-      `长轮询失败（第 ${this.#failures} 次），${Math.round(waitMs / 1000)} 秒后重试：${
+      `long polling failed (failure ${this.#failures}); retrying in ${Math.round(waitMs / 1000)} s: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -156,7 +156,7 @@ export class TelegramAdapter {
       // Ignore silently, and don't reply "no permission" — that tells a stranger the bot is
       // alive and invites more probing. A trace in the logs is enough.
       this.#onLog(
-        `忽略了不在白名单里的人：${message.from?.id ?? "?"}（chat ${chatId}）`,
+        `ignored someone outside the allowlist: ${message.from?.id ?? "?"} (chat ${chatId})`,
       );
       return;
     }
@@ -167,7 +167,7 @@ export class TelegramAdapter {
 
     const text = message.text;
     if (typeof text !== "string" || text.trim() === "") {
-      await this.#say(chatId, "这条我读不了 —— 目前只认文字，语音和图片还没接。");
+      await this.#say(chatId, "I cannot read this one — text only for now; voice and images are not wired up yet.");
       return;
     }
 
@@ -210,7 +210,7 @@ export class TelegramAdapter {
     const envelope = (await response.json()) as TelegramEnvelope<T>;
     if (!envelope.ok) {
       throw new Error(
-        `Telegram ${method} 失败：${envelope.description ?? response.status}`,
+        `Telegram ${method} failed: ${envelope.description ?? response.status}`,
       );
     }
     return envelope.result;

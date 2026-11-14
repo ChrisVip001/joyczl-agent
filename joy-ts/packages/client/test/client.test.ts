@@ -43,7 +43,7 @@ class FakeTransport implements Transport {
   /** The latest request, parsed. */
   get lastRequest(): { id: number; method: string; params: unknown } {
     const line = this.written.at(-1);
-    assert.ok(line !== undefined, "还没有写出任何请求");
+    assert.ok(line !== undefined, "nothing has been written out yet");
     return JSON.parse(line) as { id: number; method: string; params: unknown };
   }
 
@@ -88,10 +88,10 @@ function setup(): { client: JoyClient; transport: FakeTransport; logs: string[] 
   return { client, transport, logs };
 }
 
-test("请求带上递增的 id，应答还给对应的那个 await", async () => {
+test("requests carry an increasing id, and the response goes back to the await that asked", async () => {
   const { client, transport } = setup();
 
-  const first = client.request(METHODS.TURN_START, { message: "你好" });
+  const first = client.request(METHODS.TURN_START, { message: "hello" });
   const second = client.request(METHODS.SESSION_LIST, {});
 
   assert.deepEqual(
@@ -99,7 +99,7 @@ test("请求带上递增的 id，应答还给对应的那个 await", async () =>
     ["turn/start", "session/list"],
   );
   const [id1, id2] = transport.written.map((line) => JSON.parse(line).id);
-  assert.notEqual(id1, id2, "两个请求不能撞 id");
+  assert.notEqual(id1, id2, "two requests must not share an id");
 
   // Deliberately out of order: pairing by id is the whole point.
   transport.respond(id2, { data: [], nextCursor: null });
@@ -109,23 +109,23 @@ test("请求带上递增的 id，应答还给对应的那个 await", async () =>
   assert.deepEqual(await first, { turnId: "t-1" });
 });
 
-test("错误帧还原成 JoyError，并按 code 分流", async () => {
+test("an error frame becomes a JoyError, branched on by code", async () => {
   const { client, transport } = setup();
 
   const denied = client.request(METHODS.TURN_START, { message: "hi" });
-  transport.fail(transport.lastRequest.id, CODES.PROVIDER_ERROR, "没有可用的 key");
+  transport.fail(transport.lastRequest.id, CODES.PROVIDER_ERROR, "no usable key");
 
   const error = await denied.then(
-    () => assert.fail("本该被拒"),
+    () => assert.fail("this should have been rejected"),
     (caught: unknown) => caught,
   );
   assert.ok(error instanceof JoyError);
-  assert.equal(error.message, "没有可用的 key");
-  assert.ok(error.isProvider, "PROVIDER_ERROR 该被判成 provider 那类");
+  assert.equal(error.message, "no usable key");
+  assert.ok(error.isProvider, "PROVIDER_ERROR has to be judged as the provider kind");
   assert.ok(!error.isNotImplemented);
 
   const todo = client.request(METHODS.MODEL_LIST, {});
-  transport.fail(transport.lastRequest.id, CODES.NOT_IMPLEMENTED, "还没做");
+  transport.fail(transport.lastRequest.id, CODES.NOT_IMPLEMENTED, "not built yet");
   await assert.rejects(todo, (caught: unknown) => {
     assert.ok(caught instanceof JoyError);
     assert.ok(caught.isNotImplemented);
@@ -133,7 +133,7 @@ test("错误帧还原成 JoyError，并按 code 分流", async () => {
   });
 });
 
-test("通知按判别式分发；退订之后不再收到", async () => {
+test("notifications fan out on the discriminant; after unsubscribing nothing arrives", async () => {
   const { client, transport } = setup();
   const seen: string[] = [];
   const unsubscribe = client.onNotification((notification) =>
@@ -144,10 +144,10 @@ test("通知按判别式分发；退订之后不再收到", async () => {
     type: "turnStarted",
     turnId: "t-1",
     sessionId: "s-1",
-    userMessage: "你好",
+    userMessage: "hello",
     ts: "2026-09-19T00:00:00.000Z",
   });
-  transport.notify({ type: "textDelta", turnId: "t-1", delta: "你" });
+  transport.notify({ type: "textDelta", turnId: "t-1", delta: "he" });
 
   assert.deepEqual(seen, ["turnStarted", "textDelta"]);
 
@@ -155,17 +155,17 @@ test("通知按判别式分发；退订之后不再收到", async () => {
   transport.notify({
     type: "error",
     code: CODES.INTERNAL_ERROR,
-    message: "退订后这个不该再被看见",
+    message: "this must not be seen after unsubscribing",
     data: null,
   });
-  assert.deepEqual(seen, ["turnStarted", "textDelta"], "退订后不该再来");
+  assert.deepEqual(seen, ["turnStarted", "textDelta"], "nothing may arrive after unsubscribing");
 });
 
-test("读不懂的东西一律走日志，不让客户端崩", async () => {
+test("anything unreadable goes to the log instead of crashing the client", async () => {
   const { transport, logs } = setup();
 
-  transport.emitRaw("这不是 JSON");
-  transport.emitRaw(JSON.stringify({ jsonrpc: "2.0", method: "别的/方法" }));
+  transport.emitRaw("this is not JSON");
+  transport.emitRaw(JSON.stringify({ jsonrpc: "2.0", method: "other/method" }));
   transport.emitRaw(
     JSON.stringify({ jsonrpc: "2.0", method: "turn/notification" }),
   );
@@ -174,46 +174,46 @@ test("读不懂的东西一律走日志，不让客户端崩", async () => {
     JSON.stringify({
       jsonrpc: "2.0",
       id: null,
-      error: { code: CODES.PARSE_ERROR, message: "你发的不是 JSON" },
+      error: { code: CODES.PARSE_ERROR, message: "what you sent is not JSON" },
     }),
   );
-  transport.emitLog("MCP 服务器 fs 连不上，跳过");
+  transport.emitLog("the MCP server fs cannot be reached; skipping");
 
-  assert.equal(logs.length, 6, `该有 6 条日志，实际：${JSON.stringify(logs)}`);
-  assert.match(logs[0]!, /读不出来/);
-  assert.match(logs[1]!, /不认识的通知方法/);
-  assert.match(logs[2]!, /通知没有内容/);
-  assert.match(logs[3]!, /id 没人在等/);
-  assert.match(logs[4]!, /你发的不是 JSON/);
-  assert.match(logs[5]!, /MCP 服务器 fs 连不上/);
+  assert.equal(logs.length, 6, `there should be 6 log lines, actually: ${JSON.stringify(logs)}`);
+  assert.match(logs[0]!, /cannot be read/);
+  assert.match(logs[1]!, /unknown notification method/);
+  assert.match(logs[2]!, /carries nothing/);
+  assert.match(logs[3]!, /nobody is waiting/);
+  assert.match(logs[4]!, /is not JSON/);
+  assert.match(logs[5]!, /fs cannot be reached/);
 });
 
-test("连接断了：挂着的请求全被拒，且说得出在等什么", async () => {
+test("on a dropped connection every pending request is rejected, and it says what it waited for", async () => {
   const { client, transport } = setup();
 
-  const waiting = client.request(METHODS.MEMORY_SEARCH, { query: "咖啡" });
-  transport.emitClose("退出（code=1 signal=null）");
+  const waiting = client.request(METHODS.MEMORY_SEARCH, { query: "coffee" });
+  transport.emitClose("exited (code=1 signal=null)");
 
-  await assert.rejects(waiting, /memory\/search 没等到应答，连接断了/);
+  await assert.rejects(waiting, /memory\/search never got its response; the connection dropped/);
 
   // After the drop, new requests are rejected at once — they must not hang waiting for a reply that will never come.
   await assert.rejects(
     client.request(METHODS.SESSION_NEW, {}),
-    /连接已经没了/,
+    /the connection is gone/,
   );
 });
 
-test("主动关闭：文明收尾，并收敛挂着的请求", async () => {
+test("a deliberate close wraps up politely and settles the pending requests", async () => {
   const { client, transport } = setup();
 
   const waiting = client.request(METHODS.CONFIG_READ, {});
   client.close();
 
-  assert.ok(transport.closeCalled, "该去关传输层（它是关 stdin，不是 kill）");
-  await assert.rejects(waiting, /config\/read 没等到应答/);
+  assert.ok(transport.closeCalled, "it has to close the transport (that is closing stdin, not killing)");
+  await assert.rejects(waiting, /config\/read never got its response/);
 });
 
-test("方法名来自生成物，跟 Rust 侧一字不差", () => {
+test("method names come from the artefacts, letter for letter with the Rust side", () => {
   // These assertions "pin the artifacts to the ground": the day Rust renames a method, the
   // artifacts change and this goes red — instead of a runtime "method not found" much later.
   assert.equal(METHODS.TURN_START, "turn/start");

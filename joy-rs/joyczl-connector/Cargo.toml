@@ -3,7 +3,7 @@ name = "joyczl-connector"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "连接器：让 Joy 在人类逐次点头的前提下，替人去外部世界做事。"
+description = "Connectors: let Joy act in the outside world on a human's behalf, one nod at a time."
 
 [lib]
 name = "joyczl_connector"
@@ -13,21 +13,22 @@ doctest = false
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
-# base64 是 MIME 编码（主题头 / 正文 transfer-encoding）与 AUTH PLAIN 的必需品；
-# 它早已在依赖树里（app-server 上传），不新增编译物。
+# base64 is needed for MIME encoding (subject headers / body transfer-encoding) and AUTH PLAIN;
+# it is long since in the tree (app-server uploads), so nothing new to compile.
 base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }
-# 只为了拿到 Tool / ToolCtx：连接器对外暴露的就是一个普通工具，
-# 注册表一视同仁地校验参数、走同一道审批门。
+# Only for Tool / ToolCtx: a connector shows up as an ordinary tool, and the registry validates
+# its arguments and puts it through the same approval gate as any other.
 joyczl-tools = { workspace = true }
 joyczl-config = { workspace = true }
 joyczl-state = { workspace = true }
-# reqwest 早就在树里（网关 / MCP），飞书两个端点是它最平常的用法。
+# reqwest has been in the tree for a while (gateway / MCP); the two Feishu endpoints are its
+# most ordinary use.
 reqwest = { workspace = true }
 tokio = { workspace = true }
-# TLS 只用于 SMTP（465 隐式 TLS / 587 STARTTLS）。rustls 经由 reqwest 早就在树里，
-# 这里显式声明是为了「谁在用」可查 —— 不引 native-tls、不依赖系统 OpenSSL。
+# TLS is only for SMTP (465 implicit TLS / 587 STARTTLS). rustls already arrives via reqwest;
+# declaring it here makes «who uses it» answerable — no native-tls, no system OpenSSL.
 tokio-rustls = "0.26"
 rustls = "0.23"
 webpki-roots = "1"

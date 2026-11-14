@@ -3,12 +3,25 @@ import type { AcceptanceView } from "./AcceptanceView";
 import type { BudgetView } from "./BudgetView";
 import type { CheckView } from "./CheckView";
 import type { SpentView } from "./SpentView";
+import type { TaskInputView } from "./TaskInputView";
 
 /**
  * One task as the human sees it. `status` is a string on the wire
  * (pending / running / suspended / needsAttention / done / failed / cancelled) — the dashboard paints it.
  */
 export type AgentTaskView = {
+  /**
+   * Human-declared input obligation; it never grants tool permissions.
+   */
+  inputCondition?: TaskInputView;
+  /**
+   * Separate task transcript, when explicitly started through task/start.
+   */
+  executionSessionId?: string;
+  /**
+   * pending / claimed / finished / interrupted; absent for conversational tasks.
+   */
+  dispatchState?: string;
   id: string;
   /**
    * Absent = a task that belongs to no conversation.
@@ -50,7 +63,7 @@ export type AgentTaskView = {
    */
   cwd: string | null;
   /**
-   * How many times this task has been executed ("执行 3 次").
+   * How many times this task has been executed ("run 3 times").
    */
   runCount: number;
   createdAt: string;

@@ -38,9 +38,16 @@ fn rrf_favours_documents_both_legs_agree_on() {
 
     let fused = rrf_fuse(&keyword, &semantic);
     let ids: Vec<i64> = fused.iter().map(|r| r.id).collect();
-    assert_eq!(ids[0], 2, "两条腿都命中的排第一：{ids:?}");
-    assert_eq!(ids.len(), 3, "两边的并集，不重不漏");
-    assert_eq!(fused[0].content, "b", "行内容要原样带回来");
+    assert_eq!(ids[0], 2, "a hit on both legs comes first: {ids:?}");
+    assert_eq!(
+        ids.len(),
+        3,
+        "the union of both sides, no duplicates and nothing missing"
+    );
+    assert_eq!(
+        fused[0].content, "b",
+        "the row's content comes back as it went in"
+    );
 }
 
 #[test]
@@ -59,10 +66,10 @@ fn rrf_is_stable_across_runs() {
 
 #[tokio::test]
 async fn without_an_embedder_retrieval_is_exactly_keyword() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     let facts = joyczl_state::Facts::new(pool);
 
@@ -79,5 +86,8 @@ async fn without_an_embedder_retrieval_is_exactly_keyword() {
     let keyword = facts.search("morning", 4).await.unwrap();
     let hybrid_ids: Vec<i64> = hybrid.iter().map(|r| r.id).collect();
     let keyword_ids: Vec<i64> = keyword.iter().map(|r| r.id).collect();
-    assert_eq!(hybrid_ids, keyword_ids, "开关关着 = 与升级前完全一样");
+    assert_eq!(
+        hybrid_ids, keyword_ids,
+        "with the switch off it is exactly as before the upgrade"
+    );
 }

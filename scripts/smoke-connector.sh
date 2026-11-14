@@ -19,9 +19,9 @@ need_bin
 mkdir -p "$WORK/.joy"
 
 # ---- 1. No config: nothing is enabled, and the CLI says so --------------------------
-OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector list 2>&1)" || fail "connector list 失败：$OUT"
-grep -q "No connectors yet" <<<"$OUT" || fail "没有配置时该说清楚：$OUT"
-echo "  ✓ 没有配置时不启用任何连接器"
+OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector list 2>&1)" || fail "connector list failed: $OUT"
+grep -q "No connectors yet" <<<"$OUT" || fail "with no config it has to say so: $OUT"
+echo "  ✓ no config, no connector enabled"
 
 # ---- 2. Allowlist is a hard boundary ------------------------------------------------
 python3 "$REPO/scripts/fake_smtp_server.py" "$WORK/data.txt" >"$WORK/port" &
@@ -32,7 +32,7 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 PORT="$(head -n1 "$WORK/port" 2>/dev/null || true)"
-[[ -n "$PORT" ]] || fail "假 SMTP 端点没起来"
+[[ -n "$PORT" ]] || fail "the fake SMTP endpoint did not come up"
 
 cat > "$WORK/.joy/connectors.json" <<EOF
 {"email": {
@@ -48,10 +48,10 @@ set +e
 OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector email --to mallory@elsewhere.io --subject s --body b 2>&1)"
 CODE=$?
 set -e
-[[ $CODE -ne 0 ]] || fail "白名单外该失败，却成功了"
-grep -q "mallory@elsewhere.io" <<<"$OUT" || fail "报错该点名收件人：$OUT"
-grep -q "allow_recipients" <<<"$OUT" || fail "报错该说清去哪改：$OUT"
-echo "  ✓ 白名单外：拒绝，并指明白名单在哪"
+[[ $CODE -ne 0 ]] || fail "outside the allowlist this should fail, yet it succeeded"
+grep -q "mallory@elsewhere.io" <<<"$OUT" || fail "the error has to name the recipient: $OUT"
+grep -q "allow_recipients" <<<"$OUT" || fail "the error has to say where to change it: $OUT"
+echo "  ✓ outside the allowlist: refused, and it says where the allowlist is"
 
 # ---- 3. Draft mode writes outbox instead of sending --------------------------------
 python3 -c "
@@ -61,10 +61,10 @@ config = json.loads(p.read_text())
 config['email']['live'] = False
 p.write_text(json.dumps(config))
 "
-OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector email --to alice@corp.com --subject 草稿 --body 先存着 2>&1)"
-grep -q "Draft" <<<"$OUT" || fail "关掉 live 后该写草稿：$OUT"
-ls "$WORK/.joy/outbox" | grep -q "email-" || fail "outbox 里没有草稿文件"
-echo "  ✓ live=false：只写 outbox，不发"
+OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector email --to alice@corp.com --subject draft --body "hold this for now" 2>&1)"
+grep -q "Draft" <<<"$OUT" || fail "with live off it should write a draft: $OUT"
+ls "$WORK/.joy/outbox" | grep -q "email-" || fail "there is no draft file in the outbox"
+echo "  ✓ live=false: writes the outbox only, sends nothing"
 
 # ---- 4. Live send reaches the SMTP server with real MIME bytes ---------------------
 python3 -c "
@@ -76,19 +76,19 @@ p.write_text(json.dumps(config))
 "
 
 # The fake server exits after one message, so this is the only live send in the smoke.
-OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector email --to alice@corp.com,bob@corp.com --subject 你好 --body 正文内容 2>&1)" \
-  || fail "live 发送失败：$OUT"
-grep -q "Sent to" <<<"$OUT" || fail "该报告发送成功：$OUT"
+OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector email --to alice@corp.com,bob@corp.com --subject hello --body "the body text" 2>&1)" \
+  || fail "the live send failed: $OUT"
+grep -q "Sent to" <<<"$OUT" || fail "it should report a successful send: $OUT"
 
 for _ in $(seq 1 50); do
   [[ -s "$WORK/data.txt" ]] && break
   sleep 0.1
 done
-[[ -s "$WORK/data.txt" ]] || fail "SMTP 服务器没收到正文"
-grep -q "To: alice@corp.com, bob@corp.com" "$WORK/data.txt" || fail "收件人头不对"
-grep -q "Subject: =?UTF-8?B?" "$WORK/data.txt" || fail "中文主题没有按 RFC 2047 编码"
-grep -q "Content-Transfer-Encoding: base64" "$WORK/data.txt" || fail "正文不是 base64"
-echo "  ✓ live：真的走到 SMTP，收件人 / 主题编码 / base64 正文都对"
+[[ -s "$WORK/data.txt" ]] || fail "the SMTP server received no body"
+grep -q "To: alice@corp.com, bob@corp.com" "$WORK/data.txt" || fail "the recipient header is wrong"
+grep -q "Subject: =?UTF-8?B?" "$WORK/data.txt" || fail "the non-ASCII subject was not RFC 2047 encoded"
+grep -q "Content-Transfer-Encoding: base64" "$WORK/data.txt" || fail "the body is not base64"
+echo "  ✓ live: it really reached SMTP, with the recipients, the encoded subject and a base64 body all right"
 
 # ---- 5. Feishu: allowlist, draft, then one live message ---------------------------
 python3 "$REPO/scripts/fake_feishu_server.py" "$WORK/feishu.log" >"$WORK/feishu_port" &
@@ -99,7 +99,7 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 FEISHU_PORT="$(head -n1 "$WORK/feishu_port" 2>/dev/null || true)"
-[[ -n "$FEISHU_PORT" ]] || fail "假飞书端点没起来"
+[[ -n "$FEISHU_PORT" ]] || fail "the fake Feishu endpoint did not come up"
 
 python3 - "$WORK/.joy/connectors.json" "$FEISHU_PORT" <<'PY'
 import json, sys
@@ -120,22 +120,22 @@ set +e
 OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector feishu --to ou_mallory --text hi 2>&1)"
 CODE=$?
 set -e
-[[ $CODE -ne 0 ]] || fail "飞书白名单外该失败"
-grep -q "ou_mallory" <<<"$OUT" || fail "飞书报错该点名接收方：$OUT"
-echo "  ✓ 飞书白名单外：拒绝"
+[[ $CODE -ne 0 ]] || fail "outside the Feishu allowlist this should fail"
+grep -q "ou_mallory" <<<"$OUT" || fail "the Feishu error has to name the recipient: $OUT"
+echo "  ✓ outside the Feishu allowlist: refused"
 
-OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector feishu --to ou_alice --text 先存草稿 --dry-run 2>&1)"
-grep -q "Draft" <<<"$OUT" || fail "dry-run 该写草稿：$OUT"
-ls "$WORK/.joy/outbox" | grep -q "feishu-" || fail "outbox 里没有飞书草稿"
-echo "  ✓ 飞书 dry-run：只写 outbox"
+OUT="$(JOY_HOME="$WORK/.joy" "$BIN" connector feishu --to ou_alice --text "hold this as a draft" --dry-run 2>&1)"
+grep -q "Draft" <<<"$OUT" || fail "a dry run should write a draft: $OUT"
+ls "$WORK/.joy/outbox" | grep -q "feishu-" || fail "there is no Feishu draft in the outbox"
+echo "  ✓ Feishu dry run: writes the outbox only"
 
 JOY_FEISHU_SMOKE_SECRET=s3cret JOY_HOME="$WORK/.joy" \
-  "$BIN" connector feishu --to ou_alice --text 冒烟测试消息 >"$WORK/feishu_out.txt" 2>&1 \
-  || fail "飞书 live 发送失败：$(cat "$WORK/feishu_out.txt")"
-grep -q "om_fake" "$WORK/feishu_out.txt" || fail "该报告 message_id：$(cat "$WORK/feishu_out.txt")"
-[[ -s "$WORK/feishu.log" ]] || fail "假飞书没收到消息请求"
+  "$BIN" connector feishu --to ou_alice --text "a smoke-test message" >"$WORK/feishu_out.txt" 2>&1 \
+  || fail "the live Feishu send failed: $(cat "$WORK/feishu_out.txt")"
+grep -q "om_fake" "$WORK/feishu_out.txt" || fail "it should report a message_id: $(cat "$WORK/feishu_out.txt")"
+[[ -s "$WORK/feishu.log" ]] || fail "the fake Feishu received no message request"
 
-python3 - "$WORK/feishu.log" <<'PY' || fail "飞书请求体不对"
+python3 - "$WORK/feishu.log" <<'PY' || fail "the Feishu request body is wrong"
 import json, sys
 line = open(sys.argv[1], encoding="utf-8").read().strip().splitlines()[0]
 request = json.loads(line)
@@ -144,9 +144,9 @@ assert request["auth"] == "Bearer t-fake", request["auth"]
 assert request["body"]["receive_id"] == "ou_alice", request["body"]
 assert request["body"]["msg_type"] == "text", request["body"]
 content = json.loads(request["body"]["content"])
-assert content["text"] == "冒烟测试消息", content
+assert content["text"] == "a smoke-test message", content
 PY
-echo "  ✓ 飞书 live：租户 token → 文本消息，receive_id / content 形状都对"
+echo "  ✓ Feishu live: tenant token → text message, with receive_id and content shaped right"
 
 # ---- 6. Inbound: a real poller over a scripted IMAP, through the shipped binary ------
 # The whole chain this proves: connectors.json → poller task → IMAP protocol → state.db
@@ -165,10 +165,10 @@ EOF_INBOUND
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"session/list","params":{}}' \
   | JOY_HOME="$INBOUND_HOME" JOY_PROVIDER=anthropic JOY_API_KEY=test \
       "$BIN" app-server >"$WORK/inbound_boot.log" 2>&1
-grep -q '"id":1' "$WORK/inbound_boot.log" || fail "入站场景的第一次启动没应答"
+grep -q '"id":1' "$WORK/inbound_boot.log" || fail "the inbound scenario's first boot did not answer"
 
 # The cursor says "we have seen up to 100"; the scripted mailbox has 101 and 102.
-python3 - "$INBOUND_HOME/state.db" <<'PY' || fail "预置轮询游标失败"
+python3 - "$INBOUND_HOME/state.db" <<'PY' || fail "seeding the poll cursor failed"
 import sqlite3, sys
 con = sqlite3.connect(sys.argv[1])
 con.execute("INSERT INTO connector_cursors (connector, mailbox, last_uid) VALUES ('email', 'INBOX', 100)")
@@ -191,7 +191,7 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 IMAP_PORT="$(head -n1 "$WORK/imap_port" 2>/dev/null || true)"
-[[ -n "$IMAP_PORT" ]] || fail "假 IMAP 端点没起来"
+[[ -n "$IMAP_PORT" ]] || fail "the fake IMAP endpoint did not come up"
 
 # Now point the config at it (port known only after the server started).
 python3 - "$INBOUND_HOME/connectors.json" "$IMAP_PORT" <<'PY'
@@ -228,24 +228,24 @@ exec 4>&-
 kill "$INBOUND_PID" 2>/dev/null || true
 wait "$INBOUND_PID" 2>/dev/null || true
 kill "$IMAP_PID" 2>/dev/null || true
-[[ -n "$INBOX_JSON" ]] || { cat "$WORK/inbound_out.log"; fail "inbox/list 没应答"; }
+[[ -n "$INBOX_JSON" ]] || { cat "$WORK/inbound_out.log"; fail "inbox/list did not answer"; }
 
-python3 - "$INBOX_JSON" <<'PY' || fail "收件箱内容不对"
+python3 - "$INBOX_JSON" <<'PY' || fail "the inbox content is wrong"
 import json, sys
 response = json.loads(sys.argv[1])["result"]
 assert response["unseen"] == 2, response
 items = response["items"]
 assert len(items) == 2, items
 subjects = {item["subject"] for item in items}
-assert "服务器周报" in subjects, subjects        # RFC 2047 decoded
-assert "发票" in subjects, subjects
-invoice = next(item for item in items if item["subject"] == "发票")
-assert "本月发票" in invoice["snippet"], invoice  # base64 decoded
+assert "Server weekly report" in subjects, subjects        # RFC 2047 decoded
+assert "invoice" in subjects, subjects
+invoice = next(item for item in items if item["subject"] == "invoice")
+assert "The invoice for this month" in invoice["snippet"], invoice  # base64 decoded
 assert invoice["fromAddr"] == "alice@corp.com", invoice
 PY
-echo "  ✓ 入站：轮询器真的连了 IMAP，主题/正文解码后进了收件箱，inbox/list 读得回来"
+echo "  ✓ inbound: the poller really connected over IMAP; subject and body decoded into the inbox and inbox/list reads back"
 
-# ---- 7. 用户 token 的后台续期：没人发消息，它自己续 --------------------------------
+# ---- 7. A user token refreshed in the background: nobody sends a message, it renews itself ---
 # The chain this proves: connectors.json says as:user → app-server starts the renewer →
 # the renewer sees a token inside its lead window → refresh grant over real HTTP → the file
 # is rewritten with the rotated pair.
@@ -259,7 +259,7 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 RENEW_PORT="$(head -n1 "$WORK/renew_port" 2>/dev/null || true)"
-[[ -n "$RENEW_PORT" ]] || fail "续期用的假飞书端点没起来"
+[[ -n "$RENEW_PORT" ]] || fail "the fake Feishu endpoint used for the refresh did not come up"
 
 cat > "$RENEW_HOME/connectors.json" <<EOF_RENEW
 {"feishu": {"app_id": "cli_fake", "app_secret": "env:JOY_FEISHU_SMOKE_SECRET",
@@ -299,10 +299,10 @@ done
 kill "$RENEW_SERVER" 2>/dev/null || true
 kill "$RENEW_PID" 2>/dev/null || true
 
-[[ "$RENEWED" == "u-renewed" ]] || { cat "$WORK/renew_out.log"; fail "后台没有把 token 续掉（拿到：$RENEWED）"; }
-grep -q "refreshed in the background" "$WORK/renew_out.log" || { cat "$WORK/renew_out.log"; fail "续期没在日志里说一声"; }
+[[ "$RENEWED" == "u-renewed" ]] || { cat "$WORK/renew_out.log"; fail "the token was not refreshed in the background (got: $RENEWED)"; }
+grep -q "refreshed in the background" "$WORK/renew_out.log" || { cat "$WORK/renew_out.log"; fail "the refresh left no word in the log"; }
 
-python3 - "$WORK/renew.log" <<'PY_GRANT' || fail "续期请求形状不对"
+python3 - "$WORK/renew.log" <<'PY_GRANT' || fail "the refresh request is shaped wrong"
 import json, sys
 lines = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
 grant = next(item for item in lines if "oauth/token" in item["path"])
@@ -311,12 +311,12 @@ assert grant["body"]["refresh_token"] == "r-old", grant
 assert grant["body"]["client_id"] == "cli_fake", grant
 PY_GRANT
 
-python3 - "$RENEW_HOME/connector-auth/feishu.json" <<'PY_ROTATED' || fail "轮换后的 refresh token 没存下来"
+python3 - "$RENEW_HOME/connector-auth/feishu.json" <<'PY_ROTATED' || fail "the rotated refresh token was not stored"
 import json, sys
 token = json.load(open(sys.argv[1]))
 assert token["refresh_token"] == "r-renewed", token
 assert token["expires_at"] > 0, token
 PY_ROTATED
-echo "  ✓ 后台续期：没人发消息，refresh grant 真的走了，token 与轮换后的 refresh token 都落盘"
+echo "  ✓ background refresh: with nobody sending a message the refresh grant really ran, and both the token and the rotated refresh token reached the disk"
 
-echo "✓ 连接器冒烟测试通过"
+echo "✓ connector smoke test passed"

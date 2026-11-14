@@ -49,3 +49,6 @@ desktop/src-tauri/gen/
 .DS_Store
 .codegraph/
 .cursor/rules/codegraph.mdc
+
+# Local browser validation artifacts.
+/output/playwright/

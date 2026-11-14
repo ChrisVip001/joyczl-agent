@@ -71,7 +71,7 @@ pub fn next_run(cron: &str, from: NaiveDateTime) -> Result<String, String> {
 ///
 /// Structural only: `0 0 30 2 *` is *valid* and never fires. Rejecting it here would mean
 /// pretending to know the calendar better than the human who wrote it; the panel shows
-/// "没有下一次" instead, which says the same thing without guessing.
+/// "there is no next run" instead, which says the same thing without guessing.
 pub fn valid(cron: &str) -> bool {
     let fields: Vec<&str> = cron.split_whitespace().collect();
     if fields.len() != 5 {
@@ -145,9 +145,9 @@ mod tests {
 
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
         chrono::NaiveDate::from_ymd_opt(y, mo, d)
-            .expect("日期")
+            .expect("date")
             .and_hms_opt(h, mi, 0)
-            .expect("时间")
+            .expect("time")
     }
 
     #[test]
@@ -193,7 +193,7 @@ mod tests {
             "0 8 * * MON",
             "*/0 * * * *",
         ] {
-            assert!(!valid(bad), "{bad} 不该被判为合法");
+            assert!(!valid(bad), "{bad} should not be accepted as valid");
             assert_eq!(next_after(bad, at(2026, 11, 12, 0, 0)), None, "{bad}");
         }
         assert!(valid("0 8 * * 1-5"));

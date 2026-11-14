@@ -9,34 +9,36 @@ Joy 的质量体系分四层，从便宜到昂贵；**确定性 eval 100% 通过
 
 | 层 | 位置 | 形态 | 数量（最近一次全量） |
 |---|---|---|---|
-| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 603 通过 / 0 失败 |
+| 单元测试 | joy-rs 各 crate 内 | 进程内、离线、确定性 | 935 通过 / 0 失败 |
 | 覆盖率 | `cargo llvm-cov` / `coverage` | **趋势门**，不是目标 | Rust 行 65.9%（门 60）/ Python 63%（门 60） |
 | 协议生成 | scripts/write_schema.py --check | 生成物漂移检查 | 0 漂移 |
-| 前端 | joy-ts（node --test + tsc） | 110 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |
-| Python SDK | sdk/python（pytest + mypy） | 13 通过 / 0 失败 | |
+| 前端 | joy-ts（node --test + tsc） | 113 通过 / 0 失败 | mypy：Python SDK 8 文件 0 问题 |
+| Python SDK | sdk/python（pytest + mypy） | 14 通过 / 0 失败 | |
 | 端到端冒烟 | scripts/smoke*.sh | 真 app-server / 真网关 / 真驾驶舱 / 真 SDK | 4 套全通过 |
-| 确定性 eval | evals/deterministic/*.jsonl | scripted 模型驱动同一 run_turn | 66/66 通过，gate exit 0 |
+| 确定性 eval | evals/deterministic/*.jsonl | scripted 模型驱动同一 run_turn | 70/70 通过，gate exit 0 |
 | 回放 eval | evals/replay/*.jsonl | 录制对话 + **期望事件序列**（压缩/审批超时/增量输出/MCP 断线/步数用尽自动续片） | 5/5 通过，同样进 gate |
 | 长任务基准 | evals/long/*.jsonl | 同一装置，问「自主任务有没有变强」 | 11/11 达成（含一条开着计划器的），中断恢复 3/3；**不拦发版** |
-| judge | evals/judge/*.jsonl | 真模型答 + 裁判打分（0-10） | 10 例；出分不拦发版 |
+| judge | evals/judge/*.jsonl | 真模型答 + 裁判打分（0-10） | 13 例；出分不拦发版 |
+
+裁判分数必须是 0–10 的整数；非法分数使评分失败，不进入平均值。新增三项中文陪伴用例，覆盖不擅自安排计划、关系边界及不虚构个人历史。这些是单轮评审标准，不代表陪伴质量已提升；多轮人工评审仍待完成。2026-11-14 的评分边界修复已通过评测器全部六项单测，评测器全目标 Clippy 零警告；上表全量数字仍是此前工作区基线。
 
 ## 单元测试分布（按 crate）
 
 | crate | 用例 | 覆盖要点 |
 |---|---|---|
-| joyczl-state | 24 | SQL 契约、FTS5 检索（含 CJK 与乱码输入）、日历幂等、记忆后端 conformance、事实类别的归一化、提炼失败的退避、并发认领（两个 turn 同时到期只蒸馏一次） |
-| joyczl-tools | 96 | 工具行为与输出文案（落点如实）、create_event 幂等、SKILL.md 校验、参数 schema 校验、执行的三道闸门与批准（含沙箱**真的**拦住了允许目录之外的写入）、超长输出落盘、子代理工具表里没有它自己；本轮新增：12 个 hook 事件的阻断/改写/超时两分法与信任哈希、待办清单三条硬边界、后台作业的环溢出与 owner 围栏、read_file/list_dir 的分页与重读短路、fetch_url 的 SSRF 拒绝与 HTML 转文本 |
-| joyczl-provider | 24 | 两种 wire format 转换、SSE 解析、429 退避重试（真 HTTP）、token 估算、本地推理（不需要 key 的 provider） |
-| joyczl-loop | 25 | 护栏双出口、工具往返、流式增量顺序、打断收兵 |
-| joyczl-graph | 24 | 波次执行、路由、碰撞检测、on_error 排空、triage/gather 全路径 |
-| joyczl-mcp | 33 | 传输帧、握手、工具注册、OAuth 全流程（本地假授权服务器）、token 存储 0600，以及它对外暴露的记忆服务器（`joy mcp serve`） |
-| joyczl-memory | 41 | 检索门失败开放、consolidation（临时陈述过滤、类别、失败退避）、Skills 触发/重扫、显式 `$技能` 与依赖缺失、MEMORY.md 镜像、压缩水位线与兜底、RRF 融合、技能安装/更新 |
-| joyczl-agent | 13 | 确定性内核：三条验收检查（存在/子串/成功调用计数）、工具自述与文件事实对账（含矛盾检出）、计划落账与失败降级、路径收敛（工作目录外/无目录一律拒绝） |
-| joyczl-app-server | 104 | 协议派发、打断、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「先问再跑」的因果）、子代理；工具结果预算与实测 prefill 校准、子代理报告扫描与 `result_schema` 两阶段接受、生命周期钩子、待办注入、后台作业真进程（无沙箱则跳过）、目标循环的续轮/上限/判断器失败三态；以及任务引擎：无会话任务、假完成停在需要确认、真写入才通过验收、超预算停在花费前、一次执行一行台账、重启对账不重放、多轮步骤幂等键不撞、中断立即停止任务循环；以及会话门：同一会话第二轮被 `SESSION_BUSY` 挡在任何副作用之前、`steer` 在轮次边界生效、`follow-up` 排队重启不丢、空闲时调用明说没对象 |
-| joyczl-config | 27 | 环境变量语义、启动期校验（越界即退出）、补丁合并/落盘/清空（**不再有模型/密钥字段**）；多套模型配置的读写、凭据后端（内存/文件，不碰真钥匙串）、切换与删除 |
-| joyczl-cli | 7 | cron 语义、同一分钟只触发一次、两种来源装载任务、一次真触发落进 outbox |
+| joyczl-state | 89 | SQL 契约、FTS5 检索（含 CJK 与乱码输入）、日历幂等、记忆后端 conformance、事实类别的归一化、提炼失败的退避、并发认领（两个 turn 同时到期只蒸馏一次） |
+| joyczl-tools | 200 | 工具行为与输出文案（落点如实）、create_event 幂等、SKILL.md 校验、参数 schema 校验、执行的三道闸门与批准（含沙箱**真的**拦住了允许目录之外的写入）、超长输出落盘、子代理工具表里没有它自己；本轮新增：12 个 hook 事件的阻断/改写/超时两分法与信任哈希、待办清单三条硬边界、后台作业的环溢出与 owner 围栏、read_file/list_dir 的分页与重读短路、fetch_url 的 SSRF 拒绝与 HTML 转文本 |
+| joyczl-provider | 42 | 两种 wire format 转换、SSE 解析、429 退避重试（真 HTTP）、token 估算、本地推理（不需要 key 的 provider） |
+| joyczl-loop | 38 | 护栏双出口、工具往返、流式增量顺序、打断收兵 |
+| joyczl-graph | 31 | 波次执行、路由、碰撞检测、on_error 排空、triage/gather 全路径 |
+| joyczl-mcp | 37 | 传输帧、握手、工具注册、OAuth 全流程（本地假授权服务器）、token 存储 0600，以及它对外暴露的记忆服务器（`joy mcp serve`） |
+| joyczl-memory | 70 | 检索门失败开放、consolidation（临时陈述过滤、类别、失败退避）、Skills 触发/重扫、显式 `$技能` 与依赖缺失、MEMORY.md 镜像、压缩水位线与兜底、RRF 融合、技能安装/更新 |
+| joyczl-agent | 20 | 确定性内核：三条验收检查（存在/子串/成功调用计数）、工具自述与文件事实对账（含矛盾检出）、计划落账与失败降级、路径收敛（工作目录外/无目录一律拒绝） |
+| joyczl-app-server | 226 | 协议派发、打断、config/write 持久化、model/list、trace/usage 落盘、批准等待表（含「先问再跑」的因果）、子代理；工具结果预算与实测 prefill 校准、子代理报告扫描与 `result_schema` 两阶段接受、生命周期钩子、待办注入、后台作业真进程（无沙箱则跳过）、目标循环的续轮/上限/判断器失败三态；以及任务引擎：无会话任务、假完成停在需要确认、真写入才通过验收、超预算停在花费前、一次执行一行台账、重启对账不重放、多轮步骤幂等键不撞、中断立即停止任务循环；以及会话门：同一会话第二轮被 `SESSION_BUSY` 挡在任何副作用之前、`steer` 在轮次边界生效、`follow-up` 排队重启不丢、空闲时调用明说没对象 |
+| joyczl-config | 35 | 环境变量语义、启动期校验（越界即退出）、补丁合并/落盘/清空（**不再有模型/密钥字段**）；多套模型配置的读写、凭据后端（内存/文件，不碰真钥匙串）、切换与删除 |
+| joyczl-cli | 15 | cron 语义、同一分钟只触发一次、两种来源装载任务、一次真触发落进 outbox |
 | joyczl-protocol | 7 | RPC 信封序列化（导出测试按需运行） |
-| joyczl-ops | 8 | HTTP 翻译层 |
+| joyczl-ops | 72 | HTTP 翻译层 |
 
 ## 测试报告（2026-09-23 全量运行）
 
@@ -135,3 +137,15 @@ just smoke-gateway / smoke-dashboard / smoke-sdk-python
 
 失败处置约定：单元测试与确定性 eval 失败**阻塞合并**；长任务基准与 judge 分数仅记录
 趋势；smoke 失败阻塞发布。
+
+TypeScript 单元测试设置 30 秒超时，本地 HTTP 适配器挂起时会让检查失败，不会无限阻塞完整门禁。
+
+## 真实进程崩溃恢复
+
+`just smoke-recovery` 使用隔离的 app-server、本地脚本模型与 MCP 服务，在工具发出前、外部模拟服务已提交但未回复、工具结果检查点已提交这三个边界执行 SIGKILL。断言比较不中断基线的调用数、副作用数、确切 run、轮次和检查点已知 token 用量。未知结果停止等待人工核对；已知结果恢复且不重放。测试需要 POSIX 进程组，不访问配置中的真实服务。
+
+针对性回归还覆盖重复恢复、缺少模型配置、记账失败、跨 run 身份和持久化人工暂停。恢复停止也会计入检查点已知用量。未收到或未保存的供应商用量、崩溃前活动时长仍无法精确测量。
+
+保留结果：[2026-11-14 进程恢复](../evals/results/process-recovery-2026-11-14.json)，4 例通过。两种未知结果停止均保留 15 个已知 token；不中断基线与已知结果恢复均为 30 token、一个 run、一次已提交效果。Linux CI 发版闸门运行这套测试。
+
+记忆恢复回归覆盖完成前中断、启动恢复失败后保留领取、与新聊天隔离来源集合、退避事务失败，以及事实/事件已提交但来源完成标记失败。相同来源批次不能增加重复确认或重复摘要，人工删除摘要后不复活。worker 测试还验证执行所有权和停滞模型调用的取消/等待退出。进程崩溃冒烟包含记忆领取后的 SIGKILL，结果区分待恢复来源与已完成提炼。

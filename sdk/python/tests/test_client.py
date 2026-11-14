@@ -1,7 +1,8 @@
-"""客户端自己的逻辑：id 配对、通知分发、出错、连接断了。
+"""The client's own logic: id pairing, notification fan-out, errors, a dropped connection.
 
-这里不起真进程 —— 那是 `scripts/smoke-sdk-python.sh` 的事，它拿真的 app-server
-跑完整一个回合。这里只钉住「客户端对帧做了什么」，因为那才是容易错的部分。
+No real process here — that is `scripts/smoke-sdk-python.sh`'s job, and it runs a whole
+turn against a real app-server. This pins down what the client does to a frame, because
+that is the part that goes wrong.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from joyczl_agent.generated import v2
 
 
 class FakeTransport(Transport):
-    """把 app-server 换成一根内存管子。"""
+    """Swap the app-server for an in-memory pipe."""
 
     def __init__(self) -> None:
         self.written: list[dict[str, Any]] = []
@@ -83,10 +84,11 @@ async def _fire(
     method: str,
     params: BaseModel,
 ) -> asyncio.Task[Any]:
-    """发一个请求，等它写到线上，把任务交回来让测试自己决定喂什么。
+    """Send a request, wait until it is on the wire, and hand the task back so the test can
+    decide what to feed it.
 
-    `method` / `params` 故意标宽：这是个转发器，把 `request` 那套重载抹平了 ——
-    重载是给用户看的，这里只需要「发出去」。
+    `method` / `params` are deliberately wide: this is a pass-through that flattens the
+    overloads on `request` — those are for users; all this needs is "it goes out".
     """
     task = asyncio.create_task(
         client.request(method, params)  # type: ignore[call-overload]
@@ -111,7 +113,8 @@ def test_request_pairs_the_response_back_by_id() -> None:
 
         transport.feed({"jsonrpc": "2.0", "id": sent["id"], "result": {"data": []}})
         reply = await task
-        # 还原成模型，不是 dict —— 不然 `-> ModelListResponse` 那句标注是假的。
+        # Restored as a model, not a dict — otherwise the `-> ModelListResponse` annotation
+        # would be a lie.
         assert reply.data == []
 
     asyncio.run(scenario())
@@ -121,12 +124,12 @@ def test_unset_optional_params_are_left_out() -> None:
     async def scenario() -> None:
         transport, client = await _connected()
         task = await _fire(
-            client, transport, Methods.TURN_START, TurnStartParams(message="你好")
+            client, transport, Methods.TURN_START, TurnStartParams(message="hello")
         )
 
-        # 「没填」该是不出现，而不是出现成 null —— TS 那边 JSON.stringify 丢
-        # undefined 是这个动作，Rust 侧 serde 的 Option 也是这么读的。
-        assert transport.written[0]["params"] == {"message": "你好"}
+        # "Not filled in" should be absent, not present as null — dropping `undefined` is what
+        # `JSON.stringify` does on the TS side, and serde's `Option` reads it the same way.
+        assert transport.written[0]["params"] == {"message": "hello"}
         await _abandon(task)
 
     asyncio.run(scenario())
@@ -142,15 +145,15 @@ def test_notification_reaches_the_handler_as_a_model() -> None:
             {
                 "jsonrpc": "2.0",
                 "method": "turn/notification",
-                "params": {"type": "textDelta", "turnId": "t1", "delta": "你"},
+                "params": {"type": "textDelta", "turnId": "t1", "delta": "he"},
             }
         )
 
         assert len(seen) == 1
-        # `type` 是 Literal，能直接跟字符串比 —— 这是把 `--enum-field-as-literal`
-        # 设成 `one` 而不是 `all` 换来的。
+        # `type` is a Literal, so it can be compared to a string directly — that is what
+        # setting `--enum-field-as-literal` to `one` rather than `all` bought.
         assert seen[0].type == "textDelta"
-        assert seen[0].delta == "你"
+        assert seen[0].delta == "he"
         assert transport.logs == []
 
     asyncio.run(scenario())
@@ -162,7 +165,7 @@ def test_notification_that_does_not_fit_is_reported_not_raised() -> None:
         seen: list[Any] = []
         client.on_notification(seen.append)
 
-        # 少了 delta。
+        # The delta is missing.
         transport.feed(
             {
                 "jsonrpc": "2.0",
@@ -171,10 +174,11 @@ def test_notification_that_does_not_fit_is_reported_not_raised() -> None:
             }
         )
 
-        # 不发给订阅者（它拿到的会是个残缺对象），但也不能让客户端崩。
+        # Not handed to subscribers (they would get a broken object), but it must not take the
+        # client down either.
         assert seen == []
         assert len(transport.logs) == 1
-        assert "形状对不上" in transport.logs[0]
+        assert "shape does not match" in transport.logs[0]
 
     asyncio.run(scenario())
 
@@ -182,9 +186,9 @@ def test_notification_that_does_not_fit_is_reported_not_raised() -> None:
 def test_a_line_that_is_not_json_is_reported_not_raised() -> None:
     async def scenario() -> None:
         transport, _client = await _connected()
-        transport.feed_raw("{这不是 JSON")
+        transport.feed_raw("{ this is not JSON")
         assert len(transport.logs) == 1
-        assert "读不出来" in transport.logs[0]
+        assert "will not parse" in transport.logs[0]
 
     asyncio.run(scenario())
 
@@ -197,14 +201,14 @@ def test_error_response_becomes_a_joy_error() -> None:
             {
                 "jsonrpc": "2.0",
                 "id": transport.written[0]["id"],
-                "error": {"code": -32000, "message": "模型那边没接上"},
+                "error": {"code": -32000, "message": "the model never connected"},
             }
         )
 
         with pytest.raises(JoyError) as caught:
             await task
-        assert str(caught.value) == "模型那边没接上"
-        # 调用方靠 code 分流：-32000 是「去配 key」，不是「你调错了」。
+        assert str(caught.value) == "the model never connected"
+        # The caller branches on code: -32000 is "go configure a key", not "you called it wrong".
         assert caught.value.is_provider
         assert not caught.value.is_not_implemented
 
@@ -217,7 +221,7 @@ def test_server_echoing_the_id_as_a_string_still_pairs() -> None:
         task = await _fire(client, transport, Methods.MODEL_LIST, ModelListParams())
         ours = transport.written[0]["id"]
 
-        # `RequestId` 是 `number | string`，两种都得能配回来。
+        # `RequestId` is `number | string`, and both have to pair back.
         transport.feed({"jsonrpc": "2.0", "id": str(ours), "result": {"data": []}})
         assert (await task).data == []
 
@@ -229,13 +233,14 @@ def test_the_process_dying_rejects_everything_still_waiting() -> None:
         transport, client = await _connected()
         task = await _fire(client, transport, Methods.MODEL_LIST, ModelListParams())
 
-        transport.die("退出（code=1）")
+        transport.die("exit (code=1)")
 
         with pytest.raises(RuntimeError) as caught:
             await task
-        # 方法名要带上 —— 一个永远挂着的 await 最难查的地方，就是不知道它在等哪个请求。
+        # The method name has to travel — the hardest thing about an await that hangs forever
+        # is not knowing which request it is waiting on.
         assert "model/list" in str(caught.value)
-        assert client.closed_reason == "退出（code=1）"
+        assert client.closed_reason == "exit (code=1)"
 
     asyncio.run(scenario())
 
@@ -244,7 +249,7 @@ def test_request_after_close_fails_fast() -> None:
     async def scenario() -> None:
         _transport, client = await _connected()
         await client.close()
-        with pytest.raises(RuntimeError, match="连接已经没了"):
+        with pytest.raises(RuntimeError, match="the connection is gone"):
             await client.request(Methods.MODEL_LIST, ModelListParams())
 
     asyncio.run(scenario())
@@ -253,40 +258,43 @@ def test_request_after_close_fails_fast() -> None:
 def test_a_method_this_side_does_not_know_is_rejected_locally() -> None:
     async def scenario() -> None:
         _transport, client = await _connected()
-        # 发出去只会换回一句服务端的 METHOD_NOT_FOUND，而那个错分不清
-        #「名字打错了」和「服务端没有这个方法」。
-        with pytest.raises(ValueError, match="不认识这个方法"):
-            # 传的就是个不该被接受的东西，重载自然一个都不匹配。
+        # Sending it would only get a METHOD_NOT_FOUND back from the server, and that error
+        # cannot tell "the name is misspelt" from "the server has no such method".
+        with pytest.raises(ValueError, match="does not know that method"):
+            # What is passed is something that must not be accepted, so no overload matches.
             await client.request("memory/teleport", ModelListParams())  # type: ignore[call-overload]
 
     asyncio.run(scenario())
 
 
 def test_every_method_has_a_response_pairing() -> None:
-    """Rust 加了方法、生成物跟上了、配对表没跟上时，这条会红。
+    """Goes red when Rust adds a method, the artefacts follow, and the pairing table does not.
 
-    这是 `_RESPONSES` 唯一的防线：少了它，新方法要等到第一次真被调用时才炸，
-    而那时候的症状（`NotImplementedError`）离原因（配对表少一行）已经很远了。
+    This is `_RESPONSES`' only guard: without it a new method only blows up the first time
+    it is really called, and by then the symptom (`NotImplementedError`) is a long way from
+    the cause (one missing line in the pairing table).
     """
     missing = sorted(m.name for m in set(Methods) - set(_RESPONSES))
     extra = sorted(m.name for m in set(_RESPONSES) - set(Methods))
     assert not missing and not extra, (
-        f"`Methods` 和 `_RESPONSES` 对不上：生成物里多出 {missing}，配对表里多出 {extra}"
+        f"`Methods` and `_RESPONSES` disagree: the artefacts have {missing} extra, the pairing "
+        f"table has {extra} extra"
     )
 
 
 def test_every_method_type_reaches_the_package() -> None:
-    """`protocol.py` 那份清单落后于生成物时，这条会红。
+    """Goes red when `protocol.py`'s list falls behind the generated artefacts.
 
-    清单是手写的（Python 的静态类型跟不上算出来的再导出，见 `protocol.py` 开头），
-    而落后的症状很隐蔽：用户写 `from joyczl_agent import 某Params` 扑空，
-    但包自己一切正常 —— 所以在这里钉住。
+    The list is hand-written (Python's static types cannot follow a computed re-export, see the
+    top of `protocol.py`), and falling behind is a quiet symptom: a user writing
+    `from joyczl_agent import SomeParams` comes up empty while the package itself is fine —
+    so it is pinned here.
 
-    只看 `*Params` / `*Response`：具名通知类（`TextDeltaNotification` 那些）是
-    故意不导出的，理由见 `protocol.py`。
+    Only `*Params` / `*Response`: the named notification classes (`TextDeltaNotification` and
+    kin) are deliberately not exported, see `protocol.py`.
 
-    也放过 `JsonRpc*`：那是帧信封，`JsonRpcResponse` 恰好也以 Response 结尾，
-    但客户端自己拼帧，从不用这些类型。
+    `JsonRpc*` is let through too: that is the frame envelope, and `JsonRpcResponse` happens to
+    end in Response as well, but the client builds its own frames and never uses these.
     """
     missing = sorted(
         name
@@ -295,15 +303,16 @@ def test_every_method_type_reaches_the_package() -> None:
         and not name.startswith("JsonRpc")
         and name not in protocol.__all__
     )
-    assert not missing, f"这些方法类型没从 `protocol` 出去：{missing}"
+    assert not missing, f"these method types never left `protocol`: {missing}"
 
 
 def test_the_named_notification_classes_are_not_exported() -> None:
-    """那 12 个具名通知类是**陷阱**，不能放出去。
+    """Those 12 named notification classes are a **trap** and must not be exported.
 
-    它们跟联合里内联的那一份不是同一个类，`isinstance(n, TextDeltaNotification)`
-    会是 False —— 导出等于告诉用户「拿这个去 isinstance」。哪天 Rust 侧把 schema
-    改成 `allOf: [$ref]`（那样两边就合一了），这条测试会红，那时再放开它们。
+    They are not the same class as the copy inlined in the union, so
+    `isinstance(n, TextDeltaNotification)` would be False — exporting them tells the user
+    "go on, isinstance with this". If Rust ever changes the schema to `allOf: [$ref]` (which
+    would merge the two), this test goes red, and then they can be opened up.
     """
     leaked = sorted(
         name
@@ -312,4 +321,24 @@ def test_the_named_notification_classes_are_not_exported() -> None:
         and not name.startswith("Server")
         and name in protocol.__all__
     )
-    assert not leaked, f"这些具名通知类混进了导出面（isinstance 对它们不成立）：{leaked}"
+    assert not leaked, (
+        f"these named notification classes leaked into the export surface "
+        f"(isinstance does not hold for them): {leaked}"
+    )
+
+
+def test_required_null_input_is_preserved_on_the_wire() -> None:
+    async def scenario() -> None:
+        transport, client = await _connected()
+        params = protocol.TaskSignalParams(
+            conditionId="task:input", source="manual", eventKey="task", eventId="event", data=None
+        )
+        task = await _fire(client, transport, Methods.TASK_SIGNAL, params)
+        try:
+            assert "data" in transport.written[-1]["params"]
+            assert transport.written[-1]["params"]["data"] is None
+        finally:
+            await _abandon(task)
+            await client.close()
+
+    asyncio.run(scenario())

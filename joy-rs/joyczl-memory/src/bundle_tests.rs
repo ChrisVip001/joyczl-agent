@@ -4,15 +4,15 @@
 use crate::bundle::{Bundle, Page};
 
 fn temp_bundle(name: &str) -> Bundle {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let root = dir.path().join(name);
     let _ = dir.keep();
     let bundle = Bundle::from_root(&root);
-    bundle.ensure().expect("建库");
+    bundle.ensure().expect("create the store");
     bundle
 }
 
-/// 写一页、读回来：正文与头部字段都还在。
+/// Write a page, read it back: body and header fields are both still there.
 #[test]
 fn a_page_round_trips() {
     let bundle = temp_bundle("page_roundtrip");
@@ -21,22 +21,22 @@ fn a_page_round_trips() {
         "person",
         "Alex",
         "alex",
-        "喜欢早会",
-        "第一行\n第二行",
+        "likes morning meetings",
+        "first line\nsecond line",
     );
     page.sources = vec!["ledger:s1/t1".to_string()];
-    bundle.write(&page).expect("写页");
+    bundle.write(&page).expect("write the page");
 
-    let read = bundle.read("alex").expect("读").expect("存在");
+    let read = bundle.read("alex").expect("read").expect("it exists");
     assert_eq!(read.kind, "person");
     assert_eq!(read.title, "Alex");
-    assert_eq!(read.summary, "喜欢早会");
-    assert_eq!(read.body, "第一行\n第二行");
+    assert_eq!(read.summary, "likes morning meetings");
+    assert_eq!(read.body, "first line\nsecond line");
     assert_eq!(read.sources, vec!["ledger:s1/t1".to_string()]);
     assert_eq!(read.digest, page.digest);
 }
 
-/// 目录文件跟着页面走：一页一行，带标题、类型与一句话说明。
+/// The catalog follows the pages: one line per page, with title, type and a one-line summary.
 #[test]
 fn the_catalog_is_regenerated_from_the_pages() {
     let bundle = temp_bundle("page_index");
@@ -46,89 +46,120 @@ fn the_catalog_is_regenerated_from_the_pages() {
             "person",
             "Alex",
             "alex",
-            "喜欢早会",
-            "正文",
+            "likes morning meetings",
+            "the body",
         ))
-        .expect("写");
+        .expect("write");
     bundle
         .write(&Page::new(
             "joy",
             "project",
             "Joy",
             "joy",
-            "本地优先助手",
-            "正文",
+            "a local-first assistant",
+            "the body",
         ))
-        .expect("写");
+        .expect("write");
 
-    let index = bundle.index_text().expect("目录");
-    assert!(index.contains("2 pages"), "计数要对：{index}");
+    let index = bundle.index_text().expect("the directory");
     assert!(
-        index.contains("[Alex](alex.md) · person — 喜欢早会"),
+        index.contains("2 pages"),
+        "the count has to be right: {index}"
+    );
+    assert!(
+        index.contains("[Alex](alex.md) · person — likes morning meetings"),
         "{index}"
     );
     assert!(
-        index.contains("[Joy](joy.md) · project — 本地优先助手"),
+        index.contains("[Joy](joy.md) · project — a local-first assistant"),
         "{index}"
     );
 }
 
-/// 手改正文后，读出来的 digest 跟着正文变 —— 「文件说了算」不是口号。
+/// Edit the body by hand and the digest read back changes with it — "the file decides" is not
+/// a slogan.
 #[test]
 fn the_digest_follows_a_hand_edit() {
     let bundle = temp_bundle("page_handedit");
     bundle
-        .write(&Page::new("alex", "fact", "Alex", "alex", "摘要", "原文"))
-        .expect("写");
+        .write(&Page::new(
+            "alex",
+            "fact",
+            "Alex",
+            "alex",
+            "the summary",
+            "the original",
+        ))
+        .expect("write");
 
     let path = bundle.root().join("alex.md");
     let edited = std::fs::read_to_string(&path)
-        .expect("读")
-        .replace("原文", "被人改过");
-    std::fs::write(&path, edited).expect("手改");
+        .expect("read")
+        .replace("the original", "edited by someone");
+    std::fs::write(&path, edited).expect("a hand edit");
 
-    let read = bundle.read("alex").expect("读").expect("存在");
-    assert_eq!(read.body, "被人改过");
+    let read = bundle.read("alex").expect("read").expect("it exists");
+    assert_eq!(read.body, "edited by someone");
     assert_ne!(
         read.digest,
-        crate::bundle::digest_of("原文"),
-        "摘要必须反映正文"
+        crate::bundle::digest_of("the original"),
+        "the summary has to reflect the body"
     );
-    assert_eq!(read.digest, crate::bundle::digest_of("被人改过"));
+    assert_eq!(read.digest, crate::bundle::digest_of("edited by someone"));
 }
 
-/// 删除一页：文件没了，目录少一行，变更历史里留痕。
+/// Deleting a page: the file is gone, the catalog loses a line, and the change history keeps
+/// a record.
 #[test]
 fn removing_a_page_leaves_a_trail() {
     let bundle = temp_bundle("page_remove");
     bundle
-        .write(&Page::new("gone", "fact", "Gone", "gone", "", "正文"))
-        .expect("写");
-    assert!(bundle.remove("gone").expect("删"));
-    assert!(!bundle.remove("gone").expect("再删"), "已经不在了");
+        .write(&Page::new("gone", "fact", "Gone", "gone", "", "the body"))
+        .expect("write");
+    assert!(bundle.remove("gone").expect("delete it"));
+    assert!(
+        !bundle.remove("gone").expect("delete it again"),
+        "no longer there"
+    );
 
-    assert!(bundle.read("gone").expect("读").is_none());
-    assert!(!bundle.index_text().expect("目录").contains("gone.md"));
-    let trail = std::fs::read_to_string(bundle.root().join("changelog.md")).expect("历史");
+    assert!(bundle.read("gone").expect("read").is_none());
+    assert!(!bundle
+        .index_text()
+        .expect("the directory")
+        .contains("gone.md"));
+    let trail = std::fs::read_to_string(bundle.root().join("changelog.md")).expect("the history");
     assert!(trail.contains("write gone fact"), "{trail}");
     assert!(trail.contains("remove gone"), "{trail}");
 }
 
-/// 坏页面不连坐：一个手写坏的文件只是被跳过，其他页照旧可用。
+/// A bad page does not take the others down: one hand-broken file is skipped and the rest stay
+/// usable.
 #[test]
 fn one_broken_page_does_not_hide_the_rest() {
     let bundle = temp_bundle("page_broken");
     bundle
-        .write(&Page::new("good", "fact", "Good", "good", "还在", "正文"))
-        .expect("写");
-    std::fs::write(bundle.root().join("broken.md"), "没有头部的一段话\n").expect("写坏文件");
+        .write(&Page::new(
+            "good",
+            "fact",
+            "Good",
+            "good",
+            "still there",
+            "the body",
+        ))
+        .expect("write");
+    std::fs::write(
+        bundle.root().join("broken.md"),
+        "a paragraph with no frontmatter\n",
+    )
+    .expect("write the broken file");
 
-    let pages = bundle.pages().expect("列");
-    assert_eq!(pages.len(), 1, "坏的跳过，好的还在");
+    let pages = bundle.pages().expect("list");
+    assert_eq!(pages.len(), 1, "the bad one is skipped, the good one stays");
     assert_eq!(pages[0].slug, "good");
 }
 
-/// 页面名是文件名：越界、保留名、大写都被拒绝，而且拒绝得清楚。
+/// A page name is a file name: escapes, reserved names and capitals are refused, and refused
+/// with a sentence that says why.
 #[test]
 fn slug_validation_refuses_traversal() {
     let bundle = temp_bundle("page_slug");
@@ -139,33 +170,44 @@ fn slug_validation_refuses_traversal() {
         "",
         "index",
         "changelog",
-        "带 空格",
+        "with a space",
     ] {
         let error = bundle
             .page_path(bad)
             .err()
-            .unwrap_or_else(|| panic!("`{bad}` 该被拒绝"));
-        assert!(!error.to_string().is_empty(), "拒绝要带原因");
+            .unwrap_or_else(|| panic!("`{bad}` has to be refused"));
+        assert!(
+            !error.to_string().is_empty(),
+            "a refusal has to carry a reason"
+        );
     }
     assert!(
         bundle.page_path("weekly-review_2").is_ok(),
-        "正常名字要放行"
+        "an ordinary name has to be allowed"
     );
+    // A CJK page name on purpose: that is the case a byte-length check would wrongly reject.
     assert!(
         bundle.page_path("带中文").is_ok(),
-        "中文页名要放行 —— 人手写的库该是可读的"
+        "a CJK page name has to be allowed — a hand-written library should be readable"
     );
 }
 
-/// 页面的头部字段是 OKF 的形状：`type` 在第一行，正文在 `---` 之后。
+/// The header is OKF-shaped: `type` on the first line, the body after `---`.
 #[test]
 fn a_page_file_starts_with_its_type() {
     let bundle = temp_bundle("page_shape");
     bundle
-        .write(&Page::new("alex", "person", "Alex", "alex", "摘要", "正文"))
-        .expect("写");
-    let text = std::fs::read_to_string(bundle.root().join("alex.md")).expect("读");
+        .write(&Page::new(
+            "alex",
+            "person",
+            "Alex",
+            "alex",
+            "the summary",
+            "the body",
+        ))
+        .expect("write");
+    let text = std::fs::read_to_string(bundle.root().join("alex.md")).expect("read");
     assert!(text.starts_with("---\ntype: person\n"), "{text}");
     assert!(text.contains("title: Alex\n"), "{text}");
-    assert!(text.trim_end().ends_with("正文"), "{text}");
+    assert!(text.trim_end().ends_with("the body"), "{text}");
 }

@@ -11,7 +11,7 @@ export type SessionSummary = {
   lastAt: string | null;
   /**
    * The session's working directory: the **root of everything it may write** (tools refuse
-   * writes outside it). Absent = not chosen; the dashboard shows "选择工作目录".
+   * writes outside it). Absent = not chosen; the dashboard shows "choose a working directory".
    */
   cwd?: string;
   /**

@@ -29,7 +29,7 @@ async fn yields_each_data_payload() {
     .collect::<Vec<_>>()
     .await
     .into_iter()
-    .map(|r| r.expect("不应出错"))
+    .map(|r| r.expect("it should not error"))
     .collect::<Vec<_>>();
 
     assert_eq!(out.len(), 2, "{out:?}");
@@ -48,7 +48,7 @@ async fn handles_payloads_split_across_chunks() {
     .collect::<Vec<_>>()
     .await
     .into_iter()
-    .map(|r| r.expect("不应出错"))
+    .map(|r| r.expect("it should not error"))
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -69,7 +69,7 @@ async fn handles_crlf_and_missing_trailing_blank_line() {
     .collect::<Vec<_>>()
     .await
     .into_iter()
-    .map(|r| r.expect("不应出错"))
+    .map(|r| r.expect("it should not error"))
     .collect::<Vec<_>>();
 
     assert_eq!(out, vec!["{\"a\":1}".to_string(), "{\"b\":2}".to_string()]);
@@ -85,7 +85,7 @@ async fn ignores_comments_and_event_lines() {
     .collect::<Vec<_>>()
     .await
     .into_iter()
-    .map(|r| r.expect("不应出错"))
+    .map(|r| r.expect("it should not error"))
     .collect::<Vec<_>>();
 
     assert_eq!(out, vec!["{\"type\":\"ping\"}".to_string()]);

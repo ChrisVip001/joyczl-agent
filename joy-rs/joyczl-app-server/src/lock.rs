@@ -1,14 +1,8 @@
-//! Guardian lock: only one app-server process per `<home>`.
+//! Kernel-backed execution ownership shared by every checked runtime entry point.
 //!
-//! A PID file plus an atomic create: the PID file guards against **real accidents** — two app-servers
-//! each holding their own in-memory state (approvals, goals, job table), writing the same state.db,
-//! neither knowing the other exists. "Already running" must be a hard startup error, not a warning.
-//!
-//! Three semantics:
-//! * Acquiring the lock = `O_EXCL`-create the file and write our own PID;
-//! * File exists → read the PID and check whether the process is alive: alive means error out; dead means
-//!   the wreckage of the last crash, **clear it and retry** (no manual file deletion for humans);
-//! * `Drop` deletes the file. A crash failing to clean up is fine — the next process reaps by the rules above.
+//! The advisory lock follows the canonical database path and stays on a persistent inode.
+//! Its file is never unlinked; the OS releases ownership when the last guard closes or crashes.
+//! The legacy PID file remains for diagnostics and interoperability with older app-server binaries.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -20,16 +14,82 @@ const LOCK_FILE: &str = "app-server.lock";
 #[derive(Debug)]
 pub struct DaemonLock {
     path: PathBuf,
+    _ownership: std::fs::File,
 }
 
 impl Drop for DaemonLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+        if let Err(error) = fs2::FileExt::unlock(&self._ownership) {
+            eprintln!("(joy) runtime ownership unlock failed: {error}");
+        }
     }
 }
 
 /// Try to acquire the guardian lock for `home`. On failure returns an error with the reason (including the running PID and file path).
 pub fn acquire(home: &Path) -> Result<DaemonLock, String> {
+    let database = home.join("state.db");
+    let resolved = match std::fs::canonicalize(&database) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if std::fs::symlink_metadata(&database).is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                return Err(
+                    "State database symlink target is unavailable; ownership cannot be established"
+                        .into(),
+                );
+            }
+            std::fs::canonicalize(home)
+                .map_err(|error| format!("Cannot resolve runtime home: {error}"))?
+                .join("state.db")
+        }
+        Err(error) => return Err(format!("Cannot resolve state database ownership: {error}")),
+    };
+    let mut name = resolved
+        .file_name()
+        .ok_or("State database has no filename")?
+        .to_os_string();
+    name.push(".runtime.lock");
+    let lock_path = resolved
+        .parent()
+        .ok_or("State database has no directory")?
+        .join(name);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let ownership = options.open(&lock_path).map_err(|error| {
+        format!(
+            "Cannot open runtime ownership lock ({}): {error}",
+            lock_path.display()
+        )
+    })?;
+    if let Err(error) = fs2::FileExt::try_lock_exclusive(&ownership) {
+        let contended = fs2::lock_contended_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock
+            || error
+                .raw_os_error()
+                .is_some_and(|code| Some(code) == contended.raw_os_error())
+        {
+            let pid = std::fs::read_to_string(home.join(LOCK_FILE))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "unknown".into());
+            return Err(format!("A Joy runtime for this state database is already running (pid {pid}, lock {}). Use its client or stop it before starting another runtime.",lock_path.display()));
+        }
+        return Err(format!(
+            "Runtime ownership lock failed ({}): {error}",
+            lock_path.display()
+        ));
+    }
+    acquire_legacy(home, ownership)
+}
+
+fn acquire_legacy(home: &Path, ownership: std::fs::File) -> Result<DaemonLock, String> {
     let path = home.join(LOCK_FILE);
     for attempt in 0..2 {
         match std::fs::OpenOptions::new()
@@ -45,7 +105,10 @@ pub fn acquire(home: &Path) -> Result<DaemonLock, String> {
                         path.display()
                     )
                 })?;
-                return Ok(DaemonLock { path });
+                return Ok(DaemonLock {
+                    path,
+                    _ownership: ownership,
+                });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 // Lock already held: a live process is a real conflict; a dead one is crash wreckage — reap and retry.

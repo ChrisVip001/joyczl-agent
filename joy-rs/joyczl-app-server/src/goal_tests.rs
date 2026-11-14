@@ -28,7 +28,7 @@ async fn server(mock: Arc<Mock>, goal_max_rounds: i32) -> (Server, tempfile::Tem
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let server = Server::boot(
         pool,
         Settings {
@@ -48,32 +48,32 @@ async fn a_goal_is_the_task_row_and_nothing_else() {
     let (server, _dir) = server(Arc::new(Mock::new(Vec::new())), 5).await;
 
     let row = server
-        .set_task_goal("s1", Some("  让测试全绿  "))
+        .set_task_goal("s1", Some("  get the tests green  "))
         .await
-        .expect("设目标该建任务");
+        .expect("setting a goal should create the task");
     assert_eq!(
         row.goal_condition.as_deref(),
-        Some("让测试全绿"),
-        "两侧空白该被去掉"
+        Some("get the tests green"),
+        "surrounding whitespace has to be trimmed away"
     );
     assert_eq!(row.rounds_used, 0);
-    assert_eq!(row.max_rounds, 5, "上限来自 settings");
+    assert_eq!(row.max_rounds, 5, "the cap comes from settings");
 
     // Setting again edits that row — it must not stack a second task on the session.
     let same = server
-        .set_task_goal("s1", Some("让 clippy 也绿"))
+        .set_task_goal("s1", Some("get clippy green too"))
         .await
-        .expect("任务仍在");
+        .expect("the task is still there");
     assert_eq!(same.id, row.id);
-    assert_eq!(same.goal_condition.as_deref(), Some("让 clippy 也绿"));
+    assert_eq!(same.goal_condition.as_deref(), Some("get clippy green too"));
 
     // Clearing takes the condition off and leaves the row (its title is the record).
     let cleared = server
         .set_task_goal("s1", Some("   "))
         .await
-        .expect("任务仍在");
+        .expect("the task is still there");
     assert_eq!(cleared.id, row.id);
-    assert!(cleared.goal_condition.is_none(), "目标清掉了");
+    assert!(cleared.goal_condition.is_none(), "the goal was cleared");
 
     // A session with nothing: clearing is a no-op, not an error and not a new row.
     assert!(server.set_task_goal("s2", None).await.is_none());
@@ -83,12 +83,12 @@ async fn a_goal_is_the_task_row_and_nothing_else() {
 #[tokio::test]
 async fn a_self_contradicting_judgement_counts_as_not_done() {
     let mock = Arc::new(Mock::new(vec![Mock::text(
-        r#"{"ok": true, "impossible": true, "reason": "说不清"}"#,
+        r#"{"ok": true, "impossible": true, "reason": "cannot say"}"#,
     )]));
     let resolved = resolved_with(mock);
-    let judgement = crate::goal::judge(&resolved, "目标", "对话")
+    let judgement = crate::goal::judge(&resolved, "goal", "conversation")
         .await
-        .expect("判断出来了");
+        .expect("it was judged");
     assert!(!judgement.ok && !judgement.impossible, "{judgement:?}");
     assert!(
         judgement.reason.contains("contradicted itself"),
@@ -99,10 +99,10 @@ async fn a_self_contradicting_judgement_counts_as_not_done() {
 /// The judge gives no JSON: an error (the caller stops continuing and keeps the goal), not a fake success.
 #[tokio::test]
 async fn a_judge_that_does_not_answer_json_is_an_error() {
-    let mock = Arc::new(Mock::new(vec![Mock::text("我觉得差不多了吧")]));
+    let mock = Arc::new(Mock::new(vec![Mock::text("I think that is about enough")]));
     let resolved = resolved_with(mock);
-    let outcome = crate::goal::judge(&resolved, "目标", "对话").await;
-    assert!(outcome.is_err(), "没 JSON 就该是错误：{outcome:?}");
+    let outcome = crate::goal::judge(&resolved, "goal", "conversation").await;
+    assert!(outcome.is_err(), "no JSON means an error: {outcome:?}");
 }
 
 /// The closed loop: not met → one more round → met. `TurnMeta` and notifications must reflect it honestly.
@@ -112,19 +112,19 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
         // First round: gate → main reply → judge (not met)
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "goal"}"#),
         Mock::tool_use("clock1", "current_time", serde_json::json!({})),
-        Mock::text("我先做了一半。"),
-        Mock::text(r#"{"ok": false, "impossible": false, "reason": "测试还有两条红"}"#),
+        Mock::text("I did half of it first."),
+        Mock::text(r#"{"ok": false, "impossible": false, "reason": "two tests are still red"}"#),
         // Second round: gate → main reply → judge (met)
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "goal"}"#),
         Mock::tool_use("clock2", "current_time", serde_json::json!({})),
-        Mock::text("两条都修好了。"),
-        Mock::text(r#"{"ok": true, "impossible": false, "reason": "全绿了"}"#),
+        Mock::text("both are fixed."),
+        Mock::text(r#"{"ok": true, "impossible": false, "reason": "all green"}"#),
     ]));
     let (server, _dir) = server(mock.clone(), 5).await;
     let task = server
-        .set_task_goal("goal-session", Some("让测试全绿"))
+        .set_task_goal("goal-session", Some("get the tests green"))
         .await
-        .expect("设上");
+        .expect("set it");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     crate::turn::run_turn(
@@ -132,7 +132,7 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
         TurnStartParams {
             attachments: None,
             session_id: Some("goal-session".to_string()),
-            message: "开始吧".to_string(),
+            message: "let us start".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -141,7 +141,7 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
         &EventSink::new(tx),
     )
     .await
-    .expect("这一轮该跑完");
+    .expect("this turn should finish");
 
     let mut rounds = Vec::new();
     let mut meta = None;
@@ -159,19 +159,26 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
         }
     }
 
-    assert_eq!(rounds.len(), 2, "续一轮 + 达成一次：{rounds:?}");
+    assert_eq!(
+        rounds.len(),
+        2,
+        "one continuation plus one achievement: {rounds:?}"
+    );
     assert_eq!(rounds[0].0, "continuing", "{rounds:?}");
     assert_eq!(rounds[1].0, "satisfied", "{rounds:?}");
-    assert_eq!(rounds[1].2, 2, "第二轮：{rounds:?}");
+    assert_eq!(rounds[1].2, 2, "the second round: {rounds:?}");
     assert!(
-        rounds[0].1.contains("还有两条红"),
-        "理由要带过去：{rounds:?}"
+        rounds[0].1.contains("two tests are still red"),
+        "the reason has to be carried over: {rounds:?}"
     );
 
-    let meta = meta.expect("有 TurnCompleted");
+    let meta = meta.expect("there is a TurnCompleted");
     assert_eq!(meta.goal_status.as_deref(), Some("satisfied"), "{meta:?}");
     assert_eq!(meta.goal_rounds, 2, "{meta:?}");
-    assert!(reply.contains("修好了"), "最终答复是第二轮的：{reply}");
+    assert!(
+        reply.contains("fixed"),
+        "the final reply is the second round's: {reply}"
+    );
 
     // The judge's **reason** is fed back as the user message and the turn continues (findable in the same session's history).
     assert_eq!(
@@ -191,9 +198,9 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
                 message
                     .content
                     .iter()
-                    .any(|block| matches!(block, joyczl_provider::ContentBlock::Text { text } if text.contains("还有两条红")))
+                    .any(|block| matches!(block, joyczl_provider::ContentBlock::Text { text } if text.contains("two tests are still red")))
             })),
-        "续轮要把理由喂回去"
+        "a continuation has to feed the reason back"
     );
 }
 
@@ -202,14 +209,14 @@ async fn the_loop_continues_until_the_judge_is_satisfied() {
 async fn running_out_of_rounds_is_reported_honestly() {
     let mock = Arc::new(Mock::new(vec![
         Mock::text(r#"{"retrieve": false, "query": "", "reason": "goal"}"#),
-        Mock::text("还没弄好。"),
-        Mock::text(r#"{"ok": false, "impossible": false, "reason": "还差一点"}"#),
+        Mock::text("not done yet."),
+        Mock::text(r#"{"ok": false, "impossible": false, "reason": "a little short"}"#),
     ]));
     let (server, _dir) = server(mock, 1).await;
     server
-        .set_task_goal("goal-session", Some("做到 X"))
+        .set_task_goal("goal-session", Some("do X"))
         .await
-        .expect("设上");
+        .expect("set it");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     crate::turn::run_turn(
@@ -217,7 +224,7 @@ async fn running_out_of_rounds_is_reported_honestly() {
         TurnStartParams {
             attachments: None,
             session_id: Some("goal-session".to_string()),
-            message: "开始".to_string(),
+            message: "start".to_string(),
             stream: Some(true),
             cwd: None,
             tier: None,
@@ -226,7 +233,7 @@ async fn running_out_of_rounds_is_reported_honestly() {
         &EventSink::new(tx),
     )
     .await
-    .expect("跑完");
+    .expect("it finishes");
 
     let mut statuses = Vec::new();
     while let Ok(frame) = rx.try_recv() {
@@ -234,18 +241,26 @@ async fn running_out_of_rounds_is_reported_honestly() {
             statuses.push(round.status);
         }
     }
-    assert_eq!(statuses, vec!["round-limit".to_string()], "一轮就是上限");
+    assert_eq!(
+        statuses,
+        vec!["round-limit".to_string()],
+        "one round is the limit"
+    );
     let row = server
         .tasks
         .latest("goal-session")
         .await
-        .expect("查")
-        .expect("任务还在");
-    assert_eq!(row.status, joyczl_state::TaskStatus::Failed, "不伪装完成");
+        .expect("query")
+        .expect("the task is still there");
+    assert_eq!(
+        row.status,
+        joyczl_state::TaskStatus::Failed,
+        "it does not fake being done"
+    );
     assert_eq!(
         row.goal_condition.as_deref(),
-        Some("做到 X"),
-        "也不清掉目标：停下等人决定"
+        Some("do X"),
+        "and it does not clear the goal either: it stops and waits for a human"
     );
 }
 

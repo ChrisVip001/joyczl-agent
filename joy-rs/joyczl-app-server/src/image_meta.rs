@@ -1,20 +1,25 @@
-//! 图片头解析：只读文件头拿宽高，零依赖。
+//! Image header parsing: width and height from the file header alone, no dependencies.
 //!
-//! 为什么需要它：视觉 provider 普遍拒超大图（长截图最典型 —— 1120×11100 这种），
-//! 而远端只回一句 "unsupported image. Please make sure your image is valid and has
-//! one of the following formats: webp, png, jpeg, gif"：既不说真实原因，也不说上限。
-//! 本地先量一次宽高，报错才能给出真实数字和可执行的下一步。
+//! Why it exists: vision providers reject oversized images (the tall screenshot is the
+//! classic — 1120×11100 and the like), and the far end answers with one sentence:
+//! "unsupported image. Please make sure your image is valid and has one of the following
+//! formats: webp, png, jpeg, gif" — no real reason, no limit. Measuring the dimensions
+//! locally lets the error carry the actual numbers and a next step the user can take.
 //!
-//! 只覆盖 `media_type_for_extension` 放行的四种格式；认不出来就返回 `None`，不猜。
+//! Only the four formats `media_type_for_extension` accepts; anything unrecognised returns
+//! `None` — this code does not guess.
 
-/// 单边像素上限。
+/// The per-side pixel limit.
 ///
-/// 4096 是各家的保守下限：再大的图会直接被远端拒（Anthropic 允许 8000，OpenAI 建议
-/// 短边 ≤2048，DeepSeek 这类 OpenAI 兼容端点更严）。**不是**精确上限 —— 换一家仍可能
-/// 更严，所以报错文案说的是「本地保守上限」，不替远端下结论。
+/// 4096 is the conservative floor across vendors: anything larger is refused outright
+/// (Anthropic allows 8000, OpenAI suggests a short side ≤2048, and OpenAI-compatible
+/// endpoints like DeepSeek are stricter still). It is **not** an exact limit — another
+/// vendor may be stricter — so the error says "local conservative limit" and does not
+/// speak for the far end.
 pub const MAX_EDGE: u32 = 4096;
 
-/// 宽高（像素）。`None` = 文件头不认识：已损坏，或者不是这四种格式。
+/// Width and height in pixels. `None` = the header is unrecognised: either corrupt, or not
+/// one of those four formats.
 pub fn size(bytes: &[u8]) -> Option<(u32, u32)> {
     png(bytes)
         .or_else(|| gif(bytes))
@@ -22,7 +27,8 @@ pub fn size(bytes: &[u8]) -> Option<(u32, u32)> {
         .or_else(|| webp(bytes))
 }
 
-/// PNG：签名之后紧跟 IHDR，宽高是 16..20 与 20..24 的大端 u32。
+/// PNG: IHDR follows the signature; width and height are big-endian u32 at 16..20 and
+/// 20..24.
 fn png(bytes: &[u8]) -> Option<(u32, u32)> {
     const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     if !bytes.starts_with(&SIGNATURE) {
@@ -33,7 +39,7 @@ fn png(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-/// GIF：逻辑屏描述符里的宽高，小端 u16。
+/// GIF: width and height from the logical screen descriptor, little-endian u16.
 fn gif(bytes: &[u8]) -> Option<(u32, u32)> {
     if !bytes.starts_with(b"GIF8") {
         return None;
@@ -43,7 +49,8 @@ fn gif(bytes: &[u8]) -> Option<(u32, u32)> {
     Some((u32::from(width), u32::from(height)))
 }
 
-/// JPEG 没有固定头：一段段跳到第一个 SOF（FFC0–FFCF，去掉 C4/C8/CC 这三个非 SOF 段）。
+/// JPEG has no fixed header: walk the segments up to the first SOF (FFC0–FFCF, skipping
+/// C4/C8/CC, which share the range but are not SOF markers).
 fn jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
     if !bytes.starts_with(&[0xFF, 0xD8]) {
         return None;
@@ -60,7 +67,8 @@ fn jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
             let width = u16::from_be_bytes(bytes.get(at + 7..at + 9)?.try_into().ok()?);
             return Some((u32::from(width), u32::from(height)));
         }
-        // 扫描头（FFDA）之后就是熵编码数据，再往后找不到尺寸了。
+        // Past the scan header (FFDA) comes entropy-coded data; there are no dimensions
+        // beyond this point.
         if marker == 0xDA {
             return None;
         }
@@ -73,26 +81,30 @@ fn jpeg(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// WebP 三种变体：扩展格式（VP8X）直接给画布尺寸，有损/无损把尺寸藏在帧头里。
+/// Three WebP variants: the extended format (VP8X) states the canvas size, while the
+/// lossy and lossless ones hide it in the frame header.
 fn webp(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.len() < 30 || !bytes.starts_with(b"RIFF") || bytes[8..12] != b"WEBP"[..] {
         return None;
     }
     let kind = bytes.get(12..16)?;
     if kind == &b"VP8X"[..] {
-        // 24 位小端的「宽-1 / 高-1」：flags(1) + reserved(3) 之后才是画布。
+        // 24-bit little-endian "width−1 / height−1": the canvas starts after flags(1) and
+        // reserved(3).
         let width = 1 + u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]);
         let height = 1 + u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]);
         return Some((width, height));
     }
     if kind == &b"VP8 "[..] {
-        // 3 字节帧标签 + 3 字节起始码（9D 01 2A）之后，是 14 位宽高。
+        // After a 3-byte frame tag and the 3-byte start code (9D 01 2A) come 14-bit width
+        // and height.
         let width = u32::from(u16::from_le_bytes([bytes[26], bytes[27]]) & 0x3FFF);
         let height = u32::from(u16::from_le_bytes([bytes[28], bytes[29]]) & 0x3FFF);
         return Some((width, height));
     }
     if kind == &b"VP8L"[..] {
-        // 0x2F 签名之后，14 位「宽-1」接 14 位「高-1」，小端位流。
+        // After the 0x2F signature: 14 bits of "width−1" then 14 bits of "height−1", in a
+        // little-endian bit stream.
         let bits = u32::from_le_bytes([bytes[21], bytes[22], bytes[23], bytes[24]]);
         return Some(((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1));
     }

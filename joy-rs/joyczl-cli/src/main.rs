@@ -140,14 +140,9 @@ async fn main() -> Result<()> {
             let mut settings = joyczl_config::Settings::from_env();
             settings.home = home();
             settings.ensure_home()?;
-            // Daemon lock: the resident process's in-memory state (approvals/goals/
-            // jobs) only makes sense as one copy — two app-servers writing the same
-            // state.db is an incident. REPL/cockpit don't lock (they're another path,
-            // REPL holds its own in-process, see module header comment).
-            let _daemon =
-                joyczl_app_server::lock::acquire(&settings.home).map_err(|e| anyhow::anyhow!(e))?;
+            // Common runtime startup owns the execution lock before recovering state.
             let mut server = joyczl_app_server::open(&settings).await?;
-            // 常驻进程同样自己拥有后台整理（驾驶舱经它连上来）。
+            // The resident process owns its background upkeep too (the cockpit connects through it).
             server.attach_memory_worker();
             joyczl_app_server::run_stdio(server).await
         }
@@ -163,7 +158,14 @@ async fn main() -> Result<()> {
             settings.home = home();
             settings.ensure_home()?;
             let server = joyczl_app_server::open(&settings).await?;
-            schedule::run(server).await
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            match args.as_slice() {
+                [] => schedule::run(server).await,
+                [action, name] if action == "acknowledge" => {
+                    schedule::acknowledge(&server, name).await
+                }
+                _ => anyhow::bail!("Usage: joy schedule [acknowledge <name>]"),
+            }
         }
         Some("gather") => {
             let mut settings = joyczl_config::Settings::from_env();
@@ -194,7 +196,8 @@ async fn main() -> Result<()> {
             settings.home = home();
             settings.ensure_home()?;
             let mut server = joyczl_app_server::open(&settings).await?;
-            // 交互进程自己拥有后台整理：记忆工作不再占用户对话的收尾时间。
+            // The interactive process owns its own background upkeep: memory work no longer eats into the
+            // tail of the user's conversation.
             server.attach_memory_worker();
             repl::run(server).await
         }

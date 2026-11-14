@@ -30,6 +30,8 @@ import type {
 } from "./api";
 import { applyStatic, getLang, initLang, setLang, t } from "./i18n";
 import { createTimeline } from "./timeline";
+import { taskOperationForm, chatOperationForm } from "./task-operation";
+import { taskInputForm } from "./task-input";
 import { showLogin } from "./login";
 import { startSync } from "./sync";
 import {
@@ -141,7 +143,8 @@ const dom = {
   composer: must<HTMLFormElement>("composer"),
   input: must<HTMLTextAreaElement>("input"),
   send: must<HTMLButtonElement>("send"),
-  /** 只在有轮次可跟时出现：按下 = 发送落成下一轮，而不是补充这一轮。 */
+    /** Only shown while a turn can be followed: pressing it means this lands as the next turn,
+     *  not as an addition to the current one. */
   queueToggle: must<HTMLButtonElement>("queue-toggle"),
   refresh: must<HTMLButtonElement>("refresh"),
   lang: must<HTMLButtonElement>("lang"),
@@ -152,6 +155,7 @@ const dom = {
   cwd: must<HTMLButtonElement>("cwd"),
   cwdLabel: must<HTMLElement>("cwd-label"),
   progress: must<HTMLButtonElement>("progress"),
+  chatOperations: must<HTMLButtonElement>("chat-operations"),
   attach: must<HTMLButtonElement>("attach"),
   file: must<HTMLInputElement>("file"),
   staged: must<HTMLElement>("staged"),
@@ -161,7 +165,7 @@ const dom = {
   newSession: must<HTMLButtonElement>("new-session"),
   drawer: must("drawer"),
   drawerClose: must<HTMLButtonElement>("drawer-close"),
-  // 抽屉的三个面板 + 侧栏能力中心入口与计数。
+    // The drawer's three panels, plus the sidebar's capability-center entry and its counts.
   tabOverview: must<HTMLButtonElement>("tab-overview"),
   tabSkills: must<HTMLButtonElement>("tab-skills"),
   tabMcp: must<HTMLButtonElement>("tab-mcp"),
@@ -228,7 +232,8 @@ let busy = false;
  */
 let otherTurn: string | null = null;
 
-/** 这一句是「跑完再说」：有轮次在跑时，发送落成**下一轮**而不是补充当前这轮。 */
+  /** This is the "say it after this turn" wording: while a turn is running, sending lands as
+   *  the **next** turn instead of adding to the current one. */
 let queuedMode = false;
 
 /**
@@ -306,7 +311,7 @@ function renderStaged(): void {
 const TAB_IDS = ["overview", "skills", "mcp", "memory", "schedule"] as const;
 type TabId = (typeof TAB_IDS)[number];
 
-/** Which panel is showing. Kept so the 进度 button can toggle instead of only opening. */
+/** Which panel is showing. Kept so the "Progress" button can toggle instead of only opening. */
 let currentTab: TabId = "overview";
 
 /** Latest capability data, refreshed with the rest of the screen. */
@@ -781,6 +786,13 @@ async function boot(): Promise<void> {
 
   dom.refresh.addEventListener("click", () => void refresh());
   dom.older.addEventListener("click", () => void older());
+  dom.chatOperations.addEventListener("click", () => {
+    const session = current;
+    const panel = chatOperationForm(session, () => {}, () => close(),
+      error => dom.messages.append(failureOf(error)));
+    const close = openOverlay(panel);
+    panel.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  });
   dom.newSession.addEventListener("click", () => void newSession());
   dom.drawerClose.addEventListener("click", closeDrawer);
   setupSidebarResize();
@@ -794,7 +806,7 @@ async function boot(): Promise<void> {
     });
   }
 
-  // The drawer's three doors: the 进度 button toggles the overview, the sidebar's
+  // The drawer's three doors: the "Progress" button toggles the overview, the sidebar's
   // capability entries open their own panel (and switch, not stack).
   dom.progress.addEventListener("click", () => {
     if (dom.drawer.hidden || currentTab !== "overview") switchTab("overview");
@@ -847,7 +859,7 @@ async function boot(): Promise<void> {
     dom.input.style.height = `${Math.min(dom.input.scrollHeight, 180)}px`;
   });
 
-  // 「跑完再说」：不是另一个输入框，而是这一个发送按钮的另一种意思。
+  // "Queue for after": not another input box, but this send button meaning something else.
   dom.queueToggle.addEventListener("click", () => {
     queuedMode = !queuedMode;
     paintComposerMode();
@@ -920,8 +932,29 @@ async function boot(): Promise<void> {
 /** Pause / continue / cancel the current task — human switches, they exist nowhere else. */
 async function switchTask(
   task: AgentTaskView,
-  action: "suspend" | "resume" | "cancel",
+  action: "start" | "wait" | "input" | "operations" | "suspend" | "resume" | "cancel",
 ): Promise<void> {
+  if (action === "operations") {
+    const panel = taskOperationForm(task, () => { void refresh(); }, () => close(),
+      (error) => dom.overview.prepend(failureOf(error)));
+    const close = openOverlay(panel);
+    panel.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    return;
+  }
+  if (action === "wait" || action === "input") {
+    const panel = taskInputForm(task, action, () => {
+      const restore = panel.isConnected;
+      close();
+      void refresh().then(() => {
+        const target = dom.overview.querySelector<HTMLButtonElement>(".taskcard button");
+        if (restore && document.activeElement === document.body && target?.offsetParent) target.focus();
+      });
+    },
+      () => close(), (error) => dom.overview.prepend(failureOf(error)));
+    const close = openOverlay(panel);
+    panel.querySelector("textarea")?.focus();
+    return;
+  }
   if (
     action === "cancel" &&
     !window.confirm(t("取消任务「{title}」？取消后不会自动续跑。", { title: task.title }))
@@ -929,7 +962,9 @@ async function switchTask(
     return;
   }
   try {
-    await taskAction({ action, taskId: task.id });
+    await taskAction(action === "start"
+      ? { action, taskId: task.id, message: [task.title, task.goalCondition].filter(Boolean).join("\n") }
+      : { action, taskId: task.id });
   } catch (error) {
     // A dead button is worse than a visible error: say what happened, right on the panel.
     dom.overview.prepend(failureOf(error));
@@ -1207,12 +1242,18 @@ function removeMcpAsk(server: McpRow): void {
  * Returns the close function (idempotent — removing twice is a no-op).
  */
 function openOverlay(panel: HTMLElement): () => void {
+  const previous = document.activeElement;
   const overlay = el("div", { class: "fsoverlay" });
   overlay.append(panel);
   document.body.append(overlay);
+  let closed = false;
   const close = (): void => {
+    if (closed) return;
+    closed = true;
+
     overlay.remove();
     document.removeEventListener("keydown", onKey);
+    if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
   };
   const onKey = (event: KeyboardEvent): void => {
     if (event.key === "Escape") close();
@@ -1511,7 +1552,7 @@ async function submit(): Promise<void> {
  *
  * The bubble is painted right away because the message **is** accepted — it lands in the
  * transcript either way. Whether the model saw it before the turn ended is not something this
- * page can promise, so it does not claim it: "下一轮次生效" is the honest wording.
+ * page can promise, so it does not claim it: "applies from the next turn" is the honest wording.
  */
 async function steer(text: string): Promise<void> {
   dom.input.value = "";
@@ -1873,7 +1914,7 @@ async function newSession(): Promise<void> {
   queuedMode = false;
   setOtherTurn(null);
   hideStatus();
-  // Refresh paints the session list with a "新会话" placeholder for this id (see render.ts).
+  // Refresh paints the session list with a "New session" placeholder for this id (see render.ts).
   await refresh();
   dom.input.focus();
   scrollToEnd(true);
@@ -1904,7 +1945,7 @@ async function open(sessionId: string): Promise<void> {
   // Read the outgoing session's position while `current` still points at it.
   captureReading();
   rememberSession(sessionId);
-  queuedMode = false; // a new conversation: the previous one's 「跑完再说」 is not its own
+  queuedMode = false; // a new conversation: the previous one's "Queue for after" is not its own
   dom.session.textContent = sessionId;
   dom.older.hidden = true;
 
@@ -2143,7 +2184,7 @@ function placeAt(top: number): void {
 /**
  * Cap the live DOM: the store keeps everything, the page keeps a window. Beyond
  * MAX_MESSAGES children the oldest nodes are dropped — paging back is exactly what
- * the「更早的」button is for, so nothing is lost, just not painted.
+ * the "Older" button is for, so nothing is lost, just not painted.
  */
 const MAX_MESSAGES = 300;
 
@@ -2224,8 +2265,8 @@ function stalePage(id: string): void {
   );
 }
 
-// PWA：静态资源交给 service worker（缓存优先、后台更新）；/api 一帧不缓存。
-// 仅 https 或 localhost 下注册——这是浏览器自己的要求，失败不吵（安装能力是锦上添花）。
+// PWA: static assets go through a service worker (cache first, update in the background);
+// /api is never cached for even one frame.
 if (
   "serviceWorker" in navigator &&
   (location.protocol === "https:" ||
@@ -2235,15 +2276,16 @@ if (
   navigator.serviceWorker.register("./sw.js").catch(() => undefined);
 }
 
-// 登录门：远程模式（配置了服务器地址）且本设备还没有 token → 先登录，再进应用。
-// 本机同源模式不设门——`joy dashboard` 打开即用，401 时才有一次性 token 询问。
+// The sign-in gate: in remote mode (a server address is configured) with no token on this
+// device, sign in first and enter the app after.
 if (localStorage.getItem("joy-server") !== null && localStorage.getItem("joy-ops-token") === null) {
   showLogin({ onAuthed: () => void boot() });
 } else {
   void boot();
 }
 
-// 远程模式下的 401：会话过期或 token 被撤。登录卡回来，成功后整页重载拿干净状态。
+// A 401 in remote mode: the session expired or the token was revoked. The sign-in card comes
+// back, and a successful sign-in reloads the whole page for a clean state.
 window.addEventListener("joy:unauthorized", () => {
   showLogin({ notice: t("登录已过期，请重新登录"), onAuthed: () => location.reload() });
 });

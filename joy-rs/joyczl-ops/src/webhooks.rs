@@ -375,7 +375,7 @@ mod webhooks_tests {
         Hook {
             name: "deploy".to_string(),
             secret: "env:JOY_TEST_HOOK_SECRET".to_string(),
-            prompt: "处理这个部署事件：\n{{payload}}".to_string(),
+            prompt: "handle this deployment event:\n{{payload}}".to_string(),
             session: None,
             tier: Some("fast".to_string()),
             enabled: None,
@@ -415,22 +415,22 @@ mod webhooks_tests {
 
     #[test]
     fn missing_file_means_no_hooks_and_a_broken_one_is_loud() {
-        let dir = tempfile::tempdir().expect("临时目录");
-        let config = load(dir.path()).expect("没文件不是错误");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = load(dir.path()).expect("no file is not an error");
         assert!(config.hooks.is_empty());
 
-        std::fs::write(dir.path().join(CONFIG_FILE), r#"{ "hooks": [] }"#).expect("写");
+        std::fs::write(dir.path().join(CONFIG_FILE), r#"{ "hooks": [] }"#).expect("write");
         assert!(load(dir.path()).is_ok());
 
         std::fs::write(
             dir.path().join(CONFIG_FILE),
             r#"{ "hooks": [ { "name": "x" } ] }"#,
         )
-        .expect("写");
-        let error = load(dir.path()).expect_err("缺 secret 必须报错");
+        .expect("write");
+        let error = load(dir.path()).expect_err("a missing secret must be an error");
         assert!(
             format!("{error}").contains("secret"),
-            "错误里要说清是 secret：{error}"
+            "the error must name the secret: {error}"
         );
     }
 
@@ -443,11 +443,11 @@ mod webhooks_tests {
         assert_eq!(hook.session_id(), "hook:deploy");
 
         let mut without_slot = hook.clone();
-        without_slot.prompt = "看一下这个事件".to_string();
+        without_slot.prompt = "have a look at this event".to_string();
         let rendered = without_slot.render("boom");
         assert!(
             rendered.ends_with("boom"),
-            "没有占位符也要把 body 带上：{rendered}"
+            "the body must ride along even without a placeholder: {rendered}"
         );
     }
 
@@ -459,7 +459,7 @@ mod webhooks_tests {
         };
         assert!(
             hook.secret_value().is_none(),
-            "读不到就是读不到，不能退化成空串放行"
+            "unreadable is unreadable — it must not degrade into an empty string and pass"
         );
 
         let literal = Hook {
@@ -489,7 +489,7 @@ mod webhooks_tests {
                 now + Duration::from_secs(1)
             ),
             Err(Refusal::Replay),
-            "同一个签名不许用第二次"
+            "the same signature must not be used twice"
         );
 
         // Fresh timestamp, stale signature: the body may not grow a new timestamp under an old seal.
@@ -524,34 +524,34 @@ mod webhooks_tests {
     #[test]
     fn the_signature_is_plain_hex_hmac_over_timestamp_dot_body() {
         let signature = signature_of("s3cret", "1700000000", "boom");
-        assert_eq!(signature.len(), 64, "SHA-256 是 32 字节 = 64 个十六进制位");
+        assert_eq!(signature.len(), 64, "SHA-256 is 32 bytes = 64 hex digits");
         assert!(
             signature
                 .chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-            "小写十六进制：{signature}"
+            "lowercase hex: {signature}"
         );
         assert_eq!(
             signature,
             signature_of("s3cret", "1700000000", "boom"),
-            "同样输入必须同样输出"
+            "the same input must give the same output"
         );
         // Golden vector, cross-checked against the recipe in the docs:
         //   printf '%s' '1700000000.{"status":"failed"}' | openssl dgst -sha256 -hmac s3cret -r
         assert_eq!(
             signature_of("s3cret", "1700000000", r#"{"status":"failed"}"#),
             "82ff010e35b5514d818199f607587e304942a6aafe29ccc4ce0dd21a63613135",
-            "格式一旦变了，另一侧的 openssl 就验不过"
+            "change the format and the other side's openssl will not verify"
         );
         assert_ne!(
             signature,
             signature_of("s3cret", "1700000001", "boom"),
-            "时间戳要真的参与"
+            "the timestamp has to take part for real"
         );
         assert_ne!(
             signature,
             signature_of("s3cret", "1700000000", "boom!"),
-            "body 要真的参与"
+            "the body has to take part for real"
         );
     }
 
@@ -570,7 +570,7 @@ mod webhooks_tests {
         assert_eq!(
             admit(&hook, &good, "boom", 0, now),
             Ok(()),
-            "plain 模式不拦重放 —— 这正是要 signature 的理由"
+            "plain mode does not stop replays — exactly why signature exists"
         );
         let bad = Credential {
             secret: "wrong",
@@ -622,44 +622,44 @@ mod webhooks_tests {
         assert_eq!(admit(&hook, &good, "boom", 0, start), Ok(()));
         match admit(&hook, &good, "boom", 0, start) {
             Err(Refusal::TooFast(wait)) => assert!((1..=60).contains(&wait), "retry after {wait}"),
-            other => panic!("第三次该被限流，得到 {other:?}"),
+            other => panic!("the third call should be rate-limited, got {other:?}"),
         }
         assert_eq!(
             admit(&hook, &good, "boom", 0, start + Duration::from_secs(61)),
             Ok(()),
-            "过了一分钟该重新放行"
+            "a minute later it should be allowed again"
         );
     }
 
     /// A config that can never pass is a typo, not a policy: both are refused at load, loudly.
     #[test]
     fn impossible_limits_and_non_http_callbacks_are_refused_at_load() {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(CONFIG_FILE);
 
         std::fs::write(
             &path,
             r#"{"hooks":[{"name":"x","secret":"s","prompt":"p","limit":0}]}"#,
         )
-        .expect("写");
-        let error = load(dir.path()).expect_err("limit 0 必须报错");
+        .expect("write");
+        let error = load(dir.path()).expect_err("limit 0 must be an error");
         assert!(format!("{error}").contains("limit"), "{error}");
 
         std::fs::write(
             &path,
             r#"{"hooks":[{"name":"x","secret":"s","prompt":"p","callback":"ftp://example.com/x"}]}"#,
         )
-        .expect("写");
-        let error = load(dir.path()).expect_err("ftp 不是回调");
+        .expect("write");
+        let error = load(dir.path()).expect_err("ftp is not a callback");
         assert!(format!("{error}").contains("http"), "{error}");
 
         std::fs::write(
             &path,
             r#"{"hooks":[{"name":"x","secret":"s","prompt":"p","callback":"https://example.com/x","signature":true,"limit":6}]}"#,
         )
-        .expect("写");
-        let config = load(dir.path()).expect("这三个字段都要认得");
-        let hook = find(&config, "x").expect("找得到");
+        .expect("write");
+        let config = load(dir.path()).expect("all three fields have to be understood");
+        let hook = find(&config, "x").expect("found it");
         assert!(hook.wants_signature());
         assert_eq!(hook.limit, Some(6));
         assert_eq!(hook.callback_url(), Some("https://example.com/x"));

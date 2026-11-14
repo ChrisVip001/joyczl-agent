@@ -25,9 +25,10 @@ jobs:
       - run: cargo test --workspace
 
   rust-coverage:
-    # 趋势门，不是目标。阈值按**实测基线**定：本地一次 `cargo llvm-cov
-    # --workspace --summary-only` 量到 65.9% 行覆盖，门设在 60 —— 宁可低而真。
-    # 设高了只会逼出「为了过门而写的测试」，那比没有门更糟。
+    # A trend gate, not a target. The threshold follows the **measured baseline**: one local
+    # `cargo llvm-cov --workspace --summary-only` came out at 65.9% line coverage, so the gate
+    # sits at 60 — low but true. Set it high and it only forces «tests written to pass the
+    # gate», which is worse than no gate.
     name: Rust (coverage floor 60%)
     runs-on: ubuntu-latest
     defaults:
@@ -45,9 +46,10 @@ jobs:
       - run: cargo llvm-cov --workspace --fail-under-lines 60 --summary-only
 
   windows:
-    # 显式记录平台边界，而不是假装支持：exec 的沙箱是 Unix-only
-    # （macOS seatbelt / Linux bubblewrap），测试里凡是要真沙箱的都跳过。
-    # 这一 job 只证明**除沙箱外的部分**在 Windows 上照样编译、照样过测。
+    # Record the platform boundary explicitly rather than pretend to support it: the exec sandbox
+    # is Unix-only (macOS seatbelt / Linux bubblewrap), and anything needing a real sandbox is
+    # skipped. This job only proves that **everything but the sandbox** builds and passes on
+    # Windows too.
     name: Windows (build + tests, sandbox tests not applicable)
     runs-on: windows-latest
     defaults:
@@ -60,8 +62,8 @@ jobs:
         with:
           workspaces: joy-rs
       - run: cargo build -p joyczl-cli
-      # joyczl-tools 整个排除：exec 的沙箱后端在 Windows 上不存在，
-      # 而它的测试里有一部分是「真起一个沙箱」的。
+      # joyczl-tools is excluded wholesale: the exec sandbox backend does not exist on Windows,
+      # and some of its tests really start one.
       - run: cargo test --workspace --exclude joyczl-tools
       - run: cargo test -p joyczl-tools -- --skip sandbox --skip spill
 
@@ -102,8 +104,9 @@ jobs:
         working-directory: joy-ts
 
   python:
-    # mypy 是 `strict = true`（见 pyproject.toml）：SDK 的类型标注就是它卖的东西。
-    # 覆盖率同样是趋势门，阈值按实测基线（63%）定在 60；生成物不计入分母。
+    # mypy runs with `strict = true` (see pyproject.toml): type annotations are what this SDK
+    # sells. Coverage is a trend gate too, threshold 60 against the measured baseline (63%);
+    # generated code is not in the denominator.
     name: Python SDK (mypy strict / pytest + coverage floor 60%)
     runs-on: ubuntu-latest
     steps:
@@ -129,17 +132,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p joyczl-cli
-      # 冒烟里的 dashboard/hub 段需要一个真的 dist —— 而且新鲜度守卫会让
-      # 「源码比 dist 新/没有 dist」的 hub 拒绝启动（fail-closed），所以这里
-      # 必须先构建。justfile 的 smoke-dashboard: build dashboard-build 早写明
-      # 了这个依赖，CI 漏了，守卫上线第一天就把它抓了出来。
+      # The dashboard/hub leg of the smoke test needs a real dist — and the freshness guard
+      # makes a hub whose sources are newer than dist, or that has no dist at all, refuse to
+      # start (fail-closed), so the build has to happen first. The justfile's
+      # `smoke-dashboard: build dashboard-build` spelled that dependency out; CI had missed it,
+      # and the guard caught it on its first day.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install && npm run build --workspace @joy/dashboard
         working-directory: joy-ts
       - run: ./target/debug/joy eval ../evals/deterministic
-      # 冒烟是在真进程上跑协议：eval 用的是进程内的 scripted 模型，唯有这一条
-      # 走真的 app-server + 真的 stdio JSON-RPC。它守的是 Rust 与前端之间那条缝
-      # —— 那条缝的漏出过事故，而单测和 eval 都看不见它。
+      # The smoke test runs the protocol over real processes: the evals use an in-process
+      # scripted model, and this is the only leg that goes through a real app-server over real
+      # stdio JSON-RPC. It guards the seam between Rust and the front end — that seam has leaked
+      # before, and neither the unit tests nor the evals can see it.
       - run: bash ../scripts/smoke.sh
+      # Exercise real process death; all provider and external effects are local fixtures.
+      - run: python3 ../scripts/smoke-recovery.py

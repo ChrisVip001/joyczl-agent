@@ -79,10 +79,10 @@ pub struct ExecPolicy {
     /// set (`crate::roots::HOME_CONTROL`). Empty = only the disk root is refused; a real
     /// server always fills it in.
     pub home: PathBuf,
-    /// Commands a human already said yes to **in this process** ("本会话总是允许"). Exact match,
+    /// Commands a human already said yes to **in this process** ("always allow in this session"). Exact match,
     /// no wildcards. Shared, so the very next call sees the answer — an approval that only takes
     /// effect after a restart is not what the click promised. Never written to disk (that is
-    /// `settings.json`'s `exec_allow`, the "记住这条" answer).
+    /// `settings.json`'s `exec_allow`, the "remember this one" answer).
     pub session_allow: Arc<Mutex<Vec<String>>>,
 }
 
@@ -133,7 +133,7 @@ fn pipes_into_a_shell(command: &str) -> bool {
 ///
 /// Used in exactly one spot: the hook explicitly returned `permissionDecision: allow`, i.e.
 /// someone decided for the user — don't ask again.
-struct AlreadyApproved;
+pub(crate) struct AlreadyApproved;
 
 impl crate::approval::ApprovalBroker for AlreadyApproved {
     fn request(&self, _request: crate::approval::ApprovalRequest) -> crate::approval::ApprovalFut {
@@ -415,7 +415,7 @@ pub async fn pass_gate(
                 args_preview: command.to_string(),
                 reason,
                 timeout_secs: policy.approval_timeout_secs,
-                // "记住这条" records the command itself — what the human read, not its class.
+                // "remember this one" records the command itself — what the human read, not its class.
                 remember: Some(RememberTarget::Command(command.trim().to_string())),
             };
             if broker.request(request).await {
@@ -541,6 +541,23 @@ pub async fn execute(
     approval: Option<&dyn crate::approval::ApprovalBroker>,
     on_delta: Option<crate::DeltaSink>,
 ) -> String {
+    execute_with_notice(command, policy, writable, approval, on_delta, None).await
+}
+
+pub(crate) async fn execute_with_notice(
+    command: &str,
+    policy: &ExecPolicy,
+    writable: &[PathBuf],
+    approval: Option<&dyn crate::approval::ApprovalBroker>,
+    on_delta: Option<crate::DeltaSink>,
+    on_uncertain: Option<crate::UncertainSink>,
+) -> String {
+    let unknown = |reason: String| {
+        if let Some(notice) = &on_uncertain {
+            notice(&reason);
+        }
+        format!("Error: {reason}; outcome is unknown. Reconcile any committed effects before continuing.")
+    };
     if let Err(why) = pass_gate(command, policy, approval).await {
         return format!("Error: {why}");
     }
@@ -567,21 +584,34 @@ pub async fn execute(
     })
     .await;
 
-    let (out_result, _err_result, status, out, err) = match collected {
+    let (out_result, err_result, status, out, err) = match collected {
         Ok(collected) => collected,
         Err(_) => {
-            return format!(
-                "Error: the command did not finish within {} seconds and was killed. (Raise JOY_EXEC_TIMEOUT to widen it.)",
+            return unknown(format!(
+                "The command exceeded {} seconds and was killed",
                 policy.timeout_secs
-            );
+            ));
         }
     };
     if let Err(e) = out_result {
-        return format!("Error: could not read the output: {e}");
+        return unknown(format!("Could not read command output: {e}"));
     }
-    let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+    if let Err(e) = err_result {
+        return unknown(format!("Could not read command standard error: {e}"));
+    }
+    let status = match status {
+        Ok(status) => status,
+        Err(e) => return unknown(format!("Could not collect command status: {e}")),
+    };
+    let Some(code) = status.code() else {
+        return unknown("Command terminated without an exit code".into());
+    };
 
-    let mut combined = format!("exit code {code}\n{out}");
+    let mut combined = if code == 0 {
+        format!("exit code {code}\n{out}")
+    } else {
+        format!("Error: exit code {code}\n{out}")
+    };
     if !err.trim().is_empty() {
         combined.push_str("\n--- stderr ---\n");
         combined.push_str(&err);
@@ -727,11 +757,12 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
                     let cwd_text = cwd.as_ref().map(|p| p.display().to_string());
                     return Ok(
                         match jobs
-                            .spawn_for_run(
+                            .spawn_guarded(
                                 &ctx.session_id,
                                 &command,
                                 cwd_text,
                                 ctx.task_run_id.clone(),
+                                ctx.resource_lease.clone(),
                             )
                             .await
                         {
@@ -745,12 +776,13 @@ pub fn run_command(policy: ExecPolicy) -> Tool {
 
                 // `JOY_EXEC_WRITABLE_ROOTS` is merged (and filtered) by spawn_sandboxed, which
                 // both foreground and background paths go through — no caller has to remember.
-                Ok(execute(
+                Ok(execute_with_notice(
                     &command,
                     &policy,
                     &writable,
                     approval.as_deref(),
                     ctx.on_delta.clone(),
+                    ctx.on_uncertain.clone(),
                 )
                 .await)
             })

@@ -77,8 +77,12 @@ test-protocol *args:
     cd {{ rust_dir }} && cargo test -p joyczl-protocol {{args}}
 
 # End to end: really start app-server, feed JSON-RPC via stdin, check every reply.
-smoke: build
+smoke: build dashboard-build
     {{ justfile_directory() }}/scripts/smoke.sh
+
+# Real SIGKILL boundaries with isolated local provider/MCP fixtures (POSIX).
+smoke-recovery: build
+    python3 {{ justfile_directory() }}/scripts/smoke-recovery.py
 
 # ---- Evals: the diamond before a release --------------------------------------------------
 # Deterministic eval: scripted models + assertions, offline 0/1. **Must pass 100%** —

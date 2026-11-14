@@ -100,7 +100,7 @@ fn contained(path: &Path, roots: &[PathBuf]) -> Result<(), String> {
     ))
 }
 
-/// Already covered by a directory someone said yes to ("本会话总是允许" / "记住这条")?
+/// Already covered by a directory someone said yes to ("always allow in this session" / "remember this one")?
 ///
 /// A poisoned lock reads as "nothing approved" — asking once more is a safe fallback, skipping the
 /// question is not.
@@ -139,7 +139,7 @@ pub(crate) async fn pass_write_gate(
             "Write {path:?} (inside the writable scope; in on-request mode every write asks first)"
         ),
         timeout_secs: policy.approval_timeout_secs,
-        // "记住这条" records the **directory**: the human approved this folder, not this file name.
+        // "remember this one" records the **directory**: the human approved this folder, not this file name.
         remember: path
             .parent()
             .map(|dir| RememberTarget::Directory(dir.to_path_buf())),
@@ -151,6 +151,37 @@ pub(crate) async fn pass_write_gate(
     }
 }
 
+/// The hook, then the gate — the pair every tool that changes **one** file has to pass.
+///
+/// Written once because it had been written out three times: whether a new file tool was safe
+/// could only be answered by diffing it against `write_file`, and the day one copy forgot the
+/// roots check would be the day the boundary stopped holding. `what` is the verb in the refusal
+/// message; `shown` is the path as the model wrote it, which is what the approval question quotes.
+///
+/// Tools that gate **two** paths (`move_file`) still call `permission_hook` and
+/// `pass_write_gate` themselves: their question ("source or destination?") is genuinely
+/// different, and folding it in here would hide which of the two was refused.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn admit(
+    ctx: &ToolCtx,
+    tool: &str,
+    what: &str,
+    path: &Path,
+    shown: &str,
+    policy: &WritePolicy,
+    input: Value,
+) -> Result<(), String> {
+    let (approval, blocked) = permission_hook(ctx, tool, input).await;
+    if let Some(why) = blocked {
+        return Err(format!(
+            "{why} (a PermissionRequest hook refused this {what})"
+        ));
+    }
+    let roots = crate::roots::workspace_roots(ctx, &policy.extra_roots).workspaces;
+    pass_write_gate(tool, path, shown, policy, &roots, approval)
+        .await
+        .map_err(|e| e.to_string())
+}
 /// Fire the `PermissionRequest` hook: it may refuse outright, or allow on the user's behalf.
 /// Returns the (possibly upgraded) approval to use for the gate, or a refusal reason.
 pub(crate) async fn permission_hook(
@@ -304,20 +335,16 @@ pub fn write_file(policy: WritePolicy) -> Tool {
                 check_content(&content, "content")?;
                 let path = crate::fs::resolve_against_cwd(&ctx, crate::fs::expand_tilde(&raw));
 
-                let (approval, blocked) = permission_hook(
+                if let Err(why) = admit(
                     &ctx,
                     "write_file",
+                    "write",
+                    &path,
+                    &raw,
+                    &policy,
                     json!({ "path": raw, "content": content }),
                 )
-                .await;
-                if let Some(why) = blocked {
-                    return Ok(format!(
-                        "Error: {why} (a PermissionRequest hook refused this write)"
-                    ));
-                }
-                let roots = crate::roots::workspace_roots(&ctx, &policy.extra_roots).workspaces;
-                if let Err(why) =
-                    pass_write_gate("write_file", &path, &raw, &policy, &roots, approval).await
+                .await
                 {
                     return Ok(format!("Error: {why}"));
                 }
@@ -391,20 +418,16 @@ pub fn edit(policy: WritePolicy) -> Tool {
                 }
                 check_content(&new_string, "new_string")?;
 
-                let (approval, blocked) = permission_hook(
+                if let Err(why) = admit(
                     &ctx,
                     "edit",
+                    "edit",
+                    &path,
+                    &raw,
+                    &policy,
                     json!({ "path": raw, "old_string": old_string, "new_string": new_string }),
                 )
-                .await;
-                if let Some(why) = blocked {
-                    return Ok(format!(
-                        "Error: {why} (a PermissionRequest hook refused this edit)"
-                    ));
-                }
-                let roots = crate::roots::workspace_roots(&ctx, &policy.extra_roots).workspaces;
-                if let Err(why) =
-                    pass_write_gate("edit", &path, &raw, &policy, &roots, approval).await
+                .await
                 {
                     return Ok(format!("Error: {why}"));
                 }

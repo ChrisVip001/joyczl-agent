@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""假的 SMTP 服务器，只给 smoke-connector.sh 用。
+"""A fake SMTP server, only for smoke-connector.sh.
 
-起在 127.0.0.1:0，把端口打印到 stdout 一行；按 SMTP 剧本应答，把 DATA 之后收到的
-全部内容写进 argv[1] 指定的文件，然后自己退出（一次只服务一封信）。
+Listens on 127.0.0.1:0 and prints the port as one line on stdout; answers by the SMTP
+script, writes everything it receives after DATA into the file named by argv[1], and exits
+(it serves one message at a time).
 
-不验签、不真发、不连网 —— 冒烟测的是「连接器 → socket」之间那一段全是真的，
-远端这一端是可预期的假货。
+No signature check, no real send, no network — the smoke test covers the stretch from the
+connector to the socket, which is all real; this far end is a predictable fake.
 """
 
 import socket

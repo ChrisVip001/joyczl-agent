@@ -23,7 +23,7 @@ use crate::Gate;
 pub struct AuthParams {
     pub username: String,
     pub password: String,
-    /// A label for this device ("我的手机", "work-laptop"). Same device + password
+    /// A label for this device ("my phone", "work-laptop"). Same device + password
     /// returns the same token — logging in twice does not multiply tokens.
     pub device: String,
 }

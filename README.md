@@ -82,7 +82,7 @@ Releases ship every 1–2 weeks with real notes. If you want those without the n
   time, and `ledger:…` chips back to the source turns), and the context meter (six
   sections, with a notice before the window fills). One button compacts on demand
   ([docs/operations.md](docs/operations.md))
-- **Act**: 29 built-in tools (21 always on, 8 behind switches) plus MCP servers
+- **Act**: 34 built-in tools (23 always on, 11 behind switches) plus MCP servers
   ([docs/configuration.md](docs/configuration.md))
 - **Stay cheap**: the system prompt is a stable prefix plus a per-turn tail, so the
   provider can cache it; the skill catalog is one line per skill with bodies on demand, and
@@ -105,7 +105,8 @@ Releases ship every 1–2 weeks with real notes. If you want those without the n
   ([docs/configuration.md](docs/configuration.md))
 - **Be examined**: deterministic evals gate every release; `joy eval --replay` pins the event
   order of compaction, approval timeouts, streamed output, MCP reconnects and step-budget
-  continuations; a judge grades answer quality ([docs/testing.md](docs/testing.md))
+  continuations; a judge grades answer quality and rejects invalid scores before averaging
+  ([docs/testing.md](docs/testing.md))
 - **Be observed**: every turn lands a trace line and a usage row
   ([docs/architecture.md](docs/architecture.md))
 
@@ -119,6 +120,8 @@ Releases ship every 1–2 weeks with real notes. If you want those without the n
 | `search_web` | DuckDuckGo HTML, or Tavily with `TAVILY_API_KEY` |
 | `read_file` | read a text file: paginated (2000 lines / 50KB, never mid-line), line numbers, a continuation protocol, and a re-read short-circuit; **on by default** |
 | `list_dir` | list a directory: directories first, files with sizes, 500-entry cap; **on by default** |
+| `glob` | find files by name pattern (`**` across directories, `*`/`?` inside one; a pattern with no `/` matches the file name at any depth), skipping `.git`, `node_modules`, `target`, `dist`, `build` and friends; **on by default** |
+| `grep` | search file contents and return `path:line: text` (plain text, optional `ignore_case` and a `glob` filter), skipping the same trees plus binaries and anything over 2 MB, capped at 200 matches; **on by default** |
 | `fetch_url` | fetch a page's text (HTML→plain, 50k cap); SSRF guard (blocks private/metadata targets, re-checks every redirect) + an external-content-is-data declaration |
 | `create_skill` | persist an agreed workflow as procedural memory |
 | `job_output` / `job_list` / `job_kill` | read, list and stop background jobs (started with `run_command`'s `background=true`) |
@@ -126,6 +129,9 @@ Releases ship every 1–2 weeks with real notes. If you want those without the n
 | `current_time` | local time with weekday and timezone |
 | `write_file` / `edit` | write a text file / one exact-match replacement with a change hunk — off unless `JOY_WRITE=1`; writable boundary = the working directory **bound to the session** (or named for this turn when the session has none) + `JOY_EXEC_WRITABLE_ROOTS` |
 | `apply_patch` | apply a patch: several files and several hunks in one call, **all or nothing** (one hunk that does not fit means nothing is written); same boundary and approval as `write_file` / `edit` |
+| `define_tool` | define a new tool for itself: a JSON file (name, description, argument schema, command template) that lands in `<home>/tools/` and is in the table **from the next turn** — no restart, no rebuild. It runs through the same sandbox, allowlist and approval as `run_command`; off unless `JOY_EXEC=1` |
+| `delete_file` | delete one file (never a directory) — same boundary and approval as `write_file`; off unless `JOY_WRITE=1` |
+| `move_file` | move or rename one file, **both** ends inside the boundary, an existing destination refused — off unless `JOY_WRITE=1` |
 | `run_command` | shell commands — sandboxed, allowlisted, off unless `JOY_EXEC=1` ([SECURITY.md](SECURITY.md)) |
 | `delegate_task` | hand one self-contained job to a subagent (`tasks: [...]` fans out up to 4 independent jobs concurrently, merged in order) — off unless `JOY_DELEGATE=1`, cannot delegate again; pass `result_schema` for a structured answer (retried once, then prose) |
 | `read_skill` | read one skill's full body — the always-present catalog carries only its name and one line; **on by default** |
@@ -137,7 +143,7 @@ Releases ship every 1–2 weeks with real notes. If you want those without the n
 
 ### Providers and keys
 
-**Twelve LLM providers are pre-adapted in code** (`joyczl-provider`), switchable at will — and extendable without code: `<home>/models-catalog.json` patches built-in defaults or adds a provider, and `scripts/gen_catalog.py` generates those rows from [models.dev](https://models.dev) (context limits, vision, tool-call — joy's wire and key-env mappings included). See [docs/configuration.md](docs/configuration.md). `/model` lists configured profiles, `/model add ds deepseek deepseek-chat --env DEEPSEEK_API_KEY` adds one, `/model use ds` switches — no need to retype the key, effective immediately, no restart. Configuration lives in the REPL's `/model` and `models.json` — the dashboard carries no config panel. Keys go to the OS keychain first (macOS Keychain, Linux `secret-tool`, **Windows Credential Manager**), falling back to `<home>/secrets.json` (0600, plaintext) when there is none — the save response says which one it was, honestly. Key writes go through the `SecretVault` seam, so a server-side KMS backend can slot in without touching callers. **The old `JOY_API_KEY` / `JOY_BASE_URL` env vars are no longer read** — configuration has exactly one path: `models.json`. The dashboard also self-hosts: `JOY_OPS_HOST=0.0.0.0` demands `JOY_OPS_TOKEN` at startup, `/api/*` is Bearer-gated ([docs/operations.md](docs/operations.md)).
+**Twelve LLM providers are pre-adapted in code** (`joyczl-provider`), switchable at will — and extendable without code: `<home>/models-catalog.json` patches built-in defaults or adds a provider, and `scripts/gen_catalog.py` generates those rows from [models.dev](https://models.dev) (context limits, vision, tool-call — joy's wire and key-env mappings included). See [docs/configuration.md](docs/configuration.md). `/model` lists configured profiles, `/model add ds deepseek deepseek-flash --env DEEPSEEK_API_KEY` adds one, `/model use ds` switches — no need to retype the key, effective immediately, no restart. Configuration lives in the REPL's `/model` and `models.json` — the dashboard carries no config panel. Keys go to the OS keychain first (macOS Keychain, Linux `secret-tool`, **Windows Credential Manager**), falling back to `<home>/secrets.json` (0600, plaintext) when there is none — the save response says which one it was, honestly. Key writes go through the `SecretVault` seam, so a server-side KMS backend can slot in without touching callers. **The old `JOY_API_KEY` / `JOY_BASE_URL` env vars are no longer read** — configuration has exactly one path: `models.json`. The dashboard also self-hosts: `JOY_OPS_HOST=0.0.0.0` demands `JOY_OPS_TOKEN` at startup, `/api/*` is Bearer-gated ([docs/operations.md](docs/operations.md)).
 
 Tool failures return to the model as text — the loop never crashes on one.
 
@@ -217,7 +223,8 @@ Tool failures return to the model as text — the loop never crashes on one.
    TypeScript and Python bindings, and the artifacts are checked in.
 3. **Clients only translate.** The CLI, dashboard, chat gateways, and Python
    SDK are all clients of `joy app-server` (JSON-RPC over stdio); state.db is
-   opened by exactly one process.
+   owned by the app-server runtime. Independently started runtimes still lack
+   cross-process turn coordination; see the runtime limits.
 
 </details>
 
@@ -225,7 +232,32 @@ Tool failures return to the model as text — the loop never crashes on one.
 
 ## Runtime reliability
 
-Tasks recheck acceptance after recovery. Authorized tasks can wait durably for background jobs and resume after known completion; human pause/cancel takes precedence. Tool batches and background jobs persist intent before execution; unknown outcomes require reconciliation. Queued instructions remain recorded until completion. Quick chat retains recent session context and SOUL; skill discovery supports Chinese descriptions. OpenAI uses the native Responses adapter with local encrypted continuation; see [configuration](docs/configuration.md#native-openai-responses) for legacy-endpoint overrides. See [recovery boundaries and limits](docs/limitations.md#crash-recovery) before relying on unattended work. Plans restore complete versions after restart. A [budgeted live smoke](docs/live-reliability.md) records the current DeepSeek profile, evidence and costs.
+Production entry points share one execution owner per canonical state database. Competing runtimes fail before recovery can alter live work. See [runtime ownership](docs/limitations.md#long-running-and-the-daemon-lock).
 
+File acceptance now records the measured content digest in a versioned receipt. The checks and receipt commit together; evidence failures stop completion. See [verification evidence](docs/protocol.md#versioned-verification-evidence).
+
+Unknown task operations can be inspected and reconciled with human evidence in the cockpit. Reconciliation records a receipt without rerunning tools or resuming work; original acceptance remains required. See [operation protocol](docs/protocol.md#operation-journal-and-human-reconciliation).
+
+Tasks can also retain a draft while waiting for one human-declared external input. The cockpit supports declaring the condition and providing data; persisted events survive restart, while human pause/cancel retains priority. See [external input protocol](docs/protocol.md#durable-external-input).
+
+Tasks recheck acceptance after recovery. Known checkpoint tokens remain charged when recovery stops for review or lacks model configuration; repeated recovery does not charge them twice. `just smoke-recovery` tests real process crashes with isolated local fixtures. Authorized tasks can wait durably for background jobs and resume after known completion; human pause/cancel takes precedence. Tool batches and background jobs persist intent before execution; unknown outcomes require reconciliation. Queued instructions remain recorded until completion. Generated memory views refresh after content corrections or new episodes and retry failed writes; existing memory can project without a configured model. Consolidation can retain source-bound temporary observations for up to 24 hours ([memory contract](docs/protocol.md#memory-validity-and-derivation-context)). Quick chat retains recent session context, SOUL and bounded saved personal preferences; skill discovery supports Chinese descriptions. OpenAI uses the native Responses adapter with local encrypted continuation; see [configuration](docs/configuration.md#native-openai-responses) for legacy-endpoint overrides. See [recovery boundaries and limits](docs/limitations.md#crash-recovery) before relying on unattended work. Plans restore complete versions after restart. A [budgeted live smoke](docs/live-reliability.md) records the current DeepSeek profile, evidence and costs.
+
+Click **Start task** to authorize durable queued work in its own session while continuing the original chat. See [independent task execution](docs/protocol.md#independent-task-execution).
+
+Task/goal stop status and notification production commit together. Failed commits cannot advertise completion; failed delivery is retained for retry against the original destination.
+
+Scheduled results and delivery intent persist together; file failures retry delivery. Unknown claimed work requires review and is not replayed. See [schedule recovery](docs/operations.md#schedule-recovery-and-delivery).
+
+Human memory deletion/correction now prevents matching old claims from being re-extracted automatically; forgotten subjects stay excluded from background extraction. Explicit memory writes remain available. See [memory boundaries](docs/limitations.md#memory).
+
+Stored constraints are strictly validated before planning and model calls. Recovery retains its checkpoint round number, charges known checkpoint usage once, and checks the remaining budget before proceeding.
 
 English | [简体中文](README.zh.md) · Code is MIT.
+
+Human memory validity windows and extraction context are documented in [the memory protocol](docs/protocol.md#memory-validity-and-derivation-context).
+
+Mutating tools now coordinate across sessions and retain ownership for background jobs; see [mutation admission](docs/architecture.md#mutation-admission).
+
+Structured artifact checks now verify typed JSON values and retain file-version evidence; see [structured document acceptance](docs/protocol.md#structured-document-acceptance).
+
+Ordinary chats now have [human operation review](docs/protocol.md#ordinary-chat-operation-review), with read-only continuation while earlier outcomes remain unknown.

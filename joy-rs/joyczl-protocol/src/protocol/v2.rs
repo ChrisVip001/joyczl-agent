@@ -21,6 +21,8 @@ use crate::{JsonSchema, TS};
 
 /// JSON-RPC method names. `<resource>/<method>`, resource in singular.
 pub mod methods {
+    pub const TURN_OPERATIONS: &str = "turn/operations";
+    pub const TURN_RECONCILE: &str = "turn/reconcile";
     pub const TURN_START: &str = "turn/start";
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const APPROVAL_RESPOND: &str = "approval/respond";
@@ -28,6 +30,11 @@ pub mod methods {
     pub const TODO_VIEW: &str = "todo/view";
     /// Long tasks: create / list / view / get / runs / artifacts / suspend / resume / cancel.
     /// **All human-only** — the model has no path to any of them.
+    pub const TASK_START: &str = "task/start";
+    pub const TASK_OPERATIONS: &str = "task/operations";
+    pub const TASK_RECONCILE: &str = "task/reconcile";
+    pub const TASK_WAIT: &str = "task/wait";
+    pub const TASK_SIGNAL: &str = "task/signal";
     pub const TASK_CREATE: &str = "task/create";
     pub const TASK_LIST: &str = "task/list";
     pub const TASK_VIEW: &str = "task/view";
@@ -53,13 +60,15 @@ pub mod methods {
     /// Copy the last few exchanges of a session into a new one ("try another path").
     pub const SESSION_FORK: &str = "session/fork";
     /// Which turns are running right now, optionally narrowed to one session. The dashboard's
-    /// "正在跑第几轮" and the CLI's "what is happening" both read from here.
+    /// "which round is running" and the CLI's "what is happening" both read from here.
     pub const TURN_LIST: &str = "turn/list";
     pub const TURN_STEER: &str = "turn/steer";
     pub const TURN_FOLLOW_UP: &str = "turn/follow-up";
     pub const MEMORY_SEARCH: &str = "memory/search";
     pub const MEMORY_LIST: &str = "memory/list";
     pub const MEMORY_LIST_EPISODES: &str = "memory/list-episodes";
+    pub const MEMORY_VALIDITY: &str = "memory/setValidity";
+    pub const MEMORY_PROVENANCE: &str = "memory/provenance";
     pub const MEMORY_REMEMBER: &str = "memory/remember";
     pub const MEMORY_FORGET: &str = "memory/forget";
     pub const CONFIG_READ: &str = "config/read";
@@ -260,7 +269,7 @@ pub struct ApprovalRespondParams {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct AcceptanceView {
-    /// `fileExists` / `fileContains` / `toolsOk`.
+    /// `fileExists` / `fileContains` / `jsonEquals` / `toolsOk`.
     pub kind: String,
     /// Path, relative to the task's working directory (an absolute path must land inside it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,6 +287,12 @@ pub struct AcceptanceView {
     /// The human's own wording, when they gave one. Absent = derived from the fields above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// RFC6901 pointer for jsonEquals; empty selects the complete document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<String>,
+    /// JSON-encoded expected value. A string preserves the difference between absent and JSON null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_json: Option<String>,
 }
 
 /// One condition's latest measured verdict. Same order as `AgentTaskView.acceptance`.
@@ -285,11 +300,15 @@ pub struct AcceptanceView {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct CheckView {
-    /// The condition in the human's words ("report.md 里至少有 3 处结论").
+    /// The condition in the human's words ("report.md contains at least 3 conclusions").
     pub label: String,
     pub passed: bool,
-    /// Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md 不存在").
+    /// Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md does not exist").
     pub detail: String,
+    /// SHA-256 of the exact file bytes read for this measurement, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub artifact_sha256: Option<String>,
 }
 
 /// A task's budget. An absent field means that dimension is uncapped.
@@ -321,6 +340,18 @@ pub struct SpentView {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct AgentTaskView {
+    /// Human-declared input obligation; it never grants tool permissions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub input_condition: Option<TaskInputView>,
+    /// Separate task transcript, when explicitly started through task/start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub execution_session_id: Option<String>,
+    /// pending / claimed / finished / interrupted; absent for conversational tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dispatch_state: Option<String>,
     pub id: String,
     /// Absent = a task that belongs to no conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,7 +386,7 @@ pub struct AgentTaskView {
     /// The task's own working directory (the boundary for verification and writes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// How many times this task has been executed ("执行 3 次").
+    /// How many times this task has been executed ("run 3 times").
     #[serde(default)]
     pub run_count: i32,
     pub created_at: String,
@@ -421,6 +452,124 @@ pub struct TaskListResponse {
 pub struct TaskViewResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<AgentTaskView>,
+}
+
+/// Start a pending task in its own durable execution context. Human-only.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskStartParams {
+    pub task_id: String,
+    pub message: String,
+}
+
+/// Human-only inspection of persisted tool operations and uncertainty.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskOperationsResponse {
+    pub operations: Vec<ToolOperationView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub checkpoint_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ToolOperationView {
+    pub id: String,
+    pub run_id: Option<String>,
+    pub turn_id: String,
+    pub round_id: String,
+    pub tool_use_id: String,
+    pub tool: String,
+    #[ts(type = "unknown")]
+    pub arguments: serde_json::Value,
+    pub input_digest: String,
+    /// checkpoint / recovered_checkpoint; neither proves network transmission.
+    pub origin: String,
+    pub status: String,
+    /// Automatic replay policy; this journal grants no provider idempotency guarantees.
+    pub replay_policy: String,
+    pub output_digest: Option<String>,
+    pub evidence: Option<String>,
+    pub started_at: String,
+    pub settled_at: Option<String>,
+    /// Per-turn snapshot for multi-turn ordinary-chat inspection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub checkpoint_digest: Option<String>,
+}
+
+/// Evidence records a human observation and never executes or resumes the operation.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskReconcileParams {
+    pub task_id: String,
+    pub operation_id: String,
+    pub checkpoint_digest: String,
+    /// reconciled_success / reconciled_failure / not_executed.
+    pub resolution: String,
+    pub evidence: String,
+}
+
+/// Human-only input declaration before a task starts.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskWaitParams {
+    pub task_id: String,
+    pub source: String,
+    pub event_key: String,
+    pub description: String,
+    /// Latest input arrival time; accepted data remains available after this deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+/// Authorized host input, correlated to an existing human-declared condition.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskSignalParams {
+    pub condition_id: String,
+    pub source: String,
+    pub event_key: String,
+    pub event_id: String,
+    #[ts(type = "unknown")]
+    pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskSignalResponse {
+    pub task_id: String,
+    pub accepted: bool,
+    pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TaskInputView {
+    pub condition_id: String,
+    pub source: String,
+    pub event_key: String,
+    pub description: String,
+    /// pending / received / consumed.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub received_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "unknown")]
+    pub data: Option<serde_json::Value>,
 }
 
 /// `task/get`: address one task by id (a session-less task has no other way in).
@@ -726,7 +875,7 @@ pub struct SessionSummary {
     pub started_at: Option<String>,
     pub last_at: Option<String>,
     /// The session's working directory: the **root of everything it may write** (tools refuse
-    /// writes outside it). Absent = not chosen; the dashboard shows "选择工作目录".
+    /// writes outside it). Absent = not chosen; the dashboard shows "choose a working directory".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cwd: Option<String>,
@@ -1423,6 +1572,9 @@ pub struct ModelProfileView {
     /// `null` = follow the vendor's default model (the catalog row).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub capabilities: Option<ModelCapabilities>,
     /// Whether this profile is currently active.
     pub active: bool,
 }
@@ -1463,6 +1615,9 @@ pub struct ModelSaveParams {
     /// but *this* model sees" gets declared at the moment the profile is created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub capabilities: Option<ModelCapabilities>,
     /// Make it active right after saving (default true — the smoothest on first setup).
     #[serde(default)]
     pub make_active: Option<bool>,
@@ -1884,4 +2039,97 @@ pub enum ServerNotification {
     /// notifications are built per event and shipped via channels. ts-rs is transparent to `Box<T>`.
     TurnCompleted(Box<TurnCompletedNotification>),
     Error(ErrorNotification),
+}
+
+/// Human-only replacement of a fact's validity window. Null removes a bound.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct MemoryValidityParams {
+    pub fact_id: i32,
+    pub valid_from: Option<String>,
+    pub valid_until: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct MemoryProvenanceParams {
+    pub fact_id: i32,
+}
+
+/// References describe extraction context, not independent evidence of truth.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct MemoryObservation {
+    pub context_digest: String,
+    pub source_refs: Vec<String>,
+    pub observed_at: String,
+    /// JSON assessment for a source-bound temporary claim. Confidence is model-reported,
+    /// not calibrated or independent verification; includes quotation and source-time expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub assessment_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct MemoryProvenanceResponse {
+    pub fact_id: i32,
+    pub valid_from: Option<String>,
+    pub valid_until: Option<String>,
+    /// `human` or `consolidation`; absent for an unbounded legacy claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub validity_origin: Option<String>,
+    pub observations: Vec<MemoryObservation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct MemoryValidityResponse {
+    pub changed: bool,
+}
+
+/// Explicit declarations for the profile's main model; absent fields retain defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ModelCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub tools: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub context_window: Option<i32>,
+    /// Responses only. Supported efforts depend on the selected model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub reasoning_effort: Option<String>,
+}
+
+/// Human-only inspection of stopped ordinary-chat operations; task operations use task/operations.
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TurnOperationsParams {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct TurnReconcileParams {
+    pub session_id: String,
+    pub turn_id: String,
+    pub operation_id: String,
+    pub checkpoint_digest: String,
+    pub resolution: String,
+    pub evidence: String,
 }

@@ -44,7 +44,7 @@ export function aesKeyOf(encodingAesKey: string): Buffer {
     // But it doesn't catch everything: a 42-char (one short) input also yields 32 bytes (40 give
     // 30, the extra 3 give 2) — that error can only be caught by the appid check after decryption.
     throw new Error(
-      `EncodingAESKey 解出来是 ${key.length} 字节，应该是 32 —— 多半是复制的时候没弄干净（它应该是 43 个字符）。`,
+      `EncodingAESKey decodes to ${key.length} bytes, expected 32 — the copy likely picked up stray characters (it should be 43 characters).`,
     );
   }
   return key;
@@ -115,7 +115,7 @@ export function decryptMessage(
 
   if (appId !== options.appId) {
     throw new Error(
-      `解密出来的 AppID 是 ${appId}，跟配的 ${options.appId} 对不上 —— 这条不是发给这个公众号的（或者跟别的号串了密钥）。`,
+      `the decrypted AppID is ${appId}, which does not match the configured ${options.appId} — this message is not for this account (or the key is shared with another one).`,
     );
   }
   return message;

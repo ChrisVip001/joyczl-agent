@@ -14,6 +14,7 @@ pub struct Client {
     base_url: String,
     api_key: String,
     max_retries: u32,
+    reasoning: Option<(String, String)>,
 }
 impl Client {
     pub fn new(api_key: &str, base_url: Option<&str>, timeout: Duration, max_retries: u32) -> Self {
@@ -28,8 +29,23 @@ impl Client {
                 .to_string(),
             api_key: api_key.into(),
             max_retries,
+            reasoning: None,
         }
     }
+    pub fn with_reasoning(mut self, model: &str, effort: Option<String>) -> Self {
+        self.reasoning = effort.map(|effort| (model.to_string(), effort));
+        self
+    }
+    fn body(&self, request: &CreateRequest) -> Result<Value, ProviderError> {
+        let mut body = to_responses(request)?;
+        if let Some((model, effort)) = &self.reasoning {
+            if &request.model == model {
+                body["reasoning"] = json!({"effort":effort});
+            }
+        }
+        Ok(body)
+    }
+
     async fn send(&self, body: &Value) -> Result<reqwest::Response, ProviderError> {
         let url = format!("{}/responses", self.base_url);
         crate::retry::with_retries(self.max_retries, || async {
@@ -44,7 +60,7 @@ impl Client {
         .await
     }
     async fn create_inner(&self, request: CreateRequest) -> Result<CreateResponse, ProviderError> {
-        let response = self.send(&to_responses(&request)?).await?;
+        let response = self.send(&self.body(&request)?).await?;
         from_responses(&response.json::<Value>().await?)
     }
     async fn stream_inner(
@@ -52,7 +68,7 @@ impl Client {
         request: CreateRequest,
         on_text: TextSink,
     ) -> Result<CreateResponse, ProviderError> {
-        let mut body = to_responses(&request)?;
+        let mut body = self.body(&request)?;
         body["stream"] = json!(true);
         let response = self.send(&body).await?;
         // Never retry after output has started; a dropped stream is an error, not a completed answer.

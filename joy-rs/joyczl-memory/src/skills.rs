@@ -666,6 +666,8 @@ mod lexical_tests {
 
     #[test]
     fn chinese_skills_are_discoverable_without_english_aliases() {
+        // The fixtures are Chinese on purpose: `overlap` is a CJK bigram-ish matcher, and English
+        // words would not exercise what it does.
         assert!(overlap("帮我整理会议纪要", "整理会议纪要并提取待办") >= 2);
         assert_eq!(overlap("今天心情不好", "整理会议纪要"), 0);
         assert_eq!(overlap("会议", "会议会议会议"), 1);

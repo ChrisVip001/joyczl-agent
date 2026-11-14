@@ -8,7 +8,7 @@
  */
 export type AcceptanceView = {
   /**
-   * `fileExists` / `fileContains` / `toolsOk`.
+   * `fileExists` / `fileContains` / `jsonEquals` / `toolsOk`.
    */
   kind: string;
   /**
@@ -32,4 +32,12 @@ export type AcceptanceView = {
    * The human's own wording, when they gave one. Absent = derived from the fields above.
    */
   label: string | null;
+  /**
+   * RFC6901 pointer for jsonEquals; empty selects the complete document.
+   */
+  pointer: string | null;
+  /**
+   * JSON-encoded expected value. A string preserves the difference between absent and JSON null.
+   */
+  expectedJson: string | null;
 };

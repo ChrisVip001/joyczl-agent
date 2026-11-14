@@ -6,7 +6,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
 class JoyProtocolV2(RootModel[Any]):
@@ -14,8 +14,15 @@ class JoyProtocolV2(RootModel[Any]):
 
 
 class AcceptanceView(BaseModel):
+    expectedJson: Annotated[
+        str | None,
+        Field(
+            description='JSON-encoded expected value. A string preserves the difference between absent and JSON null.'
+        ),
+    ] = None
     kind: Annotated[
-        str, Field(description='`fileExists` / `fileContains` / `toolsOk`.')
+        str,
+        Field(description='`fileExists` / `fileContains` / `jsonEquals` / `toolsOk`.'),
     ]
     label: Annotated[
         str | None,
@@ -39,6 +46,12 @@ class AcceptanceView(BaseModel):
         str | None,
         Field(
             description='Plain substring for `fileContains` — **not** a regex: a badly written pattern must not be able to stall a whole round.'
+        ),
+    ] = None
+    pointer: Annotated[
+        str | None,
+        Field(
+            description='RFC6901 pointer for jsonEquals; empty selects the complete document.'
         ),
     ] = None
     tool: Annotated[str | None, Field(description='Tool name for `toolsOk`.')] = None
@@ -118,16 +131,22 @@ class BudgetView(BaseModel):
 
 
 class CheckView(BaseModel):
+    artifactSha256: Annotated[
+        str | None,
+        Field(
+            description='SHA-256 of the exact file bytes read for this measurement, when applicable.'
+        ),
+    ] = None
     detail: Annotated[
         str,
         Field(
-            description='Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md 不存在").'
+            description='Passed: the evidence ("report.md 12.4 KB"). Failed: the measurement ("report.md does not exist").'
         ),
     ]
     label: Annotated[
         str,
         Field(
-            description='The condition in the human\'s words ("report.md 里至少有 3 处结论").'
+            description='The condition in the human\'s words ("report.md contains at least 3 conclusions").'
         ),
     ]
     passed: bool
@@ -411,6 +430,18 @@ class MemoryListResponse(BaseModel):
     nextCursor: str | None = None
 
 
+class MemoryObservation(BaseModel):
+    assessmentJson: Annotated[
+        str | None,
+        Field(
+            description='JSON assessment for a source-bound temporary claim. Confidence is model-reported, not calibrated or independent verification; includes quotation and source-time expiry.'
+        ),
+    ] = None
+    contextDigest: str
+    observedAt: str
+    sourceRefs: list[str]
+
+
 class MemoryPageParams(BaseModel):
     page: Annotated[
         str, Field(description='Page slug, no `.md` (`alex`, not `alex.md`).')
@@ -438,6 +469,23 @@ class MemoryPageView(BaseModel):
     summary: str
     title: str
     updated: str
+
+
+class MemoryProvenanceParams(BaseModel):
+    factId: int
+
+
+class MemoryProvenanceResponse(BaseModel):
+    factId: int
+    observations: list[MemoryObservation]
+    validFrom: str | None = None
+    validUntil: str | None = None
+    validityOrigin: Annotated[
+        str | None,
+        Field(
+            description='`human` or `consolidation`; absent for an unbounded legacy claim.'
+        ),
+    ] = None
 
 
 class MemoryRememberParams(BaseModel):
@@ -470,9 +518,33 @@ class MemorySearchResponse(BaseModel):
     facts: list[Fact]
 
 
+class MemoryValidityParams(BaseModel):
+    factId: int
+    validFrom: str | None = None
+    validUntil: str | None = None
+
+
+class MemoryValidityResponse(BaseModel):
+    changed: bool
+
+
 class MessageRole(str, Enum):
     user = 'user'
     assistant = 'assistant'
+
+
+class ModelCapabilities(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    contextWindow: int | None = None
+    reasoningEffort: Annotated[
+        str | None,
+        Field(
+            description='Responses only. Supported efforts depend on the selected model.'
+        ),
+    ] = None
+    tools: bool | None = None
 
 
 class ModelInfo(BaseModel):
@@ -497,6 +569,7 @@ class ModelProfileView(BaseModel):
         bool, Field(description='Whether this profile is currently active.')
     ]
     baseUrl: str | None = None
+    capabilities: ModelCapabilities | None = None
     id: str
     keySource: Annotated[
         str | None,
@@ -557,6 +630,7 @@ class ModelSaveParams(BaseModel):
         ),
     ] = None
     baseUrl: str | None = None
+    capabilities: ModelCapabilities | None = None
     id: str
     keyEnv: Annotated[
         str | None,
@@ -999,7 +1073,7 @@ class SessionSummary(BaseModel):
     cwd: Annotated[
         str | None,
         Field(
-            description='The session\'s working directory: the **root of everything it may write** (tools refuse writes outside it). Absent = not chosen; the dashboard shows "选择工作目录".'
+            description='The session\'s working directory: the **root of everything it may write** (tools refuse writes outside it). Absent = not chosen; the dashboard shows "choose a working directory".'
         ),
     ] = None
     forkedFrom: Annotated[
@@ -1157,12 +1231,54 @@ class TaskGetParams(BaseModel):
     taskId: str
 
 
+class TaskInputView(BaseModel):
+    conditionId: str
+    data: Any | None = None
+    description: str
+    eventId: str | None = None
+    eventKey: str
+    expiresAt: str | None = None
+    receivedAt: str | None = None
+    source: str
+    state: Annotated[str, Field(description='pending / received / consumed.')]
+
+
 class TaskListParams(RootModel[None]):
     root: Annotated[None, Field(title='TaskListParams')]
 
 
+class TaskReconcileParams(BaseModel):
+    checkpointDigest: str
+    evidence: str
+    operationId: str
+    resolution: Annotated[
+        str,
+        Field(description='reconciled_success / reconciled_failure / not_executed.'),
+    ]
+    taskId: str
+
+
 class TaskRunsResponse(BaseModel):
     runs: list[RunView]
+
+
+class TaskSignalParams(BaseModel):
+    conditionId: str
+    data: Any
+    eventId: str
+    eventKey: str
+    source: str
+
+
+class TaskSignalResponse(BaseModel):
+    accepted: bool
+    duplicate: bool
+    taskId: str
+
+
+class TaskStartParams(BaseModel):
+    message: str
+    taskId: str
 
 
 class TaskUpdatedNotification(BaseModel):
@@ -1172,6 +1288,19 @@ class TaskUpdatedNotification(BaseModel):
         str | None, Field(description='Absent for a task that belongs to no session.')
     ] = None
     status: str
+    taskId: str
+
+
+class TaskWaitParams(BaseModel):
+    description: str
+    eventKey: str
+    expiresAt: Annotated[
+        str | None,
+        Field(
+            description='Latest input arrival time; accepted data remains available after this deadline.'
+        ),
+    ] = None
+    source: str
     taskId: str
 
 
@@ -1217,6 +1346,38 @@ class ToolDeltaNotification(BaseModel):
             description='A chunk of output, as it arrived. Chunk boundaries are not meaningful.'
         ),
     ]
+    toolUseId: str
+    turnId: str
+
+
+class ToolOperationView(BaseModel):
+    arguments: Any
+    checkpointDigest: Annotated[
+        str | None,
+        Field(description='Per-turn snapshot for multi-turn ordinary-chat inspection.'),
+    ] = None
+    evidence: str | None = None
+    id: str
+    inputDigest: str
+    origin: Annotated[
+        str,
+        Field(
+            description='checkpoint / recovered_checkpoint; neither proves network transmission.'
+        ),
+    ]
+    outputDigest: str | None = None
+    replayPolicy: Annotated[
+        str,
+        Field(
+            description='Automatic replay policy; this journal grants no provider idempotency guarantees.'
+        ),
+    ]
+    roundId: str
+    runId: str | None = None
+    settledAt: str | None = None
+    startedAt: str
+    status: str
+    tool: str
     toolUseId: str
     turnId: str
 
@@ -1294,6 +1455,20 @@ class TurnInterruptResponse(BaseModel):
 
 class TurnListParams(BaseModel):
     sessionId: str | None = None
+
+
+class TurnOperationsParams(BaseModel):
+    sessionId: str
+    turnId: str | None = None
+
+
+class TurnReconcileParams(BaseModel):
+    checkpointDigest: str
+    evidence: str
+    operationId: str
+    resolution: str
+    sessionId: str
+    turnId: str
 
 
 class TurnResumedNotification(BaseModel):
@@ -1437,6 +1612,18 @@ class AgentTaskView(BaseModel):
             description="The task's own working directory (the boundary for verification and writes)."
         ),
     ] = None
+    dispatchState: Annotated[
+        str | None,
+        Field(
+            description='pending / claimed / finished / interrupted; absent for conversational tasks.'
+        ),
+    ] = None
+    executionSessionId: Annotated[
+        str | None,
+        Field(
+            description='Separate task transcript, when explicitly started through task/start.'
+        ),
+    ] = None
     finishedAt: str | None = None
     goalCondition: Annotated[
         str | None,
@@ -1445,6 +1632,12 @@ class AgentTaskView(BaseModel):
         ),
     ] = None
     id: str
+    inputCondition: Annotated[
+        TaskInputView | None,
+        Field(
+            description='Human-declared input obligation; it never grants tool permissions.'
+        ),
+    ] = None
     lastStopReason: Annotated[
         str | None,
         Field(
@@ -1455,7 +1648,9 @@ class AgentTaskView(BaseModel):
     roundsUsed: int
     runCount: Annotated[
         int | None,
-        Field(description='How many times this task has been executed ("执行 3 次").'),
+        Field(
+            description='How many times this task has been executed ("run 3 times").'
+        ),
     ] = 0
     sessionId: Annotated[
         str | None,
@@ -1707,6 +1902,11 @@ class TaskEnvelope(BaseModel):
 
 class TaskListResponse(BaseModel):
     tasks: list[AgentTaskView]
+
+
+class TaskOperationsResponse(BaseModel):
+    checkpointDigest: str | None = None
+    operations: list[ToolOperationView]
 
 
 class TaskViewResponse(BaseModel):

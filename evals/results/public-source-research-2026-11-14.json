@@ -1,0 +1,24 @@
+{
+  "representation": "Re-serialized semantic copy; original artifact bytes were temporary.",
+  "originalArtifactSha256": "e14e88a66401c9fff48584c08be26145f75ead5445becae67bc8266b627b8adf",
+  "sourceReport": "evals/results/deepseek-flash-2026-11-14-research.json",
+  "artifact": {
+    "facts": {
+      "sdkMinimalFilesystemRestricted": false,
+      "webNeedsWorkspaceSelection": true
+    },
+    "sources": [
+      {
+        "id": "web-ui",
+        "quote": "输入框不可用",
+        "url": "https://deepseek-harness.github.io/deepseek-harness/guide/quickstart"
+      },
+      {
+        "id": "python-sdk",
+        "quote": "danger-full-access",
+        "url": "https://deepseek-harness.github.io/deepseek-harness/guide/python-sdk"
+      }
+    ],
+    "summary": "Web UI needs a selected workspace before input works; the minimal SDK profile is not filesystem-restricted."
+  }
+}

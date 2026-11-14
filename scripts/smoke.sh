@@ -5,7 +5,7 @@
 #
 #   ./scripts/smoke.sh
 #
-# Requires a prior cargo build (it uses target/debug/joy directly).
+# Requires prior Rust and dashboard builds; the hub validates its UI assets.
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -17,13 +17,13 @@ cd "$WORK"
 # unknown method → bad JSON. Note: no API key here, so turn/start should report PROVIDER_ERROR,
 # with a message telling the user what to do — while all other methods must keep working.
 OUTPUT=$(printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"memory/remember","params":{"subject":"阿明","content":"阿明喜欢早上的会议"}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"memory/search","params":{"query":"早上"}}' \
-  '{"jsonrpc":"2.0","id":3,"method":"memory/forget","params":{"subject":"阿明"}}' \
+  '{"jsonrpc":"2.0","id":1,"method":"memory/remember","params":{"subject":"Alex","content":"Alex likes morning meetings"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"memory/search","params":{"query":"morning"}}' \
+  '{"jsonrpc":"2.0","id":3,"method":"memory/forget","params":{"subject":"Alex"}}' \
   '{"jsonrpc":"2.0","id":4,"method":"config/read","params":{}}' \
   '{"jsonrpc":"2.0","id":5,"method":"turn/start","params":{"message":"hi"}}' \
   '{"jsonrpc":"2.0","id":6,"method":"nope","params":{}}' \
-  '{ 坏 JSON' \
+  '{ bad JSON' \
   | "$BIN" app-server)
 
 echo "$OUTPUT" | sed 's/^/  /'
@@ -31,21 +31,21 @@ echo "$OUTPUT" | sed 's/^/  /'
 # ---- Assertions ----
 fail() { echo "✗ $1" >&2; exit 1; }
 
-echo "$OUTPUT" | grep -q '"id":1,"result":{"fact"'          || fail "memory/remember 没写进去"
-echo "$OUTPUT" | grep -q '"id":2,"result":{"episodes":\[\],"facts":\[{"content":"阿明喜欢早上的会议"' \
-                                                              || fail "中文检索没命中"
-echo "$OUTPUT" | grep -q '"id":3,"result":{"removed":1}'     || fail "memory/forget 没删掉"
-echo "$OUTPUT" | grep -q '"id":4,"result":{"config":'        || fail "config/read 没返回配置"
-echo "$OUTPUT" | grep -q '"id":5,"error":{"code":-32000'     || fail "没配 key 时 turn/start 应当报 PROVIDER_ERROR"
-echo "$OUTPUT" | grep -qE 'no API key|缺 API key'      || fail "PROVIDER_ERROR 应当说明怎么办"
-echo "$OUTPUT" | grep -q '"id":6,"error":{"code":-32601'     || fail "未知方法应当报 METHOD_NOT_FOUND"
-echo "$OUTPUT" | grep -q '"code":-32700'                     || fail "坏 JSON 应当报 PARSE_ERROR"
+echo "$OUTPUT" | grep -q '"id":1,"result":{"fact"'          || fail "memory/remember wrote nothing"
+echo "$OUTPUT" | grep -q '"id":2,"result":{"episodes":\[\],"facts":\[{"content":"Alex likes morning meetings"' \
+                                                              || fail "the search found nothing"
+echo "$OUTPUT" | grep -q '"id":3,"result":{"removed":1}'     || fail "memory/forget deleted nothing"
+echo "$OUTPUT" | grep -q '"id":4,"result":{"config":'        || fail "config/read returned no config"
+echo "$OUTPUT" | grep -q '"id":5,"error":{"code":-32000'     || fail "with no key, turn/start should report PROVIDER_ERROR"
+echo "$OUTPUT" | grep -qE 'no API key'      || fail "PROVIDER_ERROR should say what to do"
+echo "$OUTPUT" | grep -q '"id":6,"error":{"code":-32601'     || fail "an unknown method should report METHOD_NOT_FOUND"
+echo "$OUTPUT" | grep -q '"code":-32700'                     || fail "bad JSON should report PARSE_ERROR"
 
 # Memory must really be an openable file — that's the whole point of "local-first".
-[[ -f "$WORK/.joy/state.db" ]] || fail "state.db 没建在 .joy/ 下"
+[[ -f "$WORK/.joy/state.db" ]] || fail "state.db was not created under .joy/"
 sqlite3 "$WORK/.joy/state.db" '.tables' >/dev/null 2>&1 \
-  && echo "  ✓ state.db 能被 sqlite3 直接打开" \
-  || echo "  ⚠ 没装 sqlite3，跳过直接打开检查"
+  && echo "  ✓ state.db opens directly in sqlite3" \
+  || echo "  ⚠ sqlite3 is not installed; skipping the direct-open check"
 
 # Start a fake SSE endpoint and print its port. The two sections below each need a fresh port
 # (it exits after serving one streaming reply).
@@ -64,45 +64,45 @@ track_pid "$FAKE_PID"
 # ---- Streaming: connect to the local fake SSE endpoint, verify SSE → textDelta → reply ----
 # No real key: model/save points a profile at the fake endpoint (keyEnv pointer); requests go out.
 PORT="$(start_fake "$WORK/fake_port")"
-[[ -n "$PORT" ]] || fail "假 SSE 端点没起来"
+[[ -n "$PORT" ]] || fail "the fake SSE endpoint did not come up"
 
 # Configure the model via the protocol itself (model/save): --env pointer key + test env var —
 # no real keychain, no plaintext file; base_url points at the fake endpoint. Also runs that path.
 STREAM_OUT=$(printf '%s\n' \
   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/save\",\"params\":{\"id\":\"fake\",\"provider\":\"anthropic\",\"apiKey\":null,\"keyEnv\":\"JOY_FAKE_KEY\",\"baseUrl\":\"http://127.0.0.1:$PORT\"}}" \
-  '{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"message":"你好"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"message":"hello"}}' \
   | JOY_FAKE_KEY=test JOY_HOME="$WORK/.joy-stream" "$BIN" app-server)
 
 echo "$STREAM_OUT" | sed 's/^/  [stream] /'
 
-echo "$STREAM_OUT" | grep -q '"method":"turn/notification"' || fail "流式没有通知发出"
-echo "$STREAM_OUT" | grep -q '"textDelta"'                 || fail "没有 textDelta 通知"
-echo "$STREAM_OUT" | grep -q '"delta":"你好"'              || fail "第一个增量不对"
-echo "$STREAM_OUT" | grep -q '"reply":"你好，世界"'         || fail "最终应答不是拼起来的完整文本"
-echo "$STREAM_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "turn/start 没有正常应答"
-echo "  ✓ 流式：SSE → textDelta → 完整应答"
+echo "$STREAM_OUT" | grep -q '"method":"turn/notification"' || fail "streaming sent no notification"
+echo "$STREAM_OUT" | grep -q '"textDelta"'                 || fail "no textDelta notification"
+echo "$STREAM_OUT" | grep -q '"delta":"hello"'              || fail "the first delta is wrong"
+echo "$STREAM_OUT" | grep -q '"reply":"hello, world"'         || fail "the final reply is not the joined text"
+echo "$STREAM_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "turn/start gave no proper reply"
+echo "  ✓ streaming: SSE → textDelta → the full reply"
 
 # ---- Graph front door: when enabled, the classifier must fail open and still answer --------
 # Same fake endpoint: non-streaming requests always 500 — so the classifier and retrieval gate
 # both "fail open", the turn falls to full_agent, and the answer matches the no-graph case.
 # That's the e2e version of the rule: a broken graph may cost latency, never capability.
 PORT2="$(start_fake "$WORK/fake_port2")"
-[[ -n "$PORT2" ]] || fail "假 SSE 端点没起来（图那次）"
+[[ -n "$PORT2" ]] || fail "the fake SSE endpoint did not come up (graph run)"
 
 GRAPH_OUT=$(printf '%s\n' \
   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/save\",\"params\":{\"id\":\"fake\",\"provider\":\"anthropic\",\"apiKey\":null,\"keyEnv\":\"JOY_FAKE_KEY\",\"baseUrl\":\"http://127.0.0.1:$PORT2\"}}" \
-  '{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"message":"你好"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"message":"hello"}}' \
   | JOY_FAKE_KEY=test JOY_GRAPH_WORKFLOWS=1 JOY_HOME="$WORK/.joy-graph" "$BIN" app-server)
 
 echo "$GRAPH_OUT" | sed 's/^/  [graph] /'
 
-echo "$GRAPH_OUT" | grep -q '"type":"graphStarted"'       || fail "开了图却没发 graphStarted"
-echo "$GRAPH_OUT" | grep -q '"node":"full_agent"'         || fail "分类器坏了就该落到 full_agent"
-echo "$GRAPH_OUT" | grep -q '"type":"graphEnded"'         || fail "图没正常收尾"
-echo "$GRAPH_OUT" | grep -q '"route":"full"'              || fail "meta 里该记下走的是 full"
-echo "$GRAPH_OUT" | grep -q '"reply":"你好，世界"'         || fail "图开着时也该给出同样的答复"
-echo "$GRAPH_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "图开着时 turn/start 也得正常应答"
-echo "  ✓ 图：分类器失败开放 → full_agent → 同样的答复"
+echo "$GRAPH_OUT" | grep -q '"type":"graphStarted"'       || fail "the graph was on but no graphStarted was sent"
+echo "$GRAPH_OUT" | grep -q '"node":"full_agent"'         || fail "a broken classifier should fall to full_agent"
+echo "$GRAPH_OUT" | grep -q '"type":"graphEnded"'         || fail "the graph did not close properly"
+echo "$GRAPH_OUT" | grep -q '"route":"full"'              || fail "meta should record that the full path was taken"
+echo "$GRAPH_OUT" | grep -q '"reply":"hello, world"'         || fail "the graph being on should give the same reply"
+echo "$GRAPH_OUT" | grep -q '"id":2,"result":{"turnId"'   || fail "with the graph on, turn/start still has to answer"
+echo "  ✓ graph: classifier fails open → full_agent → the same reply"
 
 # ---- hub: multi-user single-machine end to end ---------------------------------------------
 # adduser → start hub → no token 401 / wrong token 401 / right token 200,
@@ -110,9 +110,9 @@ echo "  ✓ 图：分类器失败开放 → full_agent → 同样的答复"
 HUB="$WORK/hub"
 HUB_OUT=$("$BIN" hub adduser alice --root "$HUB")
 HUB_TOKEN=$(printf '%s\n' "$HUB_OUT" | grep -E '^[0-9a-f]{64}$' | head -1)
-[[ -n "$HUB_TOKEN" ]] || fail "adduser 没打出一枚 64 hex 的 token"
+[[ -n "$HUB_TOKEN" ]] || fail "adduser printed no 64-hex token"
 [[ "$(printf '%s' "$HUB_TOKEN" | wc -c)" -le 64 ]] || true
-grep -q '"alice"' "$HUB/users.json" || fail "users.json 里没有 alice"
+grep -q '"alice"' "$HUB/users.json" || fail "users.json has no alice"
 
 # A free port every run: a hardcoded one turns "an old process is still listening" into a red
 # hub section that has nothing to do with this build.
@@ -126,29 +126,29 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 code() { curl -s -m 10 -o /dev/null -w '%{http_code}' "$@"; }
-[[ "$(code "http://127.0.0.1:$HUB_PORT/api/data")" == "401" ]]          || fail "hub 无 token 该 401"
-[[ "$(code -H 'Authorization: Bearer wrong' "http://127.0.0.1:$HUB_PORT/api/data")" == "401" ]] || fail "hub 错 token 该 401"
-[[ "$(code -H "Authorization: Bearer $HUB_TOKEN" "http://127.0.0.1:$HUB_PORT/api/data")" == "200" ]] || fail "hub 对 token 该 200"
-[[ -f "$HUB/alice/state.db" ]] || fail "alice 的 home 没被建出来（隔离的物理证据）"
+[[ "$(code "http://127.0.0.1:$HUB_PORT/api/data")" == "401" ]]          || fail "hub with no token should be 401"
+[[ "$(code -H 'Authorization: Bearer wrong' "http://127.0.0.1:$HUB_PORT/api/data")" == "401" ]] || fail "hub with a wrong token should be 401"
+[[ "$(code -H "Authorization: Bearer $HUB_TOKEN" "http://127.0.0.1:$HUB_PORT/api/data")" == "200" ]] || fail "hub with the right token should be 200"
+[[ -f "$HUB/alice/state.db" ]] || fail "alice's home was not created (the physical evidence of isolation)"
 
-# 注册登录（M2）：免鉴权注册 → token 直访 → 同设备登录同 token → 错密码 401。
+# register/login (M2): keyless registration → direct token access → the same device signs in
 REG=$(curl -s -m 10 -X POST "http://127.0.0.1:$HUB_PORT/api/auth/register" \
   -H 'content-type: application/json' \
   -d '{"username":"bob","password":"hunter2-secret","device":"phone"}')
 BOB_TOKEN=$(printf '%s' "$REG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
-[[ -n "$BOB_TOKEN" ]] || fail "注册响应里没有 token：$REG"
-[[ "$(code -H "Authorization: Bearer $BOB_TOKEN" "http://127.0.0.1:$HUB_PORT/api/data")" == "200" ]] || fail "bob 注册的 token 该 200"
+[[ -n "$BOB_TOKEN" ]] || fail "the registration response carries no token: $REG"
+[[ "$(code -H "Authorization: Bearer $BOB_TOKEN" "http://127.0.0.1:$HUB_PORT/api/data")" == "200" ]] || fail "bob's registration token should be 200"
 LOG=$(curl -s -m 10 -X POST "http://127.0.0.1:$HUB_PORT/api/auth/login" \
   -H 'content-type: application/json' \
   -d '{"username":"bob","password":"hunter2-secret","device":"phone"}')
 LOG_TOKEN=$(printf '%s' "$LOG" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
-[[ "$LOG_TOKEN" == "$BOB_TOKEN" ]] || fail "同设备登录该拿同一个 token"
+[[ "$LOG_TOKEN" == "$BOB_TOKEN" ]] || fail "the same device should sign in to the same token"
 [[ "$(code -X POST "http://127.0.0.1:$HUB_PORT/api/auth/login" -H 'content-type: application/json' \
-  -d '{"username":"bob","password":"wrong-password","device":"phone"}')" == "401" ]] || fail "错密码该 401"
+  -d '{"username":"bob","password":"wrong-password","device":"phone"}')" == "401" ]] || fail "a wrong password should be 401"
 [[ "$(code -X POST "http://127.0.0.1:$HUB_PORT/api/auth/register" -H 'content-type: application/json' \
-  -d '{"username":"bob","password":"hunter2-secret","device":"phone"}')" == "409" ]] || fail "重名注册该 409"
-[[ -f "$HUB/bob/state.db" ]] || fail "bob 的 home 没被建出来"
+  -d '{"username":"bob","password":"hunter2-secret","device":"phone"}')" == "409" ]] || fail "registering a taken name should be 409"
+[[ -f "$HUB/bob/state.db" ]] || fail "bob's home was not created"
 kill "$HUB_PID" 2>/dev/null
-echo "  ✓ hub：无 token 401 / 对 token 200 / 注册登录换 token，alice 与 bob 的 home 已隔离"
+echo "  ✓ hub: no token 401 / right token 200 / register-login swaps the token; alice's and bob's homes are isolated"
 
-echo "✓ 冒烟测试通过"
+echo "✓ smoke test passed"

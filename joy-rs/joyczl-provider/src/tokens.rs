@@ -66,9 +66,10 @@ fn estimate_message(message: &Message) -> usize {
                     estimate_text(name) + estimate_text(&input.to_string())
                 }
                 ContentBlock::ToolResult { content, .. } => estimate_text(content),
-                // 粗估：按原始字节数（base64 去头）近似。照片级图片落在 1–3k token
-                // 区间（Anthropic 按 (w×h)/750 计），这里拿不到像素尺寸，字节是最好的
-                // 代理量；clamp 保证小图标不约成零、超大图不至于让压缩时机失真到离谱。
+                // A rough estimate from the raw byte count (base64, header stripped). A photo-sized image
+                // lands in the 1–3k token range (Anthropic counts (w×h)/750); pixel dimensions are not
+                // available here, so bytes are the best proxy — and clamping keeps a small icon from
+                // rounding to zero and a huge image from skewing the compaction timing beyond recognition.
                 ContentBlock::Image { data, .. } => (data.len() * 3 / 4 / 256).clamp(200, 8_000),
             })
             .sum::<usize>()

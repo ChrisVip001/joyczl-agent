@@ -9,27 +9,33 @@ use serde_json::json;
 // cases are not — a TcpListener is a TcpListener on every platform CI builds on.
 
 fn write_hooks(dir: &std::path::Path, body: &str) {
-    std::fs::write(dir.join("hooks.json"), body).expect("写 hooks.json");
+    std::fs::write(dir.join("hooks.json"), body).expect("write hooks.json");
 }
 
 // ---- Loading (no subprocess needed) -----------------------------------------
 
 #[test]
 fn a_missing_file_means_no_hooks() {
-    let dir = tempfile::tempdir().expect("临时目录");
-    assert!(Hooks::load(dir.path(), None).is_none(), "没配就一次都不起");
+    let dir = tempfile::tempdir().expect("temp dir");
+    assert!(
+        Hooks::load(dir.path(), None).is_none(),
+        "unconfigured means nothing ever runs"
+    );
 }
 
 #[test]
 fn a_broken_file_config_does_not_take_the_process_down() {
-    let dir = tempfile::tempdir().expect("临时目录");
-    write_hooks(dir.path(), "{ 这不是 JSON");
-    assert!(Hooks::load(dir.path(), None).is_none(), "解析不了就当没配");
+    let dir = tempfile::tempdir().expect("temp dir");
+    write_hooks(dir.path(), "{ this is not JSON");
+    assert!(
+        Hooks::load(dir.path(), None).is_none(),
+        "unparseable is treated as unconfigured"
+    );
 }
 
 #[test]
 fn unknown_events_and_entries_without_a_command_are_skipped_with_a_reason() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     write_hooks(
         dir.path(),
         r#"{ "hooks": {
@@ -37,8 +43,8 @@ fn unknown_events_and_entries_without_a_command_are_skipped_with_a_reason() {
              "PreToolUse": [ { "matcher": "x" }, { "command": "true" } ]
            } }"#,
     );
-    let hooks = Hooks::load(dir.path(), None).expect("装载");
-    assert_eq!(hooks.count, 1, "只有一条是真能跑的");
+    let hooks = Hooks::load(dir.path(), None).expect("load");
+    assert_eq!(hooks.count, 1, "only one of them can actually run");
     assert!(
         hooks.summary().contains("PreToolUse×1"),
         "{}",
@@ -48,12 +54,12 @@ fn unknown_events_and_entries_without_a_command_are_skipped_with_a_reason() {
 
 #[test]
 fn disable_all_hooks_wins_over_everything() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     write_hooks(
         dir.path(),
         r#"{ "disableAllHooks": true, "hooks": { "PreToolUse": [ {"command": "true"} ] } }"#,
     );
-    let hooks = Hooks::load(dir.path(), None).expect("装载");
+    let hooks = Hooks::load(dir.path(), None).expect("load");
     assert_eq!(hooks.count, 0);
     assert!(
         hooks.summary().contains("disableAllHooks"),
@@ -64,7 +70,7 @@ fn disable_all_hooks_wins_over_everything() {
 
 #[test]
 fn no_entries_means_no_hooks_at_all() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     write_hooks(dir.path(), r#"{ "hooks": {} }"#);
     assert!(Hooks::load(dir.path(), None).is_none());
 }
@@ -74,46 +80,53 @@ fn no_entries_means_no_hooks_at_all() {
 #[cfg(unix)]
 fn hooks_with(dir: &std::path::Path, body: &str) -> Hooks {
     write_hooks(dir, body);
-    Hooks::load(dir, None).expect("装载")
+    Hooks::load(dir, None).expect("load")
 }
 
 /// exit 2 is the only block-via-exit-code; the reason comes from stderr.
 #[cfg(unix)]
 #[tokio::test]
 async fn exit_two_blocks_and_carries_the_reason() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let hooks = hooks_with(
         dir.path(),
         r#"{ "hooks": { "PreToolUse": [
-             { "command": "sh", "args": ["-c", "cat >/dev/null; echo 这条不许跑 >&2; exit 2"] }
+             { "command": "sh", "args": ["-c", "cat >/dev/null; echo this one must not run >&2; exit 2"] }
            ] } }"#,
     );
 
     let outcome = hooks
         .fire(HookEvent::PreToolUse, json!({"tool_name": "run_command"}))
         .await;
-    assert_eq!(outcome.blocked.as_deref(), Some("这条不许跑"));
+    assert_eq!(
+        outcome.blocked.as_deref(),
+        Some("this one must not run"),
+        "the hook's reason is passed through"
+    );
 }
 
 /// exit 1 is a **non-blocking** error: the action proceeds, but an aside must record it.
 #[cfg(unix)]
 #[tokio::test]
 async fn exit_one_is_an_error_but_not_a_block() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let hooks = hooks_with(
         dir.path(),
         r#"{ "hooks": { "PostToolUse": [
-             { "command": "sh", "args": ["-c", "cat >/dev/null; echo 我这个钩子坏了 >&2; exit 1"] }
+             { "command": "sh", "args": ["-c", "cat >/dev/null; echo my hook is broken >&2; exit 1"] }
            ] } }"#,
     );
 
     let outcome = hooks
         .fire(HookEvent::PostToolUse, json!({"tool_name": "save_note"}))
         .await;
-    assert!(outcome.blocked.is_none(), "exit 1 不该阻断");
+    assert!(outcome.blocked.is_none(), "exit 1 must not block");
     assert!(
-        outcome.note.unwrap_or_default().contains("我这个钩子坏了"),
-        "但要说出来"
+        outcome
+            .note
+            .unwrap_or_default()
+            .contains("my hook is broken"),
+        "but it has to say so"
     );
 }
 
@@ -121,16 +134,16 @@ async fn exit_one_is_an_error_but_not_a_block() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_decision_json_can_block_rewrite_and_add_context() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let hooks = hooks_with(
         dir.path(),
         r#"{ "hooks": {
              "PreToolUse": [ { "command": "sh",
                "args": ["-c", "cat >/dev/null; printf %s '{\"updatedInput\":{\"command\":\"ls -la\"}}'"] } ],
              "PostToolUse": [ { "command": "sh",
-               "args": ["-c", "cat >/dev/null; printf %s '{\"updatedOutput\":\"我把它改短了\"}'"] } ],
+               "args": ["-c", "cat >/dev/null; printf %s '{\"updatedOutput\":\"I shortened it\"}'"] } ],
              "SessionStart": [ { "command": "sh",
-               "args": ["-c", "cat >/dev/null; printf %s '{\"additionalContext\":\"这个仓库的规矩在 CONTRIBUTING.md\"}'"] } ]
+               "args": ["-c", "cat >/dev/null; printf %s '{\"additionalContext\":\"this repo keeps its rules in CONTRIBUTING.md\"}'"] } ]
            } }"#,
     );
 
@@ -142,7 +155,7 @@ async fn a_decision_json_can_block_rewrite_and_add_context() {
     let post = hooks
         .fire(HookEvent::PostToolUse, json!({"tool_name": "run_command"}))
         .await;
-    assert_eq!(post.output.as_deref(), Some("我把它改短了"));
+    assert_eq!(post.output.as_deref(), Some("I shortened it"));
 
     let start = hooks
         .fire(HookEvent::SessionStart, json!({"session_id": "s1"}))
@@ -157,7 +170,7 @@ async fn a_decision_json_can_block_rewrite_and_add_context() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_permission_decision_of_allow_counts_as_consent() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let hooks = hooks_with(
         dir.path(),
         r#"{ "hooks": { "PermissionRequest": [ { "command": "sh",
@@ -169,7 +182,7 @@ async fn a_permission_decision_of_allow_counts_as_consent() {
             json!({"tool_name": "run_command"}),
         )
         .await;
-    assert!(outcome.allowed, "该记为已获准");
+    assert!(outcome.allowed, "it should be recorded as approved");
     assert!(outcome.blocked.is_none());
 }
 
@@ -177,7 +190,7 @@ async fn a_permission_decision_of_allow_counts_as_consent() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timeout_blocks_policy_events_but_not_observers() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     // 1s timeout + sleep 3s: must time out.
     let body = r#"{ "hooks": {
          "PreToolUse": [ { "timeout": 1, "command": "sh", "args": ["-c", "cat >/dev/null; sleep 3"] } ],
@@ -190,7 +203,7 @@ async fn a_timeout_blocks_policy_events_but_not_observers() {
         .await;
     assert!(
         policy.blocked.is_some(),
-        "策略事件没能在时限内表态 = 不allowed"
+        "a policy event that cannot decide in time counts as not allowed"
     );
 
     let observer = hooks
@@ -198,7 +211,7 @@ async fn a_timeout_blocks_policy_events_but_not_observers() {
         .await;
     assert!(
         observer.blocked.is_none(),
-        "观察事件超时不该影响已经发生的事"
+        "a timed-out observation event must not affect what already happened"
     );
 }
 
@@ -206,32 +219,32 @@ async fn a_timeout_blocks_policy_events_but_not_observers() {
 #[cfg(unix)]
 #[tokio::test]
 async fn matchers_pick_which_calls_the_hook_sees() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     // On a hit, write plain text to stdout — an observation event's stdout becomes an aside.
     let hooks = hooks_with(
         dir.path(),
         r#"{ "hooks": { "PostToolUse": [
-             { "matcher": "save_note|forget_note", "command": "sh", "args": ["-c", "cat >/dev/null; echo 命中了"] }
+             { "matcher": "save_note|forget_note", "command": "sh", "args": ["-c", "cat >/dev/null; echo matched"] }
            ] } }"#,
     );
 
     let hit = hooks
         .fire(HookEvent::PostToolUse, json!({"tool_name": "forget_note"}))
         .await;
-    assert!(hit.note.unwrap_or_default().contains("命中了"));
+    assert!(hit.note.unwrap_or_default().contains("matched"));
 
     let miss = hooks
         .fire(HookEvent::PostToolUse, json!({"tool_name": "run_command"}))
         .await;
-    assert!(miss.note.is_none(), "没匹配就不该跑");
+    assert!(miss.note.is_none(), "no match means it does not run");
 }
 
 /// hooks.json changed at runtime: **don't run** and say why (aligned with trusted_hash).
 #[cfg(unix)]
 #[tokio::test]
 async fn a_file_changed_while_running_is_not_executed() {
-    let dir = tempfile::tempdir().expect("临时目录");
-    let marker = dir.path().join("跑过了");
+    let dir = tempfile::tempdir().expect("temp dir");
+    let marker = dir.path().join("it ran");
     let hooks = hooks_with(
         dir.path(),
         &format!(
@@ -245,16 +258,19 @@ async fn a_file_changed_while_running_is_not_executed() {
     // Change the file (simulating another process writing it).
     write_hooks(
         dir.path(),
-        r#"{ "hooks": { "PostToolUse": [ { "command": "sh", "args": ["-c", "cat >/dev/null; echo 新内容"] } ] } }"#,
+        r#"{ "hooks": { "PostToolUse": [ { "command": "sh", "args": ["-c", "cat >/dev/null; echo new content"] } ] } }"#,
     );
 
     let outcome = hooks
         .fire(HookEvent::PostToolUse, json!({"tool_name": "save_note"}))
         .await;
-    assert!(!marker.exists(), "was changed之后不该再执行");
+    assert!(
+        !marker.exists(),
+        "after `was changed` it must not run again"
+    );
     assert!(
         outcome.note.unwrap_or_default().contains("was changed"),
-        "要说明为什么没执行"
+        "it has to say why it did not run"
     );
 }
 
@@ -265,17 +281,17 @@ async fn a_file_changed_while_running_is_not_executed() {
 /// server task. Test-only — the same idea as provider_tests' Scripted, but one round trip.
 fn spawn_http_once(body_json: &'static str) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑端口");
-    listener.set_nonblocking(true).expect("设非阻塞");
-    let listener = tokio::net::TcpListener::from_std(listener).expect("转 tokio 监听器");
-    let addr = listener.local_addr().expect("取地址");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind the port");
+    listener.set_nonblocking(true).expect("set it non-blocking");
+    let listener = tokio::net::TcpListener::from_std(listener).expect("hand it to tokio");
+    let addr = listener.local_addr().expect("take the address");
     let handle = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("接受连接");
+        let (mut socket, _) = listener.accept().await.expect("accept the connection");
         let mut buf = Vec::new();
         // Read until the head terminator (\r\n\r\n).
         loop {
             let mut chunk = [0u8; 1024];
-            let n = socket.read(&mut chunk).await.expect("读请求");
+            let n = socket.read(&mut chunk).await.expect("read the request");
             buf.extend_from_slice(&chunk[..n]);
             if buf.windows(4).any(|w| w == b"\r\n\r\n") {
                 break;
@@ -292,7 +308,7 @@ fn spawn_http_once(body_json: &'static str) -> (std::net::SocketAddr, tokio::tas
         let mut body = buf.split_off(buf.len() - have);
         while body.len() < len {
             let mut chunk = [0u8; 1024];
-            let n = socket.read(&mut chunk).await.expect("读 body");
+            let n = socket.read(&mut chunk).await.expect("read the body");
             body.extend_from_slice(&chunk[..n]);
         }
         let response = format!(
@@ -300,26 +316,29 @@ fn spawn_http_once(body_json: &'static str) -> (std::net::SocketAddr, tokio::tas
             body_json.len(),
             body_json
         );
-        socket.write_all(response.as_bytes()).await.expect("写应答");
-        socket.flush().await.expect("刷缓冲");
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write the response");
+        socket.flush().await.expect("flush");
     });
     (addr, handle)
 }
 
 fn hooks_with_http(event: &str, url: &str) -> Hooks {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let body = json!({ "hooks": { event: [{ "url": url }] } }).to_string();
     write_hooks(dir.path(), &body);
     // The directory must outlive the fire(): the trust hash re-reads the file before every run —
     // a missing file reads as "changed" and refuses to run. keep() takes ownership (giving up
     // auto-cleanup) in exchange for a stable path.
     let path = dir.keep();
-    Hooks::load(&path, None).expect("装载")
+    Hooks::load(&path, None).expect("load")
 }
 
 #[tokio::test]
 async fn http_handler_receives_the_payload_and_can_block() {
-    let (addr, server) = spawn_http_once(r#"{"decision":"block","reason":"策略说不行"}"#);
+    let (addr, server) = spawn_http_once(r#"{"decision":"block","reason":"policy said no"}"#);
     let hooks = hooks_with_http("PreToolUse", &format!("http://{addr}/hook"));
     let outcome = hooks
         .fire(
@@ -329,21 +348,25 @@ async fn http_handler_receives_the_payload_and_can_block() {
         .await;
     assert_eq!(
         outcome.blocked.as_deref(),
-        Some("策略说不行"),
-        "HTTP 应答走同一决策契约"
+        Some("policy said no"),
+        "an HTTP response goes through the same decision contract"
     );
-    server.await.expect("服务端任务");
+    server.await.expect("the server task");
 }
 
 #[tokio::test]
 async fn http_handler_can_feed_additional_context() {
-    let (addr, server) = spawn_http_once(r#"{"additionalContext":"这是 hook 的话"}"#);
+    let (addr, server) = spawn_http_once(r#"{"additionalContext":"this is the hook's word"}"#);
     let hooks = hooks_with_http("SessionStart", &format!("http://{addr}/"));
     let outcome = hooks
         .fire(HookEvent::SessionStart, json!({ "session_id": "s" }))
         .await;
-    assert_eq!(outcome.context.as_deref(), Some("这是 hook 的话"));
-    server.await.expect("服务端任务");
+    assert_eq!(
+        outcome.context.as_deref(),
+        Some("this is the hook's word"),
+        "the hook's note is passed through"
+    );
+    server.await.expect("the server task");
 }
 
 #[tokio::test]
@@ -357,13 +380,16 @@ async fn http_connection_failure_fails_open_with_a_stderr_line() {
             json!({ "tool_name": "run_command" }),
         )
         .await;
-    assert!(outcome.blocked.is_none(), "连接失败不是拒绝");
-    assert!(outcome.note.is_some(), "但要留痕");
+    assert!(
+        outcome.blocked.is_none(),
+        "a failed connection is not a refusal"
+    );
+    assert!(outcome.note.is_some(), "but it has to leave a trace");
 }
 
 #[test]
 fn an_entry_with_both_command_and_url_is_skipped_at_load() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(
         dir.path().join("hooks.json"),
         json!({ "hooks": { "Stop": [
@@ -371,9 +397,9 @@ fn an_entry_with_both_command_and_url_is_skipped_at_load() {
         ] } })
         .to_string(),
     )
-    .expect("写配置");
+    .expect("write the config");
     assert!(
         Hooks::load(dir.path(), None).is_none(),
-        "两条 handler 都写 = 配置错误，整条跳过后零条目 → None"
+        "both handlers written = a config error; the whole rule is skipped, zero entries → None"
     );
 }

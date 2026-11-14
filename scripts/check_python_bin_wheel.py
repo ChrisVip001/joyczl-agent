@@ -1,15 +1,17 @@
-"""开箱确认 `joyczl-agent-bin` 打出来的轮子里真有一个二进制。
+"""Open the box and confirm the wheel `joyczl-agent-bin` produced really holds a binary.
 
-**为什么值得单独一步**：没找到二进制时构建并不会失败 —— hatchling 会安静地打出
-一个 `py3-none-any` 的纯 Python 轮子。这不是能顺手修掉的东西：editable 装法
-（`uv sync --extra bin`，本地开发和没编过 Rust 的机器都会走）跟出轮子传给 hook 的
-`build_data` **一模一样**，hook 里分不出来，所以在那边报错会打断开发流程。
+**Why this is worth a step of its own**: a missing binary does not fail the build — hatchling
+quietly produces a pure-Python `py3-none-any` wheel. And it cannot simply be fixed in the hook:
+an editable install (`uv sync --extra bin`, which is what local development and any machine
+without a Rust build take) hands the hook exactly the same `build_data` as a real build, so the
+hook cannot tell them apart, and erroring there would break the development loop.
 
-代价就是「打包时忘了编二进制」会安静地坏掉，而这个坏法很难看：轮子发出去、用户
-`pip install "joyczl-agent[bin]"` 装得上、`pip` 一声不吭，直到运行才「找不到 joy」。
-所以把检查放在打包入口：发出去之前开箱看一眼。
+The price is that "forgot to build the binary before packaging" breaks quietly, and it breaks
+ugly: the wheel ships, `pip install "joyczl-agent[bin]"` succeeds, pip says nothing, and only at
+runtime does it turn into "cannot find joy". So the check goes at the packaging entry point: look
+inside the box before it goes out.
 
-用法：check_python_bin_wheel.py [dist 目录，默认 dist]
+Usage: check_python_bin_wheel.py [dist directory, dist by default]
 """
 
 from __future__ import annotations
@@ -18,18 +20,18 @@ import sys
 import zipfile
 from pathlib import Path
 
-#: 必须出现在轮子里的那个路径。跟 `hatch_build.py` 的 `_IN_WHEEL` 是同一处约定。
+#: The one path that must appear inside the wheel; the same agreement as `_IN_WHEEL` in
+#: `hatch_build.py`.
 IN_WHEEL = "joyczl_agent_bin/bin/joy"
-
 
 def main(argv: list[str]) -> int:
     dist = Path(argv[1] if len(argv) > 1 else "dist")
     wheels = sorted(dist.glob("*.whl"))
     if not wheels:
-        print(f"✗ {dist} 里没有轮子")
+        print(f"✗ {dist} holds no wheel")
         return 1
 
-    # 取最新那个：`uv build` 不会清 dist，多平台构建时这里会有好几个。
+    # Take the newest one: `uv build` does not clear dist, so a multi-platform build leaves several.
     wheel = wheels[-1]
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
@@ -37,19 +39,18 @@ def main(argv: list[str]) -> int:
 
     problems = []
     if wheel.name.endswith("-any.whl"):
-        problems.append("标签是 any（纯 Python）—— 里面不可能有二进制")
+        problems.append("the tag is any (pure Python) — a binary cannot be in there")
     if IN_WHEEL not in names:
-        problems.append(f"轮子里没有 {IN_WHEEL}")
+        problems.append(f"the wheel does not carry {IN_WHEEL}")
     if problems:
         print(f"✗ {wheel.name}")
         for problem in problems:
             print(f"    {problem}")
-        print("  先 `cargo build --release`（在 joy-rs/ 下），或者用 JOY_BIN 指到二进制")
+        print("  run `cargo build --release` first (in joy-rs/), or point JOY_BIN at the binary")
         return 1
 
-    print(f"✓ {wheel.name}：里面有一个 {size / 1e6:.1f} MB 的 joy")
+    print(f"✓ {wheel.name}: carries a {size / 1e6:.1f} MB joy")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

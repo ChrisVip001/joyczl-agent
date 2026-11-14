@@ -30,7 +30,7 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 PORT="$(head -n1 "$WORK/port" 2>/dev/null || true)"
-[[ -n "$PORT" ]] || fail "假 SSE 端点没起来"
+[[ -n "$PORT" ]] || fail "the fake SSE endpoint did not come up"
 
 # Models and keys no longer travel via env vars (see 0.7.0): seed a models.json whose
 # key_source reads JOY_API_KEY from the environment and whose base_url is the fake SSE
@@ -50,28 +50,28 @@ JOY_BRIDGE_URL="file://$BRIDGE" \
 node --input-type=module -e '
   const { JoyBridge } = await import(process.env.JOY_BRIDGE_URL);
   const bridge = new JoyBridge({ env: process.env });
-  const out = await bridge.ask("telegram:42", "你好");
+  const out = await bridge.ask("telegram:42", "hello");
   bridge.close();
   console.log(JSON.stringify(out));
   await new Promise((r) => setTimeout(r, 400));
 ' > "$OUT"
 
-echo "  网关拿到：$(cat "$OUT")"
+echo "  the gateway got: $(cat "$OUT")"
 
 # ---- Assertions ------------------------------------------------------------------
 grep -q '"sessionId":"telegram:42"' "$OUT" \
-  || fail "派生的会话 id 没原样回来 —— 网关的「无状态」就靠它"
-grep -q '"reply":"你好，世界"' "$OUT" \
-  || fail "答复不是通知串拼起来的完整文本"
+  || fail "the derived session id did not come back as it went in — the gateway's statelessness rides on it"
+grep -q '"reply":"hello, world"' "$OUT" \
+  || fail "the reply is not the full text joined from the notifications"
 grep -q '"iterations":1' "$OUT" \
-  || fail "遥测（轮数）没带出来"
+  || fail "the telemetry (round count) was not carried out"
 grep -q '"model":"[^"]' "$OUT" \
-  || fail "遥测里没有模型名 —— 用户会想知道到底谁答的"
+  || fail "the telemetry carries no model name — a user wants to know who answered"
 
 # The session really hit disk: the server accepted this derived id and created it itself.
-[[ -f "$WORK/.joy/state.db" ]] || fail "state.db 没建在 .joy/ 下"
+[[ -f "$WORK/.joy/state.db" ]] || fail "state.db was not created under .joy/"
 
-echo "  ✓ 派生会话 + 真 stdio + 通知归拢 → 完整答复"
+echo "  ✓ derived session + real stdio + notifications folded → the full reply"
 
 # ---- The wechat section: a real HTTP server ----------------------------------------------
 #
@@ -134,7 +134,7 @@ node --input-type=module -e '
     "<FromUserName><![CDATA[openid-smoke]]></FromUserName>" +
     "<CreateTime>1713424427</CreateTime>" +
     "<MsgType><![CDATA[text]]></MsgType>" +
-    "<Content><![CDATA[你好]]></Content>" +
+    "<Content><![CDATA[hello]]></Content>" +
     "<MsgId>1</MsgId>" +
     "</xml>";
   const reply = await fetch(base + "?" + query, { method: "POST", body: xml });
@@ -154,20 +154,20 @@ node --input-type=module -e '
   await new Promise((r) => setTimeout(r, 400));
 ' > "$WX_OUT"
 
-echo "  微信拿到：$(cat "$WX_OUT")"
+echo "  wechat got: $(cat "$WX_OUT")"
 
 grep -q '"verify":"200 echo-ok"' "$WX_OUT" \
-  || fail "URL 验证没把 echostr 原样回过去"
+  || fail "URL verification did not echo echostr back verbatim"
 grep -q '"status":200' "$WX_OUT" \
-  || fail "推一条消息没拿到 200"
+  || fail "pushing a message did not get a 200"
 grep -q 'wechat:openid-smoke' "$WX_OUT" \
-  || fail "微信这条的会话 id 也得从平台身份派生"
-grep -q '你好，世界' "$WX_OUT" \
-  || fail "答复没进被动回复的 XML"
+  || fail "the wechat session id has to be derived from the platform identity too"
+grep -q 'hello, world' "$WX_OUT" \
+  || fail "the reply never reached the passive-reply XML"
 grep -q 'ToUserName><!\[CDATA\[openid-smoke' "$WX_OUT" \
-  || fail "回包的 ToUserName 得是发消息的那个人，不是公众号"
+  || fail "the reply ToUserName has to be the person who wrote, not the account"
 
-echo "  ✓ 真 HTTP + 验签 + XML 解析 → 被动回复"
+echo "  ✓ real HTTP + signature check + XML parsing → passive reply"
 
 # ---- The lark section: real binary frames ------------------------------------------------
 #
@@ -205,7 +205,7 @@ node --input-type=module -e '
       onerror: null,
       send(data) {
         const frame = decodeFrame(data);
-        if (frame === null) throw new Error("编出来的帧自己解不开");
+        if (frame === null) throw new Error("the frame we built cannot be taken apart by ourselves");
         socket.sent.push(frame);
       },
       close() { socket.onclose?.(); },
@@ -238,7 +238,7 @@ node --input-type=module -e '
       said.push(JSON.parse(JSON.parse(String(init.body)).content).text);
       return reply({ code: 0 });
     }
-    throw new Error("假飞书没准备这条路径：" + url);
+    throw new Error("the fake Feishu does not handle this path: " + url);
   };
 
   const adapter = new LarkAdapter(
@@ -277,7 +277,7 @@ node --input-type=module -e '
         chat_id: "oc_smoke",
         chat_type: "p2p",
         message_type: "text",
-        content: JSON.stringify({ text: "你好" }),
+        content: JSON.stringify({ text: "hello" }),
       },
     },
   });
@@ -319,20 +319,20 @@ node --input-type=module -e '
   await sleep(400);
 ' > "$LARK_OUT"
 
-echo "  飞书拿到：$(cat "$LARK_OUT")"
+echo "  Feishu got: $(cat "$LARK_OUT")"
 
 grep -qF '"pings":1' "$LARK_OUT" \
-  || fail "连上之后没先发心跳 —— 这根连接是服务端等我们先开口的"
+  || fail "no heartbeat right after connecting — on this connection the server waits for us to speak first"
 grep -qF '"logId":"9007199254740993"' "$LARK_OUT" \
-  || fail "ACK 没把服务端给的 logId 原样回填（超过 2^53 的那种）"
+  || fail "the ACK did not echo the server's logId back verbatim (the kind past 2^53)"
 grep -qF '"seqId":"0"' "$LARK_OUT" \
-  || fail "ACK 的 seqId 该回 0，不是自己编一个"
+  || fail "the ACK seqId should be 0, not one we made up"
 grep -qF '"bizRt":"0"' "$LARK_OUT" \
-  || fail "ACK 少了 biz_rt 头"
+  || fail "the ACK is missing the biz_rt header"
 grep -qF 'lark:oc_smoke' "$LARK_OUT" \
-  || fail "飞书这条的会话 id 也得从平台身份派生"
-grep -qF '"said":["你好，世界"]' "$LARK_OUT" \
-  || fail "答复没经 HTTP 发回飞书"
+  || fail "the Feishu session id has to be derived from the platform identity too"
+grep -qF '"said":["hello, world"]' "$LARK_OUT" \
+  || fail "the reply was never sent back to Feishu over HTTP"
 
-echo "  ✓ 二进制帧 + ACK 回显 + 真 app-server → HTTP 发回答复"
-echo "✓ 网关冒烟测试通过"
+echo "  ✓ binary frames + ACK echoed + a real app-server → the reply goes back over HTTP"
+echo "✓ gateway smoke test passed"

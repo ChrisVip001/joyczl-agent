@@ -3,7 +3,7 @@ name = "joyczl-protocol-noop-macros"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "非 test 构建下把 `#[derive(TS)]` / `#[derive(JsonSchema)]` 变成空操作。"
+description = "Turns `#[derive(TS)]` / `#[derive(JsonSchema)]` into a no-op outside test builds."
 
 [lib]
 proc-macro = true

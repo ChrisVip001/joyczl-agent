@@ -41,7 +41,10 @@ fn model_safe_name_keeps_what_the_provider_accepts() {
     );
     let long = config::model_safe_name("s", &"x".repeat(200));
     assert_eq!(long.len(), 64);
-    assert!(!long.starts_with('_'), "截断后不该以 _ 开头：{long}");
+    assert!(
+        !long.starts_with('_'),
+        "a truncated name must not start with _: {long}"
+    );
 }
 
 #[test]
@@ -85,9 +88,9 @@ fn oauth_resolves_to_anonymous_http_the_token_layer_sits_above() {
         oauth: Some(true),
         ..ServerSpec::default()
     };
-    match config::resolve(&spec, &no_env).expect("oauth 是合法配置") {
+    match config::resolve(&spec, &no_env).expect("oauth is a legal config") {
         config::Transport::Http { token, .. } => assert!(token.is_none()),
-        other => panic!("oauth 该走 Http 传输：{other:?}"),
+        other => panic!("oauth should take the Http transport: {other:?}"),
     }
 }
 
@@ -106,7 +109,7 @@ fn a_named_but_unset_variable_is_refused_before_connecting() {
     let found = config::resolve(&spec, &|key| {
         (key == "NOTES_API_KEY").then(|| "s3cret".to_string())
     })
-    .expect("有值就连");
+    .expect("with a value it connects");
     assert_eq!(
         found,
         TransportSpec::Http {
@@ -154,7 +157,7 @@ fn the_auth_hint_names_what_the_caller_can_check() {
         url: "https://h/mcp".to_string(),
         token: None,
     };
-    let hint = config::auth_hint(&anonymous).expect("该给提示");
+    let hint = config::auth_hint(&anonymous).expect("it should offer a hint");
     assert!(hint.contains("https://h/mcp"));
     assert!(hint.contains("auth_env"));
     // A local subprocess has no such thing as auth.
@@ -172,7 +175,7 @@ fn config_parses_the_documented_shape() {
         r#"{"servers": [{"name": "fs", "command": "npx", "args": ["-y", "s"]},
                         {"name": "notes", "url": "https://h/mcp", "auth_env": "K"}]}"#,
     )
-    .expect("能解析");
+    .expect("it resolves");
     assert_eq!(config.servers.len(), 2);
     assert_eq!(config.servers[0].command.as_deref(), Some("npx"));
     assert_eq!(config.servers[1].auth_env.as_deref(), Some("K"));
@@ -183,15 +186,18 @@ fn config_parses_the_documented_shape() {
 async fn no_config_file_means_no_mcp() {
     let client = McpClient::connect(std::path::Path::new("/nope/mcp.json")).await;
     assert!(client.servers().is_empty());
-    assert!(client.warnings().is_empty(), "没配不是错");
+    assert!(
+        client.warnings().is_empty(),
+        "unconfigured is not a mistake"
+    );
     assert!(client.tools().is_empty());
 }
 
 #[tokio::test]
 async fn a_broken_config_file_says_so() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("mcp.json");
-    std::fs::write(&path, "{ not json").expect("写");
+    std::fs::write(&path, "{ not json").expect("write");
     let client = McpClient::connect(&path).await;
     assert!(client.servers().is_empty());
     assert_eq!(client.warnings().len(), 1);
@@ -207,11 +213,11 @@ fn config_paths_put_the_users_file_first() {
     assert_eq!(
         config::config_paths_for(home, None),
         vec![std::path::PathBuf::from("/home/u/.joy/mcp.json")],
-        "没给额外目录就只读用户那一份"
+        "with no extra directory, only the user's own is read"
     );
 
     let extra =
-        std::env::join_paths(["/etc/joy/mcp.json", "/opt/pack/mcp.json"]).expect("拼得起来");
+        std::env::join_paths(["/etc/joy/mcp.json", "/opt/pack/mcp.json"]).expect("the paths join");
     assert_eq!(
         config::config_paths_for(home, Some(&extra)),
         vec![
@@ -219,7 +225,7 @@ fn config_paths_put_the_users_file_first() {
             std::path::PathBuf::from("/etc/joy/mcp.json"),
             std::path::PathBuf::from("/opt/pack/mcp.json"),
         ],
-        "用户的排第一 —— 先读到它，同名才赢得下来"
+        "the user's comes first — read first, so it wins on a name clash"
     );
 }
 
@@ -252,13 +258,13 @@ async fn the_users_config_file_wins_over_the_extras() {
     ])
     .await;
 
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let user = dir.path().join("mcp.json");
     std::fs::write(
         &user,
         json!({"servers": [{"name": "demo", "url": fake.url}]}).to_string(),
     )
-    .expect("写用户配置");
+    .expect("write the user config");
     let extra = dir.path().join("pack.json");
     std::fs::write(
         &extra,
@@ -268,18 +274,18 @@ async fn the_users_config_file_wins_over_the_extras() {
         ]})
         .to_string(),
     )
-    .expect("写额外配置");
+    .expect("write the extra config");
 
     let client = McpClient::connect_paths(&[user, extra]).await;
     assert_eq!(
         client.servers(),
         vec!["demo"],
-        "本地那一个活着；额外文件里重名的条目被跳过，没顶掉它"
+        "the local one survives; the duplicate in the extra file is skipped and does not displace it"
     );
     assert_eq!(
         client.warnings().len(),
         2,
-        "额外文件里的两个幽灵各自留了一行警告：{:?}",
+        "the two ghosts in the extra file each leave one warning line: {:?}",
         client.warnings()
     );
 }
@@ -293,7 +299,7 @@ async fn stdio_session_frames_json_lines_and_skips_foreign_messages() {
     let (server_read, mut server_write) = tokio::io::split(server_side);
     let server = tokio::spawn(async move {
         let mut lines = BufReader::new(server_read).lines();
-        while let Some(line) = lines.next_line().await.expect("读") {
+        while let Some(line) = lines.next_line().await.expect("read") {
             let message: serde_json::Value = serde_json::from_str(&line).expect("JSON");
             let method = message["method"].as_str().unwrap_or("").to_string();
             let Some(id) = message.get("id").cloned() else {
@@ -306,7 +312,7 @@ async fn stdio_session_frames_json_lines_and_skips_foreign_messages() {
                     server_write
                         .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\"}\n")
                         .await
-                        .expect("写");
+                        .expect("write");
                     json!({"tools": [{"name": "reverse"}]})
                 }
                 _ => json!({}),
@@ -315,14 +321,14 @@ async fn stdio_session_frames_json_lines_and_skips_foreign_messages() {
             server_write
                 .write_all(format!("{reply}\n").as_bytes())
                 .await
-                .expect("写");
+                .expect("write");
         }
     });
 
     let (client_read, client_write) = tokio::io::split(client_side);
     let mut session = StdioSession::new(client_read, client_write);
-    session.initialize().await.expect("握手");
-    let tools = session.list_tools().await.expect("列工具");
+    session.initialize().await.expect("handshake");
+    let tools = session.list_tools().await.expect("list the tools");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "reverse");
     // No schema from the server: degrade to "an object with no parameters".
@@ -360,7 +366,7 @@ async fn stdio_session_reports_a_server_that_goes_away() {
         error.contains("the server closed the connection"),
         "{error}"
     );
-    drain.await.expect("读完那一行");
+    drain.await.expect("drain that line");
 }
 
 /// A scripted local HTTP server: records every request it receives.
@@ -376,8 +382,8 @@ struct Reply {
 }
 
 async fn fake_http(script: Vec<Reply>) -> FakeHttp {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定");
-    let url = format!("http://{}", listener.local_addr().expect("地址"));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("the address"));
     let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(AtomicUsize::new(0));
     let (script, sink) = (Arc::new(script), seen.clone());
@@ -472,13 +478,16 @@ async fn http_session_handshakes_sends_the_token_and_reads_sse() {
     .await;
 
     let mut session = HttpSession::new(&fake.url, Some("s3cret".to_string()));
-    session.initialize().await.expect("握手");
-    let tools = session.list_tools().await.expect("列工具（走 SSE）");
+    session.initialize().await.expect("handshake");
+    let tools = session
+        .list_tools()
+        .await
+        .expect("list the tools (over SSE)");
     assert_eq!(tools[0].name, "reverse");
     let text = session
         .call_tool("reverse", json!({"text": "abc"}))
         .await
-        .expect("调用");
+        .expect("call it");
     assert_eq!(text, "cba");
 
     let seen = fake.seen.lock().await;
@@ -530,7 +539,9 @@ async fn a_dead_transport_is_rebuilt_without_replaying_an_unknown_outcome() {
             content_type: "application/json",
             body: String::new(),
         },
-        reply(r#"{"jsonrpc":"2.0","id":@id,"result":{"content":[{"type":"text","text":"活了"}]}}"#),
+        reply(
+            r#"{"jsonrpc":"2.0","id":@id,"result":{"content":[{"type":"text","text":"alive"}]}}"#,
+        ),
     ])
     .await;
 
@@ -551,7 +562,7 @@ async fn a_dead_transport_is_rebuilt_without_replaying_an_unknown_outcome() {
     );
     let next = connection.call("echo", json!({})).await;
     assert_eq!(
-        next, "活了",
+        next, "alive",
         "an explicit later call can use the rebuilt connection"
     );
     assert_eq!(fake.seen.lock().await.len(), 4);
@@ -563,7 +574,7 @@ async fn a_transport_without_a_spec_says_it_cannot_be_rebuilt() {
     let dead = crate::transport::Transport::Http(HttpSession::new("http://127.0.0.1:1/mcp", None));
     let connection = crate::Connection::with_policy("x", dead, crate::BreakerPolicy::default());
     let text = connection.call("echo", json!({})).await;
-    assert!(text.contains("重建不了"), "{text}");
+    assert!(text.contains("cannot be rebuilt"), "{text}");
 }
 
 // ---- 3. A real subprocess server -------------------------------------------
@@ -589,7 +600,7 @@ for line in sys.stdin:
                   "serverInfo": {"name": "fake", "version": "1"}}
     elif method == "tools/list":
         result = {"tools": [
-            {"name": "reverse", "description": "把文本反过来",
+            {"name": "reverse", "description": "reverse the text",
              "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}},
                              "required": ["text"]}},
             {"name": "dotted.name"},
@@ -601,7 +612,7 @@ for line in sys.stdin:
             text = (params.get("arguments") or {}).get("text", "")
             result = {"content": [{"type": "text", "text": text[::-1]}]}
         elif name == "boom":
-            result = {"content": [{"type": "text", "text": "炸了"}], "isError": True}
+            result = {"content": [{"type": "text", "text": "blew up"}], "isError": True}
         else:
             result = {"content": [{"type": "text", "text": "ok"}]}
     else:
@@ -622,13 +633,14 @@ fn python3() -> Option<std::path::PathBuf> {
 }
 
 async fn tool_ctx() -> joyczl_tools::ToolCtx {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = joyczl_state::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     joyczl_tools::ToolCtx {
         on_uncertain: None,
+        resource_lease: None,
         task_run_id: None,
         activate: None,
         embedder: None,
@@ -650,12 +662,12 @@ async fn tool_ctx() -> joyczl_tools::ToolCtx {
 #[tokio::test]
 async fn a_real_subprocess_server_registers_working_tools() {
     let Some(python) = python3() else {
-        eprintln!("跳过：这台机器上没有 python3");
+        eprintln!("skipped: no python3 on this machine");
         return;
     };
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let script = dir.path().join("fake_mcp_server.py");
-    std::fs::write(&script, FAKE_SERVER).expect("写服务器");
+    std::fs::write(&script, FAKE_SERVER).expect("write the server");
     let config = dir.path().join("mcp.json");
     std::fs::write(
         &config,
@@ -663,10 +675,14 @@ async fn a_real_subprocess_server_registers_working_tools() {
                             "args": [script.display().to_string()]}]})
         .to_string(),
     )
-    .expect("写配置");
+    .expect("write the config");
 
     let client = McpClient::connect(&config).await;
-    assert_eq!(client.warnings(), Vec::<String>::new(), "不该有警告");
+    assert_eq!(
+        client.warnings(),
+        Vec::<String>::new(),
+        "there should be no warning"
+    );
     assert_eq!(client.servers(), vec!["demo"]);
 
     let mut registry = joyczl_tools::ToolRegistry::new();
@@ -678,12 +694,15 @@ async fn a_real_subprocess_server_registers_working_tools() {
         vec!["demo_boom", "demo_dotted_name", "demo_reverse"]
     );
 
-    let reverse = registry.get("demo_reverse").expect("有 reverse");
-    assert_eq!(reverse.description, "[MCP:demo] 把文本反过来");
+    let reverse = registry.get("demo_reverse").expect("reverse is there");
+    assert_eq!(reverse.description, "[MCP:demo] reverse the text");
     assert_eq!(reverse.input_schema["required"], json!(["text"]));
     // The one without a server schema: degrade to an empty object, not a missing field.
     assert_eq!(
-        registry.get("demo_dotted_name").expect("有").input_schema,
+        registry
+            .get("demo_dotted_name")
+            .expect("present")
+            .input_schema,
         json!({"type": "object", "properties": {}})
     );
 
@@ -711,19 +730,19 @@ async fn a_real_subprocess_server_registers_working_tools() {
         !failed.contains("outcome unknown"),
         "a remote tool error is a known outcome: {failed}"
     );
-    assert!(failed.contains("炸了"), "{failed}");
+    assert!(failed.contains("blew up"), "{failed}");
 }
 
 #[tokio::test]
 async fn a_server_that_cannot_start_is_skipped_with_a_warning() {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let config = dir.path().join("mcp.json");
     std::fs::write(
         &config,
         json!({"servers": [{"name": "ghost", "command": "definitely-not-a-command-xyz"}]})
             .to_string(),
     )
-    .expect("写配置");
+    .expect("write the config");
 
     let client = McpClient::connect(&config).await;
     // One server failing to start affects neither the others nor Joy's startup.
@@ -736,7 +755,7 @@ async fn a_server_that_cannot_start_is_skipped_with_a_warning() {
     );
     assert_eq!(
         client.call("ghost", "reverse", json!({})).await,
-        "MCP 服务器 'ghost' 没有连上。"
+        "MCP server 'ghost' is not connected."
     );
 }
 
@@ -772,7 +791,7 @@ async fn a_failing_server_gets_circuit_broken() {
     .await;
 
     let mut session = HttpSession::new(&fake.url, None);
-    session.initialize().await.expect("握手");
+    session.initialize().await.expect("handshake");
 
     // Threshold 2, cooldown 150ms: tests don't wait 60 seconds for a breaker.
     let connection = Connection::with_policy(
@@ -786,28 +805,31 @@ async fn a_failing_server_gets_circuit_broken() {
 
     let first = connection.call("do", json!({})).await;
     let second = connection.call("do", json!({})).await;
-    assert!(first.contains("失败"), "{first}");
-    assert!(second.contains("失败"), "{second}");
+    assert!(first.contains("failed"), "{first}");
+    assert!(second.contains("failed"), "{second}");
 
     // Third call: breaker open — it must not be disturbed again.
     let before = fake.seen.lock().await.len();
     let skipped = connection.call("do", json!({})).await;
-    assert!(skipped.contains("断路器"), "{skipped}");
-    assert!(skipped.contains("被跳过"), "{skipped}");
+    assert!(skipped.contains("circuit breaker"), "{skipped}");
+    assert!(skipped.contains("was skipped"), "{skipped}");
     assert_eq!(
         fake.seen.lock().await.len(),
         before,
-        "熔断期间一次都不该发出去"
+        "nothing may go out while the breaker is open"
     );
 
     // Cooled down: let one probe through (half-open).
     tokio::time::sleep(Duration::from_millis(220)).await;
     let probe = connection.call("do", json!({})).await;
     assert!(
-        !probe.contains("断路器"),
-        "冷却过后要允许探一次，实际：{probe}"
+        !probe.contains("circuit breaker"),
+        "once cooled down one probe has to be let through; got: {probe}"
     );
-    assert!(probe.contains("失败"), "探针也是真的去敲了门：{probe}");
+    assert!(
+        probe.contains("failed"),
+        "the probe really did knock: {probe}"
+    );
 }
 
 /// Two servers each reporting a name-colliding tool: nobody overwrites anybody.
@@ -822,10 +844,13 @@ fn two_servers_that_collide_get_distinct_names() {
     assert!(!renamed);
 
     let (second, renamed) = config::model_safe_name_unique("a_b", "c", &mut taken);
-    assert!(renamed, "重名要改");
-    assert_ne!(second, first, "不能覆盖先到的那个");
+    assert!(renamed, "a collision has to be renamed");
+    assert_ne!(second, first, "the earlier one must not be overwritten");
     assert!(second.starts_with("a_b_c_"), "{second}");
-    assert!(second.len() <= 64, "仍然要满足 64 字符上限：{second}");
+    assert!(
+        second.len() <= 64,
+        "the 64-character cap still applies: {second}"
+    );
 }
 
 /// Even with a suffix, a long name must stay within 64 chars.

@@ -26,6 +26,13 @@ import type {
   SessionUpdateParams,
   SessionUpdateResponse,
   TaskCreateParams,
+  TaskOperationsResponse,
+  TaskReconcileParams,
+  TurnOperationsParams,
+  TurnReconcileParams,
+  TaskWaitParams,
+  TaskSignalParams,
+  TaskSignalResponse,
   TaskEnvelope,
   TurnInterruptParams,
   TurnInterruptResponse,
@@ -36,6 +43,7 @@ import type {
   TurnFollowUpResponse,
   TurnListResponse,
 } from "./protocol";
+import { t } from "./i18n.ts";
 
 /** One page of the `/api/fs` directory listing (ops's local view, not in the protocol). */
 export interface FsListing {
@@ -91,7 +99,7 @@ async function apiFetch(path: string, init: RequestInit = {}): Promise<Response>
       window.dispatchEvent(new CustomEvent("joy:unauthorized"));
       return response;
     }
-    const entered = window.prompt("这台 Joy 的 API 需要 token（服务端的 JOY_OPS_TOKEN）");
+    const entered = window.prompt(t("这台 Joy 的 API 需要 token（服务端的 JOY_OPS_TOKEN）"));
     if (entered) {
       localStorage.setItem("joy-ops-token", entered);
       const retryHeaders = new Headers(init.headers);
@@ -364,6 +372,8 @@ export async function* followEvents(): AsyncGenerator<EventPing> {
  */
 export type TaskActionBody =
   | ({ action: "create" } & TaskCreateParams)
+  | ({ action: "wait" } & TaskWaitParams)
+  | { action: "start"; taskId: string; message: string }
   | { action: "suspend" | "resume" | "cancel"; taskId: string; reason?: string | null };
 
 export async function taskAction(body: TaskActionBody): Promise<TaskEnvelope> {
@@ -372,8 +382,29 @@ export async function taskAction(body: TaskActionBody): Promise<TaskEnvelope> {
     headers: { "content-type": "application/json", accept: "application/json" },
     body: JSON.stringify(body),
   });
-  if (!response.ok) throw new ApiError(await errorOf(response));
-  return (await response.json()) as TaskEnvelope;
+  return decode<TaskEnvelope>(response);
+}
+
+export async function signalTaskInput(params: TaskSignalParams): Promise<TaskSignalResponse> {
+  return decode<TaskSignalResponse>(await apiFetch("/api/task", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ action: "signal", ...params }),
+  }));
+}
+
+export async function taskOperations(taskId: string): Promise<TaskOperationsResponse> {
+  return decode<TaskOperationsResponse>(await apiFetch("/api/task", {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ action: "operations", taskId }),
+  }));
+}
+
+export async function reconcileTaskOperation(params: TaskReconcileParams): Promise<TaskOperationsResponse> {
+  return decode<TaskOperationsResponse>(await apiFetch("/api/task", {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ action: "reconcile", ...params }),
+  }));
 }
 
 /**
@@ -452,9 +483,10 @@ async function jsonBody(response: Response): Promise<unknown> {
   if (text.trim() === "") {
     throw new ApiError({
       code: response.status,
-      message:
-        `服务端什么都没回（HTTP ${response.status} ${response.statusText || "无状态说明"}）` +
-        " —— 多半是页面比二进制新：重新 `cargo build -p joyczl-cli` 再启动一次驾驶舱。",
+      message: t(
+        "服务端什么都没回（HTTP {status}）—— 多半是页面比二进制新：重新 `cargo build -p joyczl-cli` 再启动一次驾驶舱。",
+        { status: `${response.status} ${response.statusText}`.trim() },
+      ),
     });
   }
   try {
@@ -462,7 +494,10 @@ async function jsonBody(response: Response): Promise<unknown> {
   } catch {
     throw new ApiError({
       code: response.status,
-      message: `服务端的回答不是 JSON（HTTP ${response.status}）：${text.slice(0, 140)}`,
+      message: t("服务端的回答不是 JSON（HTTP {status}）：{body}", {
+        status: response.status,
+        body: text.slice(0, 140),
+      }),
     });
   }
 }
@@ -574,7 +609,7 @@ export async function recordRecent(path: string): Promise<void> {
   }
 }
 
-// --- 能力中心（技能 / MCP 连接器）-----------------------------------------------
+// --- Capability center (skills / MCP connectors) ---------------------------------
 //
 // Ops-local views, like /api/fs above: neither the SDK nor the terminal needs
 // "browse the skill folders", so these shapes live here rather than in the protocol.
@@ -866,3 +901,16 @@ export async function compactSession(
   return decode<SessionCompactResponse>(response);
 }
 
+
+export async function turnOperations(params: TurnOperationsParams): Promise<TaskOperationsResponse> {
+  return decode<TaskOperationsResponse>(await apiFetch("/api/turn-operation", {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ action: "operations", ...params }),
+  }));
+}
+export async function reconcileTurnOperation(params: TurnReconcileParams): Promise<TaskOperationsResponse> {
+  return decode<TaskOperationsResponse>(await apiFetch("/api/turn-operation", {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ action: "reconcile", ...params }),
+  }));
+}

@@ -7,10 +7,10 @@ use super::store::SemanticStore;
 use crate::{Episodes, Facts};
 
 async fn stores() -> (Facts, Episodes) {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let pool = crate::open(&dir.path().join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm: the dir must not be dropped here
     (Facts::new(pool.clone()), Episodes::new(pool))
 }
@@ -20,7 +20,7 @@ async fn sqlite_semantic_store_honours_the_contract() {
     let (facts, _episodes) = stores().await;
     exercise_semantic(&facts)
         .await
-        .expect("本家实现不得违反自己定的契约");
+        .expect("an in-house implementation must honour its own contract");
 }
 
 #[tokio::test]
@@ -28,7 +28,7 @@ async fn sqlite_episodic_store_honours_the_contract() {
     let (_facts, episodes) = stores().await;
     exercise_episodic(&episodes)
         .await
-        .expect("本家实现不得违反自己定的契约");
+        .expect("an in-house implementation must honour its own contract");
 }
 
 /// When a trait and inherent methods coexist, the inherent ones must still work —

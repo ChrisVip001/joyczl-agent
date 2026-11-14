@@ -7,14 +7,15 @@ use crate::{ToolCtx, ToolRegistry};
 use serde_json::json;
 
 async fn ctx() -> ToolCtx {
-    let dir = tempfile::tempdir().expect("临时目录");
+    let dir = tempfile::tempdir().expect("temp dir");
     let home = dir.path().to_path_buf();
     let pool = joyczl_state::open(&home.join("state.db"))
         .await
-        .expect("打开库");
+        .expect("open the store");
     let _ = dir.keep(); // sqlite still writes -wal/-shm
     ToolCtx {
         on_uncertain: None,
+        resource_lease: None,
         task_run_id: None,
         activate: None,
         embedder: None,
@@ -51,11 +52,11 @@ fn disallowed_ips_cover_loopback_private_and_metadata() {
         "fd00::1",         // v6 ULA
     ] {
         let ip: std::net::IpAddr = bad.parse().unwrap();
-        assert!(is_disallowed_ip(ip), "{bad} 该被拒");
+        assert!(is_disallowed_ip(ip), "{bad} should be refused");
     }
     for good in ["8.8.8.8", "1.1.1.1", "2606:4700::1111"] {
         let ip: std::net::IpAddr = good.parse().unwrap();
-        assert!(!is_disallowed_ip(ip), "{good} 该allowed");
+        assert!(!is_disallowed_ip(ip), "{good} should be allowed");
     }
 }
 
@@ -70,29 +71,41 @@ async fn non_http_schemes_are_refused() {
 /// HTML → plain text: script/style vanish whole, entities decode, block tags break lines, whitespace collapses.
 #[test]
 fn html_to_text_strips_scripts_and_decodes_entities() {
-    let html = "<html><head><title>标题</title><style>body{color:red}</style></head>\
-                <body><p>第一段 &amp; 符号</p><script>evil()</script>\
-                <p>数字实体 &#28450; 字</p><br/>/*注释<!--hidden-->*/尾巴</body></html>";
+    let html = "<html><head><title>the title</title><style>body{color:red}</style></head>\
+                <body><p>the first paragraph &amp; a symbol</p><script>evil()</script>\
+                <p>numeric entity &#28450; char</p><br/>/*comment<!--hidden-->*/tail</body></html>";
     let text = html_to_text(html);
-    assert!(text.contains("标题"), "{text}");
-    assert!(text.contains("第一段 & 符号"), "{text}");
-    assert!(text.contains("数字实体 漢 字"), "{text}");
-    assert!(text.contains("尾巴"), "{text}");
-    assert!(!text.contains("evil"), "script 正文不该留下：{text}");
-    assert!(!text.contains("color:red"), "style 正文不该留下：{text}");
-    assert!(!text.contains("hidden"), "注释不该留下：{text}");
+    assert!(text.contains("title"), "{text}");
+    assert!(text.contains("the first paragraph & a symbol"), "{text}");
+    assert!(
+        text.contains("numeric entity 漢 char"),
+        "a numeric entity for a CJK character decodes: {text}"
+    );
+    assert!(text.contains("tail"), "{text}");
+    assert!(
+        !text.contains("evil"),
+        "script bodies must not survive: {text}"
+    );
+    assert!(
+        !text.contains("color:red"),
+        "style bodies must not survive: {text}"
+    );
+    assert!(
+        !text.contains("hidden"),
+        "comments must not survive: {text}"
+    );
     // The collapse criteria: no consecutive blank lines, no whitespace-only lines — one
     // blank line between block elements is fine typography; layout garbage is the target.
     let lines: Vec<&str> = text.lines().collect();
     for pair in lines.windows(2) {
         assert!(
             !(pair[0].trim().is_empty() && pair[1].trim().is_empty()),
-            "连续空行没折叠：{text:?}"
+            "consecutive blank lines were not folded: {text:?}"
         );
     }
     assert!(
         lines.iter().all(|l| *l == l.trim()),
-        "行首尾有残留空白：{text:?}"
+        "whitespace left at the line edges: {text:?}"
     );
 }
 
@@ -107,7 +120,7 @@ fn unknown_entities_pass_through() {
 /// Starts a one-shot HTTP server, returns the base URL. Routing: path → (status, content-type, body, extra).
 fn spawn_server(routes: Vec<(&'static str, u16, &'static str, String, &'static str)>) -> String {
     use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("绑定本机端口");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         for _ in 0..16 {
@@ -156,7 +169,7 @@ async fn follows_redirects_and_wraps_the_body_as_external_data() {
             "/final",
             200,
             "text/html",
-            "<html><body><h1>正文标题</h1><p>你好</p><script>alert(1)</script></body></html>"
+            "<html><body><h1>the body title</h1><p>hello</p><script>alert(1)</script></body></html>"
                 .into(),
             "",
         ),
@@ -166,9 +179,9 @@ async fn follows_redirects_and_wraps_the_body_as_external_data() {
         out.starts_with("Below is the body of an external web page"),
         "{out}"
     );
-    assert!(out.contains("正文标题"), "{out}");
-    assert!(out.contains("你好"), "{out}");
-    assert!(!out.contains("alert"), "script 不该留下：{out}");
+    assert!(out.contains("the body title"), "{out}");
+    assert!(out.contains("hello"), "{out}");
+    assert!(!out.contains("alert"), "scripts must not survive: {out}");
 }
 
 /// Every hop re-runs SSRF: a redirect to a private address is caught on hop 2.
@@ -203,7 +216,7 @@ async fn redirect_loops_stop_at_the_cap() {
 /// HTTP errors report the status code honestly.
 #[tokio::test]
 async fn http_errors_are_honest() {
-    let base = spawn_server(vec![("/gone", 404, "text/plain", "没了".into(), "")]);
+    let base = spawn_server(vec![("/gone", 404, "text/plain", "gone".into(), "")]);
     let err = execute_fetch(&format!("{base}/gone"), true)
         .await
         .unwrap_err()
@@ -214,12 +227,18 @@ async fn http_errors_are_honest() {
 /// Body char cap: truncated at 50k with a notice, never silently.
 #[tokio::test]
 async fn the_output_is_capped_with_an_honest_marker() {
-    let base = spawn_server(vec![("/long", 200, "text/plain", "字".repeat(60_000), "")]);
+    let base = spawn_server(vec![(
+        "/long",
+        200,
+        "text/plain",
+        "char".repeat(60_000),
+        "",
+    )]);
     let out = execute_fetch(&format!("{base}/long"), true).await.unwrap();
     assert!(out.contains("truncated at 50000"), "{out}");
     assert!(
         out.chars().count() < 51_000,
-        "over 50k 还在往里塞：{}",
+        "still stuffing more in past 50k: {}",
         out.chars().count()
     );
 }
@@ -252,19 +271,26 @@ use std::sync::atomic::Ordering;
 #[test]
 fn backend_plan_prefers_keyed_and_puts_bing_ahead_of_ddg_without_keys() {
     let plan = plan_backends(Some("t".into()), None, true, true);
-    assert_eq!(plan.len(), 1, "有 key 时免 key 后端不进计划");
+    assert_eq!(
+        plan.len(),
+        1,
+        "with a key, the keyless backend stays out of the plan"
+    );
     assert!(matches!(plan[0], Backend::Tavily(_)));
 
     let plan = plan_backends(None, Some("b".into()), true, true);
     assert!(matches!(plan[0], Backend::Brave(_)));
 
     let plan = plan_backends(None, None, true, true);
-    assert_eq!(plan.len(), 2, "无 key 时两个免 key 后端都试");
+    assert_eq!(plan.len(), 2, "with no key both keyless backends get tried");
     assert!(
         matches!(plan[0], Backend::Bing),
-        "Bing 先试：DDG 常被网络挡住"
+        "Bing is tried first: DDG is often blocked by the network"
     );
-    assert!(matches!(plan[1], Backend::DuckDuckGo), "DDG 仍是最后兜底");
+    assert!(
+        matches!(plan[1], Backend::DuckDuckGo),
+        "DuckDuckGo is still the last resort"
+    );
 
     assert!(matches!(
         plan_backends(None, None, false, true)[0],
@@ -276,7 +302,7 @@ fn backend_plan_prefers_keyed_and_puts_bing_ahead_of_ddg_without_keys() {
     ));
     assert!(
         plan_backends(None, None, false, false).is_empty(),
-        "全关就是没有后端 —— search_ready 必须已经把它挡在注册之外"
+        "all off means no backend — search_ready has to have kept it out of registration"
     );
 }
 
@@ -286,20 +312,26 @@ fn backend_plan_prefers_keyed_and_puts_bing_ahead_of_ddg_without_keys() {
 fn bing_result_page_parses_into_hits() {
     let page = r#"<html><body>
       <li class="b_algo" data-id="1"><h2><a href="https://example.com/a">CodeBuddy &amp; IDE</a></h2>
-        <div class="b_caption"><p>一个 <b>IDE</b> 的介绍</p></div></li>
-      <li class="b_algo"><h2><a href="https://example.com/b">第二条</a></h2>
-        <div class="b_caption"><p>另一个结果</p></div></li>
+        <div class="b_caption"><p>an introduction to an <b>IDE</b></p></div></li>
+      <li class="b_algo"><h2><a href="https://example.com/b">the second entry</a></h2>
+        <div class="b_caption"><p>another result</p></div></li>
     </body></html>"#;
     let hits = super::web::parse_bing(page, 5);
     assert_eq!(hits.len(), 2);
-    assert_eq!(hits[0].0, "CodeBuddy & IDE", "HTML 实体要解开");
-    assert_eq!(hits[0].1, "一个 IDE 的介绍", "标签要去掉");
+    assert_eq!(
+        hits[0].0, "CodeBuddy & IDE",
+        "HTML entities have to be decoded"
+    );
+    assert_eq!(
+        hits[0].1, "an introduction to an IDE",
+        "the tags have to go"
+    );
     assert_eq!(hits[0].2, "https://example.com/a");
-    assert_eq!(hits[1].0, "第二条");
+    assert_eq!(hits[1].0, "the second entry");
     assert_eq!(
         super::web::parse_bing(page, 1).len(),
         1,
-        "max_results 要生效"
+        "max_results has to take effect"
     );
 }
 
@@ -344,22 +376,37 @@ fn turn_limits_start_empty() {
     let limits = TurnLimits::default();
     assert_eq!(limits.used.load(Ordering::Relaxed), 0);
     assert_eq!(limits.search_max, 20);
-    assert_eq!(TurnLimits::new(0).search_max, 1, "0 钳到下界，永不为负预算");
-    assert_eq!(TurnLimits::new(99_999).search_max, 200, "上界钳制");
+    assert_eq!(
+        TurnLimits::new(0).search_max,
+        1,
+        "0 is clamped to the lower bound; the budget is never negative"
+    );
+    assert_eq!(
+        TurnLimits::new(99_999).search_max,
+        200,
+        "clamped to the upper bound"
+    );
 }
 
-/// `&` 后面紧跟宽字符时，那 12 字节的前瞻窗口会落在字符中间。
+/// With a wide character right after `&`, the 12-byte lookahead window lands mid-character.
 ///
-/// 这不是「没找到实体」，是一个 panic：`byte index 29899 is not a char boundary`，
-/// 真在驾驶舱启动后的第一轮抓取里炸过。窗口必须退到边界，认不出的实体原样留着。
+// This is not "entity not found", it is a panic: `byte index 29899 is not a char boundary`.
+// It really did blow up in the first fetch after the cockpit started. The window has to fall
+// back to a boundary, and an entity it cannot read stays as it was.
 #[test]
 fn an_ampersand_before_a_wide_character_does_not_panic() {
+    // A wide character after `&` is the case that used to walk off a char boundary.
     let text = "&中文中文中文中文中文中文";
     let out = html_to_text(text);
-    assert!(out.contains('&'), "认不出的实体要原样留着：{out}");
-    assert!(out.contains("中文"), "正文不该被吃掉：{out}");
+    assert!(
+        out.contains('&'),
+        "an entity it cannot read stays as it is: {out}"
+    );
+    assert!(out.contains("中文"), "the body must not be eaten: {out}");
 
-    // 边界修好之后，正常实体仍要解出来（`html_to_text` 会在末尾补一个块分隔换行）。
-    assert_eq!(html_to_text("&amp;中文").trim(), "&中文");
+    // With the boundary fixed, ordinary entities still get decoded (`html_to_text` appends a block
+    // separator newline at the end).
+    assert_eq!(html_to_text("&amp;text").trim(), "&text");
+    // &#20013; is 中: a numeric entity that names a CJK character still decodes.
     assert_eq!(html_to_text("&#20013;").trim(), "中");
 }

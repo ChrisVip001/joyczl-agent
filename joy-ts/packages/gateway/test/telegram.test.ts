@@ -48,7 +48,7 @@ class FakeTelegram {
 
     if (this.#failNext > 0) {
       this.#failNext -= 1;
-      throw new Error("网络断了");
+      throw new Error("the network dropped");
     }
 
     const method = String(input).split("/").pop() ?? "";
@@ -91,7 +91,7 @@ function update(
     message: {
       message_id: updateId,
       chat: { id: chatId, type: "private" },
-      from: { first_name: "某人", ...from },
+      from: { first_name: "someone", ...from },
       text,
     },
   };
@@ -104,7 +104,7 @@ function nonTextUpdate(updateId: number, chatId: number): unknown {
     message: {
       message_id: updateId,
       chat: { id: chatId, type: "private" },
-      from: { id: chatId, first_name: "某人" },
+      from: { id: chatId, first_name: "someone" },
       voice: { file_id: "abc", duration: 3 },
     },
   };
@@ -126,7 +126,7 @@ function setup(
       fetch: api.fetch,
       onLog: options.onLog ?? (() => {}),
     },
-    options.respond ?? (async () => "答复"),
+    options.respond ?? (async () => "the answer"),
   );
   return { adapter, api };
 }
@@ -139,7 +139,7 @@ async function runUntil(
   const running = adapter.run();
   const deadline = Date.now() + 5000;
   while (!done()) {
-    if (Date.now() > deadline) throw new Error("等到超时了");
+    if (Date.now() > deadline) throw new Error("timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   adapter.stop();
@@ -148,23 +148,23 @@ async function runUntil(
 
 // ---- Splitting long messages ---------------------------------------------------------------
 
-test("短消息原样一条", () => {
-  assert.deepEqual(splitMessage("你好", MESSAGE_LIMIT), ["你好"]);
+test("a short message stays one", () => {
+  assert.deepEqual(splitMessage("hello", MESSAGE_LIMIT), ["hello"]);
 });
 
-test("超长的按换行切，一个字都不丢", () => {
-  const text = Array.from({ length: 300 }, (_, index) => `第 ${index} 行`).join("\n");
+test("an overlong one is cut at newlines, losing not a character", () => {
+  const text = Array.from({ length: 300 }, (_, index) => `line ${index}`).join("\n");
   const chunks = splitMessage(text, 100);
 
-  assert.ok(chunks.length > 1, "这么长本来就该切成多条");
+  assert.ok(chunks.length > 1, "something this long has to be split");
   assert.ok(
     chunks.every((chunk) => chunk.length <= 100),
-    "每一段都不能超上限",
+    "no chunk may pass the limit",
   );
-  assert.equal(chunks.join("\n"), text, "切完拼回去必须跟原文一样");
+  assert.equal(chunks.join("\n"), text, "joined back together it has to match the original");
 });
 
-test("连一个换行都没有的超长内容也得切完", () => {
+test("an overlong blob with no newline at all still gets split", () => {
   const text = "x".repeat(250);
   const chunks = splitMessage(text, 100);
   assert.deepEqual(
@@ -176,80 +176,80 @@ test("连一个换行都没有的超长内容也得切完", () => {
 
 // ---- Adapter ----------------------------------------------------------------
 
-test("来一条文字：按对话去问 Joy，把答复发回那个聊天", async () => {
+test("a message arrives: ask Joy by chat, and send the answer back to that chat", async () => {
   const asked: Array<[string, string]> = [];
   const { adapter, api } = setup({
     respond: async (conversation, text) => {
       asked.push([conversation, text]);
-      return "你也好";
+      return "hello to you too";
     },
   });
-  api.pushUpdates([update(1, 42, "你好")]);
+  api.pushUpdates([update(1, 42, "hello")]);
 
   await runUntil(adapter, () => api.sent.length > 0);
 
   // Sessions split by **chat**, not by person — a group shares one conversation or nobody can keep up.
-  assert.deepEqual(asked, [["telegram:42", "你好"]]);
-  assert.deepEqual(api.sent, ["你也好"]);
+  assert.deepEqual(asked, [["telegram:42", "hello"]]);
+  assert.deepEqual(api.sent, ["hello to you too"]);
 });
 
-test("offset 推到已处理的最大 id 之后，同一条不会再来一遍", async () => {
+test("the offset moves past the biggest handled id, so nothing is seen twice", async () => {
   const { adapter, api } = setup();
-  api.pushUpdates([update(7, 42, "一")]);
-  api.pushUpdates([update(9, 42, "二")]);
+  api.pushUpdates([update(7, 42, "one")]);
+  api.pushUpdates([update(9, 42, "two")]);
 
   await runUntil(adapter, () => api.sent.length >= 2);
 
   assert.deepEqual(
     api.offsets.slice(0, 3),
     [0, 8, 10],
-    "处理完 7 之后要从 8 开始要，处理完 9 之后从 10",
+    "after 7 it asks from 8, after 9 from 10",
   );
 });
 
-test("不在白名单里的人：不问 Joy，也不回一句", async () => {
+test("someone outside the allowlist: Joy is not asked and nothing is said back", async () => {
   const logs: string[] = [];
   let asked = 0;
   const { adapter, api } = setup({
     allow: ["@alice"],
     respond: async () => {
       asked += 1;
-      return "答复";
+      return "the answer";
     },
     onLog: (text) => logs.push(text),
   });
   // A stranger (id 99) speaks first, then the allowlisted alice.
-  api.pushUpdates([update(1, 99, "你好")]);
-  api.pushUpdates([update(2, 42, "我才是 alice", { id: 7, username: "alice" })]);
+  api.pushUpdates([update(1, 99, "hello")]);
+  api.pushUpdates([update(2, 42, "I am the real alice", { id: 7, username: "alice" })]);
 
   await runUntil(adapter, () => api.sent.length > 0);
 
-  assert.equal(asked, 1, "只有被允许的那条该去问 Joy");
-  assert.deepEqual(api.sent, ["答复"]);
+  assert.equal(asked, 1, "only the allowed one goes to Joy");
+  assert.deepEqual(api.sent, ["the answer"]);
   assert.ok(
-    logs.some((line) => line.includes("不在白名单")),
-    "被拦下来的要留个痕",
+    logs.some((line) => line.includes("outside the allowlist")),
+    "what was blocked has to leave a trace",
   );
 });
 
-test("白名单里的用户名大小写不敏感", async () => {
+test("an allowlisted username is case-insensitive", async () => {
   const { adapter, api } = setup({
     allow: ["@Alice"],
-    respond: async () => "答复",
+    respond: async () => "the answer",
   });
   // The list says `@Alice`, the arrival is lowercase — usernames must be case-insensitive.
-  api.pushUpdates([update(1, 42, "你好", { id: 7, username: "alice" })]);
+  api.pushUpdates([update(1, 42, "hello", { id: 7, username: "alice" })]);
 
   await runUntil(adapter, () => api.sent.length > 0);
-  assert.deepEqual(api.sent, ["答复"]);
+  assert.deepEqual(api.sent, ["the answer"]);
 });
 
-test("语音、图片这些读不了的，明说读不了", async () => {
+test("voice and images cannot be read, and it says so plainly", async () => {
   let asked = 0;
   const { adapter, api } = setup({
     respond: async () => {
       asked += 1;
-      return "答复";
+      return "the answer";
     },
   });
   api.pushUpdates([nonTextUpdate(1, 42)]);
@@ -257,10 +257,10 @@ test("语音、图片这些读不了的，明说读不了", async () => {
   await runUntil(adapter, () => api.sent.length > 0);
 
   assert.equal(asked, 0);
-  assert.match(api.sent[0]!, /读不了/);
+  assert.match(api.sent[0]!, /cannot read this one/);
 });
 
-test("Joy 那边出错：把原因说出来，而不是默不作声", async () => {
+test("Joy fails: the reason is said out loud instead of staying quiet", async () => {
   const { adapter, api } = setup({
     respond: async () => {
       throw new JoyError({
@@ -269,60 +269,60 @@ test("Joy 那边出错：把原因说出来，而不是默不作声", async () =
       });
     },
   });
-  api.pushUpdates([update(1, 42, "你好")]);
+  api.pushUpdates([update(1, 42, "hello")]);
 
   await runUntil(adapter, () => api.sent.length > 0);
 
-  assert.match(api.sent[0]!, /模型那边没接上/);
+  assert.match(api.sent[0]!, /the model side is not connected/);
   assert.match(api.sent[0]!, /joy config/);
 });
 
-test("回答太长：分成几条发，不撞 Telegram 的上限", async () => {
+test("an answer that is too long goes out in several, never past Telegram's limit", async () => {
   const long = Array.from(
     { length: 900 },
-    (_, index) => `第 ${index} 行：这一行特意写长一点，好让总长度确实超过一条消息的上限。`,
+    (_, index) => `line ${index}: this line is written long on purpose so the total really exceeds one message.`,
   ).join("\n");
   // The expected chunk count is deterministic (splitMessage is pure) — assert only when **all**
   // chunks have arrived, else the async send mid-way yields half a list (Linux scheduling exposed
   // this race faster).
   const expected = splitMessage(long, MESSAGE_LIMIT);
   const { adapter, api } = setup({ respond: async () => long });
-  api.pushUpdates([update(1, 42, "讲个长的")]);
+  api.pushUpdates([update(1, 42, "tell me something long")]);
 
   await runUntil(adapter, () => api.sent.length >= expected.length);
 
-  assert.ok(api.sent.length > 1, "该被切成多条");
+  assert.ok(api.sent.length > 1, "it has to be split");
   assert.ok(api.sent.every((chunk) => chunk.length <= 4096));
   assert.equal(api.sent.join("\n"), long);
 });
 
-test("出网抖了一下：退避重试，进程不散", async () => {
+test("the network hiccups: back off and retry, the process holds together", async () => {
   const logs: string[] = [];
   const { adapter, api } = setup({ onLog: (text) => logs.push(text) });
   api.breakOnce();
-  api.pushUpdates([update(1, 42, "重试之后才收到的")]);
+  api.pushUpdates([update(1, 42, "this one only arrives after the retry")]);
 
   await runUntil(adapter, () => api.sent.length > 0);
 
-  assert.deepEqual(api.sent, ["答复"]);
+  assert.deepEqual(api.sent, ["the answer"]);
   assert.ok(
-    logs.some((line) => line.includes("长轮询失败")),
-    "重试这件事要说一声，不然看起来就是卡住了",
+    logs.some((line) => line.includes("long polling failed")),
+    "a retry has to be announced, or it just looks stuck",
   );
 });
 
-test("回话被拒（比如用户把 bot 封了）：只留个痕，网关不能跟着倒", async () => {
+test("the reply is refused (the user blocked the bot, say): leave a trace, the gateway must not fall over", async () => {
   const logs: string[] = [];
   const { adapter, api } = setup({ onLog: (text) => logs.push(text) });
   api.refuseSendingOnce();
-  api.pushUpdates([update(1, 42, "你好")]);
+  api.pushUpdates([update(1, 42, "hello")]);
 
   // `runUntil` awaits run() at the end: no rejection means the error was caught — uncaught, the
   // whole process would exit on one unhandled rejection.
-  await runUntil(adapter, () => logs.some((line) => line.includes("没处理完")));
+  await runUntil(adapter, () => logs.some((line) => line.includes("not handled")));
 
   assert.ok(
     logs.some((line) => line.includes("Forbidden")),
-    "得说清是发不出去，而不是翻成「连不上 Joy」指错方向",
+    "it has to say the send failed, not translate it into «cannot reach Joy» and point the wrong way",
   );
 });

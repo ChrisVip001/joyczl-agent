@@ -3,7 +3,7 @@ name = "joyczl-loop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "THE LOOP —— observe → reason → act → repeat。整个 agent 的核心机制。"
+description = "THE LOOP — observe → reason → act → repeat. The core mechanism of the whole agent."
 
 [lib]
 name = "joyczl_loop"
@@ -15,8 +15,8 @@ anyhow = { workspace = true }
 joyczl-provider = { workspace = true }
 joyczl-tools = { workspace = true }
 serde_json = { workspace = true }
-#   sync    = Interrupt 的 Notify（turn/interrupt 的取消令牌）
-#   macros  = tokio::select!（模型调用 / 工具执行与取消竞速）
+#   sync    = Interrupt's Notify (the cancellation token behind turn/interrupt)
+#   macros  = tokio::select! (racing the model call / tool run against the cancellation)
 tokio = { workspace = true }
 
 [dev-dependencies]

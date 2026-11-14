@@ -29,18 +29,21 @@ fn pings_distill_the_notifications_that_matter() {
     let started = ServerNotification::TurnStarted(TurnStartedNotification {
         turn_id: "t-1".to_string(),
         session_id: "default".to_string(),
-        user_message: "你好".to_string(),
+        user_message: "hello".to_string(),
         ts: "2026-11-05T00:00:00.000Z".to_string(),
     });
-    let ping = EventPing::of(&started).expect("回合开始是一条 ping");
+    let ping = EventPing::of(&started).expect("a turn start is one ping");
     assert_eq!(ping.kind, "turn_started");
     assert_eq!(ping.session_id.as_deref(), Some("default"));
 
     let noise = ServerNotification::TextDelta(joyczl_protocol::TextDeltaNotification {
         turn_id: "t-1".to_string(),
-        delta: "一个".to_string(),
+        delta: "one".to_string(),
     });
-    assert!(EventPing::of(&noise).is_none(), "逐字流不打门");
+    assert!(
+        EventPing::of(&noise).is_none(),
+        "a token-by-token stream does not go through the gate"
+    );
 }
 
 /// The events channel is inside the authorize layer: no token → 401; with one → an SSE
@@ -52,7 +55,7 @@ async fn the_events_channel_is_guarded_and_sse() {
     assert_eq!(
         status_of(router.clone(), "/api/events", None).await,
         StatusCode::UNAUTHORIZED,
-        "事件流和别的 API 一样要 token"
+        "the event stream needs a token like any other API"
     );
 
     let response = router
@@ -61,10 +64,10 @@ async fn the_events_channel_is_guarded_and_sse() {
                 .uri("/api/events")
                 .header("authorization", "Bearer s3cret")
                 .body(Body::empty())
-                .expect("请求体"),
+                .expect("the request body"),
         )
         .await
-        .expect("路由响应");
+        .expect("the routed response");
     assert_eq!(response.status(), StatusCode::OK);
     assert!(
         response
@@ -74,7 +77,7 @@ async fn the_events_channel_is_guarded_and_sse() {
                 .to_str()
                 .unwrap_or("")
                 .starts_with("text/event-stream")),
-        "得是 SSE 的 content-type"
+        "the content-type has to be SSE"
     );
 }
 
@@ -90,13 +93,13 @@ async fn cors_preflight_passes_for_api() {
                 .header(header::ORIGIN, "tauri://localhost")
                 .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
                 .body(Body::empty())
-                .expect("请求体"),
+                .expect("the request body"),
         )
         .await
-        .expect("路由响应");
+        .expect("the routed response");
     assert!(
         response.status().is_success(),
-        "预检该过：{:?}",
+        "the preflight should pass: {:?}",
         response.status()
     );
     assert_eq!(
@@ -115,7 +118,7 @@ fn task_pings_distill_the_checkpoint_lifecycle() {
             session_id: "default".to_string(),
             iterations: 3,
         });
-    let ping = EventPing::of(&checkpointed).expect("边界落盘是一条 ping");
+    let ping = EventPing::of(&checkpointed).expect("the edge reaching the disk is one ping");
     assert_eq!(ping.kind, "task_progress");
     assert_eq!(ping.turn_id.as_deref(), Some("t-crash"));
 
@@ -125,7 +128,7 @@ fn task_pings_distill_the_checkpoint_lifecycle() {
         from_iterations: 3,
         reason: "reconcile: crash recovery".to_string(),
     });
-    let ping = EventPing::of(&resumed).expect("续跑是一条 ping");
+    let ping = EventPing::of(&resumed).expect("a resume is one ping");
     assert_eq!(ping.kind, "task_resumed");
     assert_eq!(ping.session_id.as_deref(), Some("default"));
 
@@ -134,6 +137,6 @@ fn task_pings_distill_the_checkpoint_lifecycle() {
         session_id: "default".to_string(),
         reason: "interrupted by user".to_string(),
     });
-    let ping = EventPing::of(&suspended).expect("挂起是一条 ping");
+    let ping = EventPing::of(&suspended).expect("a suspension is one ping");
     assert_eq!(ping.kind, "task_suspended");
 }

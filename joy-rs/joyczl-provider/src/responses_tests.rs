@@ -164,3 +164,18 @@ async fn streaming_waits_for_a_terminal_response_and_preserves_tools() {
         .is_err());
     server.await.unwrap();
 }
+
+#[test]
+fn configured_reasoning_only_applies_to_its_main_model() {
+    let client = Client::new("", None, Duration::from_secs(1), 0)
+        .with_reasoning("test-model", Some("high".into()));
+    let mut request = request();
+    assert_eq!(
+        client.body(&request).unwrap()["reasoning"]["effort"],
+        "high"
+    );
+    request.model = "different-small-model".into();
+    assert!(client.body(&request).unwrap().get("reasoning").is_none());
+    let client = Client::new("", None, Duration::from_secs(1), 0);
+    assert!(client.body(&request).unwrap().get("reasoning").is_none());
+}

@@ -20,14 +20,14 @@ fn collect_events() -> (Events, Observer) {
     let sink = events.clone();
     (
         events,
-        Arc::new(move |event| sink.lock().expect("锁").push(event)),
+        Arc::new(move |event| sink.lock().expect("lock").push(event)),
     )
 }
 
 fn kinds(events: &Events) -> Vec<&'static str> {
     events
         .lock()
-        .expect("锁")
+        .expect("lock")
         .iter()
         .map(|e| match e {
             GraphEvent::Started { .. } => "graph_start",
@@ -41,7 +41,7 @@ fn kinds(events: &Events) -> Vec<&'static str> {
 }
 
 fn ended(events: &Events) -> (i64, i32, Vec<String>, Option<String>) {
-    for event in events.lock().expect("锁").iter() {
+    for event in events.lock().expect("lock").iter() {
         if let GraphEvent::Ended {
             ms,
             steps,
@@ -53,7 +53,7 @@ fn ended(events: &Events) -> (i64, i32, Vec<String>, Option<String>) {
             return (*ms, *steps, path.clone(), error.clone());
         }
     }
-    panic!("没有 graph_end 事件");
+    panic!("there is no graph_end event");
 }
 
 /// A pure compute node.
@@ -137,7 +137,7 @@ async fn linear_topology_runs_in_edge_order() {
         DEFAULT_MAX_STEPS,
     )
     .await
-    .expect("能跑");
+    .expect("it runs");
     assert_eq!(
         (
             report.state.i64("a"),
@@ -189,12 +189,12 @@ async fn fanout_runs_concurrently_and_fanin_waits_for_all() {
     let started = Instant::now();
     let report = run_graph(g, State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect("能跑");
+        .expect("it runs");
     let elapsed = started.elapsed();
     assert_eq!(report.state.str("joined"), Some("xyz")); // fan-in saw all three keys
     assert!(
         elapsed.as_millis() < 350,
-        "三个 150ms 的节点应当是并排跑的，实际用了 {elapsed:?}"
+        "three 150 ms nodes should run side by side, it took {elapsed:?}"
     );
 }
 
@@ -208,17 +208,17 @@ async fn router_picks_the_target_from_state() {
         DEFAULT_MAX_STEPS,
     )
     .await
-    .expect("能跑");
+    .expect("it runs");
     assert_eq!(report.state.str("took"), Some("quick"));
     let route = events
         .lock()
-        .expect("锁")
+        .expect("lock")
         .iter()
         .find_map(|e| match e {
             GraphEvent::Route { target, reason, .. } => Some((target.clone(), reason.clone())),
             _ => None,
         })
-        .expect("有 route 事件");
+        .expect("there is a route event");
     assert_eq!(route, ("quick".to_string(), "quick".to_string()));
 
     let full = run_graph(
@@ -228,7 +228,7 @@ async fn router_picks_the_target_from_state() {
         DEFAULT_MAX_STEPS,
     )
     .await
-    .expect("能跑");
+    .expect("it runs");
     assert_eq!(full.state.str("took"), Some("full"));
 }
 
@@ -242,7 +242,7 @@ async fn router_unknown_label_records_error_and_drains() {
         DEFAULT_MAX_STEPS,
     )
     .await
-    .expect("能跑");
+    .expect("it runs");
     assert!(!report.state.has("took"));
     assert!(report.errors["decide"].contains("unknown label"));
     assert!(ended(&events).3.is_some());
@@ -277,7 +277,7 @@ async fn parallel_key_collision_is_fatal() {
     // Two same-wave nodes writing one key is a graph bug; dropping a write silently is worse.
     let error = run_graph(g, State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect_err("两个节点撞键必须报错");
+        .expect_err("two nodes colliding on a key must error");
     assert!(matches!(error, GraphError::Collision { key, .. } if key == "same"));
 }
 
@@ -291,7 +291,7 @@ async fn sequential_overwrite_is_allowed() {
         DEFAULT_MAX_STEPS,
     )
     .await
-    .expect("能跑");
+    .expect("it runs");
     assert_eq!(report.state.i64("a"), Some(1));
 }
 
@@ -299,7 +299,7 @@ async fn sequential_overwrite_is_allowed() {
 async fn cycle_stops_at_max_visits() {
     let report = run_graph(cycle_graph(3), State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect("能跑");
+        .expect("it runs");
     assert_eq!(report.state.i64("count"), Some(3));
     assert!(report.errors["work"].contains("max_visits=3"));
 }
@@ -309,7 +309,7 @@ async fn max_steps_is_the_global_hard_stop() {
     let (events, observer) = collect_events();
     let report = run_graph(cycle_graph(99), State::new(), Some(observer), 5)
         .await
-        .expect("能跑");
+        .expect("it runs");
     assert_eq!(report.state.i64("count"), Some(5));
     assert!(report.errors["engine"].contains("max_steps=5"));
     assert_eq!(ended(&events).1, 5);
@@ -336,7 +336,7 @@ async fn node_error_routes_to_on_error_and_never_escapes() {
 
     let report = run_graph(g, State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect("节点出错不该把 run 掀了");
+        .expect("a failing node must not blow up the run");
     assert_eq!(report.state.get("saved"), Some(&json!(true)));
     assert!(report.errors["explode"].contains("ZeroDivisionError"));
     assert_eq!(report.path, vec!["explode", "fallback"]);
@@ -359,7 +359,7 @@ async fn node_error_without_on_error_drains_to_end() {
     let (events, observer) = collect_events();
     let report = run_graph(g, State::new(), Some(observer), DEFAULT_MAX_STEPS)
         .await
-        .expect("能跑");
+        .expect("it runs");
     assert!(!report.state.has("ran")); // downstream starved, the run ends cleanly
     assert!(ended(&events).3.is_some());
 }
@@ -375,7 +375,7 @@ async fn observer_event_sequence_is_pinned() {
         DEFAULT_MAX_STEPS,
     )
     .await
-    .expect("能跑");
+    .expect("it runs");
     assert_eq!(
         kinds(&events),
         vec![
@@ -389,13 +389,13 @@ async fn observer_event_sequence_is_pinned() {
         ]
     );
 
-    let first = events.lock().expect("锁")[0].clone();
+    let first = events.lock().expect("lock")[0].clone();
     match first {
         GraphEvent::Started { workflow, nodes } => {
             assert_eq!(workflow, "routed");
             assert_eq!(nodes, vec!["decide", "quick", "full"]);
         }
-        other => panic!("第一个事件应当是 graph_start，拿到 {other:?}"),
+        other => panic!("the first event should be graph_start, got {other:?}"),
     }
 }
 
@@ -439,18 +439,18 @@ async fn reserved_underscore_keys_never_merge_or_leak() {
     let (events, observer) = collect_events();
     let report = run_graph(g, State::new(), Some(observer), DEFAULT_MAX_STEPS)
         .await
-        .expect("能跑");
+        .expect("it runs");
     assert!(!report.state.has("_secret"));
     assert_eq!(report.state.i64("open"), Some(2));
     let keys = events
         .lock()
-        .expect("锁")
+        .expect("lock")
         .iter()
         .find_map(|e| match e {
             GraphEvent::NodeEnded { keys, .. } => Some(keys.clone()),
             _ => None,
         })
-        .expect("有 node_end");
+        .expect("there is a node_end");
     assert_eq!(keys, vec!["open"]);
 }
 
@@ -477,16 +477,16 @@ async fn inner_events_come_out_tagged_with_their_node() {
     let (events, observer) = collect_events();
     run_graph(g, State::new(), Some(observer), DEFAULT_MAX_STEPS)
         .await
-        .expect("能跑");
+        .expect("it runs");
     let inner = events
         .lock()
-        .expect("锁")
+        .expect("lock")
         .iter()
         .find_map(|e| match e {
             GraphEvent::Inner { node, event } => Some((node.clone(), event.clone())),
             _ => None,
         })
-        .expect("有 inner 事件");
+        .expect("there is an inner event");
     assert_eq!(inner.0, "agent");
     assert_eq!(
         inner.1,
@@ -511,7 +511,7 @@ async fn errors_from_a_previous_run_are_kept() {
     let state = State::from_value(json!({"errors": {"old": "earlier"}})).unwrap();
     let report = run_graph(linear_graph(), state, None, DEFAULT_MAX_STEPS)
         .await
-        .expect("能跑");
+        .expect("it runs");
     assert_eq!(report.errors["old"], "earlier");
     assert_eq!(report.state.get("errors"), Some(&json!({"old": "earlier"})));
 }

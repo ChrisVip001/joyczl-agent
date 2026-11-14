@@ -256,7 +256,7 @@ impl Scenario {
 /// A long task runs several **rounds inside one turn**, and every round re-asks the gate
 /// (`full_turn` starts fresh each round). So a multi-round case has to say where each gate
 /// script goes — writing them inline, in call order, is the least surprising way:
-/// `[工具调用, 文本, {"gate": …}, 工具调用, 文本]`.
+/// `[tool call, text, {"gate": …}, tool call, text]`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptedResponse {
@@ -406,15 +406,16 @@ mod tests {
         assert_eq!(name, "read_file");
         assert!(
             !path.contains("{{home}}"),
-            "占位符没被展开 —— 多半是展开结果让 JSON 解析失败、退回原文了：{path}"
+            "the placeholder was not expanded — most likely the expansion broke JSON parsing and the
+             original text was kept: {path}"
         );
         assert!(
             !path.contains('\\'),
-            "装置路径里不该有反斜杠：它在 JSON 字符串里是非法转义：{path}"
+            "a fixture path must not contain backslashes: in a JSON string that is an invalid escape: {path}"
         );
         assert!(
             path.starts_with("C:/Users/joy/AppData/Local/Temp/.tmp42/"),
-            "展开的应是同一个 home 下的文件：{path}"
+            "the expansion should be a file under the same home: {path}"
         );
         assert!(path.ends_with("/notes/article.md"), "{path}");
     }

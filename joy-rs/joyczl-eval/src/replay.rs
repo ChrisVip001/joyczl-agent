@@ -152,39 +152,43 @@ mod replay_tests {
 
     // One line on purpose: the reader is a JSONL reader, and a recording file is one line per case.
     const ONE: &str = concat!(
-        r#"{"id":"demo","description":"一轮：批准后写文件","schemaVersion":1,"#,
+        r#"{"id":"demo","description":"one turn: write a file after an approval","schemaVersion":1,"#,
         r#""settings":{"write_enabled":true,"approval":"on-request"},"#,
-        r#""recorded":{"turns":[{"say":"写到 {{home}}/a.md","#,
+        r#""recorded":{"turns":[{"say":"write to {{home}}/a.md","#,
         r#""gate":{"retrieve":false,"query":"","reason":"note"},"#,
         r#""replies":[{"tool_use":{"name":"write_file","args":{"path":"{{home}}/a.md","content":"x"}}},"#,
-        r#"{"text":"写好了。"}],"approval":{"answer":"yes","remember":"session"}}]},"#,
+        r#"{"text":"Written."}],"approval":{"answer":"yes","remember":"session"}}]},"#,
         r#""expect":{"events":["turnStarted","approvalRequested","turnCompleted"]}}"#
     );
 
     fn tmp(name: &str, body: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::tempdir().expect("临时目录");
+        let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join(name);
-        std::fs::write(&path, body).expect("写文件");
+        std::fs::write(&path, body).expect("write the file");
         (dir, path)
     }
 
     #[test]
     fn a_recording_becomes_a_scenario_without_losing_anything() {
-        let (_dir, path) = tmp("one.jsonl", &format!("# 注释行\n{ONE}\n"));
-        let mut cases = load_all(&[path]).expect("加载");
-        assert_eq!(cases.len(), 1, "注释行不该算用例");
+        let (_dir, path) = tmp("one.jsonl", &format!("# a comment line\n{ONE}\n"));
+        let mut cases = load_all(&[path]).expect("load");
+        assert_eq!(cases.len(), 1, "a comment line must not count as a case");
 
         let case = cases.remove(0);
         assert_eq!(case.recorded.turns.len(), 1);
         let scenario = case.into_scenario();
         let turns = scenario.effective_turns();
-        assert_eq!(turns.len(), 1, "多轮要按轮展开");
-        assert_eq!(turns[0].message, "写到 {{home}}/a.md");
-        assert_eq!(turns[0].responses.len(), 2, "脚本回复一条都不能丢");
+        assert_eq!(turns.len(), 1, "several turns must unfold one by one");
+        assert_eq!(turns[0].message, "write to {{home}}/a.md");
+        assert_eq!(
+            turns[0].responses.len(),
+            2,
+            "not one scripted response may be dropped"
+        );
         assert_eq!(
             turns[0].approval.as_ref().map(|a| a.answer.as_str()),
             Some("yes"),
-            "审批脚本要带过去"
+            "the approval script has to come along"
         );
         assert_eq!(
             turns[0]
@@ -200,7 +204,7 @@ mod replay_tests {
     fn an_unversioned_recording_is_refused() {
         let body = ONE.replace("\"schemaVersion\":1,", "");
         let (_dir, path) = tmp("old.jsonl", &body);
-        let error = load_all(&[path]).expect_err("没写版本就该拒绝");
+        let error = load_all(&[path]).expect_err("no version means refuse");
         assert!(format!("{error}").contains("schemaVersion"), "{error}");
     }
 
@@ -210,9 +214,12 @@ mod replay_tests {
             r#""expect":{"events":["turnStarted","approvalRequested","turnCompleted"]}"#,
             r#""expect":{}"#,
         );
-        assert_ne!(body, ONE, "替换没生效，用例其实还带着 events");
+        assert_ne!(
+            body, ONE,
+            "the replacement did not take — the case still carries events"
+        );
         let (_dir, path) = tmp("empty.jsonl", &body);
-        let error = load_all(&[path]).expect_err("没有事件序列就不算回放");
+        let error = load_all(&[path]).expect_err("no event sequence means it is not a replay");
         assert!(format!("{error}").contains("expect.events"), "{error}");
     }
 }

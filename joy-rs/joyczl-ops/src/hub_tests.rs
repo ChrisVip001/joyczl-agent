@@ -6,7 +6,7 @@
 use super::hub::{generate_token, lru_victim, stale_entries, valid_user, Hub, Users};
 
 fn temp() -> tempfile::TempDir {
-    tempfile::tempdir().expect("临时目录")
+    tempfile::tempdir().expect("temp dir")
 }
 
 /// What is stored reads back; the file is 0600 (unix).
@@ -14,52 +14,66 @@ fn temp() -> tempfile::TempDir {
 fn the_user_table_round_trips() {
     let dir = temp();
     let path = dir.path().join("users.json");
-    let mut users = Users::load(&path).expect("缺文件 = 空表");
+    let mut users = Users::load(&path).expect("a missing file = an empty ledger");
     assert!(users.is_empty());
 
     users.add("alice", "t-a");
     users.add("bob", "t-b");
-    users.save(&path).expect("存盘");
+    users.save(&path).expect("save it");
 
-    let loaded = Users::load(&path).expect("读回");
+    let loaded = Users::load(&path).expect("read back");
     assert_eq!(loaded.verify("t-a").as_deref(), Some("alice"));
     assert_eq!(loaded.verify("t-b").as_deref(), Some("bob"));
-    assert_eq!(loaded.verify("t-c"), None, "没人对上就是没有");
+    assert_eq!(loaded.verify("t-c"), None, "no match means nobody");
     assert_eq!(loaded.len(), 2);
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&path)
-            .expect("元数据")
+            .expect("metadata")
             .permissions()
             .mode();
-        assert_eq!(mode & 0o777, 0o600, "token 文件必须只有主人能读");
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "the token file must be readable by its owner alone"
+        );
     }
 }
 
 /// Adding the same name is an overwrite, not an append — that is how tokens rotate.
 #[test]
 fn adding_the_same_user_replaces_the_token() {
-    let mut users = Users::load(temp().path().join("users.json").as_path()).expect("空表");
-    users.add("alice", "旧");
-    users.add("alice", "新");
+    let mut users =
+        Users::load(temp().path().join("users.json").as_path()).expect("an empty ledger");
+    users.add("alice", "old-token");
+    users.add("alice", "new-token");
     assert_eq!(users.len(), 1);
-    assert_eq!(users.verify("旧"), None);
-    assert_eq!(users.verify("新").as_deref(), Some("alice"));
+    assert_eq!(
+        users.verify("old-token"),
+        None,
+        "the rotated-out token stops working"
+    );
+    assert_eq!(users.verify("new-token").as_deref(), Some("alice"));
 }
 
 /// verify has constant-time-compare semantics: even one byte off means no match.
 /// trim is resolve's job (Bearer header parsing); verify itself is an exact match.
 #[test]
 fn verification_agrees_with_equality() {
-    let mut users = Users::load(temp().path().join("users.json").as_path()).expect("空表");
+    let mut users =
+        Users::load(temp().path().join("users.json").as_path()).expect("an empty ledger");
     users.add("alice", "secret-token");
-    assert_eq!(users.verify("secret-tokeN"), None, "差一个字符也不行");
+    assert_eq!(
+        users.verify("secret-tokeN"),
+        None,
+        "one character off is still off"
+    );
     assert_eq!(
         users.verify("secret-token "),
         None,
-        "verify 不 trim —— 那是 resolve 的事"
+        "verify does not trim — that is resolve's job"
     );
 }
 
@@ -68,7 +82,7 @@ fn verification_agrees_with_equality() {
 fn a_bad_name_refuses_to_load() {
     let dir = temp();
     let path = dir.path().join("users.json");
-    std::fs::write(&path, r#"{"../evil": "t"}"#).expect("造坏条目");
+    std::fs::write(&path, r#"{"../evil": "t"}"#).expect("plant the bad entry");
     let error = Users::load(&path).unwrap_err();
     assert!(error.to_string().contains("is not valid"), "{error}");
 }
@@ -83,7 +97,7 @@ fn user_names_must_be_safe_path_segments() {
     assert!(!valid_user(""));
     assert!(
         !valid_user("Alice"),
-        "只许小写 —— 大小写不敏感的文件系统会撞名"
+        "lowercase only — a case-insensitive file system would collide"
     );
     assert!(!valid_user("a".repeat(33).as_str()));
 }
@@ -93,17 +107,19 @@ fn user_names_must_be_safe_path_segments() {
 #[test]
 fn an_empty_hub_opens_and_waits_for_its_first_user() {
     let dir = temp();
-    let hub = Hub::open(dir.path()).expect("空 hub 也开得起来（注册登录是正门）");
+    let hub =
+        Hub::open(dir.path()).expect("an empty hub opens too (registering is the front door)");
     assert_eq!(hub.user_count(), 0);
-    // 空表 + 公网绑定 → 首个注册被门控关死（serve_hub 会按 host 设置这一位）。
+    // Empty ledger + public binding → the first registration is shut out (serve_hub sets that flag
+    // from the host).
     hub.permit_first_registration(false);
     assert!(matches!(
         hub.register("alice", "hunter2-secret", "phone"),
         Err(crate::hub::AuthError::Closed)
     ));
 
-    std::fs::write(dir.path().join("users.json"), r#"{"alice": "t-a"}"#).expect("造表");
-    let hub = Hub::open(dir.path()).expect("有一个用户就能开");
+    std::fs::write(dir.path().join("users.json"), r#"{"alice": "t-a"}"#).expect("plant the ledger");
+    let hub = Hub::open(dir.path()).expect("one user is enough to open");
     assert_eq!(hub.user_count(), 1);
     assert_eq!(hub.home("alice"), dir.path().join("alice"));
 }
@@ -112,13 +128,17 @@ fn an_empty_hub_opens_and_waits_for_its_first_user() {
 #[test]
 fn resolve_walks_the_bearer_header() {
     let dir = temp();
-    std::fs::write(dir.path().join("users.json"), r#"{"alice": "t-a"}"#).expect("造表");
-    let hub = Hub::open(dir.path()).expect("开 hub");
+    std::fs::write(dir.path().join("users.json"), r#"{"alice": "t-a"}"#).expect("plant the ledger");
+    let hub = Hub::open(dir.path()).expect("open the hub");
 
-    assert_eq!(hub.resolve(None), None, "没带头");
-    assert_eq!(hub.resolve(Some("t-a")), None, "裸 token 不算 Bearer");
-    assert_eq!(hub.resolve(Some("Bearer ")), None, "空 token");
-    assert_eq!(hub.resolve(Some("Bearer t-b")), None, "没人对上");
+    assert_eq!(hub.resolve(None), None, "no header");
+    assert_eq!(
+        hub.resolve(Some("t-a")),
+        None,
+        "a bare token is not a Bearer"
+    );
+    assert_eq!(hub.resolve(Some("Bearer ")), None, "an empty token");
+    assert_eq!(hub.resolve(Some("Bearer t-b")), None, "no match");
     assert_eq!(hub.resolve(Some("Bearer t-a")).as_deref(), Some("alice"));
 }
 
@@ -130,8 +150,8 @@ fn the_hub_reports_its_user_count() {
         dir.path().join("users.json"),
         r#"{"alice": "t-a", "bob": "t-b"}"#,
     )
-    .expect("造表");
-    let hub = Hub::open(dir.path()).expect("开 hub");
+    .expect("plant the ledger");
+    let hub = Hub::open(dir.path()).expect("open the hub");
     assert_eq!(hub.user_count(), 2);
     // Another way to avoid an unused warning for the hub module: assert the module path exists.
     let _ = valid_user("x");
@@ -151,8 +171,8 @@ fn two_users_never_share_a_home() {
         dir.path().join("users.json"),
         r#"{"alice": "t-a", "bob": "t-b"}"#,
     )
-    .expect("造表");
-    let hub = Hub::open(dir.path()).expect("开 hub");
+    .expect("plant the ledger");
+    let hub = Hub::open(dir.path()).expect("open the hub");
 
     let alice = hub.home("alice");
     let bob = hub.home("bob");
@@ -169,17 +189,17 @@ fn two_users_never_share_a_home() {
 fn the_users_file_stores_tokens_never_model_keys() {
     let dir = temp();
     let path = dir.path().join("users.json");
-    let mut users = Users::load(&path).expect("空表");
-    users.add("alice", &generate_token().expect("生成"));
-    users.save(&path).expect("存盘");
-    let raw = std::fs::read_to_string(&path).expect("读回");
+    let mut users = Users::load(&path).expect("an empty ledger");
+    users.add("alice", &generate_token().expect("generate"));
+    users.save(&path).expect("save it");
+    let raw = std::fs::read_to_string(&path).expect("read back");
     assert!(
         !raw.contains("sk-"),
-        "准入账本里不该有模型密钥的形状：{raw}"
+        "no model-key shape may reach the access ledger: {raw}"
     );
     assert!(
         !raw.contains("keyEnv") && !raw.contains("apiKey"),
-        "它只该有 token：{raw}"
+        "it should carry nothing but the token: {raw}"
     );
 }
 
@@ -242,12 +262,12 @@ fn stale_sweep_respects_the_deadline_and_never_evicts_on_boot() {
 async fn the_pool_caps_open_instances() {
     let dir = temp();
     let path = dir.path().join("users.json");
-    let mut users = Users::load(&path).expect("空表");
+    let mut users = Users::load(&path).expect("an empty ledger");
     users.add("a", "t-a");
     users.add("b", "t-b");
     users.add("c", "t-c");
-    users.save(&path).expect("存盘");
-    let hub = Hub::open_with(dir.path(), 2, 0).expect("开 hub（上限 2，不按闲置关）");
+    users.save(&path).expect("save it");
+    let hub = Hub::open_with(dir.path(), 2, 0).expect("open the hub (cap 2, no idle closing)");
 
     let _a = hub.client("a").await.expect("a");
     let _b = hub.client("b").await.expect("b");
@@ -256,16 +276,16 @@ async fn the_pool_caps_open_instances() {
     // A third comes in: full → evict one. The Arcs of a/b/c are still held by the test
     // (pinned), so the soft cap applies — the pool over-opens rather than closing in-use.
     let _c = hub.client("c").await.expect("c");
-    assert!(hub.open_count() >= 2, "池至少保住 2 个");
+    assert!(hub.open_count() >= 2, "the pool keeps at least 2");
 
     // After dropping the a/b/c handles, the next fetch sweeps first: full → evict oldest idle.
     drop(_a);
     drop(_b);
     drop(_c);
-    let _a2 = hub.client("a").await.expect("a 再来");
+    let _a2 = hub.client("a").await.expect("a comes back");
     assert!(
         hub.open_count() <= 3,
-        "池不该无限增长：{}",
+        "the pool must not grow without bound: {}",
         hub.open_count()
     );
 }

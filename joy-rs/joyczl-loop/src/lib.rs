@@ -164,7 +164,17 @@ pub type Observer = Arc<dyn Fn(LoopEvent) + Send + Sync>;
 /// One boundary snapshot: the working memory as the model is about to be called again —
 /// assistant thoughts, tool calls and their results all in `messages`, nothing half-done.
 #[derive(Debug, Clone)]
+pub struct ToolCheckpoint {
+    pub tool_use_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+    pub output: Option<String>,
+}
+
+/// The current tool batch only; prior conversation is never admitted as new work.
+#[derive(Debug, Clone)]
 pub struct Checkpoint {
+    pub operations: Vec<ToolCheckpoint>,
     pub round_id: String,
     pub messages: Vec<Message>,
     /// Completed iterations so far (the tool round just fed back included).
@@ -252,7 +262,7 @@ pub struct LoopResult {
 ///
 /// Written as an instruction the model can *follow*, not as an apology: three sentences, no
 /// pretending, no invented results. The failure this answers was a turn that spent its whole
-/// budget and then handed the human 「试试把请求拆小一点」.
+/// budget and then handed the human "try splitting the request into smaller pieces".
 const WRAP_UP: &str =
     "(Budget note: this is the last model call of this turn; the tools have been put away.)\
 Answer in three sentences: what is done, where you are stuck, what you need from me next.\
@@ -386,6 +396,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
             round_id: round_id.clone(),
             messages: messages.clone(),
             iterations: completed_before,
+            operations: Vec::new(),
             usage,
         })
         .await
@@ -408,7 +419,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         Arc::new(move |delta: &str| {
             streamed
                 .lock()
-                .expect("streamed 锁不该中毒")
+                .expect("the streamed lock should not be poisoned")
                 .push_str(delta);
         })
     };
@@ -439,7 +450,7 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         if let Some(steering) = &turn.steering {
             let pending = steering
                 .lock()
-                .expect("steering 锁不该中毒")
+                .expect("the steering lock should not be poisoned")
                 .drain_pending();
             for text in pending {
                 messages.push(Message {
@@ -457,7 +468,8 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
         // able to spend a night), but the cap must not be a cliff: before the budget runs out,
         // the tools are taken away and the model is asked to say what it did.
         //
-        // What this replaces: a hard stop whose whole answer was 「我还没做完就到了迭代上限」
+        // What this replaces: a hard stop whose whole answer was "I hit the iteration limit before
+        // finishing"
         // — after 10 calls and 210k input tokens, the human learned nothing they could act on.
         // The token budget (`JOY_TURN_TOKEN_BUDGET`, off by default) ends a turn the same way,
         // for the same reason: the step cap bounds rounds, this bounds what they cost. Spending
@@ -619,11 +631,21 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 round_id: round_id.clone(),
                 messages: messages.clone(),
                 iterations: iteration - 1,
+                operations: uses
+                    .iter()
+                    .map(|(id, name, input)| ToolCheckpoint {
+                        tool_use_id: id.to_string(),
+                        tool: name.to_string(),
+                        input: (*input).clone(),
+                        output: None,
+                    })
+                    .collect(),
                 usage,
             })
             .await
             .map_err(joyczl_provider::ProviderError::Api)?;
         }
+        let operation_uses = uses.clone();
 
         // ---- act: run each requested tool; observe: feed the results back
         //
@@ -741,7 +763,9 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                     // A panicking tool is still a result the model can read — never a dead
                     // turn. Its position died with the panic, so it fills the first gap: every
                     // `tool_use` must have a `tool_result`, or the next request is rejected.
-                    Some(Err(e)) => panic_note = Some(format!("Error: 工具任务异常结束：{e}")),
+                    Some(Err(e)) => {
+                        panic_note = Some(format!("Error: the tool task ended abnormally: {e}"))
+                    }
                     None => break,
                 }
             }
@@ -816,6 +840,19 @@ pub async fn run(turn: Turn<'_>) -> Result<LoopResult> {
                 round_id: round_id.clone(),
                 messages: messages.clone(),
                 iterations: iteration,
+                operations: operation_uses
+                    .iter()
+                    .map(|(id, name, input)| ToolCheckpoint {
+                        tool_use_id: id.to_string(),
+                        tool: name.to_string(),
+                        input: (*input).clone(),
+                        output: tool_calls
+                            .iter()
+                            .rev()
+                            .find(|call| &call.tool_use_id == id)
+                            .map(|call| call.output.clone()),
+                    })
+                    .collect(),
                 usage,
             })
             .await
@@ -873,9 +910,12 @@ fn interrupted_result(scene: Scene) -> LoopResult {
         estimated_input_tokens,
         observed_input_tokens,
     } = scene;
-    let partial = streamed.lock().expect("streamed 锁不该中毒").clone();
+    let partial = streamed
+        .lock()
+        .expect("the streamed lock should not be poisoned")
+        .clone();
     let reply = if partial.trim().is_empty() {
-        "（这轮被打断了。）".to_string()
+        "(this turn was interrupted.)".to_string()
     } else {
         partial
     };

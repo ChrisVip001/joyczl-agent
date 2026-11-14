@@ -63,6 +63,14 @@ async fn dispatch(
 ) -> Result<Outcome, ErrorObject> {
     match method {
         // ---- Memory ----------------------------------------------------------
+        methods::TURN_OPERATIONS => {
+            let params: joyczl_protocol::TurnOperationsParams = parse(params, method)?;
+            respond(crate::turn_operations::inspect(server, &params).await?)
+        }
+        methods::TURN_RECONCILE => {
+            let params: joyczl_protocol::TurnReconcileParams = parse(params, method)?;
+            respond(crate::turn_operations::reconcile(server, params).await?)
+        }
         methods::MEMORY_SEARCH => {
             let p: MemorySearchParams = parse(params, method)?;
             let top_k = p.top_k.unwrap_or(DEFAULT_TOP_K);
@@ -109,6 +117,55 @@ async fn dispatch(
             })
         }
 
+        methods::MEMORY_VALIDITY => {
+            let p: joyczl_protocol::MemoryValidityParams = parse(params, method)?;
+            let changed = server
+                .facts
+                .set_validity(
+                    i64::from(p.fact_id),
+                    p.valid_from.as_deref(),
+                    p.valid_until.as_deref(),
+                )
+                .await
+                .map_err(internal)?;
+            respond(joyczl_protocol::MemoryValidityResponse { changed })
+        }
+        methods::MEMORY_PROVENANCE => {
+            let p: joyczl_protocol::MemoryProvenanceParams = parse(params, method)?;
+            let (valid_from, valid_until) = server
+                .facts
+                .validity(i64::from(p.fact_id))
+                .await
+                .map_err(internal)?;
+            let observations = server
+                .facts
+                .observations_detailed(i64::from(p.fact_id))
+                .await
+                .map_err(internal)?;
+            let observations = observations
+                .into_iter()
+                .map(|(context_digest, refs, observed_at, assessment_json)| {
+                    Ok(joyczl_protocol::MemoryObservation {
+                        context_digest,
+                        source_refs: serde_json::from_str(&refs)?,
+                        observed_at,
+                        assessment_json,
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+                .map_err(internal)?;
+            respond(joyczl_protocol::MemoryProvenanceResponse {
+                fact_id: p.fact_id,
+                valid_from,
+                valid_until,
+                validity_origin: server
+                    .facts
+                    .validity_origin(i64::from(p.fact_id))
+                    .await
+                    .map_err(internal)?,
+                observations,
+            })
+        }
         methods::MEMORY_REMEMBER => {
             let p: MemoryRememberParams = parse(params, method)?;
             let source = p
@@ -515,6 +572,26 @@ async fn dispatch(
         }
 
         // ---- Long tasks: every branch is human-only (the model has no task tool) ----
+        methods::TASK_OPERATIONS => {
+            let p: TaskGetParams = parse(params, method)?;
+            respond(crate::task_operations::inspect(server, &p.task_id).await?)
+        }
+        methods::TASK_RECONCILE => {
+            let p: joyczl_protocol::TaskReconcileParams = parse(params, method)?;
+            respond(crate::task_operations::reconcile(server, sink, p).await?)
+        }
+        methods::TASK_WAIT => {
+            let p: joyczl_protocol::TaskWaitParams = parse(params, method)?;
+            respond(crate::task_inputs::declare(server, sink, p).await?)
+        }
+        methods::TASK_SIGNAL => {
+            let p: joyczl_protocol::TaskSignalParams = parse(params, method)?;
+            respond(crate::task_inputs::signal(server, p).await?)
+        }
+        methods::TASK_START => {
+            let p: joyczl_protocol::TaskStartParams = parse(params, method)?;
+            respond(crate::task::start(server, sink, p).await?)
+        }
         methods::TASK_CREATE => {
             let p: TaskCreateParams = parse(params, method)?;
             respond(crate::task::create(server, p).await?)

@@ -31,7 +31,7 @@ async fn with_pending_work_it_drafts_a_digest() {
         Box::pin(async move {
             // The prompt really stitches in the four scans' output.
             assert!(state.str("gh_text").unwrap().contains("#12"));
-            let text = "DIGEST: 今天只有一件事。";
+            let text = "DIGEST: only one thing today.";
             *digest.lock().unwrap() = text.to_string();
             Ok(text.to_string())
         })
@@ -47,17 +47,18 @@ async fn with_pending_work_it_drafts_a_digest() {
         })
     });
 
-    let graph = build_gather_graph(github, web, calendar, memory, synth, draft).expect("建图");
+    let graph =
+        build_gather_graph(github, web, calendar, memory, synth, draft).expect("build the graph");
     let report = run_graph(graph, State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect("跑图");
+        .expect("run the graph");
 
     assert!(
         report.path.contains(&"draft_digest".to_string()),
-        "有事发生就该写草稿：{:?}",
+        "something happened, so a draft has to be written: {:?}",
         report.path
     );
-    assert!(*drafted.lock().unwrap(), "draft 节点真的跑过");
+    assert!(*drafted.lock().unwrap(), "the draft node really ran");
     assert_eq!(
         report.state.str("draft_path").map(str::to_string),
         Some("/outbox/gather-2026-09-20.md".to_string())
@@ -73,19 +74,20 @@ async fn a_quiet_day_ends_before_the_draft() {
     let web: WebScanFn = Arc::new(|| scan(Ok(String::new())));
     let calendar: CalendarScanFn = Arc::new(|| scan(Ok((String::new(), 0))));
     let memory: MemoryScanFn = Arc::new(|| scan(Ok(String::new())));
-    let synth: SynthFn = Arc::new(|_s| Box::pin(async { Ok("（都安静。）".to_string()) }));
+    let synth: SynthFn = Arc::new(|_s| Box::pin(async { Ok("(all quiet.)".to_string()) }));
     let draft: DraftFn = Arc::new(|_s| {
         Box::pin(async {
-            panic!("quiet 路径不该跑 draft");
+            panic!("the quiet path must not run draft");
             #[allow(unreachable_code)]
             Ok(String::new())
         })
     });
 
-    let graph = build_gather_graph(github, web, calendar, memory, synth, draft).expect("建图");
+    let graph =
+        build_gather_graph(github, web, calendar, memory, synth, draft).expect("build the graph");
     let report = run_graph(graph, State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect("跑图");
+        .expect("run the graph");
 
     assert!(
         !report.path.contains(&"draft_digest".to_string()),
@@ -93,14 +95,14 @@ async fn a_quiet_day_ends_before_the_draft() {
         report.path
     );
     assert!(report.state.str("draft_path").is_none());
-    assert_eq!(report.state.str("digest"), Some("（都安静。）"));
+    assert_eq!(report.state.str("digest"), Some("(all quiet.)"));
 }
 
 /// One scan dies: its key becomes the honest "unavailable (…)" text, and the
 /// graph still produces a digest — silence is the worst failure mode.
 #[tokio::test]
 async fn a_failed_scan_becomes_honest_text_not_silence() {
-    let github: GithubScanFn = Arc::new(|| scan(Err("gh CLI 超时".to_string())));
+    let github: GithubScanFn = Arc::new(|| scan(Err("the gh CLI timed out".to_string())));
     let web: WebScanFn = Arc::new(|| scan(Ok("(web results)".into())));
     let calendar: CalendarScanFn = Arc::new(|| scan(Ok((String::new(), 0))));
     let memory: MemoryScanFn = Arc::new(|| scan(Ok(String::new())));
@@ -112,21 +114,25 @@ async fn a_failed_scan_becomes_honest_text_not_silence() {
                 "{:?}",
                 state.str("gh_text")
             );
-            Ok("尽力而为的晨报。".to_string())
+            Ok("a best-effort morning briefing.".to_string())
         })
     });
     let draft: DraftFn = Arc::new(|_s| Box::pin(async { Ok("outbox/gather.md".to_string()) }));
 
-    let graph = build_gather_graph(github, web, calendar, memory, synth, draft).expect("建图");
+    let graph =
+        build_gather_graph(github, web, calendar, memory, synth, draft).expect("build the graph");
     let report = run_graph(graph, State::new(), None, DEFAULT_MAX_STEPS)
         .await
-        .expect("跑图");
+        .expect("run the graph");
     assert!(
         report.errors.is_empty(),
-        "scan 的失败不该留下引擎级错误：{:?}",
+        "a scan failure must not leave an engine-level error behind: {:?}",
         report.errors
     );
-    assert_eq!(report.state.str("digest"), Some("尽力而为的晨报。"));
+    assert_eq!(
+        report.state.str("digest"),
+        Some("a best-effort morning briefing.")
+    );
 }
 
 /// The router is directly testable: counts in, label out — no model, no graph.
@@ -171,7 +177,7 @@ fn scan_ownership_lists_are_disjoint() {
         scan_owns("scan_memory"),
     ] {
         for key in keys {
-            assert!(!seen.contains(key), "'{key}' 被两个 scan 认领");
+            assert!(!seen.contains(key), "'{key}' was claimed by two scans");
             seen.push(key);
         }
     }
@@ -187,7 +193,7 @@ fn the_synth_request_carries_no_tools() {
     state.set("cal_text", serde_json::json!("standup"));
     state.set("mem_text", serde_json::json!(""));
     let request = synth_request("test-model", &state);
-    assert!(request.tools.is_empty(), "tools 必须是空的");
+    assert!(request.tools.is_empty(), "tools has to be empty");
     assert!(request.messages[0].text().contains("PR #1"));
     assert!(request.messages[0].text().contains("standup"));
 }
