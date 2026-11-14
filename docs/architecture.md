@@ -15,9 +15,8 @@ structure that makes that possible; running and configuring it live in
 2. **The protocol has one definition.** `joyczl-protocol` is the single
    source of truth for the cross-language contract: `#[derive(TS)]` emits
    TypeScript, `#[derive(JsonSchema)]` emits JSON Schema which then drives
-   Python pydantic models, and the artifacts are checked in.
-3. **The Rust runtime owns execution.** The dashboard, chat gateways and Python
-   SDK use JSON-RPC over stdio; native CLI commands embed the same app-server runtime.
+   bindings, and the artifacts are checked in.
+3. **The Rust runtime owns execution.** The dashboard and the chat gateways use JSON-RPC over stdio; native CLI commands embed the same app-server runtime.
    Production `open()` holds canonical-database execution ownership before recovery.
    Memory-only SQLite access can coexist; database locking alone does not own live turns.
 

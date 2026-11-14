@@ -133,20 +133,25 @@ Four parallel scans → one synthesis → the summary prints and the draft lands
 in `outbox/gather-<date>.md`. A failed source becomes an "unavailable" line;
 the whole brief still ships.
 
-## Python SDK embedding
+## Driving it from a script
+
+There is no client library to install: `joy app-server` speaks JSON-RPC over
+stdio, one JSON object per line, so any language can drive it in a few lines.
 
 ```python
-import os
-from joyczl_agent import JoyClient
+import json, subprocess
 
-async with await JoyClient.connect() as client:   # spawns the joy app-server subprocess
-    client.on_notification(lambda n: print(n.type))
-    await client.request("turn/start", {"message": "hi", "stream": True})
+proc = subprocess.Popen(["joy", "app-server"], stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE, text=True, bufsize=1)
+proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "turn/start",
+                             "params": {"message": "hi", "stream": True}}) + "\n")
+proc.stdin.flush()
+for line in proc.stdout:               # notifications and the response share the stream
+    print(json.loads(line))
 ```
 
 Environment variables are decided by the embedding process (the subprocess
-inherits them); `JOY_BIN` can point at the binary. Packaging:
-`just build-python-bin` produces per-platform wheels.
+inherits them); `JOY_BIN` can point at the binary.
 
 ## Packaging
 

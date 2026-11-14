@@ -50,34 +50,8 @@ jobs:
           name: joy-${{ matrix.target }}
           path: dist/joy-v*.tar.gz
 
-  pypi-wheels:
-    # The native bin wheel per platform (joyczl-agent-bin). The runner is the target platform, so
-    # no cross-compilation. Uploading (twine) is done by a human — credentials do not enter CI.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: macos-15, name: macos-arm64 }
-          - { os: ubuntu-24.04, name: linux-x86_64 }
-          - { os: ubuntu-24.04-arm, name: linux-aarch64 }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: extractions/setup-just@v2
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
-      - name: Build native bin wheel
-        run: just build-python-bin
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheel-${{ matrix.name }}
-          path: sdk/python-bin/dist/*.whl
-
   release:
-    needs: [binaries, pypi-wheels]
+    needs: binaries
     runs-on: ubuntu-24.04
     steps:
       # gh release create needs a git repository; without checkout it fails with

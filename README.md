@@ -8,7 +8,7 @@ English | [简体中文](README.zh.md)
 [![Release](https://img.shields.io/github/v/release/ChrisVip001/joyczl-agent)](https://github.com/ChrisVip001/joyczl-agent/releases/latest)
 
 **A personal assistant that runs entirely on your own machine — with a memory you can actually inspect.**
-Rust owns the agent loop, memory and 29 tools; TypeScript is only the dashboard and the chat gateways; Python stays a thin SDK. Conversations, `state.db` and API keys never leave your laptop. The dashboard speaks both English and Chinese — switch it from the sidebar.
+Rust owns the agent loop, memory and 29 tools; TypeScript is only the dashboard and the chat gateways. Conversations, `state.db` and API keys never leave your laptop. The dashboard speaks both English and Chinese — switch it from the sidebar.
 
 > Most agents keep memory in a black box. Joy writes **one append-only ledger row per turn**. Open any row and you see that turn's full entry stream: the retrieval decision, which tools ran, which model answered, and what it cost. The memory library links back to source turns via `ledger:…` chips, and the FTS5 index can be rebuilt from the ledger. Nothing is hidden, nothing is silently lost.
 
@@ -220,9 +220,9 @@ Tool failures return to the model as text — the loop never crashes on one.
    lines per module), with no `joy-core` mega-crate.
 2. **The protocol has one definition.** `joyczl-protocol` is the single
    source of truth for the cross-language contract: types generate the
-   TypeScript and Python bindings, and the artifacts are checked in.
-3. **Clients only translate.** The CLI, dashboard, chat gateways, and Python
-   SDK are all clients of `joy app-server` (JSON-RPC over stdio); state.db is
+   TypeScript bindings, and the artifacts are checked in.
+3. **Clients only translate.** The CLI, dashboard and chat gateways are all
+   clients of `joy app-server` (JSON-RPC over stdio); state.db is
    owned by the app-server runtime. Independently started runtimes still lack
    cross-process turn coordination; see the runtime limits.
 

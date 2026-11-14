@@ -4,6 +4,16 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
+### The Python SDK is gone
+
+- Removed `sdk/python` and `sdk/python-bin`. Neither was ever published (PyPI
+  answers 404 for `joyczl-agent`), so the only thing they cost was a mypy-strict
+  + coverage job on every gate and a third place to regenerate the protocol.
+- Driving Joy from a script needs no library: `joy app-server` speaks JSON-RPC
+  over stdio. `docs/operations.md` now shows the twenty-line version.
+- The protocol generator emits TypeScript only; `just write-app-server-schema`
+  lost its `--python` flag, and the PyPI release job is gone.
+
 ### The CLI and the remaining server text, in English (2 of 2)
 
 - The second half: the CLI's own output (`joy --help`, `joy hub`, `mcp login`, `memory`,

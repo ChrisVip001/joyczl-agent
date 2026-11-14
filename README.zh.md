@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/ChrisVip001/joyczl-agent)](https://github.com/ChrisVip001/joyczl-agent/releases/latest)
 
 **一个完全跑在自己机器上的个人助手，而且它的记忆是能打开看的。**
-Rust 独占 agent 循环、记忆和 29 个工具；TypeScript 只负责驾驶舱和聊天网关；Python 留一个薄 SDK。对话、`state.db` 和密钥都不出本机。驾驶舱支持中英文切换，侧栏一键换语言。
+Rust 独占 agent 循环、记忆和 29 个工具；TypeScript 只负责驾驶舱和聊天网关。对话、`state.db` 和密钥都不出本机。驾驶舱支持中英文切换，侧栏一键换语言。
 
 > 多数 Agent 的记忆是个黑盒。Joy **每一轮对话只追加一行账本**：点开这一行，能看到这一轮的完整事件流——检索门怎么判的、跑了哪些工具、哪个模型答的、花了多少 token。记忆库用 `ledger:…` 回溯到原始轮次，FTS5 索引能从账本重建。不藏东西，也不会悄悄丢东西。
 
@@ -209,8 +209,8 @@ JSONRPC
 1. **Rust 独占逻辑与状态。** agent 循环、记忆、工具与 state.db 全在
    Rust；crate 按职责切碎（目标 <500 行/模块），不设 `joy-core` 大包。
 2. **协议只有一份定义。** `joyczl-protocol` 是跨语言契约的唯一事实来源：
-   类型直接生成 TypeScript 与 Python 绑定，生成物 check-in。
-3. **客户端只做翻译。** CLI、dashboard、聊天网关、Python SDK 都是
+   类型直接生成 TypeScript 绑定，生成物 check-in。
+3. **客户端只做翻译。** CLI、dashboard、聊天网关都是
    `joy app-server`（JSON-RPC over stdio）的客户端；state.db 由
    app-server runtime 管理；独立启动多个 runtime 仍缺少跨进程回合协调，
    详见运行边界。

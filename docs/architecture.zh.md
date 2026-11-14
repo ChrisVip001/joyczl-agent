@@ -12,8 +12,8 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
    Rust；crate 按职责切碎（目标 <500 行/模块），不设 `joy-core` 大包。
 2. **协议单一定义。** `joyczl-protocol` 是跨语言契约的唯一事实来源：
    `#[derive(TS)]` 生成 TypeScript、`#[derive(JsonSchema)]` 生成 JSON
-   Schema 再生成 Python pydantic 模型，生成物 check-in 进仓库。
-3. **Rust 运行时拥有执行。** dashboard、聊天网关和 Python SDK 使用 stdio JSON-RPC，
+   Schema 再生成 TypeScript 绑定，生成物 check-in 进仓库。
+3. **Rust 运行时拥有执行。** dashboard 和聊天网关使用 stdio JSON-RPC，
    原生 CLI 命令嵌入同一 app-server 运行时。生产 `open()` 在恢复前持有规范化数据库的
    执行归属。仅访问记忆的 SQLite 入口可以共存；数据库写锁本身不代表活动回合归属。
 

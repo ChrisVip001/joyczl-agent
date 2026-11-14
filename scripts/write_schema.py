@@ -3,7 +3,6 @@
 
     python3 scripts/write_schema.py            # generate (and format)
     python3 scripts/write_schema.py --check    # only check for staleness, write nothing (CI)
-    python3 scripts/write_schema.py --python   # also generate the Python SDK artefacts
 
 Why Python drives `cargo test`:
   The generation logic (ts-rs / schemars) is compiled only in a test build — outside one,
@@ -37,8 +36,6 @@ GENERATED_ROOT = RUST_DIR / PROTOCOL_CRATE / "schema"
 TEST_NAME = "export_tests::write_schema_fixtures"
 
 # The two Python SDK artefacts: v2.py is 63 types, consts.py is the two constant tables.
-PYTHON_SDK = REPO_ROOT / "sdk" / "python"
-PYTHON_GENERATED = PYTHON_SDK / "src" / "joyczl_agent" / "generated"
 
 SEPARATOR = "─" * 60
 
@@ -114,119 +111,13 @@ def diff_snapshots(committed: dict[str, str], fresh: dict[str, str]) -> list[str
     return problems
 
 
-def render_python_consts(consts: dict) -> str:
-    """Render `json/consts.json` as `generated/consts.py`.
-
-    Enums rather than two dicts: a typo in `Methods.MEMORY_SEARCH` is an AttributeError on the
-    spot plus an editor that can complete it, whereas `METHODS["MEMORY_SEARCH"]` only becomes a
-    METHOD_NOT_FOUND on the server once it has really been sent.
-
-    Pure string building, no external tool — which is why `--check` can recompute the same way
-    and compare (v2.py cannot: it needs datamodel-codegen).
-    """
-
-    def members(table: dict, *, quote: bool) -> str:
-        return "\n".join(
-            f'    {name} = "{value}"' if quote else f"    {name} = {value}"
-            for name, value in sorted(table.items())
-        )
-
-    return (
-        '"""The two constant tables from the protocol. **Generated; do not hand-edit.**\n'
-        "\n"
-        "Written by `scripts/write_schema.py` from `schema/json/consts.json`, and that JSON is\n"
-        "exported by Rust's `joyczl-protocol` (`rpc::codes`, `protocol::v2::methods`).\n"
-        "\n"
-        "The TypeScript side of the same thing is `schema/typescript/v2/{codes,methods}.mts` —\n"
-        "one source. **So the string \"memory/remember\" is defined exactly once in this repo**,\n"
-        "and all three languages are generated from it.\n"
-        '"""\n'
-        "\n"
-        "from __future__ import annotations\n"
-        "\n"
-        "from enum import Enum, IntEnum\n"
-        "\n"
-        "\n"
-        "class Codes(IntEnum):\n"
-        '    """Error codes. The names match the Rust constants so one grep finds both sides."""\n'
-        "\n"
-        f"{members(consts['codes'], quote=False)}\n"
-        "\n"
-        "\n"
-        "class Methods(str, Enum):\n"
-        '    """Method names. The values are the strings that travel on the wire."""\n'
-        "\n"
-        "    # 3.10 has no StrEnum; `str, Enum` would render inside an f-string as\n"
-        '    # "Methods.TURN_START", and method names get spliced into logs and errors — undo it.\n'
-        "    __str__ = str.__str__\n"
-        "\n"
-        f"{members(consts['methods'], quote=True)}\n"
-    )
-
-
-def generate_python_models() -> int:
-    """Generate the two Python SDK artefacts.
-
-    Constants first: they need no external tool, so even when datamodel-codegen cannot run
-    (no network, no uv installed) this half should still be fresh.
-    """
-    out = PYTHON_GENERATED / "v2.py"
-    schema = GENERATED_ROOT / "json" / "v2.json"
-    consts = GENERATED_ROOT / "json" / "consts.json"
-
-    if not schema.exists() or not consts.exists():
-        print(f"✗ {schema} or {consts} is missing; run a generation first", file=sys.stderr)
-        return 1
-    if not PYTHON_SDK.exists():
-        print(f"✗ {PYTHON_SDK} does not exist yet", file=sys.stderr)
-        return 1
-
-    PYTHON_GENERATED.mkdir(parents=True, exist_ok=True)
-    consts_py = PYTHON_GENERATED / "consts.py"
-    consts_py.write_text(
-        render_python_consts(json.loads(consts.read_text(encoding="utf-8"))),
-        encoding="utf-8",
-    )
-    print(f"✓ constants → {consts_py.relative_to(REPO_ROOT)}")
-
-    cmd = [
-        "uv", "run", "--project", str(PYTHON_SDK), "datamodel-codegen",
-        "--input", str(schema),
-        "--input-file-type", "jsonschema",
-        "--output", str(out),
-        "--output-model-type", "pydantic_v2.BaseModel",
-        "--target-python-version", "3.10",
-        # Discriminators should become Literals rather than a pile of anonymous enums, so
-        # `n.type == "textDelta"` can be written directly.
-        # `one`, not `all` — `all` also collapses a named multi-member enum like `MessageRole`
-        # into `RootModel[Literal[...]]`, and then users have to write `msg.role.root`. `one`
-        # only touches single-member enums, and every notification `type` happens to be one.
-        "--enum-field-as-literal", "one",
-        # So that `MessageRole.user == "user"` holds instead of requiring `.value`.
-        "--use-subclass-enum",
-        # By default it writes a generation timestamp in the header — that would make every
-        # regeneration produce a diff, and this file is committed.
-        "--disable-timestamp",
-        # Without this, a constrained field is generated as `limit: conint(ge=0) | None` — a
-        # **function call** written where a type annotation belongs. pydantic swallows it at
-        # runtime; mypy refuses with "Cannot use a function call in a type annotation", so the
-        # SDK's own artefact fails its own type check. With it, the field becomes
-        # `Annotated[int | None, Field(ge=0)]`, which both accept.
-        "--use-annotated",
-    ]
-    print("›", " ".join(cmd))
-    return subprocess.run(cmd, cwd=REPO_ROOT).returncode
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Generate the TypeScript types and JSON Schema from the Rust protocol")
     parser.add_argument("--check", action="store_true",
                         help="only check whether the artefacts are up to date; write nothing (CI)")
-    parser.add_argument("--python", action="store_true",
-                        help="also generate the Python pydantic models")
     parser.add_argument("cargo_args", nargs="*",
-                        help="extra arguments passed through to cargo test")
+                        help="extra arguments for the cargo run that exports the schema")
     args = parser.parse_args()
 
     # Both modes generate into a scratch directory first: write mode has to know "which files
@@ -275,17 +166,6 @@ def main() -> int:
                 if committed_text != fresh_text:
                     problems.append(f"  content differs: json/{name}")
 
-            # Then the Python side. consts.py needs no external tool, so this comparison is
-            # free — renaming a method and forgetting to regenerate Python goes red here.
-            # v2.py needs datamodel-codegen, which `--python` guarantees for itself.
-            consts_py = PYTHON_GENERATED / "consts.py"
-            if consts_py.exists():
-                fresh_consts = json.loads(
-                    (out_dir / "json" / "consts.json").read_text(encoding="utf-8"))
-                if consts_py.read_text(encoding="utf-8") != render_python_consts(fresh_consts):
-                    problems.append(
-                        f"  content differs: {consts_py.relative_to(REPO_ROOT)}")
-
             if problems:
                 print("✗ the artefacts do not match the Rust protocol:", file=sys.stderr)
                 print("\n".join(problems), file=sys.stderr)
@@ -313,8 +193,6 @@ def main() -> int:
         print(f"✓ JSON Schema → {GENERATED_ROOT / 'json' / 'v2.json'}")
         print(f"✓ constants → {GENERATED_ROOT / 'json' / 'consts.json'}")
 
-        if args.python:
-            return generate_python_models()
         return 0
     finally:
         if scratch:

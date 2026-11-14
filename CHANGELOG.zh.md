@@ -4,6 +4,14 @@
 
 ## 未发布
 
+### Python SDK 已移除
+
+- 删掉 `sdk/python` 与 `sdk/python-bin`。两个包从未发布（PyPI 上 `joyczl-agent` 是 404），
+  它们唯一的成本是每次门禁都要跑一遍 mypy strict + 覆盖率，以及协议要重新生成第三遍。
+- 用脚本驱动 Joy 不需要库：`joy app-server` 说的是 stdio 上的 JSON-RPC，
+  `docs/operations.md` 现在直接给出二十行的写法。
+- 协议生成器只出 TypeScript：`just write-app-server-schema` 不再有 `--python`，PyPI 发布 job 已删除。
+
 ### CLI 与剩下的服务端文案也说英文（下半）
 
 - 下半部分：CLI 自己的输出（`joy --help`、`joy hub`、`mcp login`、`memory`、`skill`、REPL 的

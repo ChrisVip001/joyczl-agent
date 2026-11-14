@@ -172,37 +172,13 @@ smoke-dashboard: build dashboard-build
 smoke-business: build dashboard-build
     {{ justfile_directory() }}/scripts/smoke-business.sh
 
-# ---- Python SDK -------------------------------------------------------------
-# Set up the Python SDK dev environment (uv builds the venv from pyproject, installs locked deps)
-py-install:
-    cd {{ justfile_directory() }}/sdk/python && uv sync
-
-# Type check and unit tests for the Python SDK. Generated artifacts are also how Python consumes
-# the protocol, so this catches drift too — though the drift check above is the real guard.
-py-check: py-install
-    cd {{ justfile_directory() }}/sdk/python && uv run mypy src/joyczl_agent tests
-    cd {{ justfile_directory() }}/sdk/python && uv run pytest
-
-# Build the binary wheel (`joyczl-agent-bin`): compile the release binary → pack → verify.
-# The last step can't be skipped: without the binary, packing **doesn't fail** — it quietly
-# makes an empty pure-Python wheel, worse than none (see scripts/check_python_bin_wheel.py).
-build-python-bin:
-    cd {{ rust_dir }} && cargo build --release -p joyczl-cli
-    cd {{ justfile_directory() }}/sdk/python-bin && uv build --wheel
-    {{ python }} {{ justfile_directory() }}/scripts/check_python_bin_wheel.py {{ justfile_directory() }}/sdk/python-bin/dist
-
 # Refresh the Homebrew formula's url/sha256 for a tag (after `git tag v0.8.0 && git push --tags`).
 # Computes the checksum from the same archive URL Homebrew fetches. See packaging/RELEASING.md.
 release-hash *args:
     {{ justfile_directory() }}/packaging/release-hash.sh {{args}}
 
-# End to end: really start app-server and have the Python SDK ask it. Unit tests swap the
-# transport, so only this proves "the subprocess starts, and the process exits when closed".
-smoke-sdk-python: build
-    {{ justfile_directory() }}/scripts/smoke-sdk-python.sh
-
 # ---- Run all checks in one command ----------------------------------------------
 # gate sits last: beyond green tests and lint, the deterministic eval must also pass 100%.
-check: fmt-check check-app-server-schema check-tool-docs check-config-docs check-i18n ts-check py-check eval eval-replay
+check: fmt-check check-app-server-schema check-tool-docs check-config-docs check-i18n ts-check eval eval-replay
     cd {{ rust_dir }} && cargo clippy --workspace --all-targets -- -D warnings
     cd {{ rust_dir }} && cargo test --workspace

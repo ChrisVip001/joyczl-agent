@@ -4,9 +4,8 @@ English | [简体中文](RELEASING.zh.md)
 
 Every channel, in dependency order. **CI builds everything; humans publish.**
 The only thing a tag triggers automatically is artifact creation
-(`.github/workflows/release.yml`): four platform binaries, per-platform Python
-wheels, and a GitHub Release holding them. npm / PyPI uploads run on a machine
-with credentials — tokens do not live in CI.
+(`.github/workflows/release.yml`): four platform binaries and a GitHub Release holding them. The npm upload runs
+on a machine with credentials — tokens do not live in CI.
 
 ## 0. Preconditions
 
@@ -23,8 +22,6 @@ Version lives in three places — all must agree:
 | Where | File |
 |---|---|
 | Homebrew formula | `packaging/homebrew/joy.rb` (url tag + sha256 — §4) |
-| Python main package | `sdk/python/pyproject.toml` |
-| Python bin package | `sdk/python-bin/pyproject.toml` |
 | npm shim | `packaging/npm/package.json` |
 | Cargo | `joy-rs/joyczl-cli/Cargo.toml` (drives `joy --version`) |
 
@@ -64,23 +61,6 @@ cd <tap-repo> && git commit -am "joy 0.8.0" && git push
 # verify from a clean machine:
 brew tap ChrisVip001/tap && brew install joy && brew test joy
 ```
-
-## 4. PyPI
-
-```sh
-# download the wheel artifacts from the release (gh release download v0.8.0)
-# build the pure-Python main package locally:
-cd sdk/python && uv build
-# verify what you are about to upload (this is the step people skip):
-twine check dist/* ../python-bin/dist/*.whl
-# upload — the bin wheels FIRST (main package's [bin] extra resolves them),
-# then the main package:
-twine upload ../python-bin/dist/joyczl_agent_bin-*.whl
-twine upload dist/joyczl_agent-*.tar.gz
-```
-
-Verify: `pip install joyczl-agent[bin]` in a clean venv, then `python -c
-"import joyczl_agent"` and one real call against `joy app-server`.
 
 ## 5. npm
 

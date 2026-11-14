@@ -116,19 +116,24 @@ JOY_GH_REPO=owner/repo joy gather
 四路并行扫描 → 一次综合 → 摘要打印、草稿写进 `outbox/gather-<日期>.md`。
 单个数据源失败变成报告里的 "unavailable"，不影响整体。
 
-## Python SDK 嵌入
+## 用脚本驱动它
+
+没有要安装的客户端库：`joy app-server` 说的是 stdio 上的 JSON-RPC，一行一个
+JSON 对象，任何语言几行就能驱动。
 
 ```python
-import os
-from joyczl_agent import JoyClient
+import json, subprocess
 
-async with await JoyClient.connect() as client:   # 拉起 joy app-server 子进程
-    client.on_notification(lambda n: print(n.type))
-    await client.request("turn/start", {"message": "你好", "stream": True})
+proc = subprocess.Popen(["joy", "app-server"], stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE, text=True, bufsize=1)
+proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "turn/start",
+                             "params": {"message": "hi", "stream": True}}) + "\n")
+proc.stdin.flush()
+for line in proc.stdout:               # 通知与响应共用同一个流
+    print(json.loads(line))
 ```
 
-环境变量由嵌入方进程决定（子进程继承）；`JOY_BIN` 可指定二进制。
-打包：`just build-python-bin` 产出分平台 wheel。
+环境变量由调用方决定（子进程继承）；`JOY_BIN` 可以指向二进制。
 
 ## 打包
 

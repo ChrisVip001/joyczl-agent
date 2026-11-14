@@ -103,24 +103,6 @@ jobs:
       - run: npm test
         working-directory: joy-ts
 
-  python:
-    # mypy runs with `strict = true` (see pyproject.toml): type annotations are what this SDK
-    # sells. Coverage is a trend gate too, threshold 60 against the measured baseline (63%);
-    # generated code is not in the denominator.
-    name: Python SDK (mypy strict / pytest + coverage floor 60%)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync
-        working-directory: sdk/python
-      - run: uv run mypy src/joyczl_agent tests
-        working-directory: sdk/python
-      - run: uv run coverage run -m pytest
-        working-directory: sdk/python
-      - run: uv run coverage report --fail-under=60
-        working-directory: sdk/python
-
   gate:
     name: Release gate (deterministic evals + smoke)
     runs-on: ubuntu-latest

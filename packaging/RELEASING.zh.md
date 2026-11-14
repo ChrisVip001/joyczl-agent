@@ -3,7 +3,7 @@
 English | [RELEASING.md](RELEASING.md)
 
 各渠道，按依赖顺序。**CI 负责构建，人负责发布。** tag 自动触发的只有产物
-构建（`.github/workflows/release.yml`）：四个平台的二进制、各平台 Python 轮子、
+构建（`.github/workflows/release.yml`）：四个平台的二进制、
 以及承载它们的 GitHub Release。npm / PyPI 的上传在有凭据的机器上执行——
 token 不进 CI。
 
@@ -22,8 +22,6 @@ token 不进 CI。
 | 落点 | 文件 |
 |---|---|
 | Homebrew formula | `packaging/homebrew/joy.rb`（url tag + sha256 —— §3） |
-| Python 主包 | `sdk/python/pyproject.toml` |
-| Python bin 包 | `sdk/python-bin/pyproject.toml` |
 | npm 垫片 | `packaging/npm/package.json` |
 | Cargo | `joy-rs/joyczl-cli/Cargo.toml`（决定 `joy --version`） |
 
@@ -63,22 +61,6 @@ cd <tap仓库> && git commit -am "joy 0.8.0" && git push
 # 在干净机器上验证：
 brew tap ChrisVip001/tap && brew install joy && brew test joy
 ```
-
-## 4. PyPI
-
-```sh
-# 从 Release 下载轮子产物（gh release download v0.8.0）
-# 本地构建纯 Python 主包：
-cd sdk/python && uv build
-# 验证即将上传的东西（这一步最容易被人跳过）：
-twine check dist/* ../python-bin/dist/*.whl
-# 上传 —— bin 轮子**先传**（主包的 [bin] extra 要解析它），主包后传：
-twine upload ../python-bin/dist/joyczl_agent_bin-*.whl
-twine upload dist/joyczl_agent-*.tar.gz
-```
-
-验证：干净 venv 里 `pip install joyczl-agent[bin]`，`python -c
-"import joyczl_agent"`，再对真 `joy app-server` 打一次真调用。
 
 ## 5. npm
 

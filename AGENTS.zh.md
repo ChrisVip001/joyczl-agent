@@ -3,7 +3,7 @@
 [English](AGENTS.md) | 简体中文
 
 Joy 是一个本地优先的个人助手：Rust 独占逻辑与状态，TypeScript 负责浏览器
-与聊天网关，Python 只留一个薄 SDK。改 `joy-rs/` 前先读
+与聊天网关。改 `joy-rs/` 前先读
 [docs/architecture.md](docs/architecture.md)；本文件是 AI 编码助手与人类
 贡献者共用的仓库工作规范。
 
@@ -32,7 +32,6 @@ joy-rs/
   joyczl-cli/           joy 二进制（REPL / dashboard / gather / eval / mcp / skill）
   joyczl-eval/          确定性 eval + judge + release gate
 joy-ts/                 @joy/client、@joy/gateway、@joy/dashboard
-sdk/python/             Python 薄客户端（pydantic 模型为生成物）
 evals/                  确定性 eval 与 judge 用例（JSONL）
 docs/                   架构 / 配置 / 协议 / 测试 / 运行 / 技能 / 已知边界
                         internals/ —— 实现原理教程（每层一章） 文档

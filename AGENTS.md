@@ -3,7 +3,7 @@
 English | [简体中文](AGENTS.zh.md)
 
 Joy is a local-first personal assistant: Rust owns logic and state,
-TypeScript covers the browser and chat gateways, and Python stays a thin SDK.
+TypeScript covers the browser and the chat gateways.
 Read [docs/architecture.md](docs/architecture.md) before changing `joy-rs/`;
 this file is the working standard for AI coding assistants and human
 contributors alike.
@@ -36,7 +36,6 @@ joy-rs/
   joyczl-cli/           the joy binary (REPL / dashboard / gather / eval / mcp / skill)
   joyczl-eval/          deterministic evals + judge + release gate
 joy-ts/                 @joy/client, @joy/gateway, @joy/dashboard
-sdk/python/             thin Python client (pydantic models are generated)
 evals/                  deterministic and judge scenarios (JSONL)
 docs/                   architecture / configuration / protocol / testing / operations / skills / limitations
                         internals/ — the implementation tutorial (one chapter per layer)
