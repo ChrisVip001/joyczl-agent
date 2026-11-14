@@ -1,27 +1,28 @@
-# Joy 的 Homebrew formula 模板。
+# The Homebrew formula for Joy.
 #
-# 从源码构建而不是装二进制：Joy 是一个 cargo workspace，发布 tarball 之外的
-# 任何安装方式都要重新编译；`cargo install` 正好是 cargo 世界的标准动作。
+# Built from source rather than installed as a binary: Joy is a cargo workspace, so any
+# install path other than the release tarball has to compile anyway — and `cargo install`
+# is the standard move in the cargo world.
 #
-# 用法：
+# Usage:
 #
-#   brew tap <你的 tap> && brew install joy
+#   brew tap <your tap> && brew install joy
 #
-# 本地验证：
+# To check it locally:
 #
 #   brew install --build-from-source ./packaging/homebrew/joy.rb
 #   brew test joy
 #
-# 发布 tag 之后拿到真实校验和的办法：
+# How to get the real checksum after tagging a release:
 #
 #   brew fetch --build-from-source ./packaging/homebrew/joy.rb
 class Joy < Formula
   desc "Local-first personal assistant with long-term memory"
   homepage "https://github.com/ChrisVip001/joyczl-agent"
   url "https://github.com/ChrisVip001/joyczl-agent/archive/refs/tags/v0.17.0.tar.gz"
-  # sha256 由 `just release-hash <tag>` 从同一个 /archive/refs/tags/ URL 自动重写
-  # （见 packaging/RELEASING.md）。注意别拿 GitHub API 的 /tarball/ 端点去算：
-  # 它那边是 legacy 归档，字节不同。
+  # The sha256 is rewritten by `just release-hash <tag>` from that same
+  # /archive/refs/tags/ URL (see packaging/RELEASING.md). Do not compute it from the
+  # GitHub API's /tarball/ endpoint: that one is a legacy archive and the bytes differ.
   sha256 "f49e3d5e3eb0021bf54cdde731a3e5acbc0b32b25623f57f691c6f6967b780bd"
   license any_of: ["MIT", "Apache-2.0"]
   head "https://github.com/ChrisVip001/joyczl-agent.git", branch: "main"
@@ -29,12 +30,14 @@ class Joy < Formula
   depends_on "rust" => :build
 
   def install
-    # CLI crate 是 workspace 的成员：从它的目录装，依赖解析照样走根 Cargo.toml。
+    # The CLI crate is a workspace member: install from its directory, and dependency
+    # resolution still goes through the root Cargo.toml.
     system "cargo", "install", *std_cargo_args(path: "joy-rs/joyczl-cli")
   end
 
   service do
-    # 常驻的是网关/驾驶舱那侧，不是 REPL。JOY_HOME 留在用户目录里。
+    # What stays resident is the gateway/cockpit side, not the REPL. JOY_HOME stays in the
+    # user's home directory.
     run [opt_bin/"joy", "dashboard"]
     keep_alive true
     environment_variables JOY_HOME: "${HOME}/.joy"
@@ -42,8 +45,8 @@ class Joy < Formula
 
   test do
     assert_match "joy #{version}", shell_output("#{bin}/joy --version")
-    # 不认识的子命令要打印用法并以非零退出 —— 这条路径不需要 API key、
-    # 不碰网络，适合当安装后的冒烟测试。
+    # An unknown subcommand prints usage and exits non-zero — that path needs no API key and
+    # touches no network, which makes it a good post-install smoke test.
     assert_match "Joy", shell_output("#{bin}/joy definitely-not-a-command 2>&1", 1)
   end
 end
