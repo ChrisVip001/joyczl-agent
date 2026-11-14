@@ -4,14 +4,6 @@
 
 ## 未发布
 
-### Python SDK 已移除
-
-- 删掉 `sdk/python` 与 `sdk/python-bin`。两个包从未发布（PyPI 上 `joyczl-agent` 是 404），
-  它们唯一的成本是每次门禁都要跑一遍 mypy strict + 覆盖率，以及协议要重新生成第三遍。
-- 用脚本驱动 Joy 不需要库：`joy app-server` 说的是 stdio 上的 JSON-RPC，
-  `docs/operations.md` 现在直接给出二十行的写法。
-- 协议生成器只出 TypeScript：`just write-app-server-schema` 不再有 `--python`，PyPI 发布 job 已删除。
-
 ### CLI 与剩下的服务端文案也说英文（下半）
 
 - 下半部分：CLI 自己的输出（`joy --help`、`joy hub`、`mcp login`、`memory`、`skill`、REPL 的
@@ -369,7 +361,7 @@
 - `apple_calendar` / `google_calendar` 两个 settings 字段同样删除：日程工具一直直接读
   `JOY_APPLE_CALENDAR` / `JOY_GOOGLE_CALENDAR`（`tools/src/calendar.rs`），settings 那份是
   `config/write` 能改、改了不生效的死字段。**协议变更**：`SettingsView` / `SettingsPatch`
-  各少三个字段（TS / JSON Schema / Python SDK 生成物已重算）。
+  各少三个字段（TS / JSON Schema 生成物已重算）。
 - 驾驶舱概览里的「实验」一行随之消失 —— 它显示的三位都不起作用。
 
 ### 清理：驾驶舱里没有页面的绘制代码
@@ -445,7 +437,6 @@
 
 - `just check` 的 eval 配方：用例按相对路径加载，之前 `cd joy-rs` 之后再跑必然
   `No such file or directory`。
-- Python SDK 补齐 0.14 漏掉的任务类型导出，以及本次三个新方法的响应配对。
 
 ### 已知
 
@@ -1220,6 +1211,6 @@ bubblewrap 加 `--unshare-net`。需要下载东西的命令（比如会拉 crat
 
 ## 0.1.0 — 地基
 
-- `joyczl-protocol`：单一事实来源 + TS/JSON Schema/pydantic 生成管线
+- `joyczl-protocol`：单一事实来源 + TS/JSON Schema 生成管线
 - `joyczl-state`：SQLite + FTS5(trigram) + 迁移
 - `joyczl-app-server`：JSON-RPC over stdio；`joy` CLI

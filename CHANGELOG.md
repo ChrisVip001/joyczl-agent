@@ -4,16 +4,6 @@ English | [简体中文](CHANGELOG.zh.md)
 
 ## Unreleased
 
-### The Python SDK is gone
-
-- Removed `sdk/python` and `sdk/python-bin`. Neither was ever published (PyPI
-  answers 404 for `joyczl-agent`), so the only thing they cost was a mypy-strict
-  + coverage job on every gate and a third place to regenerate the protocol.
-- Driving Joy from a script needs no library: `joy app-server` speaks JSON-RPC
-  over stdio. `docs/operations.md` now shows the twenty-line version.
-- The protocol generator emits TypeScript only; `just write-app-server-schema`
-  lost its `--python` flag, and the PyPI release job is gone.
-
 ### The CLI and the remaining server text, in English (2 of 2)
 
 - The second half: the CLI's own output (`joy --help`, `joy hub`, `mcp login`, `memory`,
@@ -454,7 +444,7 @@ six-plus mutable values — splitting them would only make every function carry 
 - The `apple_calendar` / `google_calendar` settings fields are gone too: the calendar tool has always
   read `JOY_APPLE_CALENDAR` / `JOY_GOOGLE_CALENDAR` directly (`tools/src/calendar.rs`), so the
   settings copies were `config/write`-able and inert. **Protocol change**: `SettingsView` /
-  `SettingsPatch` each lose three fields (TS / JSON Schema / Python SDK artifacts regenerated).
+  `SettingsPatch` each lose three fields (TS / JSON Schema artifacts regenerated).
 - The dashboard's "实验" row disappears with them — all three bits it printed did nothing.
 
 ### Cleanup: dashboard painters with no page
@@ -550,8 +540,6 @@ six-plus mutable values — splitting them would only make every function carry 
 
 - The `eval` recipe in `just check`: cases load by relative path, so `cd joy-rs` first always
   died with `No such file or directory`.
-- The Python SDK now exports the task types 0.14 had left out, plus response pairings for the
-  three new methods.
 
 ### Known
 
@@ -1503,7 +1491,7 @@ directory) — a build cache is the typical case. The startup line reports both.
 
 ## 0.1.0 — Foundation
 
-- `joyczl-protocol`: single source of truth + TS/JSON Schema/pydantic
+- `joyczl-protocol`: single source of truth + TS/JSON Schema
   generation pipeline
 - `joyczl-state`: SQLite + FTS5(trigram) + migrations
 - `joyczl-app-server`: JSON-RPC over stdio; `joy` CLI

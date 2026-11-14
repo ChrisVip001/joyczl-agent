@@ -172,7 +172,6 @@ release gate 步骤里跑（`bash ../scripts/smoke.sh`）。
 | Tool docs (drift check) | `python3 scripts/check_tool_docs.py`（⑥：代码里的工具名单、06-tools §6.0 的清单与数字、两份 README 的工具表必须一致） |
 | i18n (drift check) | `python3 scripts/check_i18n.py`（⑪：驾驶舱里 `t()` 用到的每条文案都要有英文，反之亦然，占位符名字还要对得上） |
 | TypeScript | `npm install` → `npm run typecheck` → `npm test` |
-| Python SDK | `uv sync` → `uv run mypy` → `uv run pytest` |
 | Release gate | `cargo build -p joyczl-cli` → `joy eval evals/deterministic` → `bash ../scripts/smoke.sh` |
 
 两个刻意的选择：

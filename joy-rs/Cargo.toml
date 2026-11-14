@@ -135,7 +135,7 @@ tower-http = { version = "0.6", features = ["fs", "set-header", "cors"] }
 # incompatible with serde 1.0.229 (it uses the already-moved serde::__private). The artefacts are
 # post-processed with node's prettier instead, see scripts/write_schema.py.
 ts-rs = { version = "10", features = ["serde-json-impl", "no-serde-warnings"] }
-# JSON Schema (the Python SDK's pydantic models are generated from it)
+# JSON Schema (a machine-readable copy for callers that are not TypeScript)
 schemars = "0.8"
 tempfile = "3"
 

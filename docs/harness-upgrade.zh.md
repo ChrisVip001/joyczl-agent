@@ -87,6 +87,6 @@
 
 [实施状态报告（2026-11-14）](harness-implementation-report-2026-11-14.zh.md)
 
-投影视图修复前的最终验证已通过：Rust 931 项、前端 113 项、Python 14 项、确定性 70/70、回放 5/5、四套端到端和五场景进程恢复。证据归档于 `evals/results/harness-validation-2026-11-14-final.json` 与 `process-recovery-2026-11-14-final.json`。新增真实提炼样本通过：只长期保存称呼，疲惫绑定原文并六小时过期。五次评测累计 46 次请求，估算 ¥0.201684、预留 ¥3.891496。后续投影刷新/失败重试/离线修复已通过七项 worker 针对性测试，随后最终整包复验通过：Rust 935/app-server 226 项，全部客户端/评测、四套冒烟及五场景恢复通过，见 `harness-validation-2026-11-14-projection.json`。
+投影视图修复前的最终验证已通过：Rust 931 项、前端 113 项、确定性 70/70、回放 5/5、四套端到端和五场景进程恢复。证据归档于 `evals/results/harness-validation-2026-11-14-final.json` 与 `process-recovery-2026-11-14-final.json`。新增真实提炼样本通过：只长期保存称呼，疲惫绑定原文并六小时过期。五次评测累计 46 次请求，估算 ¥0.201684、预留 ¥3.891496。后续投影刷新/失败重试/离线修复已通过七项 worker 针对性测试，随后最终整包复验通过：Rust 935/app-server 226 项，全部客户端/评测、四套冒烟及五场景恢复通过，见 `harness-validation-2026-11-14-projection.json`。
 
 固定来源研究正向通过；通用写入反向失败被保留；受控发布正反通过。累计八次评测 72 请求，估算 ¥0.344474、预留 ¥6.274340。适配器仅在评测器内生效；长研究与陪伴质量仍未验证。审查与迁移恢复指南见 [harness-release-review.zh.md](harness-release-review.zh.md)。

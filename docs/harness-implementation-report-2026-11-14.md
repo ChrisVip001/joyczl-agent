@@ -27,7 +27,7 @@ The initial architecture review, priorities and exit criteria were delivered, an
 | Memory corrections | Suppression/correction lineage, extraction-context digests, validity windows, recall filtering, source checks for static pages, and protection of unmanaged human files. Semantic paraphrases and historical redaction remain incomplete. |
 | Temporary observations | Separate durable facts from temporary states, validate user-role quotation/source digests, retain uncalibrated model confidence, and anchor 1–24 hour expiry to source time. Retry does not renew a claim; human edits prevail. Quotation matching does not verify meaning. |
 | Extraction lifecycle | Persist admission/completion separately, recover original source batches without merging new chats, transact backoff, deduplicate episode summaries by source context, retain worker execution ownership, and cancel/join stalled calls on shutdown. Legacy untracked claims cannot be identified automatically. |
-| Engineering artifacts | Extend migrations through 0042, generated protocol artifacts, TS/Python clients, dashboard controls, regression/process tests and bilingual documentation. Final integrated validation passes; change packaging remains unfinished. |
+| Engineering artifacts | Extend migrations through 0042, generated protocol artifacts, the TS client, dashboard controls, regression/process tests and bilingual documentation. Final integrated validation passes; change packaging remains unfinished. |
 
 See [implementation tracking](harness-upgrade.md) and [protocol contracts](protocol.md).
 
@@ -38,9 +38,9 @@ See [implementation tracking](harness-upgrade.md) and [protocol contracts](proto
 | Latest full `just check` | Exit 0, 937 Rust tests passed, zero failures, zero Clippy warnings; includes the final memory lifecycle changes. |
 | Latest deterministic/replay evaluations | 70/70 and 5/5 observed passing; scripted behavior is not general live-model reliability. |
 | Key crates | State 89, memory 70 and app-server 226 passed within the final workspace run, including memory lifecycle and provenance. |
-| Clients | Zero schema drift, 113 frontend tests and 14 Python tests passed in final validation. |
+| Clients | Zero schema drift, 113 frontend tests passed in final validation. |
 | Real process death | Five local-fixture cases observed passing: baseline, pre-dispatch, effect committed without reply, durable tool result, and admitted memory extraction. No tool replay observed. Unknown stops retained 15 known task tokens; baseline/result recovery retained 30. The memory case recovered the same two pending source rows, not a completed extraction. |
-| Four end-to-end suites | App-server, gateway, dashboard and Python SDK all reran successfully after the final memory changes, using local fixtures. |
+| Four end-to-end suites | App-server, gateway and dashboard all reran successfully after the final memory changes, using local fixtures. |
 | Browser component checks | Reconciliation input preservation, snapshot binding, operation selection, keyboard focus and narrow-screen layout verified. This was not a complete product usability audit. |
 | Earlier full-check failure | The disk-exhaustion attempt failed; a subsequent full rerun now passed. The failed attempt is not counted as a pass. |
 
@@ -50,7 +50,7 @@ The complete rerun finished with sufficient disk space. Retained evidence: [fina
 
 The authorized existing profile was **ds / DeepSeek / deepseek-flash**. This is a requested alias, not proof of a pinned internal backend revision.
 
-The empty-tool update passed the complete `just check` rerun: 937 Rust, 113 frontend, 14 Python, 70 deterministic and five replay tests, plus workspace Clippy; eight example tests passed separately. See the [current validation record](../evals/results/support-validation-2026-11-14.json). The first WeChat worker did not exit; its 12 tests passed independently and the full retry passed after stopping that worker. No gateway source changed. The four end-to-end and five recovery cases above belong to the earlier projection baseline and were not repeated for this change.
+The empty-tool update passed the complete `just check` rerun: 937 Rust, 113 frontend, 70 deterministic and five replay tests, plus workspace Clippy; eight example tests passed separately. See the [current validation record](../evals/results/support-validation-2026-11-14.json). The first WeChat worker did not exit; its 12 tests passed independently and the full retry passed after stopping that worker. No gateway source changed. The four end-to-end and five recovery cases above belong to the earlier projection baseline and were not repeated for this change.
 
 Ten invocations made 80 logical model requests: 107,645 reported input tokens and 18,486 output tokens. The historical peak-price estimate is **CNY 0.363178**; cumulative conservative reservations were **CNY 6.833904**, within the authorized **CNY 10**. Reservations are not actual spend, and the estimate is not invoice reconciliation.
 

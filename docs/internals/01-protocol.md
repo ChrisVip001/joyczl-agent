@@ -131,7 +131,6 @@ pub struct TokenUsage { pub input_tokens: i32, pub output_tokens: i32 }
 3. **比对**：`--check` 时把产物写到临时目录，与提交物逐文件比；有漂移就 exit 1。
    比对必须发生在**排版之后**，否则永远在拿「未排版的新产物」比「已排版的提交物」。
 
-`--python` 额外用 `uv run datamodel-codegen` 从 `v2.json` 生成 SDK 的 `generated/v2.py`
 （版本号写在生成物头部，钉死），并把 `consts.json` 渲染成 `Codes`/`Methods` 枚举。
 
 CI 与 `just check` 都跑 `--check`，所以**协议改了没重新生成 = 构建红**。
