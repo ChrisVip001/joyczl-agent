@@ -80,7 +80,3 @@ pub(crate) fn arm(server: Server, sink: EventSink, wait: JobWait) {
         }
     });
 }
-
-#[cfg(test)]
-#[path = "waits_tests.rs"]
-mod waits_tests;

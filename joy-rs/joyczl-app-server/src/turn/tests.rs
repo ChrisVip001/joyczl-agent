@@ -1800,7 +1800,8 @@ fn the_prompt_says_what_the_machine_cannot_do() {
         "both switches are off by default"
     );
 
-    let note = crate::turn::capability_note(&off).expect("with everything off it has to appear");
+    let note =
+        crate::turn::capability_note(&off, true).expect("with everything off it has to appear");
     assert!(note.contains("JOY_EXEC"), "{note}");
     assert!(note.contains("JOY_WRITE"), "{note}");
     assert!(
@@ -1818,7 +1819,7 @@ fn the_prompt_says_what_the_machine_cannot_do() {
         exec_enabled: true,
         ..joyczl_config::Settings::default()
     };
-    let note = crate::turn::capability_note(&half).expect("writing files is missing");
+    let note = crate::turn::capability_note(&half, true).expect("writing files is missing");
     assert!(
         note.contains("JOY_WRITE") && !note.contains("JOY_EXEC"),
         "{note}"
@@ -1834,7 +1835,7 @@ fn the_prompt_says_what_the_machine_cannot_do() {
         ..joyczl_config::Settings::default()
     };
     assert!(
-        crate::turn::capability_note(&full).is_none(),
+        crate::turn::capability_note(&full, true).is_none(),
         "with both on they must take up no prompt"
     );
 }

@@ -135,7 +135,13 @@ impl SystemPrompt {
 /// reason; the difference is that theirs usually says *what is allowed*.
 ///
 /// `None` when nothing is missing: the common case stays free.
-pub(crate) fn capability_note(settings: &joyczl_config::Settings) -> Option<String> {
+pub(crate) fn capability_note(
+    settings: &joyczl_config::Settings,
+    tools_available: bool,
+) -> Option<String> {
+    if !tools_available {
+        return Some("No tools are available for this turn. Tool references elsewhere do not grant access. Reply in plain text using the supplied context; explain when missing tools prevent verification. Do not emit tool-call syntax or claim a lookup or action occurred.".into());
+    }
     let mut missing: Vec<&str> = Vec::new();
     if !settings.exec_enabled {
         missing.push("- running commands (shell) — off until the user sets `JOY_EXEC=1`");

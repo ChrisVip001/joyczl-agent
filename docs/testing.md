@@ -9,7 +9,7 @@ passing 100% is the release gate** — one failure blocks the release.
 
 | Layer | Location | Shape | Latest full run |
 |---|---|---|---|
-| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 935 passed / 0 failed |
+| Unit tests | inside each joy-rs crate | in-process, offline, deterministic | 937 passed / 0 failed |
 | Coverage | cargo llvm-cov / coverage | a **trend floor**, not a target | Rust 65.9% lines (floor 60) / Python 63% (floor 60) |
 | Protocol generation | scripts/write_schema.py --check | artifact drift check | 0 drift |
 | Frontend | joy-ts (node --test + tsc) | 113 passed / 0 failed | |

@@ -650,4 +650,7 @@ mod dispatch_tests;
 mod operations_tests;
 
 #[cfg(test)]
+mod waits_tests;
+
+#[cfg(test)]
 mod recovery_tests;

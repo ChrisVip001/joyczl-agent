@@ -261,3 +261,5 @@ Mutating tools now coordinate across sessions and retain ownership for backgroun
 Structured artifact checks now verify typed JSON values and retain file-version evidence; see [structured document acceptance](docs/protocol.md#structured-document-acceptance).
 
 Ordinary chats now have [human operation review](docs/protocol.md#ordinary-chat-operation-review), with read-only continuation while earlier outcomes remain unknown.
+
+When a full agent turn's tool table is empty, its capability note asks for plain text and disclosure of verification limits. This is guidance, not an output guarantee; see the [live support evidence and limits](docs/live-reliability.md).

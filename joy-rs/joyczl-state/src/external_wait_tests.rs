@@ -41,17 +41,17 @@ async fn fixture() -> (
         .unwrap();
     tasks.set_running("task", "turn").await.unwrap();
     Checkpoints::new(pool.clone())
-        .save_numbered_round(
-            "turn",
-            "work",
-            "prepare report",
-            "[]",
-            0,
-            "{}",
-            Some("run"),
-            Some("round"),
-            Some(1),
-        )
+        .save_numbered_round(crate::checkpoints::CheckpointWrite {
+            turn_id: "turn",
+            session_id: "work",
+            user_message: "prepare report",
+            messages_json: "[]",
+            iterations: 0,
+            usage_json: "{}",
+            run_id: Some("run"),
+            round_id: Some("round"),
+            round_no: Some(1),
+        })
         .await
         .unwrap();
     let wait = InputWait {

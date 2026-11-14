@@ -21,6 +21,10 @@ structure that makes that possible; running and configuring it live in
    Production `open()` holds canonical-database execution ownership before recovery.
    Memory-only SQLite access can coexist; database locking alone does not own live turns.
 
+## Module responsibilities
+
+The app-server crate root holds shared server state and exports. `server_runtime.rs` owns boot/recovery and worker lifecycle; `server_tools.rs` assembles injected tools; `server_controls.rs` owns approvals and active-turn control; `server_settings.rs` owns configuration access. `turn.rs` is a facade over admission, continuation, settlement, persistence, context/retrieval, execution, triage, plans, prompts and history. HTTP handlers live under `joyczl-ops/src/api/`, grouped by resource; existing route names remain in the facade. Checkpoint writes use one borrowed `CheckpointWrite` payload for numbered rounds and atomic operation commits; older `save`/`save_round` signatures remain compatible.
+
 ## Crate dependency graph
 
 ```

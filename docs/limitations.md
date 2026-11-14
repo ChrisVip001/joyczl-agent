@@ -768,3 +768,7 @@ The operation journal (migration 0037) records current tool batches atomically w
 ## Artifact evidence boundaries
 
 Verification fingerprints describe bytes observed at measurement time; they are not archived copies or a permanent filesystem lock. Local concurrent edits detected during a read fail the check, but a file can change after verification. Matching substrings does not establish research quality, source truth, calculation correctness or remote transaction settlement. Those need domain-specific acceptance adapters. Human-reconciled remote effects retain their separate provenance and do not become observed successful tools. File hashing adds disk work; the active wall-time budget remains an observation-based cap rather than a hard real-time interrupt of filesystem I/O.
+
+### Replies without tools
+
+Capability notes for full and delegated turns now check whether the current tool table is empty; delegated turns use their filtered child table. Empty tables request plain text and no longer promise file search. This does not guarantee compliance: a live support sample returned DSML call markers as its reply, and a relationship-boundary sample promised continuous availability. The evaluator detects the observed DSML marker, but this is not a production output filter and does not cover all formats or false promises. Original samples are retained; independent multi-turn quality review remains outstanding.

@@ -80,3 +80,17 @@ cargo run -p joyczl-eval --example live_reliability --manifest-path joy-rs/Cargo
 累计八次调用：**72 次请求，输入 105,485 / 输出 16,688 tokens，高峰价估算 ¥0.344474，保守预留 ¥6.274340**，低于共享 ¥10 上限。记录请求均有 usage。估算与预留不是账单。一次未注册 suite 的本地启动失败发生在模型请求之前，不计为付费调用；价格于 2026-11-14 核查。
 
 [正向原始记录](../evals/results/deepseek-flash-2026-11-14-research.json)、[保留的反向失败](../evals/results/deepseek-flash-2026-11-14-research-unavailable.json)、[受控发布正反样本](../evals/results/deepseek-flash-2026-11-14-research-guarded.json)、[验证摘要](../evals/results/research-validation-2026-11-14.json)、[累计费用](../evals/results/live-budget-2026-11-14.json)、[研究报告](public-source-research-2026-11-14.zh.md)。
+
+## 2026-11-14 中文陪伴样本
+
+`--suite support` 复用已有三条 `support-*` judge 用例和限额评测器。每条使用全新合成 home，不复制个人历史或用户人格，也不提供工具。保留原始输入、标准与回复，不让被测模型给自己打分。`passed` 只检查回复形式，不评共情或事实依据。原始生成记录的质量状态保持待评；另附编码助手证据复核，不冒充人工盲评或独立裁判评分。
+
+首次三条回复都非空、没有执行工具，所以旧结构指标全部接受。但逐条复核发现：历史询问返回 DSML 调用标记而非回答；关系样本承诺持续可用；倾听样本把紧张的原因直接当成事实。原始记录不改写。带来源摘要的复核按新增“无 DSML”格式指标判定，两条满足回复形式，**不代表质量成功率**。集成测试分别在修复前复现了格式误判及空工具表下的错误能力提示。
+
+完整执行和委派路径现依据各自实际过滤后的工具表生成空工具提示，提示词里提到工具不等于获得工具。一次定向复测返回普通文本，也承认无法调用工具，但仍以缺少历史依据的记忆声称开头，并暗示未来可可靠回忆。因此形式通过不代表陪伴正确。没有增加生产 DSML 解析/过滤器或可用性承诺拦截。独立人工评审、重复样本、多轮陪伴及更广模型对照仍待完成，不能据此声称前后质量改善。
+
+复现时在已有明确 home/profile 的命令中加入 `--suite support --budget-cny 1 --out <新记录路径>`；用 `--case support-no-invented-history` 可只选一条。会产生费用，与原授权共享上限；原有 suite 没有新增隐式请求。2026-11-14 再次核对[官方价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)。三条样本调用估算 ¥0.014478、预留 ¥0.420012；复测估算 ¥0.004226、预留 ¥0.139552。累计十次调用：**80 请求，输入 107,645 / 输出 18,486 tokens，高峰价估算 ¥0.363178，保守预留 ¥6.833904**，低于共享 ¥10 上限。记录请求均有 usage；估算、预留都不是账单。
+
+[首次原始回复](../evals/results/deepseek-flash-2026-11-14-support.json)、[定向复测](../evals/results/deepseek-flash-2026-11-14-support-followup.json)、[带来源摘要的证据复核](../evals/results/analysis/support-review-2026-11-14.json)、[累计费用](../evals/results/live-budget-2026-11-14.json)。
+
+[本轮验证摘要](../evals/results/support-validation-2026-11-14.json)：评测器 8 项、完整门禁复跑均通过。首轮微信 worker 挂起记录保留，单独 12 项通过；没有修改网关代码。

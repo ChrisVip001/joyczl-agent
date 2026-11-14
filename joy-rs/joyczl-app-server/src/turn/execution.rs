@@ -233,7 +233,7 @@ pub(crate) async fn full_turn(
         todo: server.todo.render(session_id).as_deref(),
         summary: summary.as_deref(),
         instructions: instructions.as_deref(),
-        capabilities: capability_note(&settings).as_deref(),
+        capabilities: capability_note(&settings, !turn_tools.schemas().is_empty()).as_deref(),
     });
 
     prompt.tail.push_str(&chat_operations.prompt);
@@ -425,7 +425,8 @@ pub(crate) async fn full_turn(
                     todo: server.todo.render(session_id).as_deref(),
                     summary: summary.as_deref(),
                     instructions: instructions.as_deref(),
-                    capabilities: capability_note(&settings).as_deref(),
+                    capabilities: capability_note(&settings, !turn_tools.schemas().is_empty())
+                        .as_deref(),
                 });
             }
             Err(e) => {

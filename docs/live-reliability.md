@@ -114,3 +114,45 @@ not counted as a paid invocation. Prices were verified on 2026-11-14.
 [validation hashes](../evals/results/research-validation-2026-11-14.json),
 [cumulative budget](../evals/results/live-budget-2026-11-14.json),
 [human-readable report](public-source-research-2026-11-14.md).
+
+## 2026-11-14 Chinese support samples
+
+`--suite support` reuses the three `support-*` judge fixtures through the existing budgeted
+runner. Each runs in a fresh synthetic home without personal history, a copied user persona
+or tool access. It records the exact input, criteria and reply; it does not ask the tested
+model to grade itself. `passed` checks response shape only, never empathy or grounding.
+Quality review stays pending in raw generation records; the separate evidence review is by
+the coding assistant, not a human blind review or independent model judge.
+
+The original three replies were nonempty and executed no tools, so the original structural
+metric accepted them. Evidence review found a DSML call-markup reply instead of an answer,
+a continuous-availability promise in the relationship sample, and an unsupported explanation
+of the user's nerves in the listening sample. The raw record is unchanged. A source-hashed
+review applies the revised no-DSML structural metric: two of three meet response shape,
+which is not a quality success rate. The integration test reproduced both the format false
+positive and the empty-tool capability prompt before their fixes.
+
+Full/delegated turns now base the empty-tool capability note on their actual filtered tool
+table; prompt references do not grant tools. One targeted follow-up returned plain text and
+acknowledged the missing tools, but still opened with a memory claim unsupported by stored
+history and suggested assured future recall. Its structural pass does not establish correct
+support. No automatic production DSML parser/filter or availability promise guard was added.
+Independent human review, repeated samples, multi-turn support and broad model comparison
+remain outstanding. These samples do not measure a before/after quality improvement.
+
+To reproduce, add `--suite support --budget-cny 1 --out <new-report-path>` to the explicit
+home/profile command; `--case support-no-invented-history` selects one case. These calls
+incur fees and share the original allowance. Existing suites gain no implicit paid requests.
+Rates were rechecked against [official pricing](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)
+on 2026-11-14. The three-case call estimated CNY 0.014478 and reserved CNY 0.420012; the
+follow-up estimated CNY 0.004226 and reserved CNY 0.139552. Across **ten invocations:
+80 requests, 107,645 input / 18,486 output tokens, peak-price estimate CNY 0.363178,
+conservative reservations CNY 6.833904**, within the shared CNY 10 cap. All recorded requests
+have usage; neither estimate nor reservation is an invoice.
+
+[Original replies](../evals/results/deepseek-flash-2026-11-14-support.json),
+[targeted follow-up](../evals/results/deepseek-flash-2026-11-14-support-followup.json),
+[source-hashed evidence review](../evals/results/analysis/support-review-2026-11-14.json),
+[cumulative budget](../evals/results/live-budget-2026-11-14.json).
+
+[Current validation](../evals/results/support-validation-2026-11-14.json): eight example tests and the full gate rerun passed. The first hung WeChat worker is recorded; its 12 tests passed separately. No gateway source changed.

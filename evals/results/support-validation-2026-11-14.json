@@ -1,0 +1,44 @@
+{
+  "capturedOn": "2026-11-14",
+  "gitRevision": "f12a24cb171b614d646f0ad03305467e315c1e26",
+  "uncommittedChanges": true,
+  "scope": "Shared working tree after user module splitting. Empty tool-table capability notes in full/delegated turns, support fixture capture and evaluator-only DSML format detection. No support-quality success claim.",
+  "checks": {
+    "justCheckExitCode": 0,
+    "rustTestsPassed": 937,
+    "rustTestsFailed": 0,
+    "ignoredIncludingDocTests": 2,
+    "typeScriptTestsPassed": 113,
+    "pythonTestsPassed": 14,
+    "deterministicPassed": 70,
+    "replayPassed": 5,
+    "exampleTestsPassed": 8,
+    "workspaceClippyExitCode": 0,
+    "endToEndSmokes": "Not repeated for this change; previous projection baseline remains separate."
+  },
+  "firstFullAttempt": {
+    "outcome": "Interrupted only the owned hung WeChat test worker after the same complete test file passed independently. Cause not established; no gateway source changed.",
+    "observedExitCode": 1,
+    "isolatedWeChatTestsPassed": 12,
+    "logSha256": "2ecc0f9e53042bc93a65202bccab8bf0fa469b1d37fd4c4507db84b61d6ad1c7"
+  },
+  "finalCheckLogSha256": "84293b600dc335550e535a4e4ceea63a8ca48975a591f6991e17e0a78ffc48f7",
+  "moduleLineCounts": {
+    "joy-rs/joyczl-app-server/src/turn/prompt.rs": 256,
+    "joy-rs/joyczl-app-server/src/turn/execution.rs": 447,
+    "joy-rs/joyczl-app-server/src/subagent.rs": 378,
+    "joy-rs/joyczl-eval/examples/live_reliability.rs": 451,
+    "joy-rs/joyczl-eval/examples/live_reliability/cases.rs": 238
+  },
+  "sourceSha256": {
+    "joy-rs/joyczl-app-server/src/turn/prompt.rs": "32d4e5aefc90f689680080a75b38fecd8b756969f4f3385ce75bbfb2ce95d566",
+    "joy-rs/joyczl-app-server/src/turn/execution.rs": "77998a1d762cb7bfe6ed86868718a9edfa887cd7fcbb9dac6787b979413b9454",
+    "joy-rs/joyczl-app-server/src/subagent.rs": "7ad73a7093a606afda38a6ca1a547eb14da37c998faed3d6f2e75bce56c979da",
+    "joy-rs/joyczl-eval/examples/live_reliability.rs": "6ee43036734f0b6aa80e8eea6f4f2f4886799cd98e555fb54d3e6110b3a52211",
+    "joy-rs/joyczl-eval/examples/live_reliability/cases.rs": "53e77a636f15c18e3c6125f858289d831b84edcd7f51712fc55552cdcf7c57f1",
+    "evals/judge/quality.jsonl": "21a1fdee4081a4ea7dde6966cd75e709d55b61f52d97d13487885a58dd668d72",
+    "evals/results/deepseek-flash-2026-11-14-support.json": "4392ba63d5b95baf324643e305f3f3bf390993e088535628a4c4650b4dd2144f",
+    "evals/results/deepseek-flash-2026-11-14-support-followup.json": "fa2312037d5624f5aa342fa5ca01ff72c0da5229d8c9e2f8bbb787a1499186d0",
+    "evals/results/analysis/support-review-2026-11-14.json": "3d9c7dbabe4764dcbb1bd6719640f865e6de158abf6e058e89302a42dad783c9"
+  }
+}

@@ -38,6 +38,19 @@ pub struct CheckpointRow {
     pub updated_at: String,
 }
 
+/// Borrowed working-memory snapshot written atomically with its execution identity.
+pub struct CheckpointWrite<'a> {
+    pub turn_id: &'a str,
+    pub session_id: &'a str,
+    pub user_message: &'a str,
+    pub messages_json: &'a str,
+    pub iterations: i32,
+    pub usage_json: &'a str,
+    pub run_id: Option<&'a str>,
+    pub round_id: Option<&'a str>,
+    pub round_no: Option<i32>,
+}
+
 /// The checkpoint store. Clone is cheap (one pool handle).
 #[derive(Clone)]
 pub struct Checkpoints {
@@ -87,7 +100,7 @@ impl Checkpoints {
         run_id: Option<&str>,
         round_id: Option<&str>,
     ) -> Result<()> {
-        self.save_numbered_round(
+        self.save_numbered_round(CheckpointWrite {
             turn_id,
             session_id,
             user_message,
@@ -96,26 +109,23 @@ impl Checkpoints {
             usage_json,
             run_id,
             round_id,
-            None,
-        )
+            round_no: None,
+        })
         .await
     }
 
     /// Commit round admission and working memory together before any execution.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn save_numbered_round(
+    pub async fn save_numbered_round(&self, checkpoint: CheckpointWrite<'_>) -> Result<()> {
+        self.save_with_operations(checkpoint, &[]).await
+    }
+
+    /// Operation intent/results and the resumable boundary share one commit.
+    pub async fn save_with_operations(
         &self,
-        turn_id: &str,
-        session_id: &str,
-        user_message: &str,
-        messages_json: &str,
-        iterations: i32,
-        usage_json: &str,
-        run_id: Option<&str>,
-        round_id: Option<&str>,
-        round_no: Option<i32>,
+        checkpoint: CheckpointWrite<'_>,
+        operations: &[crate::operations::OperationSnapshot],
     ) -> Result<()> {
-        self.save_with_operations(
+        let CheckpointWrite {
             turn_id,
             session_id,
             user_message,
@@ -125,26 +135,7 @@ impl Checkpoints {
             run_id,
             round_id,
             round_no,
-            &[],
-        )
-        .await
-    }
-
-    /// Operation intent/results and the resumable boundary share one commit.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn save_with_operations(
-        &self,
-        turn_id: &str,
-        session_id: &str,
-        user_message: &str,
-        messages_json: &str,
-        iterations: i32,
-        usage_json: &str,
-        run_id: Option<&str>,
-        round_id: Option<&str>,
-        round_no: Option<i32>,
-        operations: &[crate::operations::OperationSnapshot],
-    ) -> Result<()> {
+        } = checkpoint;
         anyhow::ensure!(
             round_no.is_none_or(|number| number > 0),
             "Invalid checkpoint round number"

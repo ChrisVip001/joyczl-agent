@@ -665,7 +665,7 @@ ALWAYS_ON（`joyczl-tools/src/lib.rs` 的常量，改它等于改策略）：
 
 其余口径：
 
-- **每轮重读**（`turn.rs` 里 `declarative::attach`）：这是「即写即用」的全部实现；`JOY_TOOL_POLICY=deferred`
+- **每轮重读**（`turn_execution.rs` 里 `declarative::attach`）：这是「即写即用」的全部实现；`JOY_TOOL_POLICY=deferred`
   也照常作用于它们（先挂载再 defer）。
 - **重名不覆盖**：`register` 拒绝重名，内置工具永远赢；两份定义重名时 `<home>/tools/` 赢过技能包，并打一行日志。
 - **上限**：每目录 64 份定义、单条 `timeout_secs` ≤ 300（`JOY_EXEC_TIMEOUT` 更低时取低）、名字 ≤ 40 字符、

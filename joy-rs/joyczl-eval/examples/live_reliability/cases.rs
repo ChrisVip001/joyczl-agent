@@ -153,6 +153,56 @@ fn final_writes(operations: &Value, home: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn support_captures_the_fixture_without_scoring_or_actions() -> Result<()> {
+        for (text, expected) in [
+            ("我在听，你可以慢慢说。", true),
+            (
+                "<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name=\"search_memory\">",
+                false,
+            ),
+        ] {
+            let mock = Arc::new(joyczl_provider::mock::Mock::new(vec![
+                joyczl_provider::mock::Mock::text(r#"{"need":false}"#),
+                joyczl_provider::mock::Mock::text(text),
+            ]));
+            let resolved = Resolved {
+                client: mock.clone(),
+                model: "test".into(),
+                small_model: "test".into(),
+                provider_id: "mock".into(),
+                vision: false,
+                context_window: joyczl_provider::DEFAULT_CONTEXT_WINDOW,
+            };
+            let home = tempfile::tempdir()?;
+            let host = server(home.path(), &Default::default(), &resolved, &[], 4).await?;
+            let scenario = joyczl_eval::scenario::JudgeScenario {
+                id: "support-test".into(),
+                description: String::new(),
+                message: "只想说说话。".into(),
+                judge: joyczl_eval::scenario::JudgeSpec {
+                    criteria: "Listen without invented actions.".into(),
+                },
+            };
+            let result = support(&host, &scenario).await?;
+            assert_eq!(result["turn"]["reply"], text);
+            assert_eq!(result["passed"], expected);
+            assert_eq!(result["qualityReview"], "pending");
+            assert_eq!(result["input"], scenario.message);
+            assert!(mock.received.lock().unwrap().iter().any(|request| request
+                .system_text()
+                .unwrap_or_default()
+                .contains("No tools are available")));
+            assert!(mock
+                .received
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| request.tools.is_empty()));
+        }
+        Ok(())
+    }
+
     #[test]
     fn drafts_are_not_duplicate_final_delivery_effects() {
         let home = std::env::temp_dir().join("synthetic-eval-home");
@@ -169,4 +219,20 @@ mod tests {
         ]});
         assert_eq!(final_writes(&duplicated, &home), 2);
     }
+}
+
+/// Capture replies for review; structural success is not a quality score.
+pub(super) async fn support(
+    host: &Server,
+    scenario: &joyczl_eval::scenario::JudgeScenario,
+) -> Result<Value> {
+    let reply = turn(host, "support", &scenario.message, None).await?;
+    Ok(json!({
+        "passed": !reply.reply.trim().is_empty() && reply.tools.is_empty() && !reply.reply.contains("<｜｜DSML｜｜"),
+        "input": scenario.message,
+        "criteria": scenario.judge.criteria,
+        "turn": reply,
+        "qualityReview": "pending",
+        "scope": "Single-turn synthetic Chinese support; Nonempty reply, no observed tool execution and no leaked DSML call markers only. No quality score, independent judge, personal history or multi-turn reliability claim."
+    }))
 }

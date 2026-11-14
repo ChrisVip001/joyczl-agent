@@ -35,7 +35,7 @@ See [implementation tracking](harness-upgrade.md) and [protocol contracts](proto
 
 | Check | Result and interpretation |
 |---|---|
-| Latest full `just check` | Exit 0, 935 Rust tests passed, zero failures, zero Clippy warnings; includes the final memory lifecycle changes. |
+| Latest full `just check` | Exit 0, 937 Rust tests passed, zero failures, zero Clippy warnings; includes the final memory lifecycle changes. |
 | Latest deterministic/replay evaluations | 70/70 and 5/5 observed passing; scripted behavior is not general live-model reliability. |
 | Key crates | State 89, memory 70 and app-server 226 passed within the final workspace run, including memory lifecycle and provenance. |
 | Clients | Zero schema drift, 113 frontend tests and 14 Python tests passed in final validation. |
@@ -50,14 +50,18 @@ The complete rerun finished with sufficient disk space. Retained evidence: [fina
 
 The authorized existing profile was **ds / DeepSeek / deepseek-flash**. This is a requested alias, not proof of a pinned internal backend revision.
 
-Eight invocations made 72 logical model requests: 105,485 reported input tokens and 16,688 output tokens. The historical peak-price estimate is **CNY 0.344474**; cumulative conservative reservations were **CNY 6.274340**, within the authorized **CNY 10**. Reservations are not actual spend, and the estimate is not invoice reconciliation.
+The empty-tool update passed the complete `just check` rerun: 937 Rust, 113 frontend, 14 Python, 70 deterministic and five replay tests, plus workspace Clippy; eight example tests passed separately. See the [current validation record](../evals/results/support-validation-2026-11-14.json). The first WeChat worker did not exit; its 12 tests passed independently and the full retry passed after stopping that worker. No gateway source changed. The four end-to-end and five recovery cases above belong to the earlier projection baseline and were not repeated for this change.
+
+Ten invocations made 80 logical model requests: 107,645 reported input tokens and 18,486 output tokens. The historical peak-price estimate is **CNY 0.363178**; cumulative conservative reservations were **CNY 6.833904**, within the authorized **CNY 10**. Reservations are not actual spend, and the estimate is not invoice reconciliation.
 
 Small synthetic samples covered continuity, Chinese continuity, file delivery, uncertainty stops, expired memory, and waiting/input/chat/delivery. Retained failures include an incorrect status assertion, an insufficient step limit, and a draft counted as duplicate final delivery. The last issue was resolved by an offline review of retained receipts, not an additional successful model run.
 
-One new live structural extraction sample passed nickname-only durable retention and source-bound temporary fatigue. It does not score emotional support; quick preferences and extraction recovery have no new live quality score. Emotional support quality, long research quality and real cross-day unattended reliability remain unmeasured. See [raw evidence, review provenance and rates](live-reliability.md).
+One new live structural extraction sample passed nickname-only durable retention and source-bound temporary fatigue. It does not score emotional support; quick preferences and extraction recovery have no new live quality score. Independent support quality scores, long research quality and real cross-day unattended reliability remain unmeasured. See [raw evidence, review provenance and rates](live-reliability.md).
 
 
 Three new research invocations are retained. The first positive run passed. An unavailable-source run using generic file writes failed: task acceptance kept `needs_attention`, but the model still created a partial final file. A constrained publication adapter then passed both cases: independent reads, exact citations and typed facts gate the final write; a missing source leaves no final artifact. The original failure remains. This MCP domain adapter lives in the evaluator, not the production generic file-tool contract; missing-source explanation quality was not scored. See the [research report](public-source-research-2026-11-14.md) and [guarded raw cases](../evals/results/deepseek-flash-2026-11-14-research-guarded.json).
+
+New Chinese support replies have a [source-hashed evidence review](../evals/results/analysis/support-review-2026-11-14.json). The DSML failure is retained; empty-tool capability notes and the format metric were corrected. A structurally valid follow-up still makes a problematic memory claim, so support quality improvement is not established.
 
 ## Remaining work
 
@@ -67,7 +71,7 @@ Three new research invocations are retained. The first positive run passed. An u
 | P1 | Domain evidence and remote read-back | Define and validate one concrete transaction's authentication, source, acceptance, read-back and reconciliation contract. |
 | P1 | Service idempotency/event adapters | Integrate supported idempotency keys and authenticated events/receipts for concrete services; no universal exactly-once claim. |
 | P1 | Real long-running delivery workflows | Measure research/citation quality, long waits, shutdowns, cross-day recovery, authorization changes and notification failures. Current coverage is mainly synthetic/offline. |
-| P1 | Relationship/support quality | Three single-turn Chinese support criteria are present in the existing judge fixtures; live scoring, multi-turn samples and human review remain outstanding. Routing instructions are not quality evidence. |
+| P1 | Relationship/support quality | Three live single-turn replies and one follow-up exposed format, availability and memory-claim issues. Independent scoring, multi-turn samples and human blind review remain outstanding. |
 | P1 | Memory quality/history governance | Validate classification, address paraphrase resurrection, historical unbounded emotions, pre-migration deletions/claims, and episode/backup redaction. Confidence is not calibrated. |
 | P2 | Resource scopes | Add concrete path/resource conflict handling; separate homes, human edits and remote concurrency need their own contracts. |
 | P2 | Models and external harnesses | Broaden live compatibility/probing and API capabilities; no same-tool/same-budget comparison with Codex, Claude Code, pi or another external harness has been performed. |
@@ -75,7 +79,7 @@ Three new research invocations are retained. The first positive run passed. An u
 
 Against the original phases: **A implementation and final regression are closed, with release review still pending; B has synthetic delivery and a completed fixed-source live research pilot, but lacks long research and external transaction validation; C has adaptation/memory foundations but lacks quality validation and external-backend comparison.**
 
-Final validation, the fixed-source research pilot and archival are complete. A [review/recovery guide](harness-release-review.md) is available; the mixed working tree has not been split into commits. Chinese support quality, long research and concrete transaction read-back remain outstanding. External harness comparison should use a stable common task/tool contract. Rust, SQLite, local-first state and the single protocol were retained. Distributed scheduling, large multi-agent systems and wholesale pluginization were intentionally deferred in the original report.
+Final validation, the fixed-source research pilot and archival are complete. A [review/recovery guide](harness-release-review.md) is available; the user has committed module splitting, while the current follow-up fixes remain uncommitted. Chinese support quality, long research and concrete transaction read-back remain outstanding. External harness comparison should use a stable common task/tool contract. Rust, SQLite, local-first state and the single protocol were retained. Distributed scheduling, large multi-agent systems and wholesale pluginization were intentionally deferred in the original report.
 
 ## Tool and attribution limits
 

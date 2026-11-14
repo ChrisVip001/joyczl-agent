@@ -17,6 +17,10 @@ Joy 是一个本地优先的个人助手：状态、推理与工具执行全部�
    原生 CLI 命令嵌入同一 app-server 运行时。生产 `open()` 在恢复前持有规范化数据库的
    执行归属。仅访问记忆的 SQLite 入口可以共存；数据库写锁本身不代表活动回合归属。
 
+## 模块职责
+
+app-server 的 crate 根保留共享状态和导出。`server_runtime.rs` 负责启动、恢复与 worker 生命周期，`server_tools.rs` 装配注入的工具，`server_controls.rs` 负责批准与运行中回合控制，`server_settings.rs` 负责配置访问。`turn.rs` 作为入口，连接准入、续行、结算、持久化、上下文/召回、执行、分流、计划、提示词和历史模块。HTTP 处理器按资源放在 `joyczl-ops/src/api/` 下，原路由名仍从入口导出。带轮次编号及原子操作提交共用借用型 `CheckpointWrite` 参数；旧 `save`/`save_round` 签名保持兼容。
+
 ## crate 依赖图
 
 ```

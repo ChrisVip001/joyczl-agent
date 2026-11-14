@@ -25,32 +25,32 @@ async fn checkpoint_admission_records_the_round_before_work_can_start() {
         .unwrap();
     let checkpoints = Checkpoints::new(pool.clone());
     checkpoints
-        .save_numbered_round(
-            "turn",
-            "chat",
-            "work",
-            "[]",
-            0,
-            "{}",
-            Some("run"),
-            Some("first"),
-            Some(1),
-        )
+        .save_numbered_round(crate::checkpoints::CheckpointWrite {
+            turn_id: "turn",
+            session_id: "chat",
+            user_message: "work",
+            messages_json: "[]",
+            iterations: 0,
+            usage_json: "{}",
+            run_id: Some("run"),
+            round_id: Some("first"),
+            round_no: Some(1),
+        })
         .await
         .unwrap();
     assert_eq!(tasks.get("task").await.unwrap().unwrap().rounds_used, 1);
     checkpoints
-        .save_numbered_round(
-            "turn",
-            "chat",
-            "next",
-            "[2]",
-            0,
-            "{}",
-            Some("run"),
-            Some("second"),
-            Some(2),
-        )
+        .save_numbered_round(crate::checkpoints::CheckpointWrite {
+            turn_id: "turn",
+            session_id: "chat",
+            user_message: "next",
+            messages_json: "[2]",
+            iterations: 0,
+            usage_json: "{}",
+            run_id: Some("run"),
+            round_id: Some("second"),
+            round_no: Some(2),
+        })
         .await
         .unwrap();
     assert_eq!(tasks.get("task").await.unwrap().unwrap().rounds_used, 2);
@@ -60,17 +60,17 @@ async fn checkpoint_admission_records_the_round_before_work_can_start() {
     );
     sqlx::query("CREATE TRIGGER fail_round BEFORE UPDATE OF rounds_used ON agent_tasks BEGIN SELECT RAISE(FAIL,'injected round failure'); END").execute(&pool).await.unwrap();
     assert!(checkpoints
-        .save_numbered_round(
-            "turn",
-            "chat",
-            "work",
-            "[3]",
-            1,
-            "{}",
-            Some("run"),
-            Some("first"),
-            Some(1),
-        )
+        .save_numbered_round(crate::checkpoints::CheckpointWrite {
+            turn_id: "turn",
+            session_id: "chat",
+            user_message: "work",
+            messages_json: "[3]",
+            iterations: 1,
+            usage_json: "{}",
+            run_id: Some("run"),
+            round_id: Some("first"),
+            round_no: Some(1)
+        })
         .await
         .is_err());
     assert_eq!(

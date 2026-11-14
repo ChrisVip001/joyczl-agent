@@ -51,15 +51,17 @@ async fn save(
 ) -> anyhow::Result<()> {
     checkpoints
         .save_with_operations(
-            "turn",
-            "work",
-            "work",
-            messages,
-            0,
-            "{}",
-            Some("run"),
-            Some("round"),
-            Some(1),
+            crate::checkpoints::CheckpointWrite {
+                turn_id: "turn",
+                session_id: "work",
+                user_message: "work",
+                messages_json: messages,
+                iterations: 0,
+                usage_json: "{}",
+                run_id: Some("run"),
+                round_id: Some("round"),
+                round_no: Some(1),
+            },
             operations,
         )
         .await

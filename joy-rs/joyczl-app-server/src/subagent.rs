@@ -153,6 +153,23 @@ impl SubagentRunner for Delegated {
             // The event payload uses a short head of the task: it may be long, and the hook wants "what is being done".
             let task_preview: String = task.chars().take(400).collect();
 
+            // The tool table is the **parent turn's copy**, just without delegate_task — so recursive
+            // delegation is not "denied", it is an option that does not exist at all.
+            // The subagent's table has neither `delegate_task` (recursion structurally absent)
+            // nor `todo_write`: the board belongs to **the parent turn's task line**; the subagent
+            // writing it would overwrite the parent turn's plan.
+            let child_tools = tools
+                .without(joyczl_tools::subagent::NAME)
+                .without("todo_write");
+            // A batch member runs **read-only**: four loops are in flight, so the parent's
+            // "one write at a time" barrier cannot reach any of them. Dropping the exclusive
+            // tools makes that a property of the table instead of a rule to remember.
+            let child_tools = if readonly {
+                child_tools.readonly()
+            } else {
+                child_tools
+            };
+
             let soul = crate::turn::load_soul(
                 &home,
                 crate::turn::thin_soul_for(&settings.soul_mode, &resolved.provider_id),
@@ -175,7 +192,11 @@ impl SubagentRunner for Delegated {
                 instructions: None,
                 // Same machine, same gaps: a subagent that does not know there is no shell
                 // burns its budget the same way the parent did.
-                capabilities: crate::turn::capability_note(&settings).as_deref(),
+                capabilities: crate::turn::capability_note(
+                    &settings,
+                    !child_tools.schemas().is_empty(),
+                )
+                .as_deref(),
             });
             // Same stable prefix as the parent (soul + model identity), so the provider's
             // cache serves both; the subagent's own contract rides in the tail — it is not
@@ -195,22 +216,6 @@ impl SubagentRunner for Delegated {
                     ""
                 };
 
-            // The tool table is the **parent turn's copy**, just without delegate_task — so recursive
-            // delegation is not "denied", it is an option that does not exist at all.
-            // The subagent's table has neither `delegate_task` (recursion structurally absent)
-            // nor `todo_write`: the board belongs to **the parent turn's task line**; the subagent
-            // writing it would overwrite the parent turn's plan.
-            let child_tools = tools
-                .without(joyczl_tools::subagent::NAME)
-                .without("todo_write");
-            // A batch member runs **read-only**: four loops are in flight, so the parent's
-            // "one write at a time" barrier cannot reach any of them. Dropping the exclusive
-            // tools makes that a property of the table instead of a rule to remember.
-            let child_tools = if readonly {
-                child_tools.readonly()
-            } else {
-                child_tools
-            };
             // The subagent has **no approval channel** (`None`): it must not block on a human, so
             // actions requiring approval are treated as rejected outright — see limitations.md.
             //

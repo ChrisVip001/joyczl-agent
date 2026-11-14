@@ -256,7 +256,8 @@ async fn main() -> Result<()> {
             "expanded",
             "memory",
             "research",
-            "research-guarded"
+            "research-guarded",
+            "support"
         ]
         .contains(&suite.as_str()),
         "Unknown live eval suite"
@@ -312,6 +313,20 @@ async fn main() -> Result<()> {
     });
     resolved.client = limited.clone();
     resolved.small_model = resolved.model.clone();
+    let support = if suite == "support" {
+        joyczl_eval::scenario::load_judge(&[
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../evals/judge/quality.jsonl")
+        ])?
+        .into_iter()
+        .filter(|case| case.id.starts_with("support-"))
+        .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    ensure!(
+        suite != "support" || !support.is_empty(),
+        "No support fixtures loaded"
+    );
     let mut cases = Vec::new();
     let names = match suite.as_str() {
         "expanded" => vec![
@@ -320,6 +335,7 @@ async fn main() -> Result<()> {
             "expired-memory",
         ],
         "memory" => vec!["transient-memory"],
+        "support" => support.iter().map(|case| case.id.as_str()).collect(),
         "research" | "research-guarded" => vec!["source-report", "source-unavailable"],
         _ => vec!["continuity", "artifact", "uncertain-effect"],
     };
@@ -347,8 +363,11 @@ async fn main() -> Result<()> {
                 research_case::prepare(home, proof.path(), name == "source-unavailable", suite == "research-guarded")?;
                 Some(proof)
             } else {None};
-            let allowed=if ["source-report","source-unavailable"].contains(&name) {vec!["sources_web_ui","sources_python_sdk",if suite == "research-guarded" {"sources_publish"} else {"write_file"}]} else if name=="uncertain-effect" {vec!["lab_commit"]}else{vec!["read_file","write_file","list_dir","current_time","search_memory","list_memory","read_memory_page"]};
+            let allowed=if suite == "support" {vec![]} else if ["source-report","source-unavailable"].contains(&name) {vec!["sources_web_ui","sources_python_sdk",if suite == "research-guarded" {"sources_publish"} else {"write_file"}]} else if name=="uncertain-effect" {vec!["lab_commit"]}else{vec!["read_file","write_file","list_dir","current_time","search_memory","list_memory","read_memory_page"]};
             let host=server(home,&settings,&resolved,&allowed,if ["waiting-chat-delivery", "source-report", "source-unavailable"].contains(&name) {8} else {4}).await?;
+            if let Some(scenario) = support.iter().find(|case| case.id == name) {
+                return expanded::support(&host, scenario).await;
+            }
             match name {
                 "transient-memory" => memory_case::run(home, &resolved).await,
                 "source-report" | "source-unavailable" => research_case::run(&host, home, proof.as_ref().expect("research proof directory").path(), name == "source-unavailable", suite == "research-guarded").await,
